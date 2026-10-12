@@ -1,10 +1,10 @@
 import type { EngineInterface, PluginState, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import type { Loaded, Mode, RemoteRecord, View } from '../types'
+import type { Group, GroupResult, Loaded, Mode, RemoteRecord, View } from '../types'
 import { capturedLinearContext } from './capture'
 import { describeAge } from './format'
 import { noteMentions } from './gallery'
-import type { GroupsIo } from './groups'
+import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { markdownPage, mermaidFences, mermaidPage, toggleTaskLine } from './markdown'
@@ -41,8 +41,11 @@ export type NavIo = {
   every: (ms: number, fn: () => void) => void
   cwd: () => Promise<string>
   home: () => Promise<string | undefined>
+  sessionId: () => Promise<string>
+  sessionRoot: () => Promise<string>
   stat: (path: string) => ReturnType<Fs['stat']>
-  run: (argv: string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
+  exists: (path: string) => Promise<boolean>
+  run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
   readFile: (path: string) => Promise<string>
   writeFile: (path: string, text: string) => Promise<unknown>
   storeGet: (key: string) => Promise<unknown>
@@ -52,9 +55,14 @@ export type NavIo = {
   fork: (request: Parameters<Model['fork']>[0]) => ReturnType<Model['fork']>
   scroll: (options: Without<Parameters<Ui['scroll']>[0], 'in'>) => ReturnType<Ui['scroll']>
   open: (options: Without<Parameters<Ui['open']>[0], 'id'>) => ReturnType<Ui['open']>
+  focus: (options: Without<Parameters<Ui['focus']>[0], 'requestId'>) => ReturnType<Ui['focus']>
   remoteIo: () => RemoteIo
   groupsIo: () => GroupsIo
   columns: () => number
+  selectedNav: () => Promise<{ href: string } | undefined>
+  shownGroups: (place: GroupPlace) => Promise<readonly Group[]>
+  shownGroup: (place: GroupPlace, id: string) => Promise<Group | null>
+  writeGroup: (place: GroupPlace, id: string, change: (current: Group | null) => GroupResult) => Promise<GroupWrite>
   openGroupRemotes: () => readonly string[]
   forgetPath: (path: string) => void
   loadFile: (href: string, path: string, line?: number) => Promise<View>
@@ -74,6 +82,8 @@ const repoContexts = new Map<string, string | null>()
 let isTicking = false
 let linearBoot: Omit<LinearBootstrap, 'ok'> | null = null
 let showGeneration = 0
+
+export const clamp = (at: number, length: number) => Math.max(0, Math.min(length - 1, at))
 
 export const nav = {
   lastActivity: 0,

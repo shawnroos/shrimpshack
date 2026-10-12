@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, GroupOp, GroupOutcome, GroupResult, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './gallery'
 import { C as BASE, MUTED, ICON, META_ICON, mute, speakerColor } from './theme'
 import { record } from './capture'
@@ -13,7 +13,7 @@ import type { RemoteIo } from './remote'
 import { failureText } from './sources'
 import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint } from './live'
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
-import { cached, isTimed, refreshItem } from './refresh'
+import { cached, isTimed } from './refresh'
 import type { TitleEntry } from './refresh'
 import {
   applyGroupOps,
@@ -36,17 +36,19 @@ import {
 } from './groups'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
 import { describeAge, describeSize } from './format'
-import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries, toggleStar } from './gallery'
+import { classifyBlocks, filterRole, gridColumns, nextOf, selectEntries } from './gallery'
 import { colorFor, iconFor, kindLabel } from './kinds'
 import { diagramType, fitMarkdown, htmlToMarkdown, linkTasks, linkify, mermaidFences, outlineOf, pathCandidates, plainInline, segmentsOf, swapMermaidFences } from './markdown'
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, fitName, imageBox, rasterGradient, taskRows, wrapLines } from './measure'
 import { extOf, fileHref, kindOf, parseHref, resolvePath, shortPath } from './paths'
 import { columnWidths, fitCell, parseDelimited, prettyJson, tomlSections } from './tabular'
 import type { PictureBudget, WidgetCtx } from './pane/types'
-import { type ItemLook, type ItemState, lookOf, remoteNaming } from './pane/look'
+import { type ItemLook, lookOf } from './pane/look'
 import { HoverLayer, ItemCard, ItemIcon, ItemRow, SectionRule, fitPicture, type IconSlot } from './pane/widgets'
-import { SCRATCH, bootLinear, goBack, loadRemote, nav, noteTitle, openExternally, openFromPage, pressLink, refContext, refresh, remoteLoader, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, startTicking, switchMode, titlesByKey, trailIcon } from './navigation'
+import { SCRATCH, bootLinear, clamp, goBack, loadRemote, nav, openExternally, openFromPage, pressLink, refContext, refresh, remoteRef, repoContext, setMenu, show, sourceLine, starKeyOf, switchMode, titlesByKey, trailIcon } from './navigation'
 import type { NavIo } from './navigation'
+import { expandedGroups, focusGroupRow, groupCommands, groupHome, groupItemLook, groupPage, groupPageRows, groupTarget, itemState, loadGroupRemote, openCardItem, openGroupHref, openGroupItem, openGroupPage, selectGroupRow, setStar, starInGroupsTab, starredFirst, toggleExpanded, toggleGroupStar } from './groups-session'
+import type { GroupMenuFor, GroupRows, GroupTarget, MenuCommand } from './groups-session'
 import { forgetPath, gitRoot, guess, noteCapture, pathExists, remember, scopeEntries, sessionEntries, toHref, withMentions } from './entries'
 
 const C = BASE
@@ -80,8 +82,6 @@ let navOrder: NavItem[] = []
 
 type Direction = 'up' | 'down' | 'left' | 'right'
 
-const clamp = (at: number, length: number) => Math.max(0, Math.min(length - 1, at))
-
 // Up and down keep the column, so a card grid moves like a grid.
 function stepFrom(at: number, direction: Direction): number {
   const here = navOrder[at]
@@ -99,10 +99,10 @@ function stepFrom(at: number, direction: Direction): number {
 }
 
 async function moveSelection($: EngineInterface, direction: Direction) {
-  const rows = await groupPageRows($)
+  const rows = await groupPageRows(navIoOf($))
   if (rows) {
-    if ((direction === 'up' || direction === 'down') && (await selectGroupRow($, rows, rows.selected + (direction === 'down' ? 1 : -1)))) {
-      await focusGroupRow($, rows.selected)
+    if ((direction === 'up' || direction === 'down') && (await selectGroupRow(navIoOf($), rows, rows.selected + (direction === 'down' ? 1 : -1)))) {
+      await focusGroupRow(navIoOf($), rows.selected)
     }
     return
   }
@@ -128,7 +128,7 @@ async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
 }
 
 async function openNav($: EngineInterface, one: NavItem | undefined) {
-  if (one?.group) await openGroupPage($, one.group)
+  if (one?.group) await openGroupPage(navIoOf($), one.group)
   else if (one?.href) await show(navIoOf($), one.href)
 }
 
@@ -455,7 +455,10 @@ function navIoOf($: EngineInterface): NavIo {
     every: (ms, fn) => $.clock.every(ms, fn),
     cwd: () => $.session.cwd(),
     home: () => $.env.get('HOME'),
+    sessionId: () => $.session.id(),
+    sessionRoot: () => $.session.root(),
     stat: path => $.fs.stat(path),
+    exists: path => $.fs.exists(path),
     run: (argv, init) => $.process.run(argv, init),
     readFile: path => $.fs.read(path),
     writeFile: (path, text) => $.fs.write(path, text),
@@ -466,10 +469,15 @@ function navIoOf($: EngineInterface): NavIo {
     fork: request => $.model.fork(request),
     scroll: options => $.ui.scroll({ in: PANE, ...options }),
     open: options => $.ui.open({ id: PANE, ...options }),
+    focus: options => $.ui.focus({ requestId: PANE, ...options }),
     remoteIo: () => remoteIoOf($),
     groupsIo: () => groupsIoOf($),
     columns: () => paneColumns,
-    openGroupRemotes: () => openGroupRemotes,
+    selectedNav: () => selectedNav($),
+    shownGroups: place => shownGroups(groupsIoOf($), place),
+    shownGroup: (place, id) => shownGroup(groupsIoOf($), place, id),
+    writeGroup: (place, id, change) => writeGroupHere(groupsIoOf($), place, id, change),
+    openGroupRemotes: () => groupPage.remotes,
     forgetPath,
     loadFile: (href, path, line) => loadFile($, href, path, line),
     loadUrl: href => loadUrl($, href),
@@ -487,229 +495,6 @@ function captureIoOf($: EngineInterface): CaptureIo {
   }
 }
 
-async function setStar($: EngineInterface, raw: string, wanted?: boolean): Promise<boolean> {
-  const canonical = remoteRef(raw)?.address ?? raw
-  let isOn = false
-  await update($, stars, list => {
-    const href = list.find(one => starKeyOf(one) === itemKey(canonical)) ?? canonical
-    const next = toggleStar(list, href, wanted)
-    isOn = next.includes(href)
-    return next
-  })
-  await $.store.set('stars', await read($, stars)).catch(() => undefined)
-  return isOn
-}
-
-async function openGroupPage($: EngineInterface, id: string) {
-  await update($, openGroup, () => ({ id, item: null }))
-  await update($, mode, () => 'groups')
-  await update($, page, () => 0)
-}
-
-async function personWrite(
-  $: EngineInterface,
-  id: string,
-  failure: string,
-  change: (current: Group, now: number) => GroupResult,
-  onWritten: (write: Extract<GroupWrite, { ok: true }>) => void = () => undefined,
-) {
-  const home = await groupHome($)
-  if (!home) {
-    $.ui.toast(`${failure}: HOME is not set.`)
-    return
-  }
-  const now = await $.clock.now()
-  let isGone = false
-  const write = await writeGroupHere(groupsIoOf($), home.place, id, current => {
-    if (current) return change(current, now)
-    isGone = true
-    return { group: null, outcomes: [] }
-  })
-  if (!write.ok) $.ui.toast(`${failure}: ${write.error}.`)
-  else if (isGone) {
-    $.ui.toast('That group was deleted.')
-    if ((await read($, openGroup))?.id === id) await update($, openGroup, () => null)
-  } else onWritten(write)
-  $.ui.invalidate('ui.render')
-}
-
-async function toggleGroupStar($: EngineInterface, id: string) {
-  await personWrite($, id, 'Could not star the group', current => starGroup(current, !current.starred))
-}
-
-const starredFirst = (groups: readonly Group[]) => [...groups].sort((a, b) => Number(b.starred) - Number(a.starred))
-
-// The tab re-sorts starred-first, so the cursor index is re-pointed at the group it was on;
-// left on its old index, the next f would toggle a different card.
-async function starInGroupsTab($: EngineInterface, id: string) {
-  const kept = (await selectedNav($))?.href
-  await toggleGroupStar($, id)
-  const home = await groupHome($)
-  if (!home || !kept) return
-  const index = starredFirst(await shownGroups(groupsIoOf($), home.place)).findIndex(one => one.id === kept)
-  if (index >= 0) await update($, cursorAtom, () => index)
-  $.ui.invalidate('ui.render')
-}
-
-async function personGroupWrite($: EngineInterface, id: string, title: string, op: Extract<GroupOp, { op: 'addItem' | 'removeItem' }>) {
-  const verb = op.op === 'addItem' ? 'add to' : 'remove from'
-  await personWrite(
-    $,
-    id,
-    `Could not ${verb} ${title}`,
-    (current, now) => applyGroupOps(current, [op], { now, newId: () => shortId(Math.random), actor: 'person', others: [] }),
-    write => {
-      const outcome = write.outcomes[0]
-      const name = write.group?.title ?? title
-      if (outcome?.status === 'applied') $.ui.toast(op.op === 'addItem' ? `Added to ${name}` : `Removed from ${name}`)
-      else if (outcome?.status === 'unchanged' && op.op === 'addItem') $.ui.toast(`Already in ${name}`)
-      else $.ui.toast(outcome?.reason ?? `Could not ${verb} ${name}.`)
-    },
-  )
-}
-
-async function personGroupAdd($: EngineInterface, id: string, title: string, href: string) {
-  const target = await groupTarget($, href, (await groupHome($))?.worktreeRoot, true)
-  if ('error' in target) $.ui.toast(`Could not add to ${title}: ${target.error}.`)
-  else await personGroupWrite($, id, title, { op: 'addItem', ref: target.ref })
-}
-
-type MenuCommand = { id: string; icon: string; label: string; hint: string; run: () => void; isGroupRow?: boolean; isFilteredOnly?: boolean }
-type GroupMenuFor = { target?: string; group?: Group; selectedRef?: string; starHint?: string }
-
-const GROUP_MENU_ROWS = 8
-
-async function groupCommands($: EngineInterface, on: GroupMenuFor): Promise<MenuCommand[]> {
-  const home = await groupHome($)
-  if (!home) return []
-  const open = on.group
-  const own: MenuCommand[] = open
-    ? [
-        { id: 'group-star', icon: '\u{f51a}', label: `${open.starred ? 'Unstar' : 'Star'} this group`, hint: on.starHint ?? '', run: () => void toggleGroupStar($, open.id) },
-        ...(on.selectedRef !== undefined
-          ? [{ id: 'group-remove-here', icon: '\u{f068}', label: 'Remove from this group', hint: '', run: () => void personGroupWrite($, open.id, open.title, { op: 'removeItem', ref: on.selectedRef ?? '' }) }]
-          : []),
-      ]
-    : []
-  const href = on.target
-  const target = href ? await groupTarget($, href, home.worktreeRoot, false) : null
-  if (!href || !target || 'error' in target) return own.map(one => ({ ...one, isGroupRow: true }))
-  const key = itemKey(target.ref)
-  const groups = (await shownGroups(groupsIoOf($), home.place)).filter(one => one.id !== open?.id)
-  const rows = groups.map((one, index): MenuCommand => {
-    const held = one.items.find(item => itemKey(item.ref) === key)
-    const isFilteredOnly = index >= GROUP_MENU_ROWS
-    return held
-      ? { id: `group-remove-${one.id}`, icon: '\u{f068}', label: `Remove from group: ${one.title}`, hint: '', isFilteredOnly, run: () => void personGroupWrite($, one.id, one.title, { op: 'removeItem', ref: held.ref }) }
-      : { id: `group-add-${one.id}`, icon: '\u{f067}', label: `Add to group: ${one.title}`, hint: '', isFilteredOnly, run: () => void personGroupAdd($, one.id, one.title, href) }
-  })
-  return [...own, ...rows].map(one => ({ ...one, isGroupRow: true }))
-}
-
-type GroupRows = { id: string; title: string; keys: string[]; hrefs: string[]; selected: number }
-
-// Drawing may not write state, so the page keeps what its handlers need here: the rows as last drawn, the
-// back step to the group, and which deleted group was already reported.
-let groupRows: GroupRows | null = null
-let goneGroupNotice = ''
-let openGroupRemotes: string[] = []
-
-async function groupPageRows($: EngineInterface): Promise<GroupRows | null> {
-  if (!groupRows || (await read($, mode)) !== 'groups') return null
-  return (await read($, openGroup))?.id === groupRows.id ? groupRows : null
-}
-
-async function selectGroupRow($: EngineInterface, rows: GroupRows, wanted: number): Promise<boolean> {
-  const index = clamp(wanted, rows.keys.length)
-  const key = rows.keys[index]
-  if (key === undefined) return false
-  rows.selected = index
-  await update($, openGroup, opened => (opened?.id === rows.id ? { ...opened, item: key } : opened))
-  await update($, cursorAtom, () => index)
-  return true
-}
-
-async function focusGroupRow($: EngineInterface, index: number) {
-  await $.ui.scroll({ in: PANE, to: { key: `group-row-${index}` }, block: 'center' }).catch(() => undefined)
-  await $.ui.focus({ requestId: PANE, key: `item-${index}` }).catch(() => undefined)
-}
-
-async function openGroupItem($: EngineInterface, rows: GroupRows, index: number) {
-  await selectGroupRow($, rows, index)
-  await openGroupHref($, rows, rows.keys[rows.selected] ?? '', rows.hrefs[rows.selected] ?? '')
-}
-
-// Opening from a card sets openGroup too, so Back lands on the group page with this item selected.
-async function openGroupHref($: EngineInterface, group: { id: string; title: string }, key: string, href: string) {
-  const file = href ? parseHref(href) : null
-  if (!href || (file && !(await $.fs.exists(file.path).catch(() => false)))) {
-    $.ui.toast(`That file is gone: ${file?.path ?? key}`)
-    return
-  }
-  await update($, openGroup, () => ({ id: group.id, item: key }))
-  nav.groupBack = { id: group.id, title: group.title, depth: nav.backStack.length }
-  await show(navIoOf($), href, true)
-}
-
-async function openCardItem($: EngineInterface, id: string, key: string, href: string) {
-  const home = await groupHome($)
-  const group = home ? await shownGroup(groupsIoOf($), home.place, id) : null
-  if (group) await openGroupHref($, group, key, href)
-  else $.ui.toast('That group was deleted.')
-}
-
-// Per pane and never saved. Only handlers change it: a draw may not write state.
-const expandedGroups = new Set<string>()
-
-function toggleExpanded($: EngineInterface, id: string) {
-  if (!expandedGroups.delete(id)) expandedGroups.add(id)
-  $.ui.invalidate('ui.render')
-}
-
-async function groupItemLook($: EngineInterface, item: GroupItem, worktreeRoot: string | undefined, known: ReadonlyMap<string, TitleEntry>): Promise<ItemLook> {
-  const key = itemKey(item.ref)
-  const file = refPath(item.ref, worktreeRoot)
-  if (file) {
-    const { state, stat } = await fileState($, file.path)
-    const name = file.path.split('/').pop() || file.path
-    const folder = file.path.slice(0, Math.max(0, file.path.length - name.length - 1))
-    const where = worktreeRoot && folder.startsWith(worktreeRoot) ? folder.slice(worktreeRoot.length + 1) : folder
-    return { key, href: fileHref(file.path, file.line), name: item.label ?? name, kind: stat?.kind === 'dir' ? 'folder' : kindOf(file.path), where, state }
-  }
-  const state = await itemState($, item.ref, worktreeRoot)
-  if (!isScheme(item.ref)) return { key, href: '', name: item.label ?? item.ref, kind: kindOf(item.ref), where: '', state }
-  const ref = remoteRef(item.ref)
-  const address = ref?.address ?? item.ref
-  const title = known.get(key)
-  const host = () => {
-    try {
-      return new URL(address).hostname
-    } catch {
-      return ''
-    }
-  }
-  const naming = remoteNaming(ref, title, { label: item.label, bare: address, namesThread: false, host })
-  return {
-    key,
-    href: address,
-    name: naming.name,
-    kind: naming.kind,
-    where: naming.where,
-    state,
-    favicon: (await remotePicture($, title?.favicon))?.file,
-  }
-}
-
-function loadGroupRemote($: EngineInterface, address: string) {
-  startTicking(navIoOf($))
-  void $.clock
-    .now()
-    .then(now => refreshItem(address, remoteLoader(navIoOf($), false), now))
-    .then(entry => noteTitle(navIoOf($), entry))
-    .then(() => $.ui.invalidate('ui.render'))
-    .catch(() => undefined)
-}
-
 function groupsIoOf($: EngineInterface): GroupsIo {
   return {
     read: path => $.fs.read(path),
@@ -721,8 +506,6 @@ function groupsIoOf($: EngineInterface): GroupsIo {
     sleep: ms => $.clock.sleep(ms),
   }
 }
-
-type GroupHome = { place: GroupPlace; worktreeRoot?: string }
 
 // Render reads only: a write that decided from these could act on another session's stale group.
 const groupLists = new Map<string, { mtimeMs: number | null; groups: readonly Group[] }>()
@@ -758,66 +541,6 @@ function writeGroupHere(io: GroupsIo, place: GroupPlace, id: string, change: (cu
   })
 }
 
-const groupHomes = new Map<string, Promise<GroupHome | null>>()
-
-async function findGroupHome($: EngineInterface, root: string): Promise<GroupHome | null> {
-  const homeDir = await $.env.get('HOME')
-  if (!homeDir) return null
-  const projectKey = await resolveProjectKey(argv => $.process.run(argv), root)
-  const git = await gitRoot(navIoOf($), root)
-  return { place: { dir: groupsDir(homeDir, projectKey), projectKey }, worktreeRoot: git?.root }
-}
-
-async function groupHome($: EngineInterface): Promise<GroupHome | null> {
-  const root = await $.session.root()
-  const key = `${await $.session.id()}|${root}`
-  const known = groupHomes.get(key)
-  if (known) return known
-  const found = findGroupHome($, root)
-  groupHomes.set(key, found)
-  found.catch(() => {
-    if (groupHomes.get(key) === found) groupHomes.delete(key)
-  })
-  return found
-}
-
-type GroupTarget = { raw: string; ref: string } | { raw: string; error: string }
-
-async function groupTarget($: EngineInterface, raw: string, worktreeRoot: string | undefined, isAdd: boolean): Promise<GroupTarget> {
-  const trimmed = raw.trim()
-  const href = await toHref(navIoOf($), trimmed).catch(() => null)
-  if (href) {
-    const file = parseHref(href)
-    if (isAdd && file && !(await $.fs.exists(file.path).catch(() => false))) return { raw: trimmed, error: `No file at ${file.path}` }
-    return { raw: trimmed, ref: storedRef(remoteRef(href)?.address ?? href, worktreeRoot) }
-  }
-  if (isAdd || !trimmed) return { raw: trimmed, error: `No file or URL at ${trimmed}` }
-  if (isScheme(trimmed)) return { raw: trimmed, ref: trimmed }
-  const abs = resolvePath(trimmed.replace(/:\d+$/, ''), await $.session.cwd(), (await $.env.get('HOME')) ?? '')
-  return { raw: trimmed, ref: storedRef(fileHref(abs), worktreeRoot) }
-}
-
-
-// stat rejects for a missing path and for any other failure, so only a failed stat asks exists which one it was.
-async function fileState($: EngineInterface, path: string): Promise<{ state: ItemState; stat: { kind: string } | null }> {
-  const stat = await $.fs.stat(path).catch(() => null)
-  if (stat) return { state: 'ok', stat }
-  const state = await $.fs.exists(path).then(
-    (found): ItemState => (found ? 'ok' : 'missing'),
-    (): ItemState => 'unavailable',
-  )
-  return { state, stat: null }
-}
-
-async function itemState($: EngineInterface, ref: string, worktreeRoot?: string): Promise<ItemState> {
-  const file = refPath(ref, worktreeRoot)
-  if (file) return (await fileState($, file.path)).state
-  if (!isScheme(ref)) return 'missing'
-  const entry = cached(ref)
-  if (entry?.failure === 'gone') return 'missing'
-  return entry?.state === 'failed' || entry?.state === 'stale-since' ? 'unavailable' : 'ok'
-}
-
 async function groupJson($: EngineInterface, group: Group, worktreeRoot?: string) {
   const known = titlesByKey()
   const items = await Promise.all(
@@ -827,7 +550,7 @@ async function groupJson($: EngineInterface, group: Group, worktreeRoot?: string
       label: one.label ?? null,
       section: one.section ?? null,
       addedBy: one.addedBy,
-      state: await itemState($, one.ref, worktreeRoot),
+      state: await itemState(navIoOf($), one.ref, worktreeRoot),
     })),
   )
   return { id: group.id, title: group.title, description: group.description, starred: group.starred, sections: group.sections.map(one => ({ ...one, layout: layoutOf(one) })), items, removed: group.removed }
@@ -879,7 +602,7 @@ function sectionOps(value: unknown): GroupOp[] | string {
 }
 
 async function saveGroup($: EngineInterface, input: SaveInput) {
-  const home = await groupHome($)
+  const home = await groupHome(navIoOf($))
   if (!home) return { result: 'Could not save the group: HOME is not set.' }
   const { place, worktreeRoot } = home
   const id = input.id
@@ -898,7 +621,7 @@ async function saveGroup($: EngineInterface, input: SaveInput) {
     return { result: 'add, move and remove are lists of objects, each with a target.' }
   }
 
-  const resolveAll = (list: Record<string, unknown>[], isAdd: boolean) => Promise.all(list.map(one => groupTarget($, String(one.target), worktreeRoot, isAdd)))
+  const resolveAll = (list: Record<string, unknown>[], isAdd: boolean) => Promise.all(list.map(one => groupTarget(navIoOf($), String(one.target), worktreeRoot, isAdd)))
   const [added, moved, removed] = await Promise.all([resolveAll(adds, true), resolveAll(moves, false), resolveAll(removes, false)])
   const rejected: GroupOutcome[] = added.flatMap(one => ('error' in one ? [refused('addItem', one.error, { ref: one.raw })] : []))
   const optional = <T,>(value: unknown, wrap: (v: string) => T) => (isText(value) ? wrap(value) : {})
@@ -1036,7 +759,7 @@ const GROUP_TOOLS = [
 ]
 
 async function listGroupsTool($: EngineInterface) {
-  const home = await groupHome($)
+  const home = await groupHome(navIoOf($))
   if (!home) return { result: 'Could not list groups: HOME is not set.' }
   const groups = await listGroups(groupsIoOf($), home.place)
   const summaries = groups.map(one => ({
@@ -1054,7 +777,7 @@ async function listGroupsTool($: EngineInterface) {
 
 async function readGroupTool($: EngineInterface, id: unknown) {
   if (!isGroupRef(id)) return badId(id)
-  const home = await groupHome($)
+  const home = await groupHome(navIoOf($))
   if (!home) return { result: 'Could not read the group: HOME is not set.' }
   const group = await readGroup(groupsIoOf($), home.place, id)
   if (!group) return { result: `No group ${id} in this project.` }
@@ -1064,7 +787,7 @@ async function readGroupTool($: EngineInterface, id: unknown) {
 
 async function deleteGroupTool($: EngineInterface, id: unknown, force: boolean) {
   if (!isGroupRef(id)) return badId(id)
-  const home = await groupHome($)
+  const home = await groupHome(navIoOf($))
   if (!home) return { result: 'Could not delete the group: HOME is not set.' }
   let title = ''
   const write = await writeGroupHere(groupsIoOf($), home.place, id, current => {
@@ -1204,7 +927,7 @@ async function liveKey($: EngineInterface, key: string) {
     case 'c':
       return void $.ui.copy({ text: url ?? current?.location ?? '' })
     case 'f':
-      return url || current ? void setStar($, url ?? current?.href ?? '') : undefined
+      return url || current ? void setStar(navIoOf($), url ?? current?.href ?? '') : undefined
   }
 }
 
@@ -1286,7 +1009,7 @@ export const register: Register = on => {
       })
       .catch(() => undefined)
     for (const spec of GROUP_TOOLS) await $.tool.register(spec).catch(() => undefined)
-    void groupHome($).catch(() => undefined)
+    void groupHome(navIoOf($)).catch(() => undefined)
     await $.command.register({ name: 'peek-menu', description: 'Open the peek command menu (ctrl+k in the peek pane)' })
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
     await $.command.register({ name: 'peek', description: 'Peek at a file, folder or URL in the side pane: a path, a description ("the export diagram"), or nothing for the last one' })
@@ -1311,8 +1034,8 @@ export const register: Register = on => {
     const picked = /^item-(\d+)$/.exec(e.element ?? '')
     if (picked && e.origin.kind === 'person') {
       const index = Number(picked[1])
-      const rows = await groupPageRows($).catch(() => null)
-      if (rows) await selectGroupRow($, rows, index).catch(() => undefined)
+      const rows = await groupPageRows(navIoOf($)).catch(() => null)
+      if (rows) await selectGroupRow(navIoOf($), rows, index).catch(() => undefined)
       await update($, cursorAtom, () => index).catch(() => undefined)
       const key = navOrder[index]?.key
       if (key) void $.ui.scroll({ in: PANE, to: { key }, block: 'center' }).catch(() => undefined)
@@ -1527,7 +1250,7 @@ export const register: Register = on => {
     const target = input.target
     const href = await toHref(navIoOf($), target).catch(() => null)
     if (!href) return { result: `No file or URL at ${target}.` }
-    const isOn = await setStar($, href, input.starred !== false).catch(() => null)
+    const isOn = await setStar(navIoOf($), href, input.starred !== false).catch(() => null)
     if (isOn === null) return { result: 'Could not save the star.' }
     return { result: `${isOn ? 'Starred' : 'Unstarred'} ${parseHref(href)?.path ?? href} in peek.` }
   })
@@ -1562,7 +1285,7 @@ export const register: Register = on => {
     }
     const starring = e.data as { star?: unknown } | null
     if (e.requestId === PANE && starring && typeof starring.star === 'string') {
-      await setStar($, starring.star).catch(() => undefined)
+      await setStar(navIoOf($), starring.star).catch(() => undefined)
       return {}
     }
     const data = e.data as { toggle?: unknown } | null
@@ -1579,23 +1302,23 @@ export const register: Register = on => {
     }
     const group = e.data as { openGroup?: unknown; starGroup?: unknown } | null
     if (e.requestId === PANE && group && typeof group.openGroup === 'string') {
-      await openGroupPage($, group.openGroup).catch(() => undefined)
+      await openGroupPage(navIoOf($), group.openGroup).catch(() => undefined)
       return {}
     }
     if (e.requestId === PANE && group && typeof group.starGroup === 'string') {
       const isGroupsTab = (await read($, mode)) === 'groups' && !(await read($, openGroup))
-      await (isGroupsTab ? starInGroupsTab($, group.starGroup) : toggleGroupStar($, group.starGroup)).catch(() => undefined)
+      await (isGroupsTab ? starInGroupsTab(navIoOf($), group.starGroup) : toggleGroupStar(navIoOf($), group.starGroup)).catch(() => undefined)
       return {}
     }
     const opening = e.data as { open?: unknown; inGroup?: unknown; key?: unknown } | null
     if (e.requestId === PANE && opening && typeof opening.open === 'string' && typeof opening.inGroup === 'string') {
-      await openCardItem($, opening.inGroup, String(opening.key ?? ''), opening.open).catch(() => undefined)
+      await openCardItem(navIoOf($), opening.inGroup, String(opening.key ?? ''), opening.open).catch(() => undefined)
       return {}
     }
     if (e.requestId === PANE && opening && typeof opening.open === 'string') {
-      const rows = await groupPageRows($).catch(() => null)
+      const rows = await groupPageRows(navIoOf($)).catch(() => null)
       const at = rows ? rows.hrefs.indexOf(opening.open) : -1
-      await (rows && at >= 0 ? openGroupItem($, rows, at) : show(navIoOf($), opening.open)).catch(() => undefined)
+      await (rows && at >= 0 ? openGroupItem(navIoOf($), rows, at) : show(navIoOf($), opening.open)).catch(() => undefined)
       return {}
     }
     return next(e)
@@ -1787,7 +1510,7 @@ export const register: Register = on => {
               ? [{ id: 'live-back', icon: '\u{f060}', label: 'Back in the live page', hint: 'b', run: () => void liveKey($, 'b') }]
               : []),
             { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
-            { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar($, current.href) },
+            { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar(navIoOf($), current.href) },
           ]
         : []),
       { id: 'close', icon: '\u{f00d}', label: 'Close the pane', hint: 'x', run: () => void $.ui.close({ id: PANE }) },
@@ -1896,7 +1619,7 @@ export const register: Register = on => {
     const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
     const frame = async (middle: unknown, content: unknown, info: string, keys: Key[], { pageBg = C.panelBg, menuOn = {} }: { pageBg?: string; menuOn?: GroupMenuFor } = {}) => {
       // A group home that cannot resolve leaves the menu without group rows rather than failing the whole pane.
-      const groupMenu = isMenuOpen ? await groupCommands($, menuOn).catch(() => []) : []
+      const groupMenu = isMenuOpen ? await groupCommands(navIoOf($), menuOn).catch(() => []) : []
       return (
         <Box
           flexDirection="column"
@@ -1973,8 +1696,8 @@ export const register: Register = on => {
         menu: 'Star or unstar the selected file',
         onPress: () =>
           void selectedNav($).then(one => {
-            if (one?.group) return toggleGroupStar($, one.group)
-            return one?.href ? setStar($, one.href).then(() => undefined) : undefined
+            if (one?.group) return toggleGroupStar(navIoOf($), one.group)
+            return one?.href ? setStar(navIoOf($), one.href).then(() => undefined) : undefined
           }),
       },
     ]
@@ -1986,7 +1709,7 @@ export const register: Register = on => {
       menu: 'Expand/Collapse group',
       onPress: () => void selectedNav($).then(one => {
         const id = one?.group ?? (one && chosen === 'groups' ? one.href : undefined)
-        if (id) toggleExpanded($, id)
+        if (id) toggleExpanded(navIoOf($), id)
       }),
     }
 
@@ -1995,7 +1718,7 @@ export const register: Register = on => {
       const perRow = Math.min(2, gridColumns(inner, CARD_MIN, CARD_GAP))
       const itemWidth = Math.floor((inner - (perRow - 1) * CARD_GAP) / perRow)
       const starKeys = new Set((await read($, stars)).map(starKeyOf))
-      const worktreeRoot = (await groupHome($))?.worktreeRoot
+      const worktreeRoot = (await groupHome(navIoOf($)))?.worktreeRoot
       const known = titlesByKey()
       const drawn = await Promise.all(
         groups.map(async (group, i) => {
@@ -2017,9 +1740,9 @@ export const register: Register = on => {
           const canExpand = description.length > GROUP_CARD_LINES || blocks.length > 1 || (blocks[0]?.items.length ?? 0) > perRow
           const lines = isExpanded ? description : wrapLines(group.description, inner, GROUP_CARD_LINES)
           const shown = isExpanded ? blocks : blocks.slice(0, 1).map(block => ({ ...block, items: block.items.slice(0, perRow) }))
-          const looks = await Promise.all(shown.map(block => Promise.all(block.items.map(one => groupItemLook($, one, worktreeRoot, known)))))
-          for (const one of looks.flat()) if (one.href && !parseHref(one.href) && remoteRef(one.href) && !cached(one.href)) loadGroupRemote($, one.href)
-          const open = (look: ItemLook) => void update($, cursorAtom, () => index).then(() => openGroupHref($, group, look.key, look.href))
+          const looks = await Promise.all(shown.map(block => Promise.all(block.items.map(one => groupItemLook(navIoOf($), one, worktreeRoot, known)))))
+          for (const one of looks.flat()) if (one.href && !parseHref(one.href) && remoteRef(one.href) && !cached(one.href)) loadGroupRemote(navIoOf($), one.href)
+          const open = (look: ItemLook) => void update($, cursorAtom, () => index).then(() => openGroupHref(navIoOf($), group, look.key, look.href))
           let layers = 0
           const layer = (kind: 'rows' | 'cards', height: number, row: ItemLook[]) =>
             HoverLayer(w, `hover-${prefix}-items-${i}-${layers++}`, { kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) })
@@ -2114,7 +1837,7 @@ export const register: Register = on => {
                     label={group.starred ? '\u{f51a}' : ICON.groups}
                     plain
                     autoFocus={isSelected ? true : undefined}
-                    onPress={() => void update($, cursorAtom, () => index).then(() => openGroupPage($, group.id))}
+                    onPress={() => void update($, cursorAtom, () => index).then(() => openGroupPage(navIoOf($), group.id))}
                   />
                 </Box>
                 <Box key={`group-name-${index}`} flexGrow={1} flexShrink={1} overflow="hidden">
@@ -2144,7 +1867,7 @@ export const register: Register = on => {
                     plain
                     dimColor
                     hover={{ color: C.accent }}
-                    onPress={() => void update($, cursorAtom, () => index).then(() => toggleExpanded($, group.id))}
+                    onPress={() => void update($, cursorAtom, () => index).then(() => toggleExpanded(navIoOf($), group.id))}
                   />
                 </Box>
               )}
@@ -2157,17 +1880,17 @@ export const register: Register = on => {
     }
 
     if (chosen === 'groups') {
-      const home = await groupHome($)
+      const home = await groupHome(navIoOf($))
       const io = groupsIoOf($)
       const opened = await read($, openGroup)
       const shown = opened && home ? await shownGroup(io, home.place, opened.id) : null
-      if (opened && !shown && goneGroupNotice !== opened.id) {
-        goneGroupNotice = opened.id
+      if (opened && !shown && groupPage.goneNotice !== opened.id) {
+        groupPage.goneNotice = opened.id
         $.ui.toast('That group was deleted.')
       }
       const project = (home?.worktreeRoot ?? cwd).split('/').filter(Boolean).pop() ?? 'project'
       if (opened && shown) {
-        goneGroupNotice = ''
+        groupPage.goneNotice = ''
         const worktreeRoot = home?.worktreeRoot
         const known = titlesByKey()
         const sectionIds = new Set(shown.sections.map(one => one.id))
@@ -2175,17 +1898,17 @@ export const register: Register = on => {
           { title: '', items: shown.items.filter(one => !one.section || !sectionIds.has(one.section)) },
           ...shown.sections.map(one => ({ title: one.title, items: shown.items.filter(item => item.section === one.id) })),
         ]
-        const looks = await Promise.all(blocks.flatMap(block => block.items).map(one => groupItemLook($, one, worktreeRoot, known)))
+        const looks = await Promise.all(blocks.flatMap(block => block.items).map(one => groupItemLook(navIoOf($), one, worktreeRoot, known)))
         const remotes = looks.filter(one => one.href && !parseHref(one.href) && remoteRef(one.href))
-        for (const one of remotes) if (!cached(one.href)) loadGroupRemote($, one.href)
-        openGroupRemotes = remotes.map(one => one.href).filter(isTimed)
+        for (const one of remotes) if (!cached(one.href)) loadGroupRemote(navIoOf($), one.href)
+        groupPage.remotes = remotes.map(one => one.href).filter(isTimed)
         const keys = looks.map(one => one.key)
         const found = opened.item === null ? 0 : keys.indexOf(opened.item)
-        const previous = groupRows?.id === shown.id ? groupRows.selected : 0
+        const previous = groupPage.rows?.id === shown.id ? groupPage.rows.selected : 0
         const selected = clamp(found >= 0 ? found : previous, keys.length)
         const refs = blocks.flatMap(block => block.items).map(one => one.ref)
         const rows: GroupRows = { id: shown.id, title: shown.title, keys, hrefs: looks.map(one => one.href), selected }
-        groupRows = rows
+        groupPage.rows = rows
         navOrder = keys.map((key, index) => ({ href: key, key: `group-row-${index}`, line: index, col: 0 }))
         blockStarts = []
         const starList = await read($, stars)
@@ -2204,7 +1927,7 @@ export const register: Register = on => {
               imageKey: `favicon-${index}`,
               buttonKey: `item-${index}`,
               autoFocus: isSelected ? true : undefined,
-              onPress: () => void openGroupItem($, rows, index),
+              onPress: () => void openGroupItem(navIoOf($), rows, index),
               boxes: {},
             },
             nameKey: `group-item-${index}`,
@@ -2270,16 +1993,16 @@ export const register: Register = on => {
               label: '⏎ Open',
               hotkey: 'o',
               menu: 'Open the selected item',
-              onPress: () => void groupPageRows($).then(now => (now ? openGroupItem($, now, now.selected) : undefined)),
+              onPress: () => void groupPageRows(navIoOf($)).then(now => (now ? openGroupItem(navIoOf($), now, now.selected) : undefined)),
             },
             {
               key: 'star-selected',
               label: 'Star',
               hotkey: 'f',
               menu: 'Star or unstar the selected item',
-              onPress: () => void groupPageRows($).then(now => {
+              onPress: () => void groupPageRows(navIoOf($)).then(now => {
                 const href = now?.hrefs[now.selected]
-                return href ? setStar($, href).then(() => $.ui.invalidate('ui.render')) : undefined
+                return href ? setStar(navIoOf($), href).then(() => $.ui.invalidate('ui.render')) : undefined
               }),
             },
             closeKey,
@@ -2287,8 +2010,8 @@ export const register: Register = on => {
           { pageBg: C.appBg, menuOn: { target: rows.hrefs[selected] || undefined, group: shown, selectedRef: refs[selected] } },
         )
       }
-      groupRows = null
-      openGroupRemotes = []
+      groupPage.rows = null
+      groupPage.remotes = []
       const groups = home ? starredFirst(await shownGroups(io, home.place)) : []
       const starredCount = groups.filter(one => one.starred).length
       const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
@@ -2316,14 +2039,14 @@ export const register: Register = on => {
             label: '⏎ Open',
             hotkey: 'o',
             menu: 'Open the selected group',
-            onPress: () => void selectedGroup().then(id => (id ? openGroupPage($, id) : undefined)),
+            onPress: () => void selectedGroup().then(id => (id ? openGroupPage(navIoOf($), id) : undefined)),
           },
           {
             key: 'star-selected',
             label: 'Star',
             hotkey: 'f',
             menu: 'Star or unstar the selected group',
-            onPress: () => void selectedGroup().then(id => (id ? starInGroupsTab($, id) : undefined)),
+            onPress: () => void selectedGroup().then(id => (id ? starInGroupsTab(navIoOf($), id) : undefined)),
           },
           expandKey,
           closeKey,
@@ -2508,7 +2231,7 @@ export const register: Register = on => {
       const favs = selectEntries(favourites, 'all', '', 'recent')
       const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
       cursor = 0
-      const starredGroups = await groupHome($)
+      const starredGroups = await groupHome(navIoOf($))
         .then(found => (found ? shownGroups(groupsIoOf($), found.place) : []))
         .then(all => all.filter(one => one.starred))
         .catch(() => [])
@@ -3414,7 +3137,7 @@ export const register: Register = on => {
             : []),
           { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
           { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
-          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
+          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar(navIoOf($), current.href) },
           { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally(navIoOf($), current) },
           ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh(navIoOf($), current.href) }] : []),
           ...(liveFrame || nav.backStack.length || nav.groupBack
