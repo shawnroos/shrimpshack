@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { C } from '../hooks/theme'
 
 const WORKTREE = '/Users/shawnroos/projects/herdr-linear-board/worktrees/tui-design'
 const FILES: Record<string, string> = {
@@ -168,14 +169,14 @@ test('code, diagrams and images share one embed frame', async ($, on) => {
   await ui.unmount()
 })
 
-test('a narrow pane drops the tabs, the keys and the side spacing; the footer keeps the doc info', async ($, on) => {
+test('a narrow pane drops the tabs and the side spacing but keeps the hidden keys; the footer keeps the doc info', async ($, on) => {
   fakeDisk(on)
   await $.command.run({ command: 'peek', args: `${WORKTREE}/docs/handoff.md` } as never)
   const narrow = { ...props, bodyColumns: 44 }
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: narrow, requestId: 'peek' })
   expect(await ui.find({ key: 'tabs-left' })).toBeUndefined()
   expect(await ui.find({ key: 'tabs-right' })).toBeUndefined()
-  expect(await ui.find({ key: 'open' })).toBeUndefined()
+  expect(await ui.find({ key: 'open' })).toBeDefined()
   expect(await ui.find({ text: /handoff\.md/ })).toBeDefined()
   expect(await ui.find({ text: /100% · § Handoff/ })).toBeDefined()
   await ui.unmount()
@@ -184,6 +185,87 @@ test('a narrow pane drops the tabs, the keys and the side spacing; the footer ke
   const card = page.children.find(child => child.props.paddingX === 2)
   expect(card?.props.width).toBe(104 + 4)
   await wide.unmount()
+})
+
+type Drawn = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+
+function footerOf(tree: Drawn, bodyRows: number) {
+  const pinned = (tree.children ?? []) as Drawn[]
+  return pinned.find(child => child.props?.position === 'absolute' && child.props?.top === bodyRows - 3)
+}
+
+function shown(node: unknown): { buttons: string[]; texts: string[] } {
+  if (typeof node === 'string') return { buttons: [], texts: [node] }
+  const one = node as Drawn
+  if (!one || one.props?.display === 'none') return { buttons: [], texts: [] }
+  const inner = (one.children ?? []).map(shown)
+  return {
+    buttons: [...(one.type === 'Button' ? [String(one.props?.key)] : []), ...inner.flatMap(part => part.buttons)],
+    texts: inner.flatMap(part => part.texts),
+  }
+}
+
+test('every view shows only its status text and ⌃k menu in the footer, and the keys still press', async ($, on) => {
+  fakeDisk(on)
+  await $.command.run({ command: 'peek', args: `${WORKTREE}/docs/handoff.md` } as never)
+  for (const bodyColumns of [100, 44]) {
+    const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...props, bodyColumns }, requestId: 'peek' })
+    const footers: { buttons: string[]; texts: string[] }[] = []
+    const look = async () => footers.push(shown(footerOf((await ui.drawn()) as unknown as Drawn, props.scroll.bodyRows)))
+    await look()
+    expect(await ui.find({ key: 'open' })).toBeDefined()
+    await ui.press({ key: 'mode-recent' })
+    expect(await ui.find({ text: /files · session/ })).toBeDefined()
+    await look()
+    await ui.press({ key: 'mode-gallery' })
+    const before = (await ui.find({ text: / · session$/ }))?.text
+    expect(before).toMatch(/ · session$/)
+    await ui.press({ key: 'type' })
+    await look()
+    expect(footers.at(-1)?.texts[0]).toMatch(/ · session$/)
+    expect(footers.at(-1)?.texts[0]).not.toBe(before)
+    await ui.press({ key: 'mode-view' })
+    expect(await ui.find({ text: /100% · § Handoff/ })).toBeDefined()
+    expect(footers.length).toBe(3)
+    for (const footer of footers) {
+      expect(footer.buttons).toEqual([])
+      expect(footer.texts.at(-1)).toBe('⌃k menu')
+      expect(footer.texts.filter(text => text !== '│').length).toBe(2)
+    }
+    expect(footers[0]?.texts[0]).toMatch(/100% · § Handoff/)
+    expect((await ui.find({ text: /^⌃k menu$/ }))?.props.color).toBe(C.accent)
+    await ui.unmount()
+  }
+})
+
+test('the ctrl+k menu lists the keys the footer no longer shows, each with its hotkey, only where they apply', async ($, on) => {
+  fakeDisk(on)
+  await $.command.run({ command: 'peek', args: `${WORKTREE}/docs/handoff.md` } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'mode-gallery' })
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+  expect(await ui.find({ key: 'menu-key-type' })).toBeDefined()
+  expect(await ui.find({ key: 'menu-key-sort' })).toBeDefined()
+  expect(await ui.find({ key: 'menu-key-open-selected' })).toBeDefined()
+  expect(await ui.find({ key: 'menu-key-star-selected' })).toBeDefined()
+  expect(await ui.find({ key: 'menu-key-back' })).toBeUndefined()
+  expect(await ui.find({ text: /^j k h l move$/ })).toBeDefined()
+  expect((await ui.find({ key: 'menu-row-open' }))?.text).toMatch(/app$/)
+  expect((await ui.find({ key: 'menu-row-key-open-selected' }))?.text).toMatch(/file ?o$/)
+  await ui.press({ key: 'menu-key-type' })
+  expect(await ui.find({ key: 'menu-filter' })).toBeUndefined()
+  expect(await ui.find({ text: /markdown · session/ })).toBeDefined()
+  await ui.press({ key: 'mode-view' })
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+  expect(await ui.find({ key: 'menu-key-type' })).toBeUndefined()
+  expect(await ui.find({ key: 'menu-key-open-selected' })).toBeUndefined()
+  expect(await ui.find({ key: 'menu-open' })).toBeDefined()
+  expect(await ui.find({ text: /^j k move$/ })).toBeDefined()
+  expect((await ui.find({ key: 'menu-row-open' }))?.text).toMatch(/app ?o$/)
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.unmount()
 })
 
 test('ctrl+k opens a menu that filters and runs commands', async ($, on) => {
@@ -411,4 +493,32 @@ test('the gallery draws every element and its controls work', async ($, on) => {
     }
     await ui.unmount()
   }
+})
+
+test('Recent rows and Gallery cards: hover shows an accent star, a click anywhere opens, a click on the star stars', async ($, on) => {
+  fakeDisk(on)
+  FILES['/repo/a.md'] = '# A\n'
+  FILES['/repo/b.md'] = '# B\n'
+  await $.command.run({ command: 'peek', args: '/repo/a.md' } as never)
+  await $.command.run({ command: 'peek', args: '/repo/b.md' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'mode-recent' })
+  const layer = 'hover-touched-0'
+  await ui.resize({ columns: 80, rows: 2, in: layer })
+  expect(JSON.stringify(await ui.drawn({ in: layer }))).not.toContain('\u{f41e}')
+  await ui.pointer({ type: 'move', x: 20, y: 1, in: layer })
+  const hovered = JSON.stringify(await ui.drawn({ in: layer }))
+  expect(hovered).toContain('\u{f41e}')
+  expect(hovered).toContain(C.accent)
+  await ui.pointer({ type: 'down', button: 'left', x: 30, y: 1, in: layer })
+  expect(await ui.find({ text: /^# ?A$|^A$/ })).toBeDefined()
+
+  await ui.press({ key: 'mode-gallery' })
+  const cards = 'hover-touched-0'
+  await ui.resize({ columns: 60, rows: 5, in: cards })
+  await ui.pointer({ type: 'move', x: 10, y: 3, in: cards })
+  expect(JSON.stringify(await ui.drawn({ in: cards }))).toContain('\u{f41e}')
+  await ui.pointer({ type: 'down', button: 'left', x: 2, y: 1, in: cards })
+  expect(JSON.stringify(await ui.drawn())).toContain('\u{f51a}')
+  await ui.unmount()
 })

@@ -1,8 +1,9 @@
 import type { Loaded, RemoteRecord } from '../types'
 import type { Captured } from './capture'
 import { htmlToMarkdown } from './lib'
+import { readable } from './defuddle'
 import type { Ref } from './refs'
-import { hasCurl, httpFailure, httpText } from './sources'
+import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
 import type { Failed, SourceIo } from './sources'
 
 const SCRATCH = '/tmp/claude-peek'
@@ -164,7 +165,8 @@ async function pinnedAddress(io: SourceIo, url: URL): Promise<string[] | null> {
   const addresses = [...ran.stdout.matchAll(/^\s*(?:ip_address|ipv6_address):\s*(\S+)\s*$/gm)].map(match => match[1] ?? '')
   if (addresses.length === 0) return null
   if (addresses.some(address => (ipv4(address) === null && ipv6(address) === null) || isPrivateHost(address))) return null
-  const [chosen = ''] = addresses
+  // Every address passed the private-host check; IPv4 first, since a machine without an IPv6 route cannot connect over it.
+  const chosen = addresses.find(address => ipv4(address) !== null) ?? addresses[0] ?? ''
   const port = url.port || (url.protocol === 'https:' ? '443' : '80')
   // Pins curl to the address checked above, so a second DNS answer cannot swap in a private one.
   return ['--resolve', `${host}:${port}:${chosen.includes(':') ? `[${chosen}]` : chosen}`]
@@ -175,10 +177,12 @@ async function sha1(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-async function download(io: SourceIo, raw: string | undefined): Promise<string | undefined> {
+// The content type rides on stderr so the stdout fields every caller parses keep their order.
+const TYPE_MARKER = '__peek_type__ '
+
+async function fetchToScratch(io: SourceIo, raw: string | undefined, ext: string, maxSeconds: number): Promise<{ file: string; type?: string } | undefined> {
   const first = fetchable(raw)
   if (!first) return undefined
-  const ext = IMAGE_EXT.exec(first.pathname)?.[1]?.toLowerCase() ?? 'img'
   const file = `${SCRATCH}/web-${(await sha1(first.href)).slice(0, 12)}.${ext}`
   const made = await io.run(['mkdir', '-p', SCRATCH], { timeoutMs: 5000 }).catch(() => null)
   if (!made || made.exitCode !== 0) return undefined
@@ -187,17 +191,186 @@ async function download(io: SourceIo, raw: string | undefined): Promise<string |
   for (let hop = 0; url && hop <= MAX_IMAGE_HOPS; hop++) {
     const pin = await pinnedAddress(io, url)
     if (!pin) return undefined
-    const argv = ['curl', '-sf', ...PROTO, ...pin, '--max-redirs', '0', '--max-time', '10', '--max-filesize', '10000000', '-o', file, '-w', '%{http_code} %{size_download} %{redirect_url}', url.href]
-    const ran = await io.run(argv, { timeoutMs: 15_000 }).catch(() => null)
+    const format = `%{http_code} %{size_download} %{redirect_url}%{stderr}${TYPE_MARKER}%{content_type}`
+    const argv = ['curl', '-sf', ...PROTO, ...pin, '--max-redirs', '0', '--max-time', String(maxSeconds), '--max-filesize', '10000000', '-o', file, '-w', format, url.href]
+    const ran = await io.run(argv, { timeoutMs: (maxSeconds + 5) * 1000 }).catch(() => null)
     if (!ran || ran.exitCode !== 0) return undefined
     const [code = '', size = '', ...rest] = ran.stdout.trim().split(' ')
     const status = Number.parseInt(code, 10)
-    if (status >= 200 && status < 300) return Number.parseInt(size, 10) > 0 ? file : undefined
+    if (status >= 200 && status < 300) {
+      const cut = ran.stderr.lastIndexOf(TYPE_MARKER)
+      const type = cut >= 0 ? ran.stderr.slice(cut + TYPE_MARKER.length).trim() || undefined : undefined
+      return Number.parseInt(size, 10) > 0 ? { file, type } : undefined
+    }
     if (status < 300 || status >= 400) return undefined
     const next: string = rest.join(' ')
     url = next ? fetchable(safeParse(next, url.href)?.href) : null
   }
   return undefined
+}
+
+async function download(io: SourceIo, raw: string | undefined): Promise<string | undefined> {
+  const ext = IMAGE_EXT.exec(safeParse(raw ?? '')?.pathname ?? '')?.[1]?.toLowerCase() ?? 'img'
+  return (await fetchToScratch(io, raw, ext, 10))?.file
+}
+
+export async function downloadFile(io: SourceIo, url: string, ext: string): Promise<{ file: string; type?: string } | undefined> {
+  if (!(await hasCurl(io))) return undefined
+  return fetchToScratch(io, url, /^[a-z0-9]{1,8}$/i.test(ext) ? ext.toLowerCase() : 'txt', 20)
+}
+
+const FILE_PATH = /\.(md|mdx|markdown|txt|png|jpe?g|gif|webp|bmp|svg|csv|tsv|json|jsonc|ya?ml|toml|mmd|mermaid|ts|tsx|m?js|cjs|jsx|py|rb|sh|swift|rs|go|css|log|diff|patch)$/i
+const VIDEO_FILE = /\.(mp4|m4v|webm|mov)$/i
+
+// A blob URL is GitHub's HTML page around the file; the raw host serves the file itself.
+export function remoteFileOf(address: string): { kind: 'file'; fetchUrl: string; ext: string } | { kind: 'video' } | null {
+  const url = safeParse(address)
+  if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null
+  if (VIDEO_FILE.test(url.pathname)) return { kind: 'video' }
+  const ext = FILE_PATH.exec(url.pathname)?.[1]?.toLowerCase()
+  if (!ext) return null
+  const blob = url.hostname === 'github.com' ? /^\/([^/]+)\/([^/]+)\/blob\/(.+)$/.exec(url.pathname) : null
+  const fetchUrl = blob ? `https://raw.githubusercontent.com/${blob[1]}/${blob[2]}/${blob[3]}${url.search}` : url.href
+  return { kind: 'file', fetchUrl, ext }
+}
+
+const MAX_MEDIA = 8
+const PICTURE_LINE = /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/
+const VIDEO_TAG = /<video\b[^>]*>/gi
+
+function attribute(tag: string, name: string): string | undefined {
+  return new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, 'i').exec(tag)?.[1]
+}
+
+// An empty attribute would resolve to the page itself.
+function absolute(raw: string | undefined, base: string): string | undefined {
+  return raw ? safeParse(raw, base)?.href : undefined
+}
+
+function youtubeId(url: URL): string | undefined {
+  if (url.hostname === 'youtu.be') return url.pathname.slice(1) || undefined
+  if (/(^|\.)youtube\.com$/.test(url.hostname)) return url.searchParams.get('v') ?? /^\/embed\/([\w-]+)/.exec(url.pathname)?.[1]
+  return undefined
+}
+
+// Defuddle keeps a <video> as raw HTML and drops its poster; it becomes a picture line here, its poster read from the page.
+function withVideoLines(body: string, html: string, base: string): { body: string; posters: Map<string, string> } {
+  const posters = new Map<string, string>()
+  for (const tag of html.match(VIDEO_TAG) ?? []) {
+    const src = absolute(attribute(tag, 'src'), base)
+    const poster = absolute(attribute(tag, 'poster'), base)
+    if (src && poster) posters.set(src, poster)
+  }
+  const lines = body.split('\n').map(line => {
+    const tag = /^\s*<video\b[^>]*>/i.exec(line)?.[0]
+    const src = tag ? absolute(attribute(tag, 'src'), base) : undefined
+    return src ? `![video](${src})` : line
+  })
+  return { body: lines.join('\n'), posters }
+}
+
+const PICTURE_ROW = /^(?:!\[[^\]]*\]\([^)\s]+\)\s*){2,}$/
+const PICTURE = /!\[[^\]]*\]\([^)\s]+\)/g
+
+type Fetch = (url: string) => Promise<string | undefined>
+
+// A gallery arrives as several pictures on one line. On a reader page images past the cap leave the body rather than
+// print as raw URLs; in an issue or comment they stay, drawn as links, since the text is the author's.
+async function pageMedia(texts: readonly string[], posters: Map<string, string>, fetch: Fetch | null, overCap: 'drop' | 'link') {
+  const wanted: { key: string; thumb?: string; play?: string }[] = []
+  let images = 0
+  const bodies = texts.map(body => {
+    const lines: string[] = []
+    for (const raw of body.split('\n')) {
+      const row = PICTURE_ROW.test(raw.trim()) ? (raw.match(PICTURE) ?? []) : [raw]
+      for (const line of row) {
+        const found = PICTURE_LINE.exec(line.trim())
+        const url = found?.[2] ? safeParse(found[2]) : null
+        if (!found || !url) {
+          lines.push(line)
+          continue
+        }
+        const id = youtubeId(url)
+        const isVideo = Boolean(id) || posters.has(url.href) || /^video$/i.test(found[1] ?? '')
+        const isOver = !isVideo && ++images > MAX_MEDIA
+        if (isOver && overCap === 'drop') continue
+        if (row.length > 1) lines.push('')
+        lines.push(line.trim())
+        if (wanted.some(one => one.key === url.href)) continue
+        const thumb = isOver ? undefined : id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : isVideo ? posters.get(url.href) : url.href
+        wanted.push({ key: url.href, thumb, play: isVideo ? url.href : undefined })
+      }
+    }
+    return lines.join('\n')
+  })
+  let budget = MAX_MEDIA
+  const files = await Promise.all(wanted.map(one => (fetch && one.thumb && budget-- > 0 ? fetch(one.thumb) : Promise.resolve(undefined))))
+  const media = wanted.length ? Object.fromEntries(wanted.map((one, i) => [one.key, { file: files[i], play: one.play }])) : undefined
+  return { bodies, media }
+}
+
+const IMG_ROW = /^(?:<img\b[^>]*>\s*)+$/i
+const BARE_URL = /^<?(https?:\/\/[^\s<>]+)>?$/
+const VIDEO_PATH = /\.(mp4|m4v|webm|mov)$/i
+
+function isVideoUrl(url: URL): boolean {
+  return Boolean(youtubeId(url)) || VIDEO_PATH.test(url.pathname) || (url.hostname === 'github.com' && url.pathname.startsWith('/user-attachments/assets/'))
+}
+
+// GitHub writes an upload as an <img> tag and a video upload as a bare URL on its own line; both become picture lines.
+function withPictureLines(markdown: string): string {
+  let fence = ''
+  return markdown
+    .split('\n')
+    .map(line => {
+      const marker = /^\s*(```|~~~)/.exec(line)?.[1]
+      if (marker && (!fence || marker === fence)) fence = fence ? '' : marker
+      if (fence || marker) return line
+      const text = line.trim()
+      if (IMG_ROW.test(text)) {
+        const pictures = (text.match(/<img\b[^>]*>/gi) ?? []).map(tag => {
+          const src = safeParse(attribute(tag, 'src') ?? '')
+          const isWeb = src?.protocol === 'https:' || src?.protocol === 'http:'
+          return src && isWeb ? `![${(attribute(tag, 'alt') ?? '').replace(/[[\]]/g, '')}](${src.href})` : ''
+        })
+        return pictures.every(Boolean) ? pictures.join(' ') : line
+      }
+      const bare = BARE_URL.exec(text)?.[1]
+      const url = bare ? safeParse(bare) : null
+      return url && isVideoUrl(url) ? `![video](${url.href})` : line
+    })
+    .join('\n')
+}
+
+const remoteFiles = new Map<string, Promise<string | undefined>>()
+const MAX_REMOTE_FILES = 200
+
+// An open issue reloads every minute; the pictures in it are fetched once a session.
+function sessionFetch(io: SourceIo, session: string): Fetch {
+  return url => {
+    const key = `${session} ${url}`
+    const known = remoteFiles.get(key)
+    if (known) return known
+    if (remoteFiles.size > MAX_REMOTE_FILES) remoteFiles.clear()
+    const pending = download(io, url)
+    remoteFiles.set(key, pending)
+    return pending
+  }
+}
+
+export async function withRemoteMedia(io: SourceIo, record: RemoteRecord): Promise<RemoteRecord> {
+  const shown = record.comments?.shown ?? []
+  const texts = [record.body ?? '', ...shown.map(one => one.body)].map(withPictureLines)
+  const fetch = (await hasCurl(io)) ? sessionFetch(io, await io.sessionId()) : null
+  const { bodies, media } = await pageMedia(texts, new Map(), fetch, 'link')
+  if (!media) return record
+  const [body = '', ...comments] = bodies
+  return {
+    ...record,
+    ...(record.body !== undefined ? { body } : {}),
+    ...(record.comments ? { comments: { ...record.comments, shown: shown.map((one, i) => ({ ...one, body: comments[i] ?? one.body })) } } : {}),
+    media,
+  }
 }
 
 async function firstIcon(io: SourceIo, icons: readonly string[]): Promise<string | undefined> {
@@ -225,7 +398,7 @@ async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: st
   const [code = '', ...rest] = cut >= 0 ? ran.stderr.slice(cut + MARKER.length).trim().split(' ') : []
   const status = Number.parseInt(code, 10)
   const isUsable = status >= 200 && status < 300 && (ran.exitCode === 0 || ran.stdout.length > 0)
-  if (!isUsable) return { ok: false, failure: cut >= 0 && status > 0 ? httpFailure(status) : 'offline' }
+  if (!isUsable) return cut >= 0 && status > 0 ? { ok: false, failure: httpFailure(status), detail: httpDetail(status, rest.join(' ') || url) } : { ok: false, failure: 'offline' }
   return { ok: true, text: ran.stdout, finalUrl: rest.join(' ') || url }
 }
 
@@ -243,14 +416,22 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
   const html = page.text.slice(0, MAX_PAGE)
   const head = parseHead(html, finalUrl)
   const host = hostOf(finalUrl) ?? address.hostname
-  const [image, favicon] = isCli ? await Promise.all([download(io, head.image), faviconFor(io, host, head.icons)]) : [undefined, undefined]
+  const [image, favicon, cleaned] = await Promise.all([
+    isCli ? download(io, head.image) : undefined,
+    isCli ? faviconFor(io, host, head.icons) : undefined,
+    readable(io, html, finalUrl),
+  ])
+  const video = cleaned ? withVideoLines(cleaned, html, finalUrl) : null
+  const withMedia = video ? await pageMedia([video.body], video.posters, isCli ? url => download(io, url) : null, 'drop') : null
+  const media = withMedia?.media
   const record: RemoteRecord = {
     address: ref.address,
     kind: 'web',
     title: head.title ?? host,
     trail: [head.siteName ?? host],
     meta: [{ label: 'Host', value: host }],
-    body: htmlToMarkdown(html),
+    body: withMedia?.bodies[0] ?? htmlToMarkdown(html),
+    ...(media ? { media } : {}),
     og: { title: head.title, description: head.description, siteName: head.siteName, image },
     favicon,
     browserUrl: finalUrl,

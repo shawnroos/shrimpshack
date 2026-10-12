@@ -33,7 +33,7 @@ export type Probe = {
   hasKey: boolean
 }
 
-export type Failed = { ok: false; failure: FailureKind }
+export type Failed = { ok: false; failure: FailureKind; detail?: string }
 
 const probes = new Map<string, Promise<Probe>>()
 const keys = new Map<string, Promise<string | null>>()
@@ -60,6 +60,12 @@ export function failureText(kind: FailureKind): { title: string; hint: string } 
       return { title: 'Your network policy blocks this request', hint: 'Open it in the browser instead' }
     case 'process-unavailable':
       return { title: 'Command-line tools are unavailable here', hint: 'This surface cannot run command-line tools' }
+    case 'live-unavailable':
+      return { title: 'Live view needs the Swift compiler', hint: 'Install the command-line tools with `xcode-select --install`, then press v' }
+    case 'live-crashed':
+      return { title: 'The live view stopped', hint: 'Press v to start it again' }
+    case 'live-stalled':
+      return { title: 'The live page never drew', hint: 'Press v to try again, or o to open it in the browser' }
   }
 }
 
@@ -277,6 +283,26 @@ export async function linearPaged(
   return { ok: true, nodes, isPartial: true }
 }
 
+const STATUS_TEXT: Record<number, string> = {
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  403: 'Forbidden',
+  404: 'Not Found',
+  410: 'Gone',
+  429: 'Too Many Requests',
+  500: 'Internal Server Error',
+  502: 'Bad Gateway',
+  503: 'Service Unavailable',
+}
+
+export function httpDetail(status: number, url: string): string {
+  let host = ''
+  try {
+    host = new URL(url).host
+  } catch {}
+  return [`HTTP ${status}`, STATUS_TEXT[status], host && `from ${host}`].filter(Boolean).join(' ')
+}
+
 export function httpFailure(status: number): FailureKind {
   if (status === 429) return 'rate-limited'
   if (status === 401 || status === 403 || status === 404 || status === 410) return 'not-found-or-no-access'
@@ -299,6 +325,6 @@ export async function httpText(io: SourceIo, url: string): Promise<{ ok: true; t
   } catch (error) {
     return { ok: false, failure: isPolicyRefusal(error) ? 'fetch-blocked' : 'offline' }
   }
-  if (!response.ok) return { ok: false, failure: httpFailure(response.status) }
+  if (!response.ok) return { ok: false, failure: httpFailure(response.status), detail: httpDetail(response.status, target) }
   return { ok: true, text: response.text }
 }

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Loaded, Mention, Mode, View } from '../types'
+import type { Loaded, Mention, Mode, RemoteRecord, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts } from './theme'
 import { capturedLinearContext, record } from './capture'
@@ -9,10 +9,13 @@ import type { CaptureIo } from './capture'
 import { familyOf, itemKey, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
+import { downloadFile, remoteFileOf } from './web'
 import type { RemoteIo } from './remote'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
+import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint } from './live'
+import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
 import {
@@ -160,6 +163,8 @@ const SAMPLE_MARKDOWN = '## Markdown\n\nRenders **bold**, *italic*, `code`, [lin
 
 const MERMAID_ASCII = '/.cache/claude-peek/bin/mermaid-ascii'
 const MAX_PNG_BYTES = 2 * 1024 * 1024
+// The engine refuses a whole pane whose Image sources pass 2097152 bytes; past this budget a picture shows as a link.
+const IMAGE_TREE_BUDGET = 1_900_000
 
 const exists = new Map<string, boolean>()
 const pixels = new Map<string, string>()
@@ -171,6 +176,21 @@ let blockHeadings: string[] = []
 let estimatedRows = 1
 const HEADER_ROWS = 2
 const FOOTER_ROWS = 3
+const MOVE_KEYS = new Set(['next', 'prev', 'left', 'right'])
+const COMMAND_KEYS: Record<string, string> = {
+  peek: 'mode-view',
+  recent: 'mode-recent',
+  gallery: 'mode-gallery',
+  'role-*': 'role',
+  'scope-*': 'scope',
+  open: 'open',
+  refresh: 'refresh',
+  live: 'live',
+  'live-back': 'back',
+  copy: 'copy',
+  star: 'star',
+  close: 'close',
+}
 const PAGE_TOP = HEADER_ROWS + 1
 const converted = new Map<string, { file: string; width: number; height: number }>()
 
@@ -204,8 +224,8 @@ async function runOrThrow($: EngineInterface, argv: string[]) {
 
 // The bytes go to the terminal inline: a multiplexer between Claude Code and
 // the terminal may pass kitty images sent as data but not ones sent as a path.
-async function toPng($: EngineInterface, abs: string, mtimeMs: number) {
-  const cacheKey = `${abs}@${mtimeMs}`
+async function toPng($: EngineInterface, abs: string, mtimeMs: number, edges: readonly number[] = [1600, 1000, 600]) {
+  const cacheKey = `${abs}@${mtimeMs}@${edges.join(',')}`
   const cached = converted.get(cacheKey)
   if (cached && pixels.has(cached.file)) return cached
   await $.process.run(['mkdir', '-p', SCRATCH])
@@ -216,7 +236,7 @@ async function toPng($: EngineInterface, abs: string, mtimeMs: number) {
     await runOrThrow($, ['rsvg-convert', '-w', '1600', '-o', source, abs])
   }
   const file = `${SCRATCH}/${name}.png`
-  for (const edge of [1600, 1000, 600]) {
+  for (const edge of edges) {
     await runOrThrow($, ['sips', '-Z', String(edge), '-s', 'format', 'png', source, '--out', file])
     const { base64 } = await $.fs.read(file, { as: 'bytes' })
     if (base64.length * 0.75 <= MAX_PNG_BYTES) {
@@ -342,13 +362,52 @@ async function loadFile($: EngineInterface, href: string, path: string, line?: n
   return { ...base, kind: kind === 'json' || kind === 'toml' ? kind : 'text', meta, summary, code }
 }
 
+function urlName(url: URL): string {
+  const last = url.pathname.split('/').filter(Boolean).pop()
+  try {
+    return last ? decodeURIComponent(last) : url.hostname
+  } catch {
+    return last ?? url.hostname
+  }
+}
+
+function videoView(url: URL, now: number): View {
+  const host = url.hostname.replace(/^www\./, '')
+  const record: RemoteRecord = {
+    address: url.href,
+    kind: 'web',
+    title: urlName(url),
+    trail: [host],
+    meta: [{ label: 'Host', value: host }],
+    body: `![video](${url.href})`,
+    media: { [url.href]: { play: url.href } },
+    browserUrl: url.href,
+  }
+  return { href: url.href, title: record.title, location: url.href, kind: 'web', remote: { record, tier: 'cli', fetchedAt: now } }
+}
+
+// The page keeps the URL as its address, so o opens and c copies the URL, not the scratch copy.
+async function loadRemoteFile($: EngineInterface, url: URL, file: { fetchUrl: string; ext: string }): Promise<View | null> {
+  const got = await downloadFile(remoteIoOf($), file.fetchUrl, file.ext).catch(() => undefined)
+  if (!got || /^text\/html/i.test(got.type ?? '')) return null
+  const loaded = await loadFile($, url.href, got.file).catch(() => null)
+  if (!loaded || loaded.error) return null
+  return { ...loaded, title: urlName(url), location: url.href, root: undefined, isWorktree: undefined }
+}
+
 async function loadUrl($: EngineInterface, href: string): Promise<View> {
   const url = new URL(href)
-  const base: View = { href, title: url.hostname + url.pathname, location: href, kind: 'web', meta: url.hostname }
+  const file = remoteFileOf(href)
+  if (file?.kind === 'video') return videoView(url, await $.clock.now())
+  const fromFile = file ? await loadRemoteFile($, url, file) : null
+  if (fromFile) return fromFile
   const kind = kindOf(url.pathname)
+  const base: View = { href, title: url.hostname + url.pathname, location: href, kind: 'web', meta: url.hostname }
   if (kind === 'image' || kind === 'svg') {
     return { ...base, error: 'Remote images open in the browser. Press "Open externally".' }
   }
+  const ref = parseRef(href)
+  if (file && ref) return loadRemote($, ref)
   const response = await $.http.fetch(href)
   if (!response.ok) return { ...base, error: `HTTP ${response.status}` }
   const type = response.headers['content-type'] ?? ''
@@ -375,9 +434,12 @@ function remoteIoOf($: EngineInterface): RemoteIo {
   }
 }
 
+// A pane is about 100 columns of 8 px, so 800 px is already sharper than it can show, and keeps each picture small.
+const WEB_EDGES = [800, 600, 400]
+
 async function remotePicture($: EngineInterface, file: string | undefined) {
   if (!file || failedPictures.has(file)) return undefined
-  return toPng($, file, 0).catch(() => {
+  return toPng($, file, 0, WEB_EDGES).catch(() => {
     failedPictures.add(file)
     return undefined
   })
@@ -395,6 +457,9 @@ const repoContexts = new Map<string, string | null>()
 const backStack: { view: View; key: string }[] = []
 const failedPictures = new Set<string>()
 const blockMemo = new Map<string, { chunk: string; rows: number }[]>()
+// viewOf runs on every refresh tick and redraw; each fence costs one mermaid-ascii process.
+const drawnRecords = new Map<string, RemoteRecord>()
+const MAX_DRAWN_RECORDS = 50
 
 async function repoContext($: EngineInterface, cwd: string): Promise<string | undefined> {
   if (!repoContexts.has(cwd)) {
@@ -485,10 +550,27 @@ async function loadRemote($: EngineInterface, ref: Ref, canReplay = false): Prom
   return viewOf($, ref, entry)
 }
 
+async function withRecordDiagrams($: EngineInterface, record: RemoteRecord, fetchedAt = 0): Promise<RemoteRecord> {
+  const texts = [record.body ?? '', ...(record.comments?.shown ?? []).map(one => one.body)]
+  if (!texts.some(text => mermaidFences(text).length)) return record
+  const key = `${record.address}|${fetchedAt}|${paneColumns}`
+  const known = drawnRecords.get(key)
+  if (known) return known
+  const [body, ...comments] = await Promise.all(texts.map(text => withDrawnMermaid($, text)))
+  const drawn: RemoteRecord = {
+    ...record,
+    ...(record.body !== undefined ? { body } : {}),
+    ...(record.comments ? { comments: { ...record.comments, shown: record.comments.shown.map((one, i) => ({ ...one, body: comments[i] ?? one.body })) } } : {}),
+  }
+  if (drawnRecords.size > MAX_DRAWN_RECORDS) drawnRecords.clear()
+  drawnRecords.set(key, drawn)
+  return drawn
+}
+
 async function viewOf($: EngineInterface, ref: Ref, entry: CacheEntry): Promise<View> {
   const base: View = { href: ref.address, title: ref.key ?? ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
-  const record = entry.record
-  if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline' } }
+  const record = entry.record && (await withRecordDiagrams($, entry.record, entry.fetchedAt))
+  if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline', failureDetail: entry.failureDetail } }
   return {
     href: record.address,
     title: record.title,
@@ -501,16 +583,22 @@ async function viewOf($: EngineInterface, ref: Ref, entry: CacheEntry): Promise<
       staleSince: entry.staleSince,
       favicon: await remotePicture($, record.favicon),
       preview: await remotePicture($, record.og?.image),
+      pictures: await mediaPictures($, record.media),
     },
   }
+}
+
+async function mediaPictures($: EngineInterface, media: RemoteRecord['media']) {
+  const found = await Promise.all(Object.entries(media ?? {}).map(async ([key, one]) => [key, await remotePicture($, one.file)] as const))
+  const pictures = Object.fromEntries(found.filter((one): one is readonly [string, NonNullable<(typeof one)[1]>] => Boolean(one[1])))
+  return Object.keys(pictures).length ? pictures : undefined
 }
 
 function remoteRef(href: string, context: RefContext = {}): Ref | null {
   if (parseHref(href)) return null
   const ref = parseRef(href, context)
   if (!ref) return null
-  const kind = ref.kind === 'web' ? kindOf(new URL(ref.address).pathname) : null
-  return kind === 'image' || kind === 'svg' ? null : ref
+  return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
 }
 
 async function show($: EngineInterface, raw: string) {
@@ -607,8 +695,18 @@ async function toHref($: EngineInterface, raw: string): Promise<string | null> {
   const match = /^(.+?)(?::(\d+))?$/.exec(cleaned)
   const abs = resolvePath(match?.[1] ?? cleaned, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
   exists.delete(abs)
-  if (!(await pathExists($, abs))) return null
-  return fileHref(abs, match?.[2] ? Number(match[2]) : undefined)
+  if (await pathExists($, abs)) return fileHref(abs, match?.[2] ? Number(match[2]) : undefined)
+  return bareDomain(cleaned)
+}
+
+// `.md` and friends are real top-level domains, so a missing local file named like one goes to the guess, not the web.
+const FILE_SUFFIX = /\.(?:md|mdx|ts|tsx|js|jsx|json|py|txt|png|jpe?g|gif|svg|pdf|csv|html?|ya?ml|toml|sh|swift|rs|go|css|lock|log)$/i
+
+function bareDomain(text: string): string | null {
+  const found = /^((?:[a-z0-9-]+\.)+[a-z]{2,})(:\d+)?([/?#]\S*)?$/i.exec(text)
+  if (!found?.[1]) return null
+  if (!found[3] && FILE_SUFFIX.test(found[1])) return null
+  return `https://${text}`
 }
 
 async function guess($: EngineInterface, query: string): Promise<string | null> {
@@ -848,6 +946,170 @@ async function setMenu($: EngineInterface, isOpen: boolean) {
   await $.ui.open(isOpen ? { id: PANE, title: 'Peek', focus: true, closeOnEscape: true } : { id: PANE, title: 'Peek' })
 }
 
+const LIVE_FRAME = 'live-frame'
+// No API reports a cell's pixel size; 8 CSS px a column keeps text near its normal size at the 1 MB/s frame budget.
+const LIVE_PX_PER_COLUMN = 8
+const CELL_ASPECT = 2.1
+let live: Live | null = null
+let liveHref: string | null = null
+let liveViewport: Viewport | null = null
+let isLiveFrameDrawn = false
+let liveNotice: { href: string; kind: LiveFailureKind } | null = null
+let isTyping = false
+let lastInputSeq = 0
+let liveGeom: FrameGeometry | null = null
+const LINE_SCROLL_PX = 80
+const WHEEL_SCROLL_PX = 60
+
+function liveIoOf($: EngineInterface): LiveIo {
+  return {
+    root: $.plugin.root,
+    home: () => $.env.get('HOME'),
+    read: path => $.fs.read(path),
+    exists: path => $.fs.exists(path),
+    run: (argv, init) => $.process.run(argv, init),
+    spawn: argv => $.process.spawn({ argv }),
+    post: async (socket, path, body) => {
+      const init = body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }
+      const answer = await $.http.fetch(`http://peek-web/${path}`, { method: 'POST', socketPath: socket, ...init })
+      return answer.ok
+    },
+    after: (ms, fn) => $.clock.after(ms, fn),
+    removeDir: async dir => {
+      // Only the helper's own mkdtemp directory: a malformed `ready` must never aim rm at anything else.
+      if (/\/peek-web\.[A-Za-z0-9]{6}$/.test(dir)) await $.process.run(['rm', '-rf', dir])
+    },
+  }
+}
+
+function onLiveChange($: EngineInterface, state: LiveState, event?: { t: string }) {
+  if (state.failure && liveHref) {
+    liveNotice = { href: liveHref, kind: state.failure.kind }
+    liveHref = null
+    isLiveFrameDrawn = false
+  }
+  if (event?.t === 'frame' && isLiveFrameDrawn && liveHref && state.frame) {
+    const { path, id } = state.frame
+    // A refused blit (Image not mounted yet, or mid-resize) is answered with { deny }, not a rejection; a redraw draws the newest frame instead.
+    void $.ui.blit({ requestId: PANE, key: LIVE_FRAME, source: { file: path, format: 'png', generation: id } }).then(
+      result => {
+        if (result.deny) $.ui.invalidate('ui.render')
+      },
+      () => $.ui.invalidate('ui.render'),
+    )
+    return
+  }
+  if (event?.t === 'focus') isTyping = liveHref !== null && state.isEditable
+  // A new document has no focused field yet; typing resumes only when the next click lands on one.
+  if (event?.t === 'nav' || (event?.t === 'load' && state.load === 'loading')) isTyping = false
+  if (event?.t === 'cookies') return
+  $.ui.invalidate('ui.render')
+}
+
+function sendInput(events: HelperInput[]) {
+  if (events.length > 0) void live?.command('input', { events }).catch(() => undefined)
+}
+
+function scrollLive(dy: number, at?: { x: number; y: number }) {
+  const viewport = liveViewport
+  if (!viewport) return
+  const point = at ?? { x: Math.floor(viewport.width / 2), y: Math.floor(viewport.height / 2) }
+  sendInput([{ type: 'scroll', ...point, dy }])
+}
+
+async function liveBack($: EngineInterface) {
+  if (live?.state().canBack) await live.command('back')
+  else {
+    await leaveLive()
+    await goBack($)
+  }
+}
+
+async function liveKey($: EngineInterface, key: string) {
+  const height = liveViewport?.height ?? 400
+  const url = live?.state().url
+  const current = key === 'o' || key === 'c' || key === 'f' ? await read($, view) : null
+  switch (key) {
+    case 'j':
+    case 'down':
+      return scrollLive(LINE_SCROLL_PX)
+    case 'k':
+    case 'up':
+      return scrollLive(-LINE_SCROLL_PX)
+    case ' ':
+    case 'pagedown':
+      return scrollLive(Math.round(height * 0.8))
+    case 'pageup':
+      return scrollLive(-Math.round(height * 0.8))
+    case 'b':
+      return liveBack($)
+    case 'u':
+      return void live?.command('reload')
+    case 'v':
+      return leaveLive().then(() => $.ui.invalidate('ui.render'))
+    case 'o':
+      return url && isWebUrl(url) ? void $.process.run(['open', url]).catch(() => undefined) : current ? openExternally($, current) : undefined
+    case 'c':
+      return void $.ui.copy({ text: url ?? current?.location ?? '' })
+    case 'f':
+      return url || current ? void setStar($, url ?? current?.href ?? '') : undefined
+  }
+}
+
+type LiveInputEvent = { seq: number; type: 'click'; x: number; y: number } | ({ seq: number; type: 'key' } & TypedKey)
+
+async function onLiveInput($: EngineInterface, events: readonly LiveInputEvent[]) {
+  const fresh = events.filter(one => one.seq > lastInputSeq).sort((a, b) => a.seq - b.seq)
+  let typed: TypedKey[] = []
+  const flush = () => {
+    sendInput(typedInput(typed))
+    typed = []
+  }
+  for (const one of fresh) {
+    lastInputSeq = one.seq
+    if (one.type === 'click') {
+      flush()
+      if (liveGeom && liveViewport) sendInput([{ type: 'click', ...pagePoint(one, liveGeom, liveViewport) }])
+    } else if (isTyping) typed.push(one)
+    else {
+      flush()
+      await liveKey($, one.key)
+    }
+  }
+  flush()
+}
+
+function liveOf($: EngineInterface): Live {
+  live ??= createLive(liveIoOf($), (state, event) => onLiveChange($, state, event))
+  return live
+}
+
+function liveBox(columns: number, rows: number): Viewport {
+  const width = Math.round(Math.max(320, Math.min(900, columns * LIVE_PX_PER_COLUMN)))
+  return { width, height: Math.round((width * rows * CELL_ASPECT) / columns) }
+}
+
+async function toggleLive($: EngineInterface, current: View, viewport: Viewport) {
+  if (liveHref === current.href) {
+    await leaveLive()
+    return
+  }
+  liveNotice = null
+  liveHref = current.href
+  liveViewport = viewport
+  isLiveFrameDrawn = false
+  const url = current.remote?.record?.address ?? current.location
+  if (!(await liveOf($).start(url, viewport))) liveHref = null
+  $.ui.invalidate('ui.render')
+}
+
+async function leaveLive() {
+  liveHref = null
+  isLiveFrameDrawn = false
+  isTyping = false
+  await live?.leave().catch(() => undefined)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     lastActivity = await $.clock.now()
@@ -907,6 +1169,7 @@ export const register: Register = on => {
       await setMenu($, false).catch(() => undefined)
       return { value: undefined }
     }
+    await leaveLive()
     return next(e)
   })
 
@@ -1121,6 +1384,11 @@ export const register: Register = on => {
   })
 
   on('ui.message', async ($, e, next) => {
+    const input = e.data as { liveInput?: unknown } | null
+    if (e.requestId === PANE && input && Array.isArray(input.liveInput)) {
+      await onLiveInput($, input.liveInput as LiveInputEvent[]).catch(() => undefined)
+      return { props: { width: liveGeom?.columns ?? 1, height: liveGeom?.rows ?? 1, acked: lastInputSeq } }
+    }
     const starring = e.data as { star?: unknown } | null
     if (e.requestId === PANE && starring && typeof starring.star === 'string') {
       await setStar($, starring.star).catch(() => undefined)
@@ -1148,6 +1416,13 @@ export const register: Register = on => {
   })
 
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    if (liveHref && liveGeom && liveViewport && e.pointer) {
+      const at = wheelPoint(e.pointer, liveGeom, liveViewport)
+      if (at) {
+        scrollLive(e.by * WHEEL_SCROLL_PX, at)
+        return {}
+      }
+    }
     const isList = (await read($, mode).catch(() => 'view')) !== 'view' || !(await read($, view).catch(() => null))
     if (isList && !e.pointer && e.origin.kind === 'person' && Math.abs(e.by) === 1 && !(await read($, menuOpen).catch(() => false))) {
       await moveSelection($, e.by > 0 ? 'down' : 'up').catch(() => undefined)
@@ -1181,6 +1456,7 @@ export const register: Register = on => {
     const pageWidth = isNarrow ? columns : textWidth + 4
     const rows = Math.max(4, e.props.scroll.bodyRows - 4)
     const turn = (to: number) => void update($, page, () => Math.max(0, to))
+    if (liveHref && (chosen !== 'view' || current?.href !== liveHref)) void leaveLive()
 
     const chip = (label: string, isOn: boolean) => (
       <Text color={isOn ? C.appBg : C.overlay0} backgroundColor={isOn ? C.accent : C.panelBg} bold={isOn}>
@@ -1255,30 +1531,24 @@ export const register: Register = on => {
         </Box>
       )
 
-    const footer = (info: string, keys: { key: string; label: string; hotkey: string; onPress: () => void; isDim?: boolean; isDefault?: boolean }[]) => (
+    type Key = { key: string; label: string; hotkey: string; onPress: () => void; menu?: string }
+    const footer = (info: string, keys: Key[]) => (
       <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="center" width={columns}>
         {info && <Text color={C.overlay1}>{info}</Text>}
         {!isNarrow && info && <Text color={C.surface1}>│</Text>}
-        {!isNarrow &&
-          keys.map(one => (
-            <Button
-              key={one.key}
-              label={one.label}
-              hotkey={one.hotkey}
-              plain
-              dimColor={one.isDim}
-              autoFocus={one.isDefault ? true : undefined}
-              onPress={one.onPress}
-            />
+        <Text color={C.accent}>⌃k menu</Text>
+        {/* Hidden, yet the hotkeys still press: the Pane arms every Button in its drawn tree regardless of display (seen in engine 2.1.295, not promised by the types). Tab still visits them. */}
+        <Box key="footer-keys" display="none">
+          {keys.map(one => (
+            <Button key={one.key} label={one.label} hotkey={one.hotkey} plain onPress={one.onPress} />
           ))}
-        {!isNarrow && <Text color={C.overlay0}>⌃k menu</Text>}
+        </Box>
       </Box>
     )
-    const modeKeys = MODES.map(one => ({
+    const modeKeys: Key[] = MODES.map(one => ({
       key: `mode-${one.id}`,
       label: one.label,
       hotkey: one.hotkey,
-      isDim: one.id !== chosen,
       onPress: () => {
         void update($, mode, () => one.id)
         void update($, page, () => 0)
@@ -1330,6 +1600,12 @@ export const register: Register = on => {
             ...(current.remote
               ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hint: 'u', run: () => void refresh($, current.href) }]
               : []),
+            ...(e.surface === 'terminal' && Image && current.remote && parseRef(current.href)?.kind === 'web'
+              ? [{ id: 'live', icon: '\u{f0ac}', label: liveHref === current.href ? 'Reader view: leave the live page' : 'Live view: the real page, clickable', hint: 'v', run: () => void toggleLive($, current, liveViewport ?? { width: 600, height: 400 }) }]
+              : []),
+            ...(liveHref === current.href && live?.state().canBack
+              ? [{ id: 'live-back', icon: '\u{f060}', label: 'Back in the live page', hint: 'b', run: () => void liveKey($, 'b') }]
+              : []),
             { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
             { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar($, current.href) },
           ]
@@ -1351,7 +1627,6 @@ export const register: Register = on => {
         }),
     ]
     const words = filter.toLowerCase().split(/\s+/).filter(Boolean)
-    const matches = commands.filter(one => words.every(word => one.label.toLowerCase().includes(word)))
     const runCommand = (one: (typeof commands)[number] | undefined) => {
       if (!one) return
       closeMenu()
@@ -1359,49 +1634,61 @@ export const register: Register = on => {
     }
     const Input = 'Input' in elements ? elements.Input : undefined
     const menuWidth = Math.max(24, Math.min(64, columns - 8))
-    const menu = (
-      <Box flexDirection="column" width={menuWidth}>
-        <Text wrap="truncate-end">
-          <Text color={BASE.surface1}>─</Text>
-          <Text color={BASE.accent} bold> COMMANDS </Text>
-          <Text color={BASE.surface1}>{'─'.repeat(Math.max(1, menuWidth - 12))}</Text>
-        </Text>
-        {Input && (
-          <Box
-            key="menu-filter-frame"
-            flexDirection="row"
-            width={menuWidth}
-            borderStyle="round"
-            borderColor={BASE.accent}
-            paddingX={1}
-            marginY={1}
-          >
-            <Text color={BASE.accent}>{'\u{f002}  '}</Text>
-            <Box flexGrow={1}>
-          <Input
-            key="menu-filter"
-            placeholder="type to filter · Enter runs the first match"
-            value={filter}
-            autoFocus
-            onInput={(value: string) => void update($, menuFilter, () => value)}
-            onSubmit={() => runCommand(matches[0])}
-          />
+    const menuFor = (keys: Key[]) => {
+      const fromKeys = keys.flatMap(one => (one.menu ? [{ id: `key-${one.key}`, icon: '\u{f11c}', label: one.menu, hint: one.hotkey, run: one.onPress }] : []))
+      const closeAt = commands.findIndex(one => one.id === 'close')
+      const keyed = commands.map(one => {
+        const owner = COMMAND_KEYS[one.id.replace(/-[^-]+$/, '-*')] ?? COMMAND_KEYS[one.id]
+        return owner ? { ...one, hint: keys.find(key => key.key === owner)?.hotkey ?? '' } : one
+      })
+      const all = [...keyed.slice(0, closeAt), ...fromKeys, ...keyed.slice(closeAt)]
+      const matches = all.filter(one => words.every(word => one.label.toLowerCase().includes(word)))
+      const moves = keys.filter(one => MOVE_KEYS.has(one.key)).map(one => one.hotkey)
+      return (
+        <Box flexDirection="column" width={menuWidth}>
+          <Text wrap="truncate-end">
+            <Text color={BASE.surface1}>─</Text>
+            <Text color={BASE.accent} bold> COMMANDS </Text>
+            <Text color={BASE.surface1}>{'─'.repeat(Math.max(1, menuWidth - 12))}</Text>
+          </Text>
+          {Input && (
+            <Box
+              key="menu-filter-frame"
+              flexDirection="row"
+              width={menuWidth}
+              borderStyle="round"
+              borderColor={BASE.accent}
+              paddingX={1}
+              marginY={1}
+            >
+              <Text color={BASE.accent}>{'\u{f002}  '}</Text>
+              <Box flexGrow={1}>
+            <Input
+              key="menu-filter"
+              placeholder="type to filter · Enter runs the first match"
+              value={filter}
+              autoFocus
+              onInput={(value: string) => void update($, menuFilter, () => value)}
+              onSubmit={() => runCommand(matches[0])}
+            />
+              </Box>
             </Box>
-          </Box>
-        )}
-        {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
-        {matches.slice(0, 20).map(one => (
-          <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
-            <Box flexDirection="row" flexShrink={1}>
-              <Text color={BASE.accent}>{`${one.icon}  `}</Text>
-              <Button key={`menu-${one.id}`} label={one.label} plain onPress={() => runCommand(one)} />
+          )}
+          {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
+          {matches.slice(0, 20).map(one => (
+            <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
+              <Box flexDirection="row" flexShrink={1}>
+                <Text color={BASE.accent}>{`${one.icon}  `}</Text>
+                <Button key={`menu-${one.id}`} label={one.label} plain onPress={() => runCommand(one)} />
+              </Box>
+              <Text color={BASE.overlay0}>{one.hint}</Text>
             </Box>
-            <Text color={BASE.overlay0}>{one.hint}</Text>
-          </Box>
-        ))}
-        <Button key="menu-close" label="Close menu" plain dimColor onPress={closeMenu} />
-      </Box>
-    )
+          ))}
+          {moves.length > 0 && <Text color={BASE.overlay0}>{`${moves.join(' ')} move`}</Text>}
+          <Button key="menu-close" label="Close menu" plain dimColor onPress={closeMenu} />
+        </Box>
+      )
+    }
 
     const offset = at
     const jumpTo = (key: string) => void $.ui.scroll({ in: PANE, to: { key }, block: 'start' }).catch(() => undefined)
@@ -1423,7 +1710,6 @@ export const register: Register = on => {
       },
     })
     const blockJumps = (count: number, prefix: string) => keyJumps(Array.from({ length: count }, (_, i) => `${prefix}-${i}`))
-    type Key = { key: string; label: string; hotkey: string; onPress: () => void; isDim?: boolean; isDefault?: boolean }
     const frame = (middle: unknown, content: unknown, info: string, keys: Key[], pageBg: string = C.panelBg) => (
       <Box
         flexDirection="column"
@@ -1475,7 +1761,7 @@ export const register: Register = on => {
             paddingX={2}
             paddingY={1}
           >
-            {menu as never}
+            {menuFor(keys) as never}
           </Box>
         )}
       </Box>
@@ -1489,12 +1775,14 @@ export const register: Register = on => {
         key: 'open-selected',
         label: '⏎ Open',
         hotkey: 'o',
+        menu: 'Open the selected file',
         onPress: () => void selectedHref($).then(href => (href ? show($, href) : undefined)),
       },
       {
         key: 'star-selected',
         label: 'Star',
         hotkey: 'f',
+        menu: 'Star or unstar the selected file',
         onPress: () => void selectedHref($).then(href => (href ? setStar($, href).then(() => undefined) : undefined)),
       },
     ]
@@ -1570,6 +1858,17 @@ export const register: Register = on => {
         cursor += rowsOfCards.length * (CARD_ROWS + 1)
         return rowsOfCards.map((cards, r) => (
           <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
+            {Client && (
+              <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
+                <Client
+                  key={`hover-${prefix}-${r}`}
+                  module="./hover-layer.tsx"
+                  props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
+                  width={textWidth}
+                  height={CARD_ROWS}
+                />
+              </Box>
+            )}
             {cards.map((one, c) => {
               const index = firstNav + r * perRow + c
               const isSelected = index === selected
@@ -1686,8 +1985,8 @@ export const register: Register = on => {
             ...modeKeys,
             scopeKey,
             roleKey,
-            { key: 'type', label: 'Type', hotkey: 't', onPress: () => void update($, galleryType, one => nextOf(TYPES, one)) },
-            { key: 'sort', label: 'Sort', hotkey: 'n', onPress: () => void update($, gallerySort, one => nextOf(SORTS, one)) },
+            { key: 'type', label: 'Type', hotkey: 't', menu: `Next file type (now ${type})`, onPress: () => void update($, galleryType, one => nextOf(TYPES, one)) },
+            { key: 'sort', label: 'Sort', hotkey: 'n', menu: `Next sort order (now ${sort})`, onPress: () => void update($, gallerySort, one => nextOf(SORTS, one)) },
             ...selectKeys,
             closeKey,
           ],
@@ -1712,6 +2011,17 @@ export const register: Register = on => {
         })
         return chunks.map((chunk, i) => (
           <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
+            {Client && (
+              <Box position="absolute" top={0} left={0} width={textWidth} height={chunk.length}>
+                <Client
+                  key={`hover-${prefix}-${i}`}
+                  module="./hover-layer.tsx"
+                  props={{ kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
+                  width={textWidth}
+                  height={chunk.length}
+                />
+              </Box>
+            )}
             {chunk.map((one, j) => {
               const index = firstNav + i * LIST_CHUNK + j
               const isSelected = index === selected
@@ -1814,6 +2124,8 @@ export const register: Register = on => {
     }
     const kind = current.kind
     const path = parseHref(current.href)?.path ?? current.href
+    // An embed's content is textWidth - 2 wide; height follows the picture, capped so it fits on screen.
+    const fullWidth = (width: number, height: number) => imageBox(width, height, textWidth - 2, Math.max(IMAGE_ROWS, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 6))
     const embed = (key: string, icon: string, label: string, detail: string, color: string, child: unknown) => (
       <Box key={key} flexDirection="column" width={textWidth} backgroundColor={C.appBg} paddingX={1} paddingY={1}>
         <Box flexDirection="row" width={textWidth - 2}>
@@ -1827,6 +2139,10 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+    const diagramEmbed = (key: string, info: string, text: string) =>
+      embed(key, ICON.mermaid, 'DIAGRAM', info, C.mauve, (
+        <Text color={C.subtext0}>{text}</Text>
+      ))
     const folderPath = path.slice(0, Math.max(0, path.length - current.title.length - 1))
     const folder = current.root && folderPath.startsWith(current.root)
       ? folderPath.slice(current.root.length + 1)
@@ -1900,10 +2216,83 @@ export const register: Register = on => {
         note(1, label)
       }
       const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
+      let imageBytes = 0
+      const fitsPane = (png: string) => {
+        if (imageBytes + png.length > IMAGE_TREE_BUDGET) return false
+        imageBytes += png.length
+        return true
+      }
       const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
       const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
       const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
+      const mediaBlock = (index: number, alt: string, url: string, heading: string) => {
+        const key = `media-${index}`
+        const one = record?.media?.[url]
+        const picture = remote.pictures?.[url]
+        const loadedPng = picture && pixels.get(picture.file)
+        const png = loadedPng && fitsPane(loadedPng) ? loadedPng : undefined
+        const host = (() => {
+          try {
+            return new URL(url).host
+          } catch {
+            return url
+          }
+        })()
+        drawnParts.push(
+          embed(key, one?.play ? '\u{f03d}' : ICON.image, one?.play ? 'VIDEO' : 'IMAGE', alt || host, C.teal, (
+            <Box flexDirection="column">
+              {png && Image && picture ? (
+                <Image key={`${key}-image`} source={{ png }} {...fullWidth(picture.width, picture.height)} alt={alt || 'image'} />
+              ) : (
+                !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink($, link.href)} />
+              )}
+              {one?.play && (
+                <Button key={`media-play-${index}`} label="\u{f04b} Play video" plain onPress={() => void (isWebUrl(url) && $.process.run(['open', url]).catch(() => undefined))} />
+              )}
+            </Box>
+          )),
+        )
+        note(png && picture ? fullWidth(picture.width, picture.height).rows + 4 : 4, heading)
+      }
+      let mediaCount = 0
+      // Splits out picture lines and drawn diagrams; a fence's contents stay in the text around them.
       const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
+        if (!record?.media && !text.includes('```peek-diagram')) return markdownChunks(key, text, heading, indent)
+        let pending = ''
+        let segment = 0
+        let fence = ''
+        let diagram: { info: string; lines: string[] } | null = null
+        const flush = () => {
+          if (pending.trim()) markdownChunks(`${key}-${segment++}`, pending, heading, indent)
+          pending = ''
+        }
+        for (const line of text.split('\n')) {
+          if (diagram) {
+            if (/^\s*```\s*$/.test(line)) {
+              drawnParts.push(diagramEmbed(`${key}-diagram-${segment++}`, diagram.info, diagram.lines.join('\n')))
+              note(diagram.lines.length + 4, heading)
+              diagram = null
+            } else diagram.lines.push(line)
+            continue
+          }
+          const marker = /^\s*(```|~~~)/.exec(line)?.[1]
+          const drawn = !fence && /^```peek-diagram\s*(.*)$/.exec(line)
+          if (drawn) {
+            flush()
+            diagram = { info: drawn[1] ?? '', lines: [] }
+            continue
+          }
+          if (marker && (!fence || marker === fence)) fence = fence ? '' : marker
+          const found = !fence && !marker && /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line.trim())
+          if (found && record?.media?.[found[2] ?? '']) {
+            flush()
+            mediaBlock(mediaCount++, found[1] ?? '', found[2] ?? '', heading)
+          } else pending += `${line}\n`
+        }
+        if (diagram) pending += ['```text', ...diagram.lines, '```'].join('\n')
+        flush()
+      }
+      const markdownChunks = (key: string, text: string, heading: string, indent = 0) => {
         const memoKey = `${memoBase}|${key}`
         let chunks = blockMemo.get(memoKey)
         if (!chunks) {
@@ -1925,13 +2314,15 @@ export const register: Register = on => {
         drawnParts.push(
           <Box key="remote-failure" flexDirection="column">
             <Text color={C.red} bold>{message.title}</Text>
+            {remote.failureDetail && <Text color={C.overlay1}>{remote.failureDetail}</Text>}
             <Text color={C.subtext0}>{message.hint}</Text>
             <Text color={C.overlay0}>Press o to open it in the browser.</Text>
           </Box>,
         )
-        note(3)
+        note(remote.failureDetail ? 4 : 3)
       } else {
-        const favicon = remote.favicon && pixels.get(remote.favicon.file)
+        const faviconPng = remote.favicon && pixels.get(remote.favicon.file)
+        const favicon = faviconPng && fitsPane(faviconPng) ? faviconPng : undefined
         drawnParts.push(
           <Box key="remote-title" flexDirection="row" width={textWidth}>
             {favicon && Image ? (
@@ -1948,9 +2339,19 @@ export const register: Register = on => {
         )
         note(Math.ceil((record.title.length + 3) / textWidth), record.title)
         const labelWidth = Math.min(14, Math.max(0, ...record.meta.map(one => (META_ICON[one.label] ? 1 : one.label.length))) + 2)
+        const previewPng = remote.preview && pixels.get(remote.preview.file)
+        const preview = previewPng && fitsPane(previewPng) ? previewPng : undefined
+        const previewBox = preview && Image && remote.preview ? fullWidth(remote.preview.width, remote.preview.height) : null
+        const ogDescription = record.og?.description
         drawnParts.push(
           embed('remote-meta', iconFor(record.kind), 'DETAILS', record.status ?? '', kindColor(record.kind), (
             <Box flexDirection="column">
+              {previewBox && preview && Image && <Image key="remote-preview-image" source={{ png: preview }} {...previewBox} alt="preview image" />}
+              {ogDescription && (
+                <Box marginTop={previewBox ? 1 : 0} marginBottom={1}>
+                  <Text color={C.subtext0}>{ogDescription}</Text>
+                </Box>
+              )}
               {record.meta.map((one, i) => (
                 <Text key={`meta-${i}`} wrap="truncate-end">
                   <Text color={C.overlay0}>{(META_ICON[one.label] ?? one.label).padEnd(labelWidth)}</Text>
@@ -1960,7 +2361,7 @@ export const register: Register = on => {
             </Box>
           )),
         )
-        note(record.meta.length + 4, 'Details')
+        note(record.meta.length + 4 + (previewBox?.rows ?? 0) + (ogDescription ? estimateRows(ogDescription, textWidth - 2) + 1 : 0), 'Details')
         if (record.stats) {
           const ci = record.stats.ci
           const ciColor = { bad: C.red, wait: C.yellow, ok: C.green, none: C.overlay1 }[record.stats.ciTone]
@@ -1981,20 +2382,6 @@ export const register: Register = on => {
             )),
           )
           note(6, 'Changes')
-        }
-        const preview = remote.preview && pixels.get(remote.preview.file)
-        if (record.og && (record.og.description || preview)) {
-          drawnParts.push(
-            embed('remote-preview', ICON.web, 'PREVIEW', record.og.siteName ?? '', C.peach, (
-              <Box flexDirection="column">
-                {preview && Image && remote.preview && (
-                  <Image key="remote-preview-image" source={{ png: preview }} {...imageBox(remote.preview.width, remote.preview.height, textWidth - 4, IMAGE_ROWS - 2)} alt="preview image" />
-                )}
-                {record.og.description && <Text color={C.subtext0}>{record.og.description}</Text>}
-              </Box>
-            )),
-          )
-          note((preview ? IMAGE_ROWS : 0) + estimateRows(record.og.description ?? '', textWidth - 2) + 4, 'Preview')
         }
         const lists = () => {
           for (const [li, list] of (record.lists ?? []).entries()) {
@@ -2105,11 +2492,7 @@ export const register: Register = on => {
         }
         if (part.kind === 'code') {
           if (part.lang === 'peek-diagram') {
-            drawnParts.push(
-              embed(`diagram-${index}`, ICON.mermaid, 'DIAGRAM', part.info, C.mauve, (
-                <Text color={C.subtext0}>{part.text}</Text>
-              )),
-            )
+            drawnParts.push(diagramEmbed(`diagram-${index}`, part.info, part.text))
           } else if (part.lang === 'mermaid') {
             drawnParts.push(
               embed(`diagram-${index}`, ICON.mermaid, 'DIAGRAM', `${diagramType(part.text)} · press o to see it rendered`, C.mauve, (
@@ -2332,12 +2715,48 @@ export const register: Register = on => {
         />
       )
     }
+    const liveState = live?.state()
+    const canLive = e.surface === 'terminal' && Boolean(Image) && current.remote !== undefined && parseRef(current.href)?.kind === 'web'
+    const liveRows = Math.max(4, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 2)
+    const viewport = liveBox(textWidth, liveRows)
+    const isLiveHere = canLive && liveHref === current.href && liveState !== undefined && liveState.phase !== 'off'
+    const liveFrame = isLiveHere ? liveState.frame : undefined
+    if (liveFrame && Image) {
+      isLiveFrameDrawn = true
+      if (liveViewport && (liveViewport.width !== viewport.width || liveViewport.height !== viewport.height)) {
+        liveViewport = viewport
+        void live?.command('resize', viewport)
+      }
+      liveGeom = { left: Math.floor((e.props.bodyColumns - pageWidth) / 2) + (isNarrow ? 0 : 2), top: HEADER_ROWS + 1 - offset, columns: textWidth, rows: liveRows }
+      body = (
+        <Box width={textWidth} height={liveRows}>
+          <Image
+            key={LIVE_FRAME}
+            source={{ file: liveFrame.path, format: 'png', generation: liveFrame.id }}
+            columns={textWidth}
+            rows={liveRows}
+            alt={`${current.title} (the live view cannot draw here: press v for the reader page)`}
+          />
+          {Client && (
+            <Box position="absolute" top={0} left={0} width={textWidth} height={liveRows}>
+              <Client key="live-input" module="./live-input.tsx" props={{ width: textWidth, height: liveRows, acked: lastInputSeq }} width={textWidth} height={liveRows} />
+            </Box>
+          )}
+        </Box>
+      )
+      position = ''
+    }
+    const liveStatus = isLiveHere ? liveStatusText(liveState, current.location) : ''
+    const notice = liveNotice?.href === current.href ? failureText(liveNotice.kind) : null
     const goNext = jumps.next
     const goPrev = jumps.prev
-    const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(current.href))
+    const starTarget = (liveFrame && liveState?.url) || current.href
+    const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(starTarget))
     const remote = current.remote
     const source = remote?.record ? sourceLine(remote, now) : ''
-    const info = [isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
+    const info = liveFrame
+      ? [isStarred ? '\u{f51a} starred' : '', liveStatus].filter(Boolean).join(' · ')
+      : [liveStatus, isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
     const remoteCrumbs = remote
       ? [
           ...(remote.record?.trail ?? []).map((label, index, all) => ({
@@ -2346,7 +2765,7 @@ export const register: Register = on => {
             bg: C.surface1 as string,
             canShrink: true,
           })),
-          { label: `${iconFor(current.kind)} ${current.title}`, fg: C.appBg, bg: C.accent, bold: true },
+          { label: `${iconFor(current.kind)} ${liveFrame && liveState?.title ? liveState.title : current.title}`, fg: C.appBg, bg: C.accent, bold: true },
         ]
       : null
 
@@ -2366,25 +2785,37 @@ export const register: Register = on => {
             ]),
       <Box flexDirection="column" width={textWidth}>
           {current.error && <Text color={C.red}>{current.error}</Text>}
+          {notice && (
+            <Box key="live-notice" flexDirection="column" marginBottom={1}>
+              <Text color={C.red} bold>{notice.title}</Text>
+              <Text color={C.subtext0}>{notice.hint}</Text>
+            </Box>
+          )}
           {body as never}
       </Box>,
       info,
       [
           ...modeKeys,
-          { key: 'next', label: 'Down', hotkey: 'j', onPress: goNext },
-          { key: 'prev', label: 'Up', hotkey: 'k', onPress: goPrev },
-          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: () => void setStar($, current.href) },
-          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: () => void openExternally($, current) },
-          ...(remote ? [{ key: 'refresh', label: 'Refresh', hotkey: 'u', onPress: () => void refresh($, current.href) }] : []),
-          ...(backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', onPress: () => void goBack($) }] : []),
+          ...(canLive
+            ? [{ key: 'live', label: liveHref === current.href ? 'Reader' : 'Live', hotkey: 'v', onPress: () => void toggleLive($, current, viewport) }]
+            : []),
+          ...(liveFrame && isTyping
+            ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', menu: 'Done typing: give the keys back to peek', onPress: () => { isTyping = false; $.ui.invalidate('ui.render') } }]
+            : []),
+          { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
+          { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
+          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
+          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
+          ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }] : []),
+          ...(liveFrame || backStack.length ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }] : []),
           {
             key: 'copy',
             label: remote ? 'Copy link' : 'Copy path',
             hotkey: 'c',
-            onPress: () => void $.ui.copy({ text: current.location }),
+            onPress: liveFrame ? () => void liveKey($, 'c') : () => void $.ui.copy({ text: current.location }),
           },
           { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
-      ],
+      ].map(one => (isTyping ? { ...one, onPress: () => { isTyping = false; one.onPress() } } : one)),
     )
   })
 }

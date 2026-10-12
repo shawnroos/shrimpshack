@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { HttpResponse, ProcessRunResult } from 'claude-code'
+import type { HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
 import type { Ref } from '../hooks/refs'
@@ -20,13 +20,27 @@ function exited(exitCode: number, stdout = '', stderr = '', isStdoutTruncated = 
 
 const PUBLIC_IP = '93.184.216.34'
 
-function world(options: { pages?: Record<string, Page>; images?: Record<string, number | string>; hasCurl?: boolean; fetch?: (url: string) => HttpResponse; dns?: Record<string, string | null> }) {
+type DefuddleFake = { isInstalled?: boolean; installExit?: number; output?: string; parseExit?: number }
+
+function world(options: { pages?: Record<string, Page>; images?: Record<string, number | string>; hasCurl?: boolean; fetch?: (url: string) => HttpResponse; dns?: Record<string, string | null>; defuddle?: DefuddleFake }) {
   const session = `web-${++sessions}`
   const argvs: string[][] = []
   const fetched: string[] = []
-  const run = async (argv: readonly string[]): Promise<ProcessRunResult> => {
+  const stdins: string[] = []
+  let isInstalled = options.defuddle?.isInstalled ?? false
+  const run = async (argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult> => {
     argvs.push([...argv])
     const [bin = ''] = argv
+    if (bin === 'test') return exited(isInstalled ? 0 : 1)
+    if (bin === 'npm') {
+      const exit = options.defuddle?.installExit ?? 0
+      if (exit === 0) isInstalled = true
+      return exited(exit, '', exit === 0 ? '' : 'npm ERR! network')
+    }
+    if (bin === 'node') {
+      stdins.push(init?.stdin ?? '')
+      return exited(options.defuddle?.parseExit ?? 0, options.defuddle?.output ?? '')
+    }
     if (bin === 'sh') return exited(0, options.hasCurl === false ? '' : 'curl\n')
     if (bin === '/usr/bin/security') return exited(44, '', 'item not found')
     if (bin === 'mkdir') return exited(0)
@@ -59,7 +73,7 @@ function world(options: { pages?: Record<string, Page>; images?: Record<string, 
       return answer
     },
     linearKeyEnv: async () => undefined,
-    home: async () => undefined,
+    home: async () => (options.defuddle ? '/home' : undefined),
     read: async (path: string) => {
       throw new Error(`ENOENT ${path}`)
     },
@@ -67,7 +81,7 @@ function world(options: { pages?: Record<string, Page>; images?: Record<string, 
   }
   const curls = () => argvs.filter(argv => argv[0] === 'curl')
   const downloads = () => curls().filter(argv => argv.includes('-o')).map(argv => argv[argv.length - 1])
-  return { io, argvs, curls, downloads, fetched }
+  return { io, argvs, curls, downloads, fetched, stdins }
 }
 
 function web(address: string): Ref {
@@ -376,7 +390,13 @@ describe('loadWeb with curl', () => {
   test('an HTTP error maps to a fixed failure kind', async () => {
     const page = 'https://gone.test/'
     const { io } = world({ pages: { [page]: { html: 'secret body text', status: 404 } } })
-    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access' })
+    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access', detail: 'HTTP 404 Not Found from gone.test' })
+  })
+
+  test('a site that refuses the fetch names the status and the host that sent it', async () => {
+    const page = 'https://www.news24.co.za/'
+    const { io } = world({ pages: { [page]: { html: 'Forbidden', status: 403, finalUrl: 'https://www.news24.com/' } } })
+    expect(await loadWeb(io, web(page), NOW)).toEqual({ ok: false, failure: 'not-found-or-no-access', detail: 'HTTP 403 Forbidden from www.news24.com' })
   })
 
   test('an unreachable host is offline', async () => {
@@ -435,4 +455,115 @@ describe('fromCapture', () => {
   test('an unparseable address normalises to nothing', () => {
     expect(fromCapture(captured('x', 'not a url'), web('not a url'))).toBe(null)
   })
+})
+
+describe('reader body through defuddle', () => {
+  const page = 'https://site.test/post'
+  const html = '<html><head><title>Post</title></head><body><nav>Careers</nav><article><p>Real text.</p></article></body></html>'
+  const parsed = (content: string) => JSON.stringify({ title: 'Post', content })
+
+  test('the body is defuddle\'s markdown, with relative links made absolute', async () => {
+    const { io, stdins } = world({ pages: { [page]: { html } }, defuddle: { isInstalled: true, output: parsed('Real text. [More](/more) and ![pic](img/a.png) and [top](#top) and [ext](https://x.test/)') } })
+    const loaded = await loadWeb(io, web(page), NOW)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    expect(loaded.record.body).toBe('Real text. [More](https://site.test/more) and ![pic](https://site.test/img/a.png) and [top](#top) and [ext](https://x.test/)')
+    expect(stdins).toEqual([html])
+  })
+
+  test('a missing defuddle is installed once, pinned, with install scripts off', async () => {
+    const { io, argvs } = world({ pages: { [page]: { html } }, defuddle: { output: parsed('Real text.') } })
+    await loadWeb(io, web(page), NOW)
+    await loadWeb(io, web(page), NOW)
+    const installs = argvs.filter(argv => argv[0] === 'npm')
+    expect(installs.length).toBe(1)
+    expect(installs[0]?.includes('--ignore-scripts')).toBe(true)
+    expect(installs[0]?.some(arg => /^defuddle@\d+\.\d+\.\d+$/.test(arg))).toBe(true)
+  })
+
+  test('a failed install or parse falls back to the built-in reader', async () => {
+    for (const defuddle of [{ installExit: 1 }, { isInstalled: true, parseExit: 1 }, { isInstalled: true, output: 'not json' }, { isInstalled: true, output: parsed('') }]) {
+      const { io } = world({ pages: { [page]: { html } }, defuddle })
+      const loaded = await loadWeb(io, web(page), NOW)
+      if (!loaded.ok) throw new Error(loaded.failure)
+      expect(loaded.record.body?.includes('Real text.')).toBe(true)
+      expect(loaded.record.body?.includes('Careers')).toBe(true)
+    }
+  })
+})
+
+describe('media in the reader body', () => {
+  const page = 'https://site.test/post'
+  const html =
+    '<html><body><article><p>Text.</p><video src="/media/clip.mp4" poster="/media/poster.jpg"></video></article></body></html>'
+  const body = [
+    'Intro.',
+    '',
+    '![A photo](/img/photo.jpg)',
+    '',
+    '<video src="/media/clip.mp4" controls=""></video>',
+    '',
+    '![](https://www.youtube.com/watch?v=dQw4w9WgXcQ)',
+    '',
+    '![](https://site.test/img/missing.png)',
+  ].join('\n')
+
+  test('images and video thumbnails download; videos become playable picture lines', async () => {
+    const { io, downloads } = world({
+      pages: { [page]: { html } },
+      defuddle: { isInstalled: true, output: JSON.stringify({ content: body }) },
+      images: {
+        'https://site.test/img/photo.jpg': 200,
+        'https://site.test/media/poster.jpg': 200,
+        'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg': 200,
+      },
+    })
+    const loaded = await loadWeb(io, web(page), NOW)
+    if (!loaded.ok) throw new Error(loaded.failure)
+    const { record } = loaded
+    expect(record.body?.includes('![video](https://site.test/media/clip.mp4)')).toBe(true)
+    expect(record.body?.includes('<video')).toBe(false)
+    const media = record.media ?? {}
+    expect(media['https://site.test/img/photo.jpg']?.file?.startsWith('/tmp/claude-peek/web-')).toBe(true)
+    expect(media['https://site.test/img/photo.jpg']?.play).toBeUndefined()
+    expect(media['https://site.test/media/clip.mp4']?.play).toBe('https://site.test/media/clip.mp4')
+    expect(media['https://site.test/media/clip.mp4']?.file?.startsWith('/tmp/claude-peek/web-')).toBe(true)
+    expect(media['https://www.youtube.com/watch?v=dQw4w9WgXcQ']?.play).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+    expect(media['https://www.youtube.com/watch?v=dQw4w9WgXcQ']?.file?.startsWith('/tmp/claude-peek/web-')).toBe(true)
+    expect(media['https://site.test/img/missing.png']?.file).toBeUndefined()
+    expect(downloads()).toContain('https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg')
+  })
+
+  test('at most eight pictures are downloaded for one page', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => `![](https://site.test/i${i}.png)`).join('\n\n')
+    const images = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`https://site.test/i${i}.png`, 200 as const]))
+    const { io, downloads } = world({ pages: { [page]: { html } }, defuddle: { isInstalled: true, output: JSON.stringify({ content: many }) }, images })
+    await loadWeb(io, web(page), NOW)
+    expect(downloads().filter(url => url?.startsWith('https://site.test/i')).length).toBe(8)
+  })
+})
+
+test('an image host that answers IPv6 first is pinned to its IPv4 address', async () => {
+  const page = 'https://dual.test/'
+  const { io, curls } = world({
+    pages: { [page]: { html: FULL_OG } },
+    images: { 'https://dual.test/img/card.png': 200 },
+    dns: { 'dual.test': 'name: dual.test\nipv6_address: 2606:4700:440a::ac40:93d3\n\nname: dual.test\nip_address: 93.184.216.34\n' },
+  })
+  await loadWeb(io, web(page), NOW)
+  const fetch = curls().find(argv => argv.at(-1) === 'https://dual.test/img/card.png')
+  expect(fetch?.[fetch.indexOf('--resolve') + 1]).toBe('dual.test:443:93.184.216.34')
+})
+
+test('a row of images on one line becomes one picture each, and images past the cap leave the body', async () => {
+  const page = 'https://gallery.test/'
+  const row = Array.from({ length: 10 }, (_, i) => `![](https://gallery.test/g${i}.png)`).join(' ')
+  const images = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`https://gallery.test/g${i}.png`, 200 as const]))
+  const { io } = world({ pages: { [page]: { html: '<html><body>x</body></html>' } }, defuddle: { isInstalled: true, output: JSON.stringify({ content: `Intro.\n\n${row}\n\nOutro.` }) }, images })
+  const loaded = await loadWeb(io, web(page), NOW)
+  if (!loaded.ok) throw new Error(loaded.failure)
+  const lines = (loaded.record.body ?? '').split('\n').filter(line => line.startsWith('!['))
+  expect(lines.length).toBe(8)
+  expect(Object.keys(loaded.record.media ?? {}).length).toBe(8)
+  expect(loaded.record.body?.includes('g9.png')).toBe(false)
+  expect(loaded.record.body?.includes('Outro.')).toBe(true)
 })

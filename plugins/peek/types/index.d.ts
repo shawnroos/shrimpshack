@@ -17,6 +17,9 @@ export type FailureKind =
   | 'query-bug'
   | 'fetch-blocked'
   | 'process-unavailable'
+  | 'live-unavailable'
+  | 'live-crashed'
+  | 'live-stalled'
 
 export type Tier = 'cli' | 'api' | 'session'
 
@@ -42,12 +45,13 @@ export type RemoteRecord = {
   lists?: RemoteList[]
   og?: { title?: string; description?: string; siteName?: string; image?: string }
   favicon?: string
+  media?: Record<string, { file?: string; play?: string }>
   browserUrl: string
 }
 
 export type Loaded =
   | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number; liveFailure?: FailureKind }
-  | { ok: false; failure: FailureKind }
+  | { ok: false; failure: FailureKind; detail?: string }
 
 export type View = {
   href: string
@@ -71,9 +75,11 @@ export type View = {
     tier?: Tier
     fetchedAt?: number
     failure?: FailureKind
+    failureDetail?: string
     staleSince?: number
     favicon?: { file: string; width: number; height: number }
     preview?: { file: string; width: number; height: number }
+    pictures?: Record<string, { file: string; width: number; height: number }>
   }
 }
 

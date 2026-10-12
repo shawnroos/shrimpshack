@@ -17,6 +17,8 @@ transcript.
 | GitHub pull requests | Details, line counts, files changed, a CI summary, the description and comments |
 | GitHub issues and repos | Details, the body or README, comments, and a repo's open pull requests and issues |
 | Linear issues and projects | Details, the description, comments with replies, and a project's open issues |
+| A link to a file (`.md`, `.png`, `.json`, `.csv`, code, ...) | Downloaded and drawn like the local file; `o` and `c` still use the link |
+| A link to a video (`.mp4`, `.webm`, `.mov`) | A Play button that opens it in your browser |
 
 ## Remote pages
 
@@ -24,6 +26,11 @@ Links and IDs in replies become clickable: GitHub URLs, `owner/repo#12`, `#12`
 inside a GitHub repo, Linear URLs, and Linear IDs such as `WEB-2757` when
 `WEB` is a team in your workspace. Peek is read-only: it never changes
 anything in GitHub or Linear.
+
+Pictures, videos and Mermaid diagrams in a pull request, issue or Linear
+description or comment draw the same way as on a web page: up to 8 pictures
+inline, a video as its thumbnail and a Play button. A picture that cannot be
+downloaded, such as an attachment in a private repo, stays a link.
 
 Each page comes from the best source available, and the footer names it:
 
@@ -41,6 +48,30 @@ Refresh pauses after 10 minutes with no activity and backs off when a service
 rate-limits it. When no tool or key is available, refresh repeats the agent's
 own read call.
 
+## Live view
+
+On a web page, press `v` to switch between the reader page and the real page.
+The real page is rendered by WebKit and drawn in the pane. You can scroll it
+with the wheel or `j`/`k`, and click links and buttons. After you click a text
+field, typing goes to the page. Press Escape or Done typing (`d`) to give the
+keys back to peek. While the page is live, `b` goes back in the page, `u`
+reloads it, and `o`, `c` and `f` open, copy or star the page's current address.
+
+Live view is a page renderer, not a browser. It has one page, no tabs, and no
+downloads. It loads only `http` and `https` pages and refuses pop-up windows
+and JavaScript dialogs.
+
+- **Nothing is saved.** Cookies and site data live only in memory. A login lasts
+  until peek unloads, then it is gone.
+- **Frames are budgeted.** Peek sends a new picture only when the page changes,
+  and at most about 1 MB a second, because faster streams stutter in the pane.
+  A busy page, such as a video, drops to a few frames a second.
+- **First use builds the helper.** Live view uses a small Swift program that is
+  compiled on first use (about 40 seconds) into `~/.cache/claude-peek/bin/`.
+  This needs the Xcode command-line tools: run `xcode-select --install` once.
+- **Terminal only.** Live view needs a terminal that draws images. Under a
+  multiplexer, set `CLAUDE_CODE_FORCE_TERMINAL_IMAGES` (Setup step 4).
+
 ## Commands
 
 | Command | Does |
@@ -49,13 +80,19 @@ own read call.
 | `/peek WEB-2757` or `/peek owner/repo#12` | Opens a Linear or GitHub item |
 | `/peek the export diagram` | Finds a recent file by description |
 | `/peek` | Reopens the last file |
-| `/peek-menu` | Command menu: switch view, scroll, open, copy, recent files |
+| `/peek-menu` | Command menu: every action in the current view with its key, plus recent files |
 | `/peek-ui` | A live gallery of every UI element a mod can draw |
 
 In the pane: `j`/`k` jump between blocks, the wheel scrolls, `r` shows recent
 files, `o` opens the file in its own app (a remote page in the browser), `c`
 copies the path or link, `u` refreshes a remote page, `b` goes back to the page
-you came from, `x` closes.
+you came from, `v` switches a web page to live view, `x` closes. In Recent and
+Gallery, `j`/`k`/`h`/`l` move the selection, `o` opens it and `f` stars it;
+in Gallery, `t` and `n` change the file type and the sort order.
+
+The footer shows only the page status and `⌃k menu`. The keys are not drawn,
+but they all work. Open the menu (Ctrl+K, Setup step 2) to see each action
+that applies to the current view, with its key.
 
 ## Setup
 
@@ -82,6 +119,8 @@ you came from, `x` closes.
 ## Requirements
 
 macOS: image conversion uses `sips` and `rsvg-convert`, and Open uses `open`.
+Live view needs the Xcode command-line tools (`swiftc`).
+Web reader pages are cleaned with [Defuddle](https://github.com/kepano/defuddle), which strips menus, footers and other page chrome. Up to 8 of the page's images show inline; a video shows its thumbnail and a Play button that opens it in your browser. Peek installs a pinned copy with npm on first use into `~/.cache/claude-peek/` (needs Node). Without it, peek falls back to its own simpler cleanup.
 
 ## Development
 
