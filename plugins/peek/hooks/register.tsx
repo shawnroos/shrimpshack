@@ -114,7 +114,7 @@ const galleryFilter = atom({ plugin: 'peek', key: 'galleryFilter' } as const, ''
 const roleFilter = atom({ plugin: 'peek', key: 'roleFilter' } as const, 'all')
 const stars = atom({ plugin: 'peek', key: 'stars' } as const, [])
 const cursorAtom = atom({ plugin: 'peek', key: 'cursor' } as const, 0)
-type NavItem = { href: string; key: string; line: number; col: number }
+type NavItem = { href: string; key: string; line: number; col: number; group?: string }
 let navOrder: NavItem[] = []
 
 type Direction = 'up' | 'down' | 'left' | 'right'
@@ -155,13 +155,17 @@ async function moveSelection($: EngineInterface, direction: Direction) {
 
 async function selectAndOpen($: EngineInterface, index: number) {
   await update($, cursorAtom, () => index)
-  const href = navOrder[index]?.href
-  if (href) await show($, href)
+  await openNav($, navOrder[index])
 }
 
-async function selectedHref($: EngineInterface): Promise<string | undefined> {
+async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
   const at = await read($, cursorAtom)
-  return navOrder[Math.max(0, Math.min(navOrder.length - 1, at))]?.href
+  return navOrder[Math.max(0, Math.min(navOrder.length - 1, at))]
+}
+
+async function openNav($: EngineInterface, one: NavItem | undefined) {
+  if (one?.group) await openGroupPage($, one.group)
+  else if (one?.href) await show($, one.href)
 }
 
 const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
@@ -173,6 +177,7 @@ const LIST_CHUNK = 10
 const CARD_ROWS = 5
 const CARD_MIN = 26
 const CARD_GAP = 2
+const PINNED_GROUPS = 4
 const fullText = new Map<string, string>()
 const roots = new Map<string, { root: string; isWorktree: boolean } | null>()
 const GALLERY = 'peek-ui'
@@ -2358,17 +2363,75 @@ export const register: Register = on => {
         label: '⏎ Open',
         hotkey: 'o',
         menu: 'Open the selected file',
-        onPress: () => void selectedHref($).then(href => (href ? show($, href) : undefined)),
+        onPress: () => void selectedNav($).then(one => openNav($, one)),
       },
       {
         key: 'star-selected',
         label: 'Star',
         hotkey: 'f',
         menu: 'Star or unstar the selected file',
-        onPress: () => void selectedHref($).then(href => (href ? setStar($, href).then(() => undefined) : undefined)),
+        onPress: () =>
+          void selectedNav($).then(one => {
+            if (one?.group) return toggleGroupStar($, one.group)
+            return one?.href ? setStar($, one.href).then(() => undefined) : undefined
+          }),
       },
     ]
     const closeKey: Key = { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) }
+
+    const groupCards = (groups: readonly Group[], prefix: string, firstIndex: number, selected: number) => {
+      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
+      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
+      const rowsOfCards = Array.from({ length: Math.ceil(groups.length / perRow) }, (_, r) => groups.slice(r * perRow, r * perRow + perRow))
+      const openAt = (index: number, id: string) => void update($, cursorAtom, () => index).then(() => openGroupPage($, id))
+      const grid = rowsOfCards.map((cards, r) => (
+        <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
+          {Client && (
+            <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
+              <Client
+                key={`hover-${prefix}-${r}`}
+                module="./hover-layer.tsx"
+                props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ group: one.id, isStarred: one.starred })) }}
+                width={textWidth}
+                height={CARD_ROWS}
+              />
+            </Box>
+          )}
+          {cards.map((one, c) => {
+            const index = firstIndex + r * perRow + c
+            const isSelected = index === selected
+            return (
+              <Box
+                key={`${prefix}-${r}-${c}`}
+                flexDirection="column"
+                width={cardWidth}
+                height={CARD_ROWS}
+                paddingX={2}
+                paddingY={1}
+                backgroundColor={isSelected ? C.surface0 : C.panelBg}
+                hover={{ backgroundColor: C.surface0 }}
+              >
+                <Box flexDirection="row">
+                  <Button
+                    key={`item-${index}`}
+                    label={one.starred ? '\u{f51a}' : ICON.groups}
+                    plain
+                    autoFocus={isSelected ? true : undefined}
+                    onPress={() => openAt(index, one.id)}
+                  />
+                  <Box key={`group-name-${index}`}>
+                    <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${one.title}`}</Text>
+                  </Box>
+                </Box>
+                <Text color={C.overlay0} wrap="truncate-end">{one.description.split('\n')[0] || ' '}</Text>
+                <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${plural(one.items.length, 'item')} · ${describeAge(one.updatedAt, now)}`}</Text>
+              </Box>
+            )
+          })}
+        </Box>
+      ))
+      return { rowsOfCards, grid }
+    }
 
     if (chosen === 'groups') {
       const home = await groupHome($)
@@ -2546,61 +2609,12 @@ export const register: Register = on => {
       const groups = (home ? await listGroups(io, home.place) : []).sort((a, b) => Number(b.starred) - Number(a.starred))
       const starredCount = groups.filter(one => one.starred).length
       const crumb = crumbs([{ label: `${ICON.groups} ${project}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true }])
-      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
-      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
       const selected = await read($, cursorAtom)
-      const rowsOfCards = Array.from({ length: Math.ceil(groups.length / perRow) }, (_, r) => groups.slice(r * perRow, r * perRow + perRow))
+      const { rowsOfCards, grid } = groupCards(groups, 'groups', 0, selected)
       navOrder = rowsOfCards.flatMap((cards, r) => cards.map((one, col) => ({ href: one.id, key: `groups-${r}`, line: r, col })))
       blockStarts = rowsOfCards.map((_, r) => r * (CARD_ROWS + 1))
       estimatedRows = Math.max(1, rowsOfCards.length * (CARD_ROWS + 1))
       const selectedGroup = () => read($, cursorAtom).then(at => navOrder[Math.max(0, Math.min(navOrder.length - 1, at))]?.href)
-      const openAt = (index: number, id: string) => void update($, cursorAtom, () => index).then(() => openGroupPage($, id))
-      const grid = rowsOfCards.map((cards, r) => (
-        <Box key={`groups-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
-          {Client && (
-            <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
-              <Client
-                key={`hover-groups-${r}`}
-                module="./hover-layer.tsx"
-                props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ group: one.id, isStarred: one.starred })) }}
-                width={textWidth}
-                height={CARD_ROWS}
-              />
-            </Box>
-          )}
-          {cards.map((one, c) => {
-            const index = r * perRow + c
-            const isSelected = index === selected
-            return (
-              <Box
-                key={`groups-${r}-${c}`}
-                flexDirection="column"
-                width={cardWidth}
-                height={CARD_ROWS}
-                paddingX={2}
-                paddingY={1}
-                backgroundColor={isSelected ? C.surface0 : C.panelBg}
-                hover={{ backgroundColor: C.surface0 }}
-              >
-                <Box flexDirection="row">
-                  <Button
-                    key={`item-${index}`}
-                    label={one.starred ? '\u{f51a}' : ICON.groups}
-                    plain
-                    autoFocus={isSelected ? true : undefined}
-                    onPress={() => openAt(index, one.id)}
-                  />
-                  <Box key={`group-name-${index}`}>
-                    <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${one.title}`}</Text>
-                  </Box>
-                </Box>
-                <Text color={C.overlay0} wrap="truncate-end">{one.description.split('\n')[0] || ' '}</Text>
-                <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${plural(one.items.length, 'item')} · ${describeAge(one.updatedAt, now)}`}</Text>
-              </Box>
-            )
-          })}
-        </Box>
-      ))
       const content = (
         <Box flexDirection="column" width={textWidth}>
           {groups.length === 0 && <Text color={C.overlay0}>No groups yet. The agent makes groups: ask it to group related files and links.</Text>}
@@ -2845,6 +2859,31 @@ export const register: Register = on => {
       const favs = selectEntries(favourites, 'all', '', 'recent')
       const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
       cursor = 0
+      const starredGroups = await groupHome($)
+        .then(found => (found ? listGroups(groupsIoOf($), found.place) : []))
+        .then(all => all.filter(one => one.starred))
+        .catch(() => [])
+      const pinned = starredGroups.slice(0, PINNED_GROUPS)
+      const pinnedBlock = (() => {
+        if (!pinned.length) return null
+        cursor += 2
+        const { rowsOfCards, grid } = groupCards(pinned, 'starred', nav.length, selected)
+        rowsOfCards.forEach((cards, r) => {
+          keys.push(`starred-${r}`)
+          starts.push(cursor + r * (CARD_ROWS + 1))
+          const line = navLine++
+          cards.forEach((one, col) => nav.push({ href: '', group: one.id, key: `starred-${r}`, line, col }))
+        })
+        cursor += rowsOfCards.length * (CARD_ROWS + 1) + 1
+        const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
+        return (
+          <Box flexDirection="column" width={textWidth}>
+            {section('STARRED GROUPS', count)}
+            <Box height={1} />
+            {grid}
+          </Box>
+        )
+      })()
       const favBlock = favouritesBlock(favs)
       const rowList = (items: readonly FileEntry[], prefix: string) => {
         const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
@@ -2929,11 +2968,14 @@ export const register: Register = on => {
       blockStarts = starts
       estimatedRows = Math.max(1, cursor)
       const jumps = keyJumps(keys)
+      const pinnedId = nav[Math.max(0, Math.min(nav.length - 1, selected))]?.group
+      const pinnedOn = pinned.find(one => one.id === pinnedId)
       const content = (
         <Box flexDirection="column" width={textWidth}>
+          {pinnedBlock}
           {favBlock}
           {!rest && waiting}
-          {rest && recentList.length === 0 && favs.length === 0 && (
+          {rest && recentList.length === 0 && favs.length === 0 && pinned.length === 0 && (
             <Text color={C.overlay0}>
               {scope === 'session' ? 'Nothing mentioned yet. Paths and links in replies land here.' : 'No files found here.'}
             </Text>
@@ -2955,11 +2997,15 @@ export const register: Register = on => {
           ...modeKeys,
           scopeKey,
           roleKey,
-          ...selectKeys,
+          ...selectKeys.map(one => {
+            if (!pinnedOn) return one
+            if (one.key === 'open-selected') return { ...one, menu: 'Open the selected group' }
+            return one.key === 'star-selected' ? { ...one, menu: 'Unstar the selected group' } : one
+          }),
           closeKey,
         ],
         C.appBg,
-        { target: nav[Math.max(0, Math.min(nav.length - 1, selected))]?.href },
+        pinnedOn ? { group: pinnedOn, starHint: 'f' } : { target: nav[Math.max(0, Math.min(nav.length - 1, selected))]?.href },
       )
     }
 
