@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { hoverLayers } from './fixtures/overlay'
 
 const PAGE = 'https://site.test/post'
 // A PNG signature and an 800x600 IHDR chunk: the engine checks both before it draws.
@@ -83,5 +84,21 @@ test('a page with more image data than one pane can carry links the overflow ins
   expect(inline * 600_000 <= 2_097_152).toBe(true)
   expect(inline > 0).toBe(true)
   expect(tree.includes('https://site.test/s5.png')).toBe(true)
+  await ui.unmount()
+})
+
+test('Recent and Gallery keep the hover star layer of a media page last in the parent', async ($, on) => {
+  mediaWorld(on)
+  await $.command.run({ command: 'peek', args: PAGE } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  expect(await ui.find({ text: /^VIDEO$/ })).toBeDefined()
+  await ui.press({ key: 'mode-recent' })
+  const recent = hoverLayers(await ui.drawn())
+  expect(recent.onTop).toContain('hover-touched-0')
+  expect(recent.buried).toEqual([])
+  await ui.press({ key: 'mode-gallery' })
+  const gallery = hoverLayers(await ui.drawn())
+  expect(gallery.onTop).toContain('hover-touched-0')
+  expect(gallery.buried).toEqual([])
   await ui.unmount()
 })

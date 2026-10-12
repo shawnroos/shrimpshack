@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 
 import { C, META_ICON, mute } from '../hooks/theme'
 import { issueList, pullList, pullView, repoView } from './fixtures/github/items'
+import { hoverLayers } from './fixtures/overlay'
 
 const NOW = 10 * 3600_000
 const ran: string[][] = []
@@ -94,6 +95,22 @@ test('a repo page lists pull requests before the README; a row opens its pull re
   expect(tree.indexOf('PULL REQUESTS')).toBeLessThan(tree.indexOf('README'))
   await ui.press({ key: 'list-item-0-0' })
   expect(ran.some(argv => argv.join(' ').startsWith('gh pr view 41'))).toBe(true)
+  await ui.unmount()
+})
+
+test('Recent rows for remote pages keep their hover star layer last in the parent', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await ui.press({ key: 'mode-recent' })
+  const layers = hoverLayers(await ui.drawn())
+  expect(layers.onTop).toContain('hover-touched-0')
+  expect(layers.buried).toEqual([])
+  await ui.press({ key: 'mode-gallery' })
+  const gallery = hoverLayers(await ui.drawn())
+  expect(gallery.onTop).toContain('hover-touched-0')
+  expect(gallery.buried).toEqual([])
   await ui.unmount()
 })
 
