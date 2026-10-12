@@ -2607,17 +2607,7 @@ export const register: Register = on => {
                 <Box flexShrink={0} marginLeft={1}>
                   <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
                 </Box>
-                {Client && (
-                  <Box position="absolute" top={0} left={0} width={inner} height={1}>
-                    <Client
-                      key={`hover-${prefix}-${i}`}
-                      module="./hover-layer.tsx"
-                      props={{ kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] }}
-                      width={inner}
-                      height={1}
-                    />
-                  </Box>
-                )}
+                {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] })}
               </Box>
               {lines.length > 0 && <Box height={1} />}
               {lines.map((text, k) => (
