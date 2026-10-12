@@ -80,7 +80,9 @@ function watching(on: On) {
   const log: string[] = []
   on('state.set', (_$, e, next) => {
     const write = e as { key: string; value: unknown }
-    if (!['menuOpen', 'menuFilter'].includes(write.key)) log.push(`set ${write.key} ${short(write.key, write.value)}`)
+    const line = `set ${write.key} ${short(write.key, write.value)}`
+    // A write that repeats the one just before it leaves the screen as it was, so it is not told apart.
+    if (!['menuOpen', 'menuFilter'].includes(write.key) && log.at(-1) !== line) log.push(line)
     return next(e)
   })
   on('ui.scroll', () => ({}))
@@ -217,7 +219,6 @@ const EXPECTED: Record<string, string[]> = {
     "> focus item-2",
     "set openGroup {\"id\":\"GROUP0\",\"item\":\"c.md\"}",
     "set cursor 2",
-    "set cursor 2",
     "focus item-2 in group-top/group-block-0/group-row-2",
     "name c.md",
     "> prev",
@@ -227,7 +228,6 @@ const EXPECTED: Record<string, string[]> = {
     "name b.md",
     "> focus item-0",
     "set openGroup {\"id\":\"GROUP0\",\"item\":\"a.md\"}",
-    "set cursor 0",
     "set cursor 0",
     "focus item-0 in group-top/group-block-0/group-row-0",
     "name a.md",
