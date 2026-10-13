@@ -111,13 +111,23 @@ export function familyOf(kind: string): 'gh' | 'linear' | 'slack' | 'web' {
   return 'web'
 }
 
+const GITHUB_ITEM_URL = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)$/
+
 // A pull request and an issue URL for one number are the same item, as are a Slack thread and a reply link inside it.
+export function keyOf(ref: Ref): string {
+  if (ref.kind === 'slack-thread') return ref.address
+  if ('number' in ref) return `https://github.com/${ref.owner}/${ref.repo}#${ref.number}`
+  // A web page whose URL has the pull/issue shape (an owner GitHub's parser rejects) still collapses, as itemKey always did.
+  return ref.address.replace(GITHUB_ITEM_URL, '$1#$2')
+}
+
+// Not keyOf(parseRef(address)): stored group items and tombstones are keyed by their raw spelling (a /files link, `o/r#12`).
 export function itemKey(address: string): string {
   if (/^https:\/\/[^/]+\.slack\.com\/archives\//i.test(address)) {
     const ref = parseRef(address)
-    if (ref?.kind === 'slack-thread') return ref.address
+    if (ref?.kind === 'slack-thread') return keyOf(ref)
   }
-  return address.replace(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)$/, '$1#$2')
+  return address.replace(GITHUB_ITEM_URL, '$1#$2')
 }
 
 export function refHref(text: string, context: RefContext): string | null {

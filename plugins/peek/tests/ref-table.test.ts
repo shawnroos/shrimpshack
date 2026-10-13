@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { itemKey, parseRef } from '../hooks/refs'
+import { itemKey, keyOf, parseRef } from '../hooks/refs'
 import type { RefContext } from '../hooks/refs'
 
 // Recorded from 0755bdc: input, context, kind, canonical address, itemKey of the raw input, itemKey of the address.
@@ -47,6 +47,8 @@ const TABLE: [string, RefContext | undefined, string | null, string | null, stri
   ['https://acme.slack.com/archives/C0123ABCD', undefined, 'web', 'https://acme.slack.com/archives/C0123ABCD', 'https://acme.slack.com/archives/C0123ABCD', 'https://acme.slack.com/archives/C0123ABCD'],
   ['https://acme.slack.com/archives/C0123ABCD/p123', undefined, 'web', 'https://acme.slack.com/archives/C0123ABCD/p123', 'https://acme.slack.com/archives/C0123ABCD/p123', 'https://acme.slack.com/archives/C0123ABCD/p123'],
   ['https://slack.com/archives/C0123ABCD/p1791759796763609', undefined, 'web', 'https://slack.com/archives/C0123ABCD/p1791759796763609', 'https://slack.com/archives/C0123ABCD/p1791759796763609', 'https://slack.com/archives/C0123ABCD/p1791759796763609'],
+  ['https://github.com/settings/issues/5', undefined, 'web', 'https://github.com/settings/issues/5', 'https://github.com/settings/issues/5', 'https://github.com/settings/issues/5'],
+  ['https://github.com/o%20x/r/pull/5', undefined, 'web', 'https://github.com/o%20x/r/pull/5', 'https://github.com/o%20x/r#5', 'https://github.com/o%20x/r#5'],
   ['https://example.com', undefined, 'web', 'https://example.com/', 'https://example.com', 'https://example.com/'],
   ['https://example.com/a?b=1#top', undefined, 'web', 'https://example.com/a?b=1', 'https://example.com/a?b=1#top', 'https://example.com/a?b=1'],
   ['https://example.com/a#top', undefined, 'web', 'https://example.com/a', 'https://example.com/a#top', 'https://example.com/a'],
@@ -68,6 +70,7 @@ describe('ref identity table', () => {
       expect(ref?.address ?? null).toBe(address)
       expect(itemKey(text)).toBe(rawKey)
       expect(ref ? itemKey(ref.address) : null).toBe(addressKey)
+      expect(ref ? keyOf(ref) : null).toBe(addressKey)
     })
   }
 })
