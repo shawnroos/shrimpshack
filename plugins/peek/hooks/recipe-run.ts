@@ -39,7 +39,7 @@ const ENV_BIN = '/usr/bin/env'
 const REDACTED = '[redacted]'
 
 type Loaded = Extract<Awaited<ReturnType<typeof loadRecipe>>, { ok: true }>
-type Ran = { ok: true; text: string } | { ok: true; value: unknown } | ({ ok: false } & RunFailure)
+type Ran = { ok: true; text: string; secrets?: readonly string[] } | { ok: true; value: unknown } | ({ ok: false } & RunFailure)
 
 const timeoutOf = (recipe: Recipe) => Math.min(recipe.source.timeoutSeconds ?? RECIPE_CAPS.defaultTimeoutSeconds, RECIPE_CAPS.timeoutSeconds)
 
@@ -115,7 +115,7 @@ async function runScript(io: RunIo, loaded: Loaded, source: { run: string[]; env
   const result = ran.value
   if (result.exitCode !== 0) return { ok: false, kind: 'exit-nonzero', exitCode: result.exitCode, stderr: excerpt(result.stderr, secrets) }
   if (result.isStdoutTruncated) return { ok: false, kind: 'output-truncated' }
-  return { ok: true, text: result.stdout }
+  return { ok: true, text: result.stdout, secrets }
 }
 
 async function runMcp(io: RunIo, loaded: Loaded, source: { server: string; tool: string; args?: Record<string, unknown> }, url: string, draft: boolean): Promise<Ran> {
@@ -159,10 +159,12 @@ export async function runRecipe(io: RunIo, target: RunTarget, url: string): Prom
   if ('value' in ran) raw = ran.value
   else {
     if (!ran.text.trim()) return { ok: false, ...named, kind: 'not-JSON', message: 'the source printed nothing; it must print one Page as JSON' }
+    const secrets = ran.secrets ?? []
     try {
       raw = JSON.parse(ran.text)
     } catch (error) {
-      return { ok: false, ...named, kind: 'not-JSON', message: `${excerpt(String(error))}; output began ${JSON.stringify(excerpt(ran.text.trim().slice(0, 80)))}` }
+      // The parser's own message quotes the stdout it choked on, so it is redacted like the excerpt.
+      return { ok: false, ...named, kind: 'not-JSON', message: `${excerpt(String(error), secrets)}; output began ${JSON.stringify(excerpt(ran.text.trim(), secrets).slice(0, 80))}` }
     }
   }
   const checked = validatePage(raw)

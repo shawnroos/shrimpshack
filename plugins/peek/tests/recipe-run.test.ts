@@ -144,6 +144,16 @@ describe('runRecipe: failures by name', () => {
     })
     expect(failed(await run(w), 'started-failed').message).not.toContain(secret)
   })
+
+  test('a not-JSON excerpt of stdout, and the parser error that quotes it, are redacted of declared values', async () => {
+    const secret = 'tok_SECRET_789'
+    for (const stdout of [`${secret} is not a page`, `{"title": ${secret}}`, `Authorization: Bearer ${secret}\n`]) {
+      const w = world({ files: scriptFolder('figma-files', { env: ['TOKEN'] }), env: { TOKEN: secret }, script: () => ({ stdout }) })
+      const message = failed(await run(w), 'not-JSON').message
+      expect(message.includes('SECRET') ? `${stdout} -> ${message}` : '').toBe('')
+      expect(message).toContain('[redacted]')
+    }
+  })
 })
 
 describe('runRecipe: the folder is what runs', () => {
