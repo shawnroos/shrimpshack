@@ -369,7 +369,7 @@ export async function withRemoteMedia(io: SourceIo, record: RemoteRecord): Promi
     ...record,
     ...(record.body !== undefined ? { body } : {}),
     ...(record.comments ? { comments: { ...record.comments, shown: shown.map((one, i) => ({ ...one, body: comments[i] ?? one.body })) } } : {}),
-    media,
+    media: { ...record.media, ...media },
   }
 }
 

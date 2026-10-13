@@ -4,24 +4,34 @@ import type { Captured, CaptureIo } from './capture'
 import { fromCapture as githubFromCapture, loadGithub } from './github'
 import { fromCapture as linearFromCapture, loadLinear } from './linear'
 import type { Ref } from './refs'
+import { fromCapture as slackFromCapture, loadSlack } from './slack'
 import type { SourceIo } from './sources'
-import { fromCapture as webFromCapture, loadWeb, withRemoteMedia } from './web'
+import { downloadFile, fromCapture as webFromCapture, loadWeb, withRemoteMedia } from './web'
 
 export type RemoteIo = SourceIo & CaptureIo
 
 type Source = {
-  load: (io: SourceIo, ref: Ref, now: number) => Promise<Loaded>
+  load: (io: RemoteIo, ref: Ref, now: number) => Promise<Loaded>
   fromCapture: (captured: Captured, ref: Ref) => Loaded | null
+}
+
+function loadSlackPage(io: RemoteIo, ref: Ref, now: number): Promise<Loaded> {
+  const downloadImage = async (url: string, ext: string) => {
+    const got = await downloadFile(io, url, ext)
+    return got && (!got.type || got.type.startsWith('image/')) ? got.file : undefined
+  }
+  return loadSlack({ ...io, downloadImage }, ref, now)
 }
 
 function sourceFor(ref: Ref): Source {
   if (ref.kind === 'linear-issue' || ref.kind === 'linear-project') return { load: loadLinear, fromCapture: linearFromCapture }
+  if (ref.kind === 'slack-thread') return { load: loadSlackPage, fromCapture: slackFromCapture }
   if (ref.kind === 'web') return { load: loadWeb, fromCapture: webFromCapture }
   return { load: loadGithub, fromCapture: githubFromCapture }
 }
 
-// Replay repeats an MCP read with no permission prompt, so only a refresh asks
-// for it; an open uses whatever the session already fetched.
+// Replay repeats an MCP read, which can ask for permission, so only a refresh
+// does it; an open uses whatever the session already fetched.
 export async function loadItem(io: RemoteIo, ref: Ref, now: number, options: { canReplay?: boolean } = {}): Promise<Loaded> {
   const source = sourceFor(ref)
   const live = await source.load(io, ref, now)

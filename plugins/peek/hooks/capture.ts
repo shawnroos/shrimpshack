@@ -24,9 +24,10 @@ const MAX_TEXT = 2_000_000
 const RESERVED = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])
 const READ_PREFIX = /^(?:get|list|search)_/
 const READ_EXACT = new Set(['issue_read', 'pull_request_read'])
+const SLACK_READ = /^slack_(?:read|search)_/
 const SHELL_META = /[;&|`\n\r<>]|\$\(/
 const GH_API_WRITE = /^(?:-[^-]*[XfF]|--(?:method|field|raw-field|input)(?:=|$))/
-const REMOTE_URL = /https:\/\/(?:www\.)?(?:github\.com|linear\.app)\/[^\s"'<>)\]}\\,]+/g
+const REMOTE_URL = /https:\/\/(?:www\.)?(?:github\.com|linear\.app|[a-z0-9-]+\.slack\.com)\/[^\s"'<>)\]}\\,]+/g
 
 const store = new Map<string, Captured>()
 let textSize = 0
@@ -72,8 +73,8 @@ export function isReadCall(tool: string, input: Record<string, unknown>): boolea
   if (tool === 'WebFetch') return typeof input.url === 'string'
   if (tool === 'Bash') return ghRead(input.command) !== null
   const mcp = splitMcp(tool)
-  if (!mcp || !/linear|github/i.test(mcp.server)) return false
-  return READ_PREFIX.test(mcp.name) || READ_EXACT.has(mcp.name)
+  if (!mcp || !/linear|github|slack/i.test(mcp.server)) return false
+  return READ_PREFIX.test(mcp.name) || READ_EXACT.has(mcp.name) || SLACK_READ.test(mcp.name)
 }
 
 function isSingleItem(tool: string, input: Record<string, unknown>): boolean {
@@ -105,9 +106,10 @@ function textOf(answer: unknown): string | null {
   return reply.result === undefined ? null : JSON.stringify(reply.result)
 }
 
+// The Slack server writes its JSON with every slash escaped (`https:\/\/`), which no URL pattern matches.
 function remoteRefs(text: string): Ref[] {
   const seen = new Map<string, Ref>()
-  for (const url of new Set(text.match(REMOTE_URL))) {
+  for (const url of new Set(text.replace(/\\\//g, '/').match(REMOTE_URL))) {
     const ref = parseRef(url)
     if (ref && ref.kind !== 'web' && !seen.has(ref.address)) seen.set(ref.address, ref)
   }

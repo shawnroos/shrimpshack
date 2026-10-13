@@ -84,6 +84,32 @@ describe('parseRef canonical addresses', () => {
     expect(itemKey('https://github.com/o/r/pull/12')).toBe(itemKey('https://github.com/o/r/issues/12'))
     expect(itemKey('https://example.com/a')).toBe('https://example.com/a')
   })
+
+  test('a Slack thread permalink is a thread; a reply link with thread_ts names the parent', () => {
+    expect(parseRef('https://acme.slack.com/archives/C0123ABCD/p1791759796763609')).toEqual({
+      kind: 'slack-thread',
+      address: 'https://acme.slack.com/archives/C0123ABCD/p1791759796763609',
+      workspace: 'acme',
+      channel: 'C0123ABCD',
+      ts: '1791759796.763609',
+    })
+    const reply = parseRef('https://acme.slack.com/archives/C0123ABCD/p1791761128357239?thread_ts=1791759796.763609&cid=C0123ABCD')
+    expect(reply?.address).toBe('https://acme.slack.com/archives/C0123ABCD/p1791759796763609')
+    expect(reply?.ts).toBe('1791759796.763609')
+  })
+
+  test('a Slack channel link or a malformed message link stays a web page', () => {
+    expect(parseRef('https://acme.slack.com/archives/C0123ABCD')?.kind).toBe('web')
+    expect(parseRef('https://acme.slack.com/archives/C0123ABCD/p123')?.kind).toBe('web')
+    expect(parseRef('https://slack.com/archives/C0123ABCD/p1791759796763609')?.kind).toBe('web')
+  })
+
+  test('a thread and a reply link inside it share an item key', () => {
+    const parent = 'https://acme.slack.com/archives/C0123ABCD/p1791759796763609'
+    const reply = 'https://acme.slack.com/archives/C0123ABCD/p1791761128357239?thread_ts=1791759796.763609&cid=C0123ABCD'
+    expect(itemKey(reply)).toBe(itemKey(parent))
+    expect(itemKey('https://acme.slack.com/archives/C0123ABCD/p1791761128357239')).not.toBe(itemKey(parent))
+  })
 })
 
 describe('linkify with references', () => {

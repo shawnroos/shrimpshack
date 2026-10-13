@@ -19,6 +19,13 @@ describe('isReadCall', () => {
     expect(isReadCall('WebFetch', { url: 'https://example.com' })).toBe(true)
   })
 
+  test('Slack read and search tools pass; sending and writing do not', () => {
+    expect(isReadCall('mcp__plugin_slack_slack__slack_read_thread', { channel_id: 'C1', message_ts: '1.2' })).toBe(true)
+    expect(isReadCall('mcp__plugin_slack_slack__slack_search_public', {})).toBe(true)
+    expect(isReadCall('mcp__plugin_slack_slack__slack_send_message', {})).toBe(false)
+    expect(isReadCall('mcp__plugin_slack_slack__slack_update_canvas', {})).toBe(false)
+  })
+
   test('only a single plain read-only gh command counts', () => {
     const bash = (command: string) => isReadCall('Bash', { command })
     expect(bash('gh pr view 12 --repo o/r --json title,state')).toBe(true)
@@ -189,6 +196,18 @@ describe('the capture store', () => {
     expect(hit?.source).toBe('webfetch')
     expect(hit?.result).toBe('A page about cats')
     expect(await replay(fakeIo([], 'x'), 'https://example.com/cats')).toBeNull()
+  })
+
+  test('Slack permalinks in a Slack search result become mentions of their threads, slash-escaped or not, and are never stored as pages', () => {
+    // The Slack server escapes every slash in its JSON text, as JSON allows.
+    const text =
+      '{"results":"Permalink: [link](https:\\/\\/acme.slack.com\\/archives\\/C0123ABCD\\/p1791761128357239?thread_ts=1791759796.763609&cid=C0123ABCD)\\nAlso https://acme.slack.com/archives/C0999ZZZZ/p1791000000000001"}'
+    const found = record({ tool: 'mcp__plugin_slack_slack__slack_search_public', keywords: ['x'] }, { result: [{ type: 'text', text }] }, 1)
+    expect(found.addresses).toEqual([
+      'https://acme.slack.com/archives/C0123ABCD/p1791759796763609',
+      'https://acme.slack.com/archives/C0999ZZZZ/p1791000000000001',
+    ])
+    expect(lookup('https://acme.slack.com/archives/C0123ABCD/p1791759796763609')).toBeNull()
   })
 
   test('the store evicts the oldest entry past 200', () => {
