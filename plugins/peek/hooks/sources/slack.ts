@@ -1,6 +1,5 @@
 import type { CaptureIo } from '../capture'
 import type { Ref, SlackThreadRef } from '../refs'
-import { describeAge } from '../format'
 import { sessionMemo } from '../cache'
 import { IMAGE_MIME_EXT, SCRATCH, downloadImage } from '../net'
 import { slackFailure } from './classify'
@@ -97,25 +96,6 @@ function replyCount(count: number, hasMore: boolean): string {
   if (hasMore) return `${count}+ replies`
   if (count === 0) return 'no replies'
   return count === 1 ? '1 reply' : `${count} replies`
-}
-
-export function initials(name: string): string {
-  const words = name.split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean)
-  const first = words[0]?.[0] ?? ''
-  const last = words.length > 1 ? (words.at(-1)?.[0] ?? '') : ''
-  return `${first}${last}`.toUpperCase() || '?'
-}
-
-export function whenLabel(iso: string, now: number, timeZone?: string): string {
-  const at = Date.parse(iso)
-  if (Number.isNaN(at)) return iso
-  const day = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
-  if (day.format(at) === day.format(now)) return describeAge(at, now)
-  const isThisYear = day.format(at).slice(0, 4) === day.format(now).slice(0, 4)
-  const date = new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric', ...(isThisYear ? {} : { year: 'numeric' }) }).format(at)
-  const time = new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' }).format(at)
-  // Newer ICU puts a narrow no-break space before AM/PM.
-  return `${date}, ${time}`.replace(/\s/g, ' ')
 }
 
 function permalink(ref: SlackThreadRef, ts: string, parentTs: string): string {

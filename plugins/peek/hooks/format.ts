@@ -14,3 +14,22 @@ export function describeAge(thenMs: number, nowMs: number): string {
 }
 
 export const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
+
+export function initials(name: string): string {
+  const words = name.split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean)
+  const first = words[0]?.[0] ?? ''
+  const last = words.length > 1 ? (words.at(-1)?.[0] ?? '') : ''
+  return `${first}${last}`.toUpperCase() || '?'
+}
+
+export function whenLabel(iso: string, now: number, timeZone?: string): string {
+  const at = Date.parse(iso)
+  if (Number.isNaN(at)) return iso
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+  if (day.format(at) === day.format(now)) return describeAge(at, now)
+  const isThisYear = day.format(at).slice(0, 4) === day.format(now).slice(0, 4)
+  const date = new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric', ...(isThisYear ? {} : { year: 'numeric' }) }).format(at)
+  const time = new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit' }).format(at)
+  // Newer ICU puts a narrow no-break space before AM/PM.
+  return `${date}, ${time}`.replace(/\s/g, ' ')
+}

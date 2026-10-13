@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { ProcessRunResult } from 'claude-code'
 
-import { initials, loadSlack, mrkdwnToMarkdown, whenLabel } from '../hooks/sources/slack'
+import { loadSlack, mrkdwnToMarkdown } from '../hooks/sources/slack'
+import { initials, whenLabel } from '../hooks/format'
 import { parseThreadText } from '../hooks/parsers/slack-transcript'
 import { speakerColor } from '../hooks/theme'
 import type { SlackIo } from '../hooks/sources/slack'
