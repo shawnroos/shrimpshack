@@ -9,7 +9,7 @@ import { extOf, fileHref, kindOf } from './paths'
 import type { Kind } from './paths'
 import { parseRef } from './refs'
 import { parseDelimited, prettyJson, tomlSections } from './tabular'
-import { downloadFile, remoteFileOf } from './web'
+import { downloadFile, remoteFileOf } from './sources/web'
 
 export const fullText = new Map<string, string>()
 

@@ -5,7 +5,7 @@ import type { Captured } from '../hooks/capture'
 import type { Ref } from '../hooks/refs'
 import type { SourceIo } from '../hooks/sources'
 import { MARKER } from '../hooks/parsers/curl'
-import { fromCapture, isPrivateHost, loadWeb, parseHead } from '../hooks/web'
+import { fromCapture, isPrivateHost, loadWeb, parseHead } from '../hooks/sources/web'
 import { FULL_OG, HOSTILE, ICO_ICON, NO_ICON, TITLE_ONLY, privateImage } from './fixtures/web/pages'
 import { exited } from './fixtures/results'
 

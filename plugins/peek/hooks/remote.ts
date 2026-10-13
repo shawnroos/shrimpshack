@@ -4,7 +4,7 @@ import type { Ref } from './refs'
 import { adapterFor } from './sources/adapter'
 import type { RemoteIo } from './sources/adapter'
 import type { SourceIo } from './sources'
-import { withRemoteMedia } from './web'
+import { withRemoteMedia } from './sources/web'
 
 export type { RemoteIo } from './sources/adapter'
 

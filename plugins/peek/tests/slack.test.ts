@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { ProcessRunResult } from 'claude-code'
 
-import { initials, loadSlack, mrkdwnToMarkdown, whenLabel } from '../hooks/slack'
+import { initials, loadSlack, mrkdwnToMarkdown, whenLabel } from '../hooks/sources/slack'
 import { parseThreadText } from '../hooks/parsers/slack-transcript'
 import { speakerColor } from '../hooks/theme'
-import type { SlackIo } from '../hooks/slack'
+import type { SlackIo } from '../hooks/sources/slack'
 import { ADA_PIC, CHANNEL_RESULT, CLI_CHANNEL, CLI_REPLIES, FILES_RESULT, FILES_TEXT, LONE_MESSAGE, THREAD_MORE, THREAD_RESULT, fileResult, usersResult } from './fixtures/slack/mcp'
 import { exited, meta, record, ref } from './fixtures/results'
 

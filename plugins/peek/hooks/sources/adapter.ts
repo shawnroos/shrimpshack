@@ -1,12 +1,12 @@
 import type { Loaded, RemoteFailure, Tier } from '../../types'
 import type { Captured, CaptureIo } from '../capture'
-import { fromCapture as githubFromCapture, loadGithub } from '../github'
-import { fromCapture as linearFromCapture, loadLinear } from '../linear'
+import { fromCapture as githubFromCapture, loadGithub } from './github'
+import { fromCapture as linearFromCapture, loadLinear } from './linear'
 import type { Ref } from '../refs'
-import { loadSlack } from '../slack'
+import { loadSlack } from './slack'
 import type { SourceIo } from '../sources'
 import { ICON } from '../theme'
-import { downloadFile, fromCapture as webFromCapture, loadWeb } from '../web'
+import { downloadFile, fromCapture as webFromCapture, loadWeb } from './web'
 import { parseUrl } from '../wire'
 
 export type RemoteIo = SourceIo & CaptureIo

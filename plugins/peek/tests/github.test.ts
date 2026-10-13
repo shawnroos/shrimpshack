@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
-import { ciSummary, ciTone, fromCapture, loadGithub, resolveNumber } from '../hooks/github'
+import { ciSummary, ciTone, fromCapture, loadGithub, resolveNumber } from '../hooks/sources/github'
 import type { SourceIo } from '../hooks/sources'
 import { checks, conversation, issueList, issueView, issuesApiIssue, issuesApiPull, mcpPullRead, pullList, pullView, repoView } from './fixtures/github/items'
 import type { Loaded } from '../types'

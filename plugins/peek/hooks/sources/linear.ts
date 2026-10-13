@@ -1,12 +1,12 @@
-import type { Captured } from './capture'
-import { parseRef } from './refs'
-import type { LinearIssueRef, LinearProjectRef, Ref } from './refs'
-import { linearPaged, linearQuery } from './sources'
-import { ok } from './sources/result'
-import type { Connection, Failed, SourceIo } from './sources'
-import { asDay, asObj, asStr, tryJson } from './wire'
-import type { Json } from './wire'
-import type { Loaded, RemoteComment, RemoteList, RemoteListItem, RemoteRecord } from '../types'
+import type { Captured } from '../capture'
+import { parseRef } from '../refs'
+import type { LinearIssueRef, LinearProjectRef, Ref } from '../refs'
+import { linearPaged, linearQuery } from '../sources'
+import { ok } from './result'
+import type { Connection, Failed, SourceIo } from '../sources'
+import { asDay, asObj, asStr, tryJson } from '../wire'
+import type { Json } from '../wire'
+import type { Loaded, RemoteComment, RemoteList, RemoteListItem, RemoteRecord } from '../../types'
 
 const SHOWN_COMMENTS = 50
 const FROZEN_TYPES = new Set(['completed', 'canceled'])
