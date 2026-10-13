@@ -1,4 +1,4 @@
-import { itemKey, keyOf, parseRef } from './refs'
+import { itemKey, keyOf, LINEAR_KEY, parseRef } from './refs'
 import type { Ref, RefKind } from './refs'
 
 export type CaptureIo = {
@@ -140,7 +140,7 @@ function linearSource(args: Record<string, unknown>, text: string): Ref | null {
   const id = [args.id, args.issueId, args.identifier, args.query].find((one): one is string => typeof one === 'string')
   const fromResult = topLevelUrl(text)
   const resultRef = fromResult ? parseRef(fromResult) : null
-  const isKey = id !== undefined && /^[A-Za-z][A-Za-z0-9]{0,9}-\d+$/.test(id)
+  const isKey = id !== undefined && LINEAR_KEY.test(id)
   if (resultRef?.kind === 'linear-issue') return !isKey || resultRef.key === id.toUpperCase() ? resultRef : null
   if (resultRef?.kind === 'linear-project') return resultRef
   if (isKey) {
