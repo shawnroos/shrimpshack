@@ -3,6 +3,8 @@ import { githubRef } from './refs'
 import type { GithubItemRef, Ref } from './refs'
 import { runGh } from './sources'
 import type { Failed, SourceIo } from './sources'
+import { asArr, asNum, asObj, tryJson } from './wire'
+import type { Json } from './wire'
 import type { CiTone, Loaded, RemoteComment, RemoteKind, RemoteList, RemoteListItem, RemoteRecord, Tier } from '../types'
 
 const COMMENTS_SHOWN = 50
@@ -14,16 +16,13 @@ const REPO_FIELDS = 'nameWithOwner,description,defaultBranchRef,primaryLanguage,
 const BUCKETS = ['passed', 'failed', 'pending', 'cancelled', 'skipped'] as const
 
 type Bucket = (typeof BUCKETS)[number]
-type Json = Record<string, unknown>
 
 const resolved = new Map<string, boolean>()
 
+// GitHub's fields keep their whitespace (a body can open with indented code), and a missing object, string or
+// number reads as {}, '' or 0, where wire.ts trims and returns undefined.
 function obj(value: unknown): Json {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {}
-}
-
-function arr(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
+  return asObj(value) ?? {}
 }
 
 function str(value: unknown): string {
@@ -31,15 +30,7 @@ function str(value: unknown): string {
 }
 
 function num(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function parse(text: string): unknown {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return undefined
-  }
+  return asNum(value) ?? 0
 }
 
 function pick(source: Json, ...keys: string[]): unknown {
@@ -71,7 +62,7 @@ export async function resolveNumber(io: SourceIo, ref: Ref): Promise<{ ok: true;
   // `gh issue view` answers for a PR number too, so only the issues API's pull_request key tells them apart.
   const ran = await runGh(io, ['api', `repos/${owner}/${repo}/issues/${number}`])
   if (!ran.ok) return ran
-  const answer = parse(ran.stdout)
+  const answer = tryJson(ran.stdout)
   if (!answer || typeof answer !== 'object') return { ok: false, failure: 'query-bug' }
   const isPull = obj(answer).pull_request !== undefined && obj(answer).pull_request !== null
   resolved.set(key, isPull)
@@ -107,7 +98,7 @@ function bucketOf(check: Json): Bucket {
 function ci(rollup: unknown, mergeable: unknown, state: unknown): { text: string; tone: CiTone } {
   // A source that omits the field (a REST or MCP payload) says nothing about CI; an empty array says nothing ran.
   if (rollup === undefined) return { text: 'CI not in this source', tone: 'none' }
-  const checks = arr(rollup)
+  const checks = asArr(rollup)
   if (checks.length === 0) {
     if (str(state).toUpperCase() === 'OPEN') {
       const merge = str(mergeable).toUpperCase()
@@ -134,7 +125,7 @@ export function ciTone(rollup: unknown, mergeable: unknown, state: unknown): CiT
 }
 
 function names(value: unknown, key: 'name' | 'login'): string {
-  return arr(value)
+  return asArr(value)
     .map(entry => (typeof entry === 'string' ? entry : str(obj(entry)[key])))
     .filter(Boolean)
     .join(', ')
@@ -159,8 +150,8 @@ function comment(raw: unknown, isReview: boolean): RemoteComment & { time: strin
 
 function conversation(comments: unknown, reviews: unknown, inline?: number): RemoteRecord['comments'] {
   const all = [
-    ...arr(comments).map(raw => comment(raw, false)),
-    ...arr(reviews)
+    ...asArr(comments).map(raw => comment(raw, false)),
+    ...asArr(reviews)
       .filter(raw => str(obj(raw).body).trim() !== '')
       .map(raw => comment(raw, true)),
   ].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
@@ -263,7 +254,7 @@ function issueRecord({ view, ref }: ItemShape): RemoteRecord | null {
 }
 
 function listItems(raw: unknown, owner: string, repo: string, isPull: boolean): RemoteListItem[] {
-  return arr(raw)
+  return asArr(raw)
     .map(obj)
     .filter(entry => num(entry.number) > 0)
     .sort((a, b) => (str(a.updatedAt) < str(b.updatedAt) ? 1 : str(a.updatedAt) > str(b.updatedAt) ? -1 : 0))
@@ -310,14 +301,14 @@ async function loadRepo(io: SourceIo, owner: string, repo: string, now: number):
     runGh(io, ['issue', 'list', '--repo', slug, '--state', 'open', '--limit', LIST_LIMIT, '--search', 'sort:updated-desc', '--json', 'number,title,updatedAt,author,url']),
   ])
   if (!view.ok) return view
-  const json = obj(parse(view.stdout))
+  const json = obj(tryJson(view.stdout))
   const lists: RemoteList[] = []
   if (pulls.ok) {
-    const items = listItems(parse(pulls.stdout), owner, repo, true)
+    const items = listItems(tryJson(pulls.stdout), owner, repo, true)
     lists.push({ heading: 'Pull requests', items, total: Math.max(num(obj(json.pullRequests).totalCount), items.length) })
   }
   if (issues.ok) {
-    const items = listItems(parse(issues.stdout), owner, repo, false)
+    const items = listItems(tryJson(issues.stdout), owner, repo, false)
     lists.push({ heading: 'Issues', items, total: Math.max(num(obj(json.issues).totalCount), items.length) })
   }
   const body = readme.ok && readme.stdout.trim() ? readme.stdout : undefined
@@ -332,14 +323,14 @@ async function loadPull(io: SourceIo, ref: GithubItemRef, now: number): Promise<
   ])
   if (!view.ok) return view
   const count = inline.ok ? Number.parseInt(inline.stdout.trim(), 10) : NaN
-  const record = pullRecord({ view: obj(parse(view.stdout)), ref, inline: Number.isFinite(count) ? count : undefined })
+  const record = pullRecord({ view: obj(tryJson(view.stdout)), ref, inline: Number.isFinite(count) ? count : undefined })
   return loaded(record, 'cli', now) ?? { ok: false, failure: 'query-bug' }
 }
 
 async function loadIssue(io: SourceIo, ref: GithubItemRef, now: number): Promise<Loaded> {
   const view = await runGh(io, ['issue', 'view', String(ref.number), '--repo', `${ref.owner}/${ref.repo}`, '--json', ISSUE_FIELDS])
   if (!view.ok) return view
-  return loaded(issueRecord({ view: obj(parse(view.stdout)), ref }), 'cli', now) ?? { ok: false, failure: 'query-bug' }
+  return loaded(issueRecord({ view: obj(tryJson(view.stdout)), ref }), 'cli', now) ?? { ok: false, failure: 'query-bug' }
 }
 
 export async function loadGithub(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
@@ -366,7 +357,7 @@ function capturedKind(captured: Captured, ref: Ref, view: Json): RemoteKind | nu
 }
 
 export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
-  const parsed = parse(captured.result)
+  const parsed = tryJson(captured.result)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const view = obj(parsed)
   const kind = capturedKind(captured, ref, view)
