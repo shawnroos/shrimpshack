@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { applyGroupOps, createGroup, deleteGroup, GROUP_CAPS, shortId, starGroup } from '../hooks/groups'
-import type { Group, GroupActor, GroupContext, GroupOp } from '../types'
+import type { Group, GroupActor, GroupContext, GroupOp } from '../types/groups'
 
 const NOW = 1_000
 const LATER = 2_000

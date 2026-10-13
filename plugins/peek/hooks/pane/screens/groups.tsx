@@ -1,4 +1,4 @@
-import type { Group, SectionLayout } from '../../../types'
+import type { Group, SectionLayout } from '../../../types/groups'
 import { describeAge, plural } from '../../format'
 import { gridColumns } from '../../gallery'
 import { layoutOf } from '../../groups'

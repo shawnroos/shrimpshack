@@ -1,4 +1,4 @@
-import type { Group, GroupOp, GroupOutcome, SectionLayout } from '../types'
+import type { Group, GroupOp, GroupOutcome, SectionLayout } from '../types/groups'
 import { toHref } from './entries'
 import { plural } from './format'
 import { createGroup, deleteGroup, isGroupId, layoutOf, listGroups, readGroup, refused, shortId, applyGroupOps } from './groups'

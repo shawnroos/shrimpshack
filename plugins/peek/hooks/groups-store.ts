@@ -1,4 +1,4 @@
-import type { Group, GroupResult } from '../types'
+import type { Group, GroupResult } from '../types/groups'
 import { fileOf, isGroupId, listGroups, readGroup, writeGroup } from './groups'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
 

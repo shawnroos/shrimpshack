@@ -1,4 +1,4 @@
-import type { Group, GroupItem, GroupOp, GroupResult } from '../types'
+import type { Group, GroupItem, GroupOp, GroupResult } from '../types/groups'
 import { gitRoot, toHref } from './entries'
 import { toggleStar } from './gallery'
 import { applyGroupOps, groupsDir, isScheme, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'

@@ -1,6 +1,6 @@
 import type { PluginState } from 'claude-code'
 
-import type { Group } from '../../../types'
+import type { Group } from '../../../types/groups'
 import { plural } from '../../format'
 import { groupItemLook, groupPage, loadGroupRemote, openGroupHref, setStar } from '../../groups-session'
 import type { GroupHome } from '../../groups-session'

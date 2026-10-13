@@ -1,6 +1,7 @@
 import type { EngineInterface, PluginState } from 'claude-code'
 
-import type { Group, GroupResult, Loaded, Mode, RemoteRecord, View } from '../types'
+import type { Loaded, Mode, RemoteRecord, View } from '../types'
+import type { Group, GroupResult } from '../types/groups'
 import { bootLinearIdentity, linearContext } from './sources/linear-identity'
 import { describeAge } from './format'
 import { noteMentions } from './gallery'

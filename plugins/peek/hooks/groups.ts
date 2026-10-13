@@ -1,4 +1,4 @@
-import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection, SectionLayout } from '../types'
+import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection, SectionLayout } from '../types/groups'
 import { parseHref } from './paths'
 import { itemKey } from './refs'
 
