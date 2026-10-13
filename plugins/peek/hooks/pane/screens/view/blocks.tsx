@@ -1,6 +1,8 @@
 import type { RenderChildren } from 'claude-code'
 
+import type { TablePart } from '../../../markdown'
 import { IMAGE_ROWS, imageBox } from '../../../measure'
+import { columnWidths, fitCell } from '../../../tabular'
 import { nav } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { ICON } from '../../../theme'
@@ -61,6 +63,23 @@ export function Embed(ctx: DrawContext, key: string, icon: string, label: string
 export function DiagramEmbed(ctx: DrawContext, key: string, info: string, text: string) {
   const { Text, C } = ctx
   return Embed(ctx, key, ICON.mermaid, 'DIAGRAM', info, C.mauve, <Text color={C.subtext0}>{text}</Text>)
+}
+
+export function TableBlock(ctx: DrawContext, key: string, { header, align, rows }: TablePart, width = ctx.textWidth) {
+  const { Box, Text, C, isMenuOpen } = ctx
+  const widths = columnWidths([header, ...rows], width)
+  const line = (row: readonly string[]) => widths.map((cell, c) => fitCell(row[c] ?? '', cell, align[c])).join('  ')
+  return (
+    <Box key={key} flexDirection="column" width={width}>
+      <Text color={C.accent} bold wrap="truncate-end">{line(header)}</Text>
+      <Text color={C.surface1} wrap="truncate-end">{widths.map(cell => '─'.repeat(cell)).join('  ')}</Text>
+      {rows.map((row, r) => (
+        <Text key={`${key}-row-${r}`} color={isMenuOpen ? C.overlay1 : C.text} backgroundColor={r % 2 ? C.cardBg : undefined} wrap="truncate-end">
+          {line(row)}
+        </Text>
+      ))}
+    </Box>
+  )
 }
 
 export type Blocks = { drawnParts: RenderChildren[]; partRows: number[]; partHeadings: string[]; note: (rows: number, heading?: string) => void }

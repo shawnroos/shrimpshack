@@ -315,6 +315,18 @@ test('a mermaid fence in a pull request body draws as a diagram', async ($, on) 
   await ui.unmount()
 })
 
+test('a table in a pull request body draws as aligned columns, and a table in a fence stays code', async ($, on) => {
+  fakeWorld(on, { pull: { body: 'Plan:\n\n| Step | Days |\n|---|---:|\n| Build | 3 |\n\n```\n| raw | pipe |\n|---|---|\n```\n' } })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  const page = JSON.stringify(await ui.drawn())
+  expect(page).toMatch(/\["Step +Days"\]/)
+  expect(page).toMatch(/\["Build +   3"\]/)
+  expect(page).not.toContain('| Step |')
+  expect(page).toContain('| raw | pipe |')
+  await ui.unmount()
+})
+
 test('Recent and Gallery match a star by its stored href, so a star saved as /issues/42 does not star the /pull/42 entry', async ($, on) => {
   fakeWorld(on)
   const issue = 'https://github.com/acme/widgets/issues/42'

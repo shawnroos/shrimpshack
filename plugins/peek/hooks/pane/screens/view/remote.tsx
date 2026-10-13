@@ -3,7 +3,7 @@ import { describeAge } from '../../../format'
 import { pixels } from '../../../images'
 import { colorFor, iconFor } from '../../../kinds'
 import { isWebUrl } from '../../../live'
-import { linkify } from '../../../markdown'
+import { linkify, splitTables } from '../../../markdown'
 import { chunkMarkdown, estimateRows, fitName } from '../../../measure'
 import { openFromPage, pressLink, refContext } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
@@ -13,7 +13,7 @@ import { ICON, META_ICON, mute } from '../../../theme'
 import { parseUrl } from '../../../wire'
 import type { DrawContext, PictureBudget } from '../../types'
 import { SectionRule, fitPicture } from '../../widgets'
-import { DiagramEmbed, Embed, fullWidthOf, newBlocks, settleBlocks } from './blocks'
+import { DiagramEmbed, Embed, TableBlock, fullWidthOf, newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
 import { slackThread } from './slack'
 
@@ -100,6 +100,16 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     flush()
   }
   const markdownChunks = (key: string, text: string, heading: string, indent = 0) => {
+    if (!text.includes('|')) return proseChunks(key, text, heading, indent)
+    for (const [i, part] of splitTables(text).entries()) {
+      if (part.kind === 'markdown') proseChunks(`${key}-t${i}`, part.text, heading, indent)
+      else {
+        drawnParts.push(<Box key={`${key}-t${i}`} marginLeft={indent}>{TableBlock(ctx, `${key}-table-${i}`, part, textWidth - indent)}</Box>)
+        note(2 + part.rows.length, heading)
+      }
+    }
+  }
+  const proseChunks = (key: string, text: string, heading: string, indent = 0) => {
     const memoKey = `${memoBase}|${key}`
     let chunks = blockMemo.get(memoKey)
     if (!chunks) {

@@ -262,6 +262,49 @@ function cellAlign(rule: string): CellAlign {
   return cell.endsWith(':') ? 'right' : 'left'
 }
 
+export type TablePart = Extract<DocPart, { kind: 'table' }>
+
+// A table needs a pipe header line directly above a dashed rule with the same
+// cell count; it runs until a blank or pipe-less line. Fenced lines never count.
+export function splitTables(text: string): ({ kind: 'markdown'; text: string } | TablePart)[] {
+  const out: ({ kind: 'markdown'; text: string } | TablePart)[] = []
+  let buffer: string[] = []
+  let table: TablePart | null = null
+  let fence = ''
+  const flush = () => {
+    if (buffer.join('').trim()) out.push({ kind: 'markdown', text: buffer.join('\n') })
+    buffer = []
+  }
+  for (const line of text.split('\n')) {
+    if (table) {
+      if (line.includes('|') && line.trim()) {
+        const cells = tableCells(line)
+        table.rows.push(table.header.map((_, c) => cells[c] ?? ''))
+        continue
+      }
+      out.push(table)
+      table = null
+    }
+    const marker = /^\s*(```|~~~)/.exec(line)?.[1]
+    if (marker && (!fence || marker === fence)) fence = fence ? '' : marker
+    const header = buffer[buffer.length - 1]
+    if (!fence && !marker && header?.includes('|') && line.includes('-') && TABLE_RULE.test(line)) {
+      const rule = tableCells(line)
+      const names = tableCells(header)
+      if (rule.length === names.length) {
+        buffer.pop()
+        flush()
+        table = { kind: 'table', header: names, align: rule.map(cellAlign), rows: [] }
+        continue
+      }
+    }
+    buffer.push(line)
+  }
+  if (table) out.push(table)
+  flush()
+  return out
+}
+
 export function plainInline(text: string): string {
   return text
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -275,7 +318,7 @@ export function segmentsOf(page: string): DocPart[] {
   let tasks: TaskItem[] = []
   let inFence = false
   const flush = () => {
-    if (buffer.join('').trim()) out.push({ kind: 'markdown', text: buffer.join('\n') })
+    out.push(...splitTables(buffer.join('\n')))
     buffer = []
   }
   const flushQuote = () => {
@@ -286,7 +329,6 @@ export function segmentsOf(page: string): DocPart[] {
     if (tasks.length) out.push({ kind: 'tasks', items: tasks })
     tasks = []
   }
-  let table: Extract<DocPart, { kind: 'table' }> | null = null
   let code: { lang: string; info: string; lines: string[] } | null = null
   for (const line of page.split('\n')) {
     const fence = /^\s*(```|~~~)\s*([\w+#.-]*)\s*(.*)$/.exec(line)
@@ -298,26 +340,6 @@ export function segmentsOf(page: string): DocPart[] {
         code.lines.push(line)
       }
       continue
-    }
-    if (table) {
-      if (line.includes('|') && line.trim()) {
-        const cells = tableCells(line)
-        table.rows.push(table.header.map((_, c) => cells[c] ?? ''))
-        continue
-      }
-      out.push(table)
-      table = null
-    }
-    const header = buffer[buffer.length - 1]
-    if (header?.includes('|') && TABLE_RULE.test(line) && line.includes('-')) {
-      const rule = tableCells(line)
-      const names = tableCells(header)
-      if (rule.length === names.length) {
-        buffer.pop()
-        flush()
-        table = { kind: 'table', header: names, align: rule.map(cellAlign), rows: [] }
-        continue
-      }
     }
     if (fence) {
       flush()
@@ -368,7 +390,6 @@ export function segmentsOf(page: string): DocPart[] {
   flush()
   flushQuote()
   flushTasks()
-  if (table) out.push(table)
   if (code) out.push({ kind: 'code', lang: code.lang, info: code.info, text: code.lines.join('\n') })
   return out
 }

@@ -4,12 +4,11 @@ import { diagramType, plainInline, segmentsOf } from '../../../markdown'
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, imageBox, taskRows } from '../../../measure'
 import { fullText } from '../../../loaders'
 import { pressLink } from '../../../navigation'
-import { columnWidths, fitCell } from '../../../tabular'
 import type { NavIo } from '../../../navigation'
 import { fileHref } from '../../../paths'
 import { ICON } from '../../../theme'
 import type { DrawContext } from '../../types'
-import { DiagramEmbed, Embed, newBlocks, settleBlocks } from './blocks'
+import { DiagramEmbed, Embed, TableBlock, newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
 
 export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, markdown: string, path: string): Promise<ViewBody> {
@@ -128,21 +127,8 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
       continue
     }
     if (part.kind === 'table') {
-      const { header, align, rows } = part
-      const widths = columnWidths([header, ...rows], textWidth)
-      const line = (row: readonly string[]) => widths.map((width, c) => fitCell(row[c] ?? '', width, align[c])).join('  ')
-      drawnParts.push(
-        <Box key={`table-${index}`} flexDirection="column" width={textWidth}>
-          <Text color={C.accent} bold wrap="truncate-end">{line(header)}</Text>
-          <Text color={C.surface1} wrap="truncate-end">{widths.map(width => '─'.repeat(width)).join('  ')}</Text>
-          {rows.map((row, r) => (
-            <Text key={`table-${index}-row-${r}`} color={isMenuOpen ? C.overlay1 : C.text} backgroundColor={r % 2 ? C.cardBg : undefined} wrap="truncate-end">
-              {line(row)}
-            </Text>
-          ))}
-        </Box>,
-      )
-      note(2 + rows.length)
+      drawnParts.push(TableBlock(ctx, `table-${index}`, part))
+      note(2 + part.rows.length)
       continue
     }
     if (part.kind === 'quote') {
