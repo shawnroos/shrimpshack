@@ -1,10 +1,10 @@
-import type { FailureKind } from '../../types'
+import type { RemoteFailure } from '../../types'
 
 // Each transport answers the same status its own way (a 404 page is gone, a 404 non-JSON GraphQL reply is
 // not-found-or-no-access); the contexts keep those answers apart rather than unifying them.
 export type StatusContext = 'page' | 'graphql-text' | 'graphql-error' | 'graphql-data'
 
-type StatusTable = { exact: Readonly<Partial<Record<number, FailureKind>>>; success: FailureKind; serverError: FailureKind; other: FailureKind }
+type StatusTable = { exact: Readonly<Partial<Record<number, RemoteFailure>>>; success: RemoteFailure; serverError: RemoteFailure; other: RemoteFailure }
 
 const STATUS_TABLES: Record<StatusContext, StatusTable> = {
   page: {
@@ -33,7 +33,7 @@ const STATUS_TABLES: Record<StatusContext, StatusTable> = {
   },
 }
 
-export function fromHttpStatus(status: number, context: StatusContext): FailureKind {
+export function fromHttpStatus(status: number, context: StatusContext): RemoteFailure {
   const table = STATUS_TABLES[context]
   const exact = table.exact[status]
   if (exact) return exact
@@ -41,9 +41,9 @@ export function fromHttpStatus(status: number, context: StatusContext): FailureK
   return status >= 500 ? table.serverError : table.other
 }
 
-export type PatternRules = readonly (readonly [RegExp, FailureKind])[]
+export type PatternRules = readonly (readonly [RegExp, RemoteFailure])[]
 
-export function fromPatterns(text: string, rules: PatternRules): FailureKind | null {
+export function fromPatterns(text: string, rules: PatternRules): RemoteFailure | null {
   return rules.find(([pattern]) => pattern.test(text))?.[1] ?? null
 }
 
@@ -56,12 +56,12 @@ export const GH_RULES: PatternRules = [
   [/dial tcp|could not connect|connection refused|timeout|timed out|no such host|network is unreachable|error connecting/i, 'offline'],
 ]
 
-export function ghFailure(stderr: string): FailureKind {
+export function ghFailure(stderr: string): RemoteFailure {
   return fromPatterns(stderr, GH_RULES) ?? 'query-bug'
 }
 
 // null: this transport's token is refused, so the next transport may still serve the thread.
-export const SLACK_CODES: Readonly<Record<string, FailureKind | null>> = {
+export const SLACK_CODES: Readonly<Record<string, RemoteFailure | null>> = {
   thread_not_found: 'gone',
   message_not_found: 'gone',
   channel_not_found: 'not-found-or-no-access',
@@ -78,7 +78,7 @@ export const SLACK_CODES: Readonly<Record<string, FailureKind | null>> = {
   account_inactive: null,
 }
 
-export function slackFailure(message: string): FailureKind | null {
+export function slackFailure(message: string): RemoteFailure | null {
   const code = /execution_failed:\s*([a-z_]+)/.exec(message)?.[1] ?? /^\s*([a-z_]+)\s*$/.exec(message)?.[1] ?? ''
   return Object.hasOwn(SLACK_CODES, code) ? (SLACK_CODES[code] ?? null) : 'query-bug'
 }

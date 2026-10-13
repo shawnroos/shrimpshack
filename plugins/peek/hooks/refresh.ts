@@ -1,4 +1,4 @@
-import type { FailureKind, Loaded, RemoteKind, RemoteRecord, Tier } from '../types'
+import type { Loaded, RemoteFailure, RemoteKind, RemoteRecord, Tier } from '../types'
 import { itemKey, parseRef } from './refs'
 import { parseUrl } from './wire'
 
@@ -20,7 +20,7 @@ export type CacheEntry = {
   attemptedAt: number
   state: CacheState
   staleSince?: number
-  failure?: FailureKind
+  failure?: RemoteFailure
   failureDetail?: string
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { FailureKind, Loaded, RemoteKind, RemoteRecord } from '../types'
+import type { Loaded, RemoteFailure, RemoteKind, RemoteRecord } from '../types'
 import {
   BACKGROUND_CAP,
   cached,
@@ -39,7 +39,7 @@ function ok(kind: RemoteKind, extra: Partial<RemoteRecord> = {}): Answer {
   return (address, now) => ({ ok: true, record: record(address, kind, extra), tier: 'cli', fetchedAt: now })
 }
 
-function failing(failure: FailureKind): Answer {
+function failing(failure: RemoteFailure): Answer {
   return () => ({ ok: false, failure })
 }
 

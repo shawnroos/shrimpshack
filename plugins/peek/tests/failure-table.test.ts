@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { HttpResponse, ProcessRunResult } from 'claude-code'
 
-import type { FailureKind } from '../types'
+import type { LiveFailure, RemoteFailure } from '../types'
 import type { SourceIo } from '../hooks/sources'
 import { failureText, httpText, linearQuery, runGh } from '../hooks/sources'
+import { liveFailureText } from '../hooks/live'
 import { loadSlack } from '../hooks/slack'
 import type { SlackIo } from '../hooks/slack'
 import { loadWeb } from '../hooks/web'
@@ -64,7 +65,7 @@ function world(options: { tools?: string[]; ghAuth?: () => ProcessRunResult | Er
 }
 
 describe('gh: stderr and probe results', () => {
-  const STDERR: [string, FailureKind][] = [
+  const STDERR: [string, RemoteFailure][] = [
     ['GraphQL: Could not resolve to a PullRequest with the number of 9.', 'gone'],
     ['gh: Not Found (HTTP 404)', 'gone'],
     ['HTTP 410: Gone', 'gone'],
@@ -108,7 +109,7 @@ describe('gh: stderr and probe results', () => {
 
 describe('Linear GraphQL: four status ladders and the extension codes', () => {
   const STATUSES = [200, 302, 400, 401, 403, 404, 410, 418, 500, 503]
-  const NOT_JSON: Record<number, FailureKind> = {
+  const NOT_JSON: Record<number, RemoteFailure> = {
     200: 'query-bug',
     302: 'offline',
     400: 'query-bug',
@@ -120,7 +121,7 @@ describe('Linear GraphQL: four status ladders and the extension codes', () => {
     500: 'offline',
     503: 'offline',
   }
-  const UNKNOWN_ERROR: Record<number, FailureKind> = {
+  const UNKNOWN_ERROR: Record<number, RemoteFailure> = {
     200: 'query-bug',
     302: 'query-bug',
     400: 'query-bug',
@@ -132,7 +133,7 @@ describe('Linear GraphQL: four status ladders and the extension codes', () => {
     500: 'offline',
     503: 'offline',
   }
-  const NO_ERRORS: Record<number, FailureKind | 'ok'> = {
+  const NO_ERRORS: Record<number, RemoteFailure | 'ok'> = {
     200: 'ok',
     302: 'offline',
     400: 'offline',
@@ -144,7 +145,7 @@ describe('Linear GraphQL: four status ladders and the extension codes', () => {
     500: 'offline',
     503: 'offline',
   }
-  const outcome = (result: { ok: true; data: unknown } | { ok: false; failure: FailureKind }) => (result.ok ? 'ok' : result.failure)
+  const outcome = (result: { ok: true; data: unknown } | { ok: false; failure: RemoteFailure }) => (result.ok ? 'ok' : result.failure)
   for (const status of STATUSES) {
     test(`HTTP ${status}: non-JSON ${NOT_JSON[status]}, unknown error ${UNKNOWN_ERROR[status]}, no errors ${NO_ERRORS[status]}`, async () => {
       const bodies = ['<html>Bad gateway</html>', { errors: [{ message: 'odd', extensions: { code: 'WEIRD' } }] }, { errors: [{ message: 'odd' }] }, { data: {} }, { errors: [], data: {} }]
@@ -162,7 +163,7 @@ describe('Linear GraphQL: four status ladders and the extension codes', () => {
     }
   })
 
-  const CODES: [string, unknown, number, FailureKind][] = [
+  const CODES: [string, unknown, number, RemoteFailure][] = [
     ['RATELIMITED code', { extensions: { code: 'RATELIMITED' } }, 200, 'rate-limited'],
     ['ratelimited type', { extensions: { type: 'ratelimited' } }, 400, 'rate-limited'],
     ['lowercase authentication_error', { extensions: { code: 'authentication_error' } }, 200, 'key-refused'],
@@ -196,7 +197,7 @@ describe('Linear GraphQL: four status ladders and the extension codes', () => {
 })
 
 describe('plain HTTP: httpText and curl pages', () => {
-  const PAGE: [number, FailureKind, string][] = [
+  const PAGE: [number, RemoteFailure, string][] = [
     [302, 'offline', 'HTTP 302 from h.test'],
     [400, 'query-bug', 'HTTP 400 Bad Request from h.test'],
     [401, 'not-found-or-no-access', 'HTTP 401 Unauthorized from h.test'],
@@ -259,7 +260,7 @@ describe('Slack: error codes and the transport that cannot serve', () => {
   }
   const load = (options: Options) => loadSlack(slackWorld(options), ref(THREAD), NOW)
 
-  const CODES: [string, FailureKind][] = [
+  const CODES: [string, RemoteFailure][] = [
     ['thread_not_found', 'gone'],
     ['message_not_found', 'gone'],
     ['channel_not_found', 'not-found-or-no-access'],
@@ -305,7 +306,7 @@ describe('Slack: error codes and the transport that cannot serve', () => {
 })
 
 describe('failure text', () => {
-  const TEXT: Record<FailureKind, { title: string; hint: string }> = {
+  const TEXT: Record<RemoteFailure, { title: string; hint: string }> = {
     'cli-missing': { title: 'GitHub CLI is not installed', hint: 'Install it with `brew install gh`, then run `gh auth login`' },
     'cli-unauthed': { title: 'GitHub CLI is not signed in', hint: 'Run `gh auth login` in a terminal' },
     'key-missing': { title: 'No Linear API key found', hint: 'Set LINEAR_API_KEY or add it to ~/.secrets' },
@@ -317,14 +318,21 @@ describe('failure text', () => {
     'query-bug': { title: 'peek sent a request the service rejected', hint: 'Open it in the browser; this is a peek bug' },
     'fetch-blocked': { title: 'Your network policy blocks this request', hint: 'Open it in the browser instead' },
     'process-unavailable': { title: 'Command-line tools are unavailable here', hint: 'This surface cannot run command-line tools' },
+    'slack-unavailable': { title: 'Slack is not connected', hint: 'Slack: connect the Slack MCP server (/mcp), or install the Slack CLI and run `slack login`' },
+  }
+  for (const [kind, text] of Object.entries(TEXT) as [RemoteFailure, { title: string; hint: string }][]) {
+    test(`${kind} keeps its title and hint`, () => {
+      expect(failureText(kind)).toEqual(text)
+    })
+  }
+  const LIVE_TEXT: Record<LiveFailure, { title: string; hint: string }> = {
     'live-unavailable': { title: 'Live view needs the Swift compiler', hint: 'Install the command-line tools with `xcode-select --install`, then press v' },
     'live-crashed': { title: 'The live view stopped', hint: 'Press v to start it again' },
     'live-stalled': { title: 'The live page never drew', hint: 'Press v to try again, or o to open it in the browser' },
-    'slack-unavailable': { title: 'Slack is not connected', hint: 'Slack: connect the Slack MCP server (/mcp), or install the Slack CLI and run `slack login`' },
   }
-  for (const [kind, text] of Object.entries(TEXT) as [FailureKind, { title: string; hint: string }][]) {
+  for (const [kind, text] of Object.entries(LIVE_TEXT) as [LiveFailure, { title: string; hint: string }][]) {
     test(`${kind} keeps its title and hint`, () => {
-      expect(failureText(kind)).toEqual(text)
+      expect(liveFailureText(kind)).toEqual(text)
     })
   }
 })

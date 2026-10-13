@@ -7,7 +7,7 @@ import { asObj, asStr, decodeEntities, parseUrl, tryJson } from './wire'
 import { channelName, parseThreadText, profilePicture, unwrapTranscript } from './parsers/slack-transcript'
 import type { SlackMessage, SlackThread } from './parsers/slack-transcript'
 import type { Json } from './wire'
-import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
+import type { Loaded, RemoteComment, RemoteFailure, RemoteFile, RemoteRecord } from '../types'
 
 export type SlackIo = Pick<SourceIo, 'sessionId' | 'run'> &
   Pick<CaptureIo, 'mcpCall'> & { downloadImage?: (url: string, ext: string) => Promise<string | undefined> }
@@ -40,11 +40,9 @@ const cliPaths = new Map<string, Promise<string | null>>()
 const filePictures = new Map<string, Promise<string | undefined>>()
 const avatarFiles = new Map<string, Promise<string | undefined>>()
 
-type Unavailable = { ok: false; failure: 'unavailable' }
-
-function isUnavailable(result: Loaded | Unavailable): result is Unavailable {
-  return !result.ok && result.failure === 'unavailable'
-}
+// The transport is absent or refused its token: the next transport may still serve the thread.
+type Skip = { skip: true }
+const SKIP: Skip = { skip: true }
 
 
 function inline(text: string): string {
@@ -80,10 +78,6 @@ function plainLine(text: string): string {
     .replace(/^([*_~]+)(.+?)\1$/, '$2')
   const plain = decodeEntities(stripped, SLACK_ENTITIES).trim()
   return plain.length > TITLE_CAP ? `${plain.slice(0, TITLE_CAP - 1)}…` : plain
-}
-
-function slackOutcome(message: string): FailureKind | 'unavailable' {
-  return slackFailure(message) ?? 'unavailable'
 }
 
 function isoOf(ts: string): string {
@@ -261,13 +255,16 @@ async function withPictures(io: SlackIo, record: RemoteRecord, messages: readonl
   }
 }
 
-async function loadViaMcp(io: SlackIo, ref: SlackThreadRef, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
+async function loadViaMcp(io: SlackIo, ref: SlackThreadRef, channel: string, ts: string, now: number): Promise<Loaded | Skip> {
   const [thread, info] = await Promise.all([
     mcpRead(io, 'slack_read_thread', { channel_id: channel, message_ts: ts, limit: REPLY_LIMIT }),
     mcpRead(io, 'slack_read_channel', { channel_id: channel, limit: 1 }),
   ])
-  if (!thread) return { ok: false, failure: 'unavailable' }
-  if (thread.isError) return { ok: false, failure: slackOutcome(thread.text) }
+  if (!thread) return SKIP
+  if (thread.isError) {
+    const failure = slackFailure(thread.text)
+    return failure ? { ok: false, failure } : SKIP
+  }
   const { messages, more } = unwrapTranscript(thread.text)
   const parsed = parseThreadText(messages)
   if (!parsed) return { ok: false, failure: 'query-bug' }
@@ -293,12 +290,15 @@ async function findCli(io: SlackIo): Promise<string | null> {
   return pending
 }
 
-async function cliApi(io: SlackIo, bin: string, args: readonly string[]): Promise<{ ok: true; body: Json } | { ok: false; failure: FailureKind | 'unavailable' }> {
+async function cliApi(io: SlackIo, bin: string, args: readonly string[]): Promise<{ ok: true; body: Json } | { ok: false; failure: RemoteFailure } | Skip> {
   const ran = await io.run([bin, 'api', ...args], { timeoutMs: CLI_TIMEOUT_MS }).catch(() => null)
   if (!ran) return { ok: false, failure: 'offline' }
   const body = asObj(tryJson(ran.stdout))
-  if (!body) return { ok: false, failure: ran.exitCode === 0 ? 'query-bug' : 'unavailable' }
-  if (body.ok !== true) return { ok: false, failure: slackOutcome(asStr(body.error) ?? '') }
+  if (!body) return ran.exitCode === 0 ? { ok: false, failure: 'query-bug' } : SKIP
+  if (body.ok !== true) {
+    const failure = slackFailure(asStr(body.error) ?? '')
+    return failure ? { ok: false, failure } : SKIP
+  }
   return { ok: true, body }
 }
 
@@ -328,13 +328,14 @@ function cliMessage(one: Json): SlackMessage {
   }
 }
 
-async function loadViaCli(io: SlackIo, ref: SlackThreadRef, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
+async function loadViaCli(io: SlackIo, ref: SlackThreadRef, channel: string, ts: string, now: number): Promise<Loaded | Skip> {
   const bin = await findCli(io)
-  if (!bin) return { ok: false, failure: 'unavailable' }
+  if (!bin) return SKIP
   const [replies, info] = await Promise.all([
     cliApi(io, bin, ['conversations.replies', `channel=${channel}`, `ts=${ts}`, `limit=${REPLY_LIMIT}`]),
     cliApi(io, bin, ['conversations.info', `channel=${channel}`]),
   ])
+  if ('skip' in replies) return SKIP
   if (!replies.ok) return { ok: false, failure: replies.failure }
   const raw = Array.isArray(replies.body.messages) ? replies.body.messages : []
   const messages = raw
@@ -343,7 +344,7 @@ async function loadViaCli(io: SlackIo, ref: SlackThreadRef, channel: string, ts:
     .map(one => cliMessage(one))
   const [parent, ...rest] = messages
   if (!parent) return { ok: false, failure: 'query-bug' }
-  const name = info.ok ? asStr(asObj(info.body.channel)?.name) : undefined
+  const name = 'body' in info ? asStr(asObj(info.body.channel)?.name) : undefined
   const thread = { parent, replies: rest, hasMore: replies.body.has_more === true }
   const record = await withPictures(io, threadRecord(ref, thread, name), messages, undefined)
   return { ok: true, record, tier: 'cli', fetchedAt: now }
@@ -353,9 +354,9 @@ export async function loadSlack(io: SlackIo, ref: Ref, now: number): Promise<Loa
   if (ref.kind !== 'slack-thread' || !ref.channel || !ref.ts) return { ok: false, failure: 'query-bug' }
   const { channel, ts } = ref
   const viaMcp = await loadViaMcp(io, ref, channel, ts, now)
-  if (!isUnavailable(viaMcp)) return viaMcp
+  if (!('skip' in viaMcp)) return viaMcp
   const viaCli = await loadViaCli(io, ref, channel, ts, now)
-  if (!isUnavailable(viaCli)) return viaCli
+  if (!('skip' in viaCli)) return viaCli
   return { ok: false, failure: 'slack-unavailable' }
 }
 

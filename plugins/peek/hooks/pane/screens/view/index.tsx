@@ -2,13 +2,12 @@ import type { View } from '../../../../types'
 import { setStar } from '../../../groups-session'
 import { pixels } from '../../../images'
 import { iconFor } from '../../../kinds'
-import { liveStatusText } from '../../../live'
+import { liveFailureText, liveStatusText } from '../../../live'
 import { LIVE_FRAME, liveActions, liveBox, liveSession, toggleLive } from '../../../live-pane'
 import { goBack, nav, openExternally, refresh, sourceLine, starKeyOf, trailIcon } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { parseHref, shortPath } from '../../../paths'
 import { itemKey, parseRef } from '../../../refs'
-import { failureText } from '../../../sources'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
 import { closeAction, modeActions } from '../../actions'
@@ -104,7 +103,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     position = ''
   }
   const liveStatus = isLiveHere ? liveStatusText(liveState, current.location) : ''
-  const notice = liveSession.notice?.href === current.href ? failureText(liveSession.notice.kind) : null
+  const notice = liveSession.notice?.href === current.href ? liveFailureText(liveSession.notice.kind) : null
   const starTarget = (liveFrame && liveState?.url) || current.href
   const isStarred = (await io.stars.read()).some(one => starKeyOf(one) === itemKey(starTarget))
   const remote = current.remote

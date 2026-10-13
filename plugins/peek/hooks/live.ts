@@ -1,6 +1,6 @@
 import type { ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import type { FailureKind } from '../types'
+import type { LiveFailure } from '../types'
 
 const HELPER_SOURCE = 'helper/peek-web.swift'
 const CACHE_DIR = '.cache/claude-peek/bin'
@@ -14,6 +14,17 @@ export type BuildIo = {
   read: (path: string) => Promise<string>
   exists: (path: string) => Promise<boolean>
   run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
+}
+
+export function liveFailureText(kind: LiveFailure): { title: string; hint: string } {
+  switch (kind) {
+    case 'live-unavailable':
+      return { title: 'Live view needs the Swift compiler', hint: 'Install the command-line tools with `xcode-select --install`, then press v' }
+    case 'live-crashed':
+      return { title: 'The live view stopped', hint: 'Press v to start it again' }
+    case 'live-stalled':
+      return { title: 'The live page never drew', hint: 'Press v to try again, or o to open it in the browser' }
+  }
 }
 
 export type Built = { ok: true; path: string; isBuilt: boolean } | { ok: false; failure: 'live-unavailable'; reason: string }
@@ -112,8 +123,6 @@ export function splitLines(rest: string, text: string): { lines: string[]; rest:
   return { lines: parts.filter(line => line.trim() !== ''), rest: tail }
 }
 
-export type LiveFailureKind = Extract<FailureKind, 'live-unavailable' | 'live-crashed' | 'live-stalled'>
-
 export type Viewport = { width: number; height: number }
 
 export type LiveState = {
@@ -129,7 +138,7 @@ export type LiveState = {
   isEditable: boolean
   hasCookies: boolean
   isThrottled: boolean
-  failure?: { kind: LiveFailureKind; reason: string }
+  failure?: { kind: LiveFailure; reason: string }
 }
 
 export type Timer = { cancel: () => void }

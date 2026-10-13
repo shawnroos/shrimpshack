@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import type { FailureKind } from '../types'
+import type { RemoteFailure } from '../types'
 import type { SourceIo } from '../hooks/sources'
 import { failureText, hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/sources'
 import { exited } from './fixtures/results'
 
 const KEY = 'lin_api_PLANTEDKEY123'
-const ALL_KINDS: FailureKind[] = [
+const ALL_KINDS: RemoteFailure[] = [
   'cli-missing',
   'cli-unauthed',
   'key-missing',
@@ -283,7 +283,7 @@ describe('probe and gh', () => {
   })
 
   test('gh stderr maps to a kind and never travels upward', async () => {
-    const cases: [string, FailureKind][] = [
+    const cases: [string, RemoteFailure][] = [
       ['GraphQL: Could not resolve to a PullRequest with the number of 9.', 'gone'],
       ['gh: Not Found (HTTP 404)', 'gone'],
       ['gh: Resource not accessible by integration (HTTP 403)', 'not-found-or-no-access'],
@@ -334,7 +334,7 @@ test('every kind has a title and a next action', () => {
 })
 
 test('the planted key appears nowhere but the Authorization header, across every failure kind', () => {
-  const failures = new Set(outputs.flatMap(value => ((value as { failure?: FailureKind }).failure ? [(value as { failure: FailureKind }).failure] : [])))
+  const failures = new Set(outputs.flatMap(value => ((value as { failure?: RemoteFailure }).failure ? [(value as { failure: RemoteFailure }).failure] : [])))
   for (const kind of ALL_KINDS.filter(kind => kind !== 'key-missing')) expect([kind, failures.has(kind)]).toEqual([kind, true])
   const visible = JSON.stringify({
     outputs,

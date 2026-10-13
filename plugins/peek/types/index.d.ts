@@ -6,7 +6,7 @@ export type Heading = { level: number; text: string }
 
 export type RemoteKind = 'gh-repo' | 'gh-issue' | 'gh-pr' | 'linear-issue' | 'linear-project' | 'slack-thread' | 'web'
 
-export type FailureKind =
+export type RemoteFailure =
   | 'cli-missing'
   | 'cli-unauthed'
   | 'key-missing'
@@ -18,10 +18,9 @@ export type FailureKind =
   | 'query-bug'
   | 'fetch-blocked'
   | 'process-unavailable'
-  | 'live-unavailable'
-  | 'live-crashed'
-  | 'live-stalled'
   | 'slack-unavailable'
+
+export type LiveFailure = 'live-unavailable' | 'live-crashed' | 'live-stalled'
 
 export type Tier = 'cli' | 'api' | 'mcp' | 'session'
 
@@ -65,8 +64,8 @@ export type RemoteRecord = {
 }
 
 export type Loaded =
-  | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number; liveFailure?: FailureKind }
-  | { ok: false; failure: FailureKind; detail?: string }
+  | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number; liveFailure?: RemoteFailure }
+  | { ok: false; failure: RemoteFailure; detail?: string }
 
 export type View = {
   href: string
@@ -89,7 +88,7 @@ export type View = {
     record?: RemoteRecord
     tier?: Tier
     fetchedAt?: number
-    failure?: FailureKind
+    failure?: RemoteFailure
     failureDetail?: string
     staleSince?: number
     favicon?: { file: string; width: number; height: number }

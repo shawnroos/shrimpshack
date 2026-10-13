@@ -1,6 +1,6 @@
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import type { FailureKind } from '../types'
+import type { RemoteFailure } from '../types'
 import { fromHttpStatus, ghFailure } from './sources/classify'
 import { parseUrl, tryJson } from './wire'
 
@@ -30,17 +30,17 @@ export type SourceIo = {
 }
 
 export type Probe = {
-  gh: FailureKind | null
+  gh: RemoteFailure | null
   hasCurl: boolean
   hasKey: boolean
 }
 
-export type Failed = { ok: false; failure: FailureKind; detail?: string }
+export type Failed = { ok: false; failure: RemoteFailure; detail?: string }
 
 const probes = new Map<string, Promise<Probe>>()
 const keys = new Map<string, Promise<string | null>>()
 
-export function failureText(kind: FailureKind): { title: string; hint: string } {
+export function failureText(kind: RemoteFailure): { title: string; hint: string } {
   switch (kind) {
     case 'cli-missing':
       return { title: 'GitHub CLI is not installed', hint: 'Install it with `brew install gh`, then run `gh auth login`' }
@@ -64,12 +64,6 @@ export function failureText(kind: FailureKind): { title: string; hint: string } 
       return { title: 'Your network policy blocks this request', hint: 'Open it in the browser instead' }
     case 'process-unavailable':
       return { title: 'Command-line tools are unavailable here', hint: 'This surface cannot run command-line tools' }
-    case 'live-unavailable':
-      return { title: 'Live view needs the Swift compiler', hint: 'Install the command-line tools with `xcode-select --install`, then press v' }
-    case 'live-crashed':
-      return { title: 'The live view stopped', hint: 'Press v to start it again' }
-    case 'live-stalled':
-      return { title: 'The live page never drew', hint: 'Press v to try again, or o to open it in the browser' }
     case 'slack-unavailable':
       return { title: 'Slack is not connected', hint: 'Slack: connect the Slack MCP server (/mcp), or install the Slack CLI and run `slack login`' }
   }
@@ -97,7 +91,7 @@ async function runProbe(io: SourceIo): Promise<Probe> {
   const hasCurl = found.has('curl')
   if (!found.has('gh')) return { gh: 'cli-missing', hasCurl, hasKey }
   const status = await io.run(['gh', 'auth', 'status'], { timeoutMs: 10_000 }).catch(() => null)
-  const gh: FailureKind | null = status === null ? 'offline' : status.exitCode === 0 ? null : 'cli-unauthed'
+  const gh: RemoteFailure | null = status === null ? 'offline' : status.exitCode === 0 ? null : 'cli-unauthed'
   return { gh, hasCurl, hasKey }
 }
 
@@ -130,7 +124,7 @@ async function findKey(io: SourceIo): Promise<string | null> {
   return pending
 }
 
-async function forgetKey(io: SourceIo, failure: FailureKind): Promise<void> {
+async function forgetKey(io: SourceIo, failure: RemoteFailure): Promise<void> {
   if (failure === 'key-refused' || failure === 'key-missing') keys.delete(await io.sessionId())
 }
 
@@ -157,7 +151,7 @@ function isPolicyRefusal(error: unknown): boolean {
 
 type Attempt = { ok: true; data: unknown } | Failed | { ok: false; failure: 'rate-limited'; waitMs: number }
 
-function graphqlFailure(error: unknown, status: number): FailureKind | 'retry' {
+function graphqlFailure(error: unknown, status: number): RemoteFailure | 'retry' {
   const extensions = (error as { extensions?: { code?: unknown; type?: unknown } } | null)?.extensions
   const code = typeof extensions?.code === 'string' ? extensions.code.toUpperCase() : ''
   const type = typeof extensions?.type === 'string' ? extensions.type.toUpperCase().replace(/ /g, '_') : ''

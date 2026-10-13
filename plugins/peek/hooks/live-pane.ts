@@ -1,7 +1,7 @@
-import type { View } from '../types'
+import type { LiveFailure, View } from '../types'
 import { setStar } from './groups-session'
 import { createLive, isWebUrl, pagePoint, typedInput } from './live'
-import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveState, TypedKey, Viewport } from './live'
+import type { FrameGeometry, HelperInput, Live, LiveState, TypedKey, Viewport } from './live'
 import { goBack, openExternally } from './navigation'
 import type { NavIo } from './navigation'
 import type { Action } from './pane/types'
@@ -18,7 +18,7 @@ export const liveSession = {
   href: null as string | null,
   viewport: null as Viewport | null,
   isFrameDrawn: false,
-  notice: null as { href: string; kind: LiveFailureKind } | null,
+  notice: null as { href: string; kind: LiveFailure } | null,
   isTyping: false,
   lastInputSeq: 0,
   geom: null as FrameGeometry | null,
