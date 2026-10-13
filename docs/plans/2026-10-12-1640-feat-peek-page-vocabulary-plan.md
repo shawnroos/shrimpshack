@@ -184,7 +184,8 @@ flowchart TB
     - Peek runs it through `/usr/bin/env -i` with only `HOME`, `PATH`, `LANG`, `TMPDIR`, `PEEK_URL` and the variable names the recipe declares in `env`. Session secrets such as `LINEAR_API_KEY` never reach a script by default.
     - The working directory is the recipe folder. The link is passed as the last argument and in `PEEK_URL`.
     - The timeout is 20 s by default, and a recipe may raise it to 60 s. Output is capped at `$.process.run`'s 4 MiB.
-  - **MCP source.** It names a server, a tool and arguments, and `{{url}}` is replaced by the link.
+  - **MCP source: fetch, then map.** It names a server, a tool and arguments (`{{url}}` replaced by the link), plus a required `map` script in the folder. Peek calls the tool through the engine's own connection, then runs the map script under the script rules above with `{ "text": …, "structured": … }` on stdin (the tool's joined text content and its structured content, when present); the script prints the Page. This mirrors the built-in pages: Slack fetches with `slack_read_thread` and maps with `parseThreadText`, GitHub and Linear fetch JSON and map it in `github.ts` and `linear.ts`. Real MCP tools return their own data, never a Page.
+  - **The agent can write the map.** The agent calls the same MCP tool itself with a sample link, saves the result to `$TMPDIR` in the stdin format, and runs the map script against it locally until it prints a valid Page. When the map step fails, `check_recipe` returns the exact stdin peek gave the script (capped, under fetched data), so a live result that differs from the sample is visible.
   - **Typed outcomes.** Every outcome has a type: started-failed, exit-nonzero, timeout, output-truncated, not-JSON, server-not-connected, tool-error, invalid-page (with paths), changed-during-run, and needs-permission.
   - **Stderr.** The excerpt is capped at 500 characters, and the values of the declared variables are redacted from it.
   - **One runner for both callers.** The check tool and the pane call the same runner, so a recipe cannot pass the check and fail in the pane.
@@ -327,6 +328,7 @@ flowchart LR
   U5 --> U10[U10 timers]
   U9 --> U6[U6 agent tools]
   U6 --> U7[U7 skill and docs]
+  U7 --> U11[U11 MCP fetch then map]
 ```
 
 - **Parallel:** U8 can run beside U1, U2 and U3. U8 edits only `register.tsx` and its existing tests; U1, U2 and U3 touch only new modules and their tests.
@@ -602,6 +604,30 @@ flowchart LR
   - A failing timed run backs off and keeps the last page with its failure marker.
   - After 10 idle minutes, timed runs pause.
 - **Verification:** Timer tests pass with the mock clock.
+
+### U11. MCP sources fetch, then map through a script
+
+- **Goal:** An MCP-backed recipe turns any real MCP tool's output into a Page through a map script the agent writes and tests.
+- **Requirements:** R7, R10, R12, R13; KTD4, KTD7, KTD8.
+- **Dependencies:** U3, U6, U7, U9.
+- **Files:** `plugins/peek/hooks/page.ts` (recipe declaration), `plugins/peek/hooks/recipe-run.ts`, `plugins/peek/hooks/register.tsx` (check_recipe input echo, approval surface), `plugins/peek/hooks/recipes.ts` (map script must exist in the folder), the skill and its references and examples, `plugins/peek/tests/recipe-run.test.ts`, `plugins/peek/tests/recipe-tools.test.ts`, `plugins/peek/tests/skill-examples.test.ts` and fixtures.
+- **Approach:**
+  1. `validateRecipe`: an `mcp` source requires `map` (argv starting `./`, same rules as `run`); `env` is allowed for the map script.
+  2. Runner: call the tool, build the stdin object, run the map script exactly like a script source (real path inside the folder, `env -i`, timeout shared across both steps), then parse and validate. A draft checks both the MCP tool and the map script against session permissions before either runs.
+  3. Failure kinds: a map failure reports as exit-nonzero, not-JSON or invalid-page and carries the stdin it was given; an empty tool result is its own kind.
+  4. `check_recipe` puts that stdin under fetched data when the map step fails. The approval surface shows the MCP tool and the map script's full text.
+  5. Skill: teach the loop sample, map, test locally, then `check_recipe`, with the stdin format spelled out. The MCP example becomes a realistic tool result, a `map.py`, and the page it produces; the mirror check runs the map against the saved sample.
+- **Patterns to follow:** `slack.ts` (`mcpCall` then `parseThreadText`), the script path in `recipe-run.ts`.
+- **Test scenarios:**
+  - An MCP recipe whose map turns a fixture tool result into a page draws that page.
+  - A map that exits 1 → exit-nonzero, and `check_recipe` returns the stdin it got.
+  - A map printing an unknown block → invalid-page with its path.
+  - An MCP recipe without `map` fails `validateRecipe`.
+  - A draft whose MCP tool is allowed but whose map script asks → needs-permission, and neither step ran.
+  - The map script's stdin is byte-for-byte the documented `{ text, structured }` shape.
+  - Editing `map.py` drops approval.
+  - The skill's MCP example map, run on its saved sample, reproduces its sample page.
+- **Verification:** All scenarios pass, each seen red first; the mirror check passes.
 
 ### U6. Agent tools: `check_recipe` and `open`
 
