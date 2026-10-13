@@ -6,6 +6,7 @@ import { C as BASE } from '../theme'
 import { MODES } from './actions'
 import { Menu, menuRows, menuWidthOf } from './menu'
 import type { MenuLists } from './menu'
+import type { CrumbSegment } from '../crumbs'
 import type { Action, Crumb, DrawContext, PaneActions, Screen } from './types'
 
 export const HEADER_ROWS = 2
@@ -56,9 +57,38 @@ function fitCrumbs(parts: readonly Crumb[], geom: { columns: number; isNarrow: b
   return { fitted, isTabCompact }
 }
 
-function Crumbs(ctx: DrawContext, fitted: readonly Crumb[]) {
-  const { Box, Text, C } = ctx
+function crumbSegments(ctx: DrawContext, fitted: readonly Crumb[]) {
+  const { C } = ctx
   const last = fitted.length - 1
+  const segments: CrumbSegment[] = [{ text: '\u{e0b6}', fg: fitted[0]?.bg ?? C.surface0, bg: C.frame, crumb: 0, isEdge: true }]
+  for (const [index, one] of fitted.entries()) {
+    segments.push({ text: index === 0 ? `${one.label} ` : ` ${one.label}${index === last ? '' : ' '}`, fg: one.fg, bg: one.bg, crumb: index, ...(one.bold ? { bold: true } : {}) })
+    segments.push(
+      index === last
+        ? { text: '\u{e0b4}', fg: one.bg, bg: C.frame, crumb: index, isEdge: true }
+        : { text: '\u{e0bc}', fg: one.bg, bg: fitted[index + 1]?.bg ?? C.frame, crumb: index, isEdge: true },
+    )
+  }
+  return segments
+}
+
+function Crumbs(ctx: DrawContext, fitted: readonly Crumb[]) {
+  const { Box, Text, Client, C } = ctx
+  const last = fitted.length - 1
+  if (Client && fitted.some(one => one.press)) {
+    const segments = crumbSegments(ctx, fitted)
+    return (
+      <Box flexDirection="row" flexShrink={1} height={1} overflow="hidden">
+        <Client
+          key="crumbs"
+          module="../crumbs.tsx"
+          props={{ segments, presses: fitted.map(one => one.press ?? null) }}
+          width={segments.reduce((sum, one) => sum + [...one.text].length, 0)}
+          height={1}
+        />
+      </Box>
+    )
+  }
   return (
     <Box flexDirection="row" flexShrink={1} height={1} overflow="hidden">
       <Text color={fitted[0]?.bg ?? C.surface0} backgroundColor={C.frame}>{'\u{e0b6}'}</Text>

@@ -11,6 +11,7 @@ export type PaneWire =
   | { starGroup: string }
   | { open: string; inGroup: string; key: string }
   | { open: string }
+  | { go: string }
 
 export type PaneMessage =
   | { t: 'liveInput'; events: LiveInputEvent[] }
@@ -21,6 +22,7 @@ export type PaneMessage =
   | { t: 'starGroup'; id: string }
   | { t: 'openInGroup'; href: string; group: string; key: string }
   | { t: 'open'; href: string }
+  | { t: 'go'; href: string }
 
 const MODE_IDS: Record<Mode, true> = { view: true, recent: true, gallery: true, groups: true }
 const isMode = (value: unknown): value is Mode => typeof value === 'string' && Object.prototype.hasOwnProperty.call(MODE_IDS, value)
@@ -37,5 +39,6 @@ export function parsePaneMessage(data: unknown): PaneMessage | null {
   if (typeof one.starGroup === 'string') return { t: 'starGroup', id: one.starGroup }
   if (typeof one.open === 'string' && typeof one.inGroup === 'string') return { t: 'openInGroup', href: one.open, group: one.inGroup, key: String(one.key ?? '') }
   if (typeof one.open === 'string') return { t: 'open', href: one.open }
+  if (typeof one.go === 'string') return { t: 'go', href: one.go }
   return null
 }

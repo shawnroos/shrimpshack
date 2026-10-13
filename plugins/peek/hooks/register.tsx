@@ -22,7 +22,7 @@ import { groupsScreen } from './pane/screens/groups'
 import { recentScreen } from './pane/screens/recent'
 import { galleryScreen } from './pane/screens/gallery'
 import { viewScreen } from './pane/screens/view/index'
-import { bootLinear, clamp, nav, pressLink, refContext, repoContext, setMenu, show, switchMode } from './navigation'
+import { bootLinear, clamp, nav, openFromPage, pressLink, refContext, repoContext, setMenu, show, switchMode } from './navigation'
 import type { NavIo } from './navigation'
 import { TOOLS } from './group-tools'
 import { createGroupStore } from './groups-store'
@@ -429,6 +429,9 @@ export const register: Register = on => {
         return {}
       case 'toggle':
         await pressLink(io, message.href).catch(() => undefined)
+        return {}
+      case 'go':
+        await openFromPage(io, message.href).catch(() => undefined)
         return {}
       case 'mode':
         await switchMode(io, message.mode).catch(() => undefined)

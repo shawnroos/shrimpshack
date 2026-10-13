@@ -68,6 +68,14 @@ async function focusedItem(ui: { find: (q: { key: string }) => Promise<{ props: 
   return -1
 }
 
+
+// Crumbs that link somewhere are drawn by a Client module, so their words live in its props.
+async function trailHas(ui: { find: (q: { key: string }) => Promise<{ props: unknown } | undefined> }, pattern: RegExp) {
+  const crumbs = await ui.find({ key: 'crumbs' })
+  const segments = (crumbs?.props as { props?: { segments?: { text: string }[] } } | undefined)?.props?.segments ?? []
+  return segments.some(one => pattern.test(one.text))
+}
+
 const props = PANE_PROPS
 
 test('header, paged content and footer draw for a doc and a code file; Recent lists and reopens them', async ($, on) => {
@@ -81,8 +89,8 @@ test('header, paged content and footer draw for a doc and a code file; Recent li
     expect(await ui.find({ key: 'tabs-right' })).toBeDefined()
     expect(await ui.find({ key: 'open' })).toBeDefined()
     expect(await ui.find({ text: /100% · § Handoff/ })).toBeDefined()
-    expect(await ui.find({ text: /handoff\.md/ })).toBeDefined()
-    expect(await ui.find({ text: /docs $/ })).toBeDefined()
+    expect(await trailHas(ui, /handoff\.md/)).toBe(true)
+    expect(await trailHas(ui, /docs $/)).toBe(true)
     await ui.press({ key: 'mode-recent' })
     expect(await ui.find({ key: 'scope' })).toBeDefined()
     expect(await ui.find({ text: /2 files · session/ })).toBeDefined()
@@ -90,7 +98,7 @@ test('header, paged content and footer draw for a doc and a code file; Recent li
     expect(await itemNamed(ui, 'board.rs')).toBe('item-1')
     await ui.press({ key: 'item-1' })
     expect(await ui.find({ text: /line 1 of/ })).toBeDefined()
-    expect(await ui.find({ text: /app/ })).toBeDefined()
+    expect(await trailHas(ui, /app/)).toBe(true)
     await ui.unmount()
   }
 })
@@ -169,7 +177,7 @@ test('a narrow pane drops the tabs and the side spacing but keeps the hidden key
   expect(await ui.find({ key: 'tabs-left' })).toBeUndefined()
   expect(await ui.find({ key: 'tabs-right' })).toBeUndefined()
   expect(await ui.find({ key: 'open' })).toBeDefined()
-  expect(await ui.find({ text: /handoff\.md/ })).toBeDefined()
+  expect(await trailHas(ui, /handoff\.md/)).toBe(true)
   expect(await ui.find({ text: /100% · § Handoff/ })).toBeDefined()
   await ui.unmount()
   const wide = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...props, bodyColumns: 200 }, requestId: 'peek' })
@@ -586,6 +594,30 @@ test('a bullet list in a markdown file draws with an accent arrow instead of a d
   expect(page).toContain('"text":"beta with `code`"')
   expect(page).toContain('"text":"inner"')
   expect(page).not.toContain('- alpha')
+  await ui.unmount()
+})
+
+test('the header trail is clickable: a click on the folder crumb opens that folder, and b comes back to the file', async ($, on) => {
+  fakeDisk(on)
+  FILES['/repo/notes/trail.md'] = '# Trail\n\nBody.'
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await $.command.run({ command: 'peek', args: '/repo/notes/trail.md' } as never)
+  await ui.redraw()
+  const crumbs = await ui.find({ key: 'crumbs' })
+  const segments = (crumbs?.props as { props: { segments: { text: string; crumb: number }[]; presses: unknown[] } }).props
+  expect(segments.presses).toEqual([{ go: 'file:///repo' }, { go: 'file:///repo/notes' }, null])
+  let x = 0
+  for (const one of segments.segments) {
+    if (one.crumb === 1) break
+    x += [...one.text].length
+  }
+  await ui.pointer({ type: 'down', button: 'left', x: x + 1, y: 0, in: 'crumbs' } as never)
+  await ui.redraw()
+  expect(JSON.stringify(await ui.drawn())).toMatch(/notes/)
+  expect(JSON.stringify(await ui.drawn())).not.toContain('TRAIL')
+  await ui.press({ key: 'back' })
+  await ui.redraw()
+  expect(JSON.stringify(await ui.drawn())).toContain('TRAIL')
   await ui.unmount()
 })
 

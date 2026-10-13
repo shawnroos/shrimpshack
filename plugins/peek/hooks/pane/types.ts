@@ -5,6 +5,7 @@ import type { GroupMenuFor } from '../groups-session'
 import type { Cell, NavIo } from '../navigation'
 import type { MUTED } from '../theme'
 import type { Layout, ScreenLayout } from './layout'
+import type { PaneWire } from './messages'
 
 export type Palette = typeof MUTED
 
@@ -92,6 +93,6 @@ export type Action = {
   isFilteredOnly?: boolean
 }
 
-export type Crumb = { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }
+export type Crumb = { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean; press?: PaneWire }
 
 export type Screen = { crumbs: Crumb[]; content: RenderChildren; info: string; actions: Action[]; menuOn?: GroupMenuFor; pageBg?: string; layout: ScreenLayout }

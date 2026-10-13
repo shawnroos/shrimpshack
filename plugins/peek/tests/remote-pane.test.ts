@@ -45,6 +45,14 @@ function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boole
   )
 }
 
+
+// Crumbs that link somewhere are drawn by a Client module, so their words live in its props.
+async function trailHas(ui: { find: (q: { key: string }) => Promise<{ props: unknown } | undefined> }, pattern: RegExp) {
+  const crumbs = await ui.find({ key: 'crumbs' })
+  const segments = (crumbs?.props as { props?: { segments?: { text: string }[] } } | undefined)?.props?.segments ?? []
+  return segments.some(one => pattern.test(one.text))
+}
+
 const props = PANE_PROPS
 
 test('a pull request draws title, details, the CI line and comments, on terminal and desktop', async ($, on) => {
@@ -60,7 +68,7 @@ test('a pull request draws title, details, the CI line and comments, on terminal
     expect(await ui.find({ text: /3 · 2 inline/ })).toBeDefined()
     expect(await ui.find({ text: /via gh · 0s ago/ })).toBeDefined()
     expect(await ui.find({ key: 'refresh' })).toBeDefined()
-    expect(await ui.find({ text: /^ ?\u{f09b} acme ?$/u })).toBeDefined()
+    expect(await trailHas(ui, /^ ?\u{f09b} acme ?$/u)).toBe(true)
     await ui.unmount()
   }
 })
@@ -367,6 +375,15 @@ test('a task line already linked to a local file inside a pull request body draw
   expect(page).toContain('"text":"linked task"')
   expect(page).not.toContain('tasks.tsx')
   expect(page).not.toContain('"key":"task-3"')
+  await ui.unmount()
+})
+
+test('a pull request trail links its owner and repo crumbs; the page crumb has no link', async ($, on) => {
+  fakeWorld(on)
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  const crumbs = await ui.find({ key: 'crumbs' })
+  expect((crumbs?.props as { props: { presses: unknown[] } }).props.presses).toEqual([{ go: 'https://github.com/acme' }, { go: 'https://github.com/acme/widgets' }, null])
   await ui.unmount()
 })
 

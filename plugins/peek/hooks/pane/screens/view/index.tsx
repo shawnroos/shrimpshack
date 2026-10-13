@@ -6,13 +6,14 @@ import { liveFailureText, liveStatusText } from '../../../live'
 import { LIVE_FRAME, liveActions, liveBox, liveSession, toggleLive } from '../../../live-pane'
 import { goBack, nav, openExternally, refresh, sourceLine, starKeyOf } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
-import { parseHref, shortPath } from '../../../paths'
+import { fileHref, parseHref, shortPath } from '../../../paths'
 import { itemKey } from '../../../refs'
 import { adapterOfKind } from '../../../sources/adapter'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
 import { closeAction, modeActions } from '../../actions'
 import { canGoLive } from '../../look'
+import type { PaneWire } from '../../messages'
 import type { Action, DrawContext, PaneActions, Screen } from '../../types'
 import { noJumps } from './blocks'
 import type { Jumps, ViewBody } from './blocks'
@@ -47,6 +48,8 @@ const endTypingFirst = (one: Action): Action => ({
     one.run()
   },
 })
+
+const crumbTo = (href: string | undefined): PaneWire | undefined => (href ? { go: href } : undefined)
 
 export async function viewScreen(ctx: DrawContext, actions: PaneActions, current: View): Promise<Screen> {
   const { Box, Text, Image, Client, C, textWidth, pageWidth, isNarrow, offset, now, cwd, home } = ctx
@@ -117,6 +120,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     ? [
         ...(remote.record?.trail ?? []).map((label, index, all) => ({
           label: `${adapterOfKind(current.kind ?? 'web').trailIcon(index, all.length)} ${label}`,
+          press: crumbTo(remote.record && adapterOfKind(current.kind ?? 'web').trailHref?.(remote.record.address, index, all.length)),
           fg: C.subtext0 as string,
           bg: C.surface1 as string,
           canShrink: true,
@@ -146,12 +150,13 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
         ? [
             {
               label: `${current.isWorktree ? ICON.worktree : ICON.repo} ${current.root.split('/').pop() ?? ''}`,
+              press: crumbTo(fileHref(current.root)),
               fg: C.overlay1 as string,
               bg: C.surface0 as string,
             },
           ]
         : []),
-      ...(folder ? [{ label: `${ICON.folder} ${folder}`, fg: C.subtext0 as string, bg: C.surface1 as string, canShrink: true }] : []),
+      ...(folder ? [{ label: `${ICON.folder} ${folder}`, fg: C.subtext0 as string, bg: C.surface1 as string, canShrink: true, press: crumbTo(fileHref(folderPath)) }] : []),
       { label: `${iconFor(kind)} ${current.title}`, fg: C.appBg, bg: C.accent, bold: true },
     ],
     content: (

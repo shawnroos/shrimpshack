@@ -15,6 +15,14 @@ async function recentText($: Parameters<typeof call>[0] & { ui: { mount: (input:
   return text
 }
 
+
+// Crumbs that link somewhere are drawn by a Client module, so their words live in its props.
+async function trailHas(ui: { find: (q: { key: string }) => Promise<{ props: unknown } | undefined> }, pattern: RegExp) {
+  const crumbs = await ui.find({ key: 'crumbs' })
+  const segments = (crumbs?.props as { props?: { segments?: { text: string }[] } } | undefined)?.props?.segments ?? []
+  return segments.some(one => pattern.test(one.text))
+}
+
 test('a peek group tool call is not recorded by the capture hook, while a GitHub read is', async ($, on) => {
   fakeFs(on)
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
@@ -276,7 +284,7 @@ test('clicking an item on a card opens it and Back returns to its group page wit
   await ui.press({ key: 'mode-groups' })
   await ui.press({ key: 'groups-it-0-1' })
   expect(await ui.find({ key: 'group-page-title' })).toBeUndefined()
-  expect(await ui.find({ text: /todo\.md/ })).toBeDefined()
+  expect(await trailHas(ui, /todo\.md/)).toBe(true)
   await ui.press({ key: 'back' })
   expect((await ui.find({ key: 'group-page-title' }))?.text).toMatch(/Launch/)
   expect(await selectedRow(ui)).toBe(1)
@@ -284,7 +292,7 @@ test('clicking an item on a card opens it and Back returns to its group page wit
   const layer = 'hover-groups-items-0-0'
   await ui.resize({ columns: PANE_PROPS.bodyColumns - 11, rows: 5, in: layer })
   await ui.pointer({ type: 'down', button: 'left', x: 2, y: 2, in: layer })
-  expect(await ui.find({ text: /plan\.md/ })).toBeDefined()
+  expect(await trailHas(ui, /plan\.md/)).toBe(true)
   await ui.press({ key: 'back' })
   expect(await selectedRow(ui)).toBe(0)
   await ui.unmount()
@@ -551,7 +559,7 @@ test('back from an opened item returns to the page with that item selected; if i
   await ui.press({ key: 'next' })
   await ui.press({ key: 'open-selected' })
   expect(await ui.find({ key: 'group-page-title' })).toBeUndefined()
-  expect(await ui.find({ text: /todo\.md/ })).toBeDefined()
+  expect(await trailHas(ui, /todo\.md/)).toBe(true)
   await $.command.run({ command: 'peek-menu' } as never)
   await ui.redraw()
   expect((await ui.find({ key: 'menu-row-key-back' }))?.text).toMatch(/Back to Launch ?b$/)

@@ -32,6 +32,7 @@ export type SourceAdapter = {
   tierLabel: (tier: Tier | undefined) => string
   // The header shortens a crumb by keeping its first two characters as the icon, so every trail piece needs one.
   trailIcon: (index: number, count: number) => string
+  trailHref?: (address: string, index: number, count: number) => string | undefined
   load: (io: RemoteIo, ref: Ref, now: number) => Promise<Loaded>
   fromCapture?: (captured: Captured, ref: Ref) => Loaded | null
   capture?: CaptureReader
@@ -77,6 +78,12 @@ const GITHUB: SourceAdapter = {
   isTimed: ref => ref.kind !== 'gh-repo',
   tierLabel: tierLabels({ cli: 'via gh' }),
   trailIcon: (index, count) => (index === 0 && count > 1 ? '\u{f09b}' : ICON['gh-repo']),
+  trailHref: (address, index, count) => {
+    const [owner, repo] = (parseUrl(address)?.pathname ?? '').split('/').filter(Boolean)
+    const levels = count > 1 ? [owner, owner && repo ? `${owner}/${repo}` : undefined] : [owner]
+    const path = levels[index]
+    return path ? `https://github.com/${path}` : undefined
+  },
   load: loadGithub,
   fromCapture: githubFromCapture,
   // Slack's own tools name no item; a GitHub-shaped read on a Slack server has always been read as GitHub.
@@ -112,6 +119,10 @@ const WEB: SourceAdapter = {
   isTimed: () => false,
   tierLabel: tierLabels({ cli: 'via curl', api: 'via web fetch' }),
   trailIcon: () => '\u{f0ac}',
+  trailHref: (address, index) => {
+    const url = parseUrl(address)
+    return index === 0 && url ? `${url.protocol}//${url.host}/` : undefined
+  },
   load: loadWeb,
   fromCapture: webFromCapture,
 }
