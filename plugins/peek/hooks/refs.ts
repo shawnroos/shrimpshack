@@ -109,13 +109,6 @@ export function githubAddressRef(owner: unknown, repo: unknown, number: number, 
   return parseRef(`https://github.com/${owner}/${repo}/${isPull ? 'pull' : 'issues'}/${number}`)
 }
 
-export function familyOf(kind: string): 'gh' | 'linear' | 'slack' | 'web' {
-  if (kind.startsWith('gh-')) return 'gh'
-  if (kind.startsWith('linear-')) return 'linear'
-  if (kind.startsWith('slack-')) return 'slack'
-  return 'web'
-}
-
 const GITHUB_ITEM_URL = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)$/
 
 // A pull request and an issue URL for one number are the same item, as are a Slack thread and a reply link inside it.

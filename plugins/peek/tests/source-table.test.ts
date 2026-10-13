@@ -2,8 +2,11 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { Loaded, RemoteKind, Tier, View } from '../types'
 import { typeOf } from '../hooks/kinds'
-import { sourceLine, trailIcon } from '../hooks/navigation'
+import { sourceLine } from '../hooks/navigation'
 import { dueAddresses, isTimed, refreshItem, resetRefresh } from '../hooks/refresh'
+import { adapterOfKind } from '../hooks/sources/adapter'
+
+const trailIcon = (kind: string, index: number, count: number) => adapterOfKind(kind).trailIcon(index, count)
 
 const MIN = 60_000
 const THREAD = 'https://acme.slack.com/archives/C0123ABCD/p1791759796763609'

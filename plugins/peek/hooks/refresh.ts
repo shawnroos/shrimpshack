@@ -1,6 +1,7 @@
 import type { Loaded, RemoteFailure, RemoteKind, RemoteRecord, Tier } from '../types'
 import { itemKey, parseRef } from './refs'
-import { parseUrl } from './wire'
+import { adapterFor, adapterOfAddress } from './sources/adapter'
+import type { SourceId } from './sources/adapter'
 
 export const ON_SCREEN_MS = 60_000
 export const BACKGROUND_MS = 5 * 60_000
@@ -24,8 +25,6 @@ export type CacheEntry = {
   failureDetail?: string
 }
 
-export type Source = 'github' | 'linear' | 'slack' | 'web'
-
 export type TitleEntry = { title: string; kind: RemoteKind; status?: string; favicon?: string; trail?: string[]; updatedAt: number }
 
 type Load = (address: string) => Promise<Loaded>
@@ -34,7 +33,7 @@ type ScheduleInput = { onScreen?: string; background: readonly string[]; now: nu
 
 const entries = new Map<string, CacheEntry>()
 const inFlight = new Map<string, Promise<CacheEntry>>()
-const backoff = new Map<Source, { waitMs: number; until: number }>()
+const backoff = new Map<SourceId, { waitMs: number; until: number }>()
 let backgroundLoads: number[] = []
 
 export function resetRefresh(): void {
@@ -48,32 +47,22 @@ export function cached(address: string): CacheEntry | undefined {
   return entries.get(itemKey(address))
 }
 
-export function sourceOf(address: string): Source {
-  const url = parseUrl(address)
-  if (!url) return 'web'
-  const host = url.hostname.toLowerCase().replace(/^www\./, '')
-  if (host === 'github.com') return 'github'
-  if (host === 'linear.app') return 'linear'
-  if (host.endsWith('.slack.com')) return 'slack'
-  return 'web'
-}
-
 export function isTimed(address: string): boolean {
-  const kind = parseRef(address)?.kind
-  return kind === 'gh-pr' || kind === 'gh-issue' || kind === 'gh-number' || kind === 'linear-issue' || kind === 'slack-thread'
+  const ref = parseRef(address)
+  return ref !== null && adapterFor(ref).isTimed(ref)
 }
 
 export function isCurrent(currentHref: string | undefined, address: string): boolean {
   return currentHref !== undefined && itemKey(currentHref) === itemKey(address)
 }
 
-function extendBackoff(source: Source, now: number): void {
+function extendBackoff(source: SourceId, now: number): void {
   const waitMs = Math.min((backoff.get(source)?.waitMs ?? BACKOFF_START_MS / 2) * 2, BACKOFF_MAX_MS)
   backoff.set(source, { waitMs, until: now + waitMs })
 }
 
 function settle(previous: CacheEntry | undefined, address: string, result: Loaded, now: number): CacheEntry {
-  const source = sourceOf(address)
+  const source = adapterOfAddress(address).id
   if (result.ok) {
     // A capture served after a failed live call proves nothing about the service, so only a live answer ends a back-off.
     if (result.liveFailure === 'rate-limited') extendBackoff(source, now)
@@ -131,7 +120,7 @@ function eligible(address: string, now: number, intervalMs: number): CacheEntry 
   if (inFlight.has(key)) return undefined
   const entry = entries.get(key)
   if (!entry?.record || entry.record.isFrozen) return undefined
-  if ((backoff.get(sourceOf(address))?.until ?? 0) > now) return undefined
+  if ((backoff.get(adapterOfAddress(address).id)?.until ?? 0) > now) return undefined
   return now - entry.attemptedAt >= intervalMs ? entry : undefined
 }
 

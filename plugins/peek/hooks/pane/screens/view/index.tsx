@@ -4,10 +4,11 @@ import { pixels } from '../../../images'
 import { iconFor } from '../../../kinds'
 import { liveFailureText, liveStatusText } from '../../../live'
 import { LIVE_FRAME, liveActions, liveBox, liveSession, toggleLive } from '../../../live-pane'
-import { goBack, nav, openExternally, refresh, sourceLine, starKeyOf, trailIcon } from '../../../navigation'
+import { goBack, nav, openExternally, refresh, sourceLine, starKeyOf } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { parseHref, shortPath } from '../../../paths'
 import { itemKey, parseRef } from '../../../refs'
+import { adapterOfKind } from '../../../sources/adapter'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
 import { closeAction, modeActions } from '../../actions'
@@ -114,7 +115,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
   const remoteCrumbs = remote
     ? [
         ...(remote.record?.trail ?? []).map((label, index, all) => ({
-          label: `${trailIcon(current.kind ?? 'web', index, all.length)} ${label}`,
+          label: `${adapterOfKind(current.kind ?? 'web').trailIcon(index, all.length)} ${label}`,
           fg: C.subtext0 as string,
           bg: C.surface1 as string,
           canShrink: true,

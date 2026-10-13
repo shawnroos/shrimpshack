@@ -8,7 +8,7 @@ import { chunkMarkdown, estimateRows, fitName } from '../../../measure'
 import { openFromPage, pressLink, refContext } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { parseRef } from '../../../refs'
-import { failureText } from '../../../sources'
+import { adapterOfKind } from '../../../sources/adapter'
 import { ICON, META_ICON, mute } from '../../../theme'
 import type { DrawContext, PictureBudget } from '../../types'
 import { SectionRule, fitPicture } from '../../widgets'
@@ -120,7 +120,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     }
   }
   if (!record) {
-    const message = failureText(remote.failure ?? 'offline')
+    const message = adapterOfKind(current.kind ?? 'web').failureText(remote.failure ?? 'offline')
     drawnParts.push(
       <Box key="remote-failure" flexDirection="column">
         <Text color={C.red} bold>{message.title}</Text>

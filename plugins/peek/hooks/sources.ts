@@ -40,35 +40,6 @@ export type Failed = { ok: false; failure: RemoteFailure; detail?: string }
 const probes = new Map<string, Promise<Probe>>()
 const keys = new Map<string, Promise<string | null>>()
 
-export function failureText(kind: RemoteFailure): { title: string; hint: string } {
-  switch (kind) {
-    case 'cli-missing':
-      return { title: 'GitHub CLI is not installed', hint: 'Install it with `brew install gh`, then run `gh auth login`' }
-    case 'cli-unauthed':
-      return { title: 'GitHub CLI is not signed in', hint: 'Run `gh auth login` in a terminal' }
-    case 'key-missing':
-      return { title: 'No Linear API key found', hint: 'Set LINEAR_API_KEY or add it to ~/.secrets' }
-    case 'key-refused':
-      return { title: 'Linear refused the API key', hint: 'Create a new key in Linear settings and update LINEAR_API_KEY' }
-    case 'not-found-or-no-access':
-      return { title: 'Not found, or you have no access', hint: 'Check the link, or open it in the browser' }
-    case 'gone':
-      return { title: 'Not found: it was deleted, moved, or you have no access', hint: 'Check the link, or open it in the browser' }
-    case 'rate-limited':
-      return { title: 'Rate limited', hint: 'Wait a minute, then refresh' }
-    case 'offline':
-      return { title: 'Could not reach the service', hint: 'Check your connection, then refresh' }
-    case 'query-bug':
-      return { title: 'peek sent a request the service rejected', hint: 'Open it in the browser; this is a peek bug' }
-    case 'fetch-blocked':
-      return { title: 'Your network policy blocks this request', hint: 'Open it in the browser instead' }
-    case 'process-unavailable':
-      return { title: 'Command-line tools are unavailable here', hint: 'This surface cannot run command-line tools' }
-    case 'slack-unavailable':
-      return { title: 'Slack is not connected', hint: 'Slack: connect the Slack MCP server (/mcp), or install the Slack CLI and run `slack login`' }
-  }
-}
-
 export async function probe(io: SourceIo): Promise<Probe> {
   const session = await io.sessionId()
   const known = probes.get(session)

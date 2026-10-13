@@ -1,7 +1,7 @@
 import type { RemoteKind } from '../types'
 import type { GalleryType } from './gallery'
 import type { Kind } from './paths'
-import { familyOf } from './refs'
+import { adapterOfKind } from './sources/adapter'
 import { C, ICON } from './theme'
 
 type KindInfo = {
@@ -49,5 +49,5 @@ export function kindLabel(kind: string | undefined): { glyph: string; label: str
 
 // An unlisted remote kind (a new gh-/linear-/slack- one) still sorts as a page.
 export function typeOf(kind: string): GalleryType {
-  return infoOf(kind)?.type ?? (familyOf(kind) === 'web' ? 'code' : 'html')
+  return infoOf(kind)?.type ?? (adapterOfKind(kind).id === 'web' ? 'code' : 'html')
 }

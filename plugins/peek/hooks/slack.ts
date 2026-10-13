@@ -360,7 +360,3 @@ export async function loadSlack(io: SlackIo, ref: Ref, now: number): Promise<Loa
   if (!('skip' in viaCli)) return viaCli
   return { ok: false, failure: 'slack-unavailable' }
 }
-
-export function fromCapture(): Loaded | null {
-  return null
-}

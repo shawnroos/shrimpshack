@@ -3,7 +3,8 @@ import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'c
 
 import type { RemoteFailure } from '../types'
 import type { SourceIo } from '../hooks/sources'
-import { failureText, hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/sources'
+import { hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/sources'
+import { failureText } from '../hooks/sources/adapter'
 import { exited } from './fixtures/results'
 
 const KEY = 'lin_api_PLANTEDKEY123'

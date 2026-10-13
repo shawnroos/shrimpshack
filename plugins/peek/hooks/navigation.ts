@@ -13,11 +13,11 @@ import { markdownPage, mermaidFences, mermaidPage, toggleTaskLine } from './mark
 import { kindOf, parseHref } from './paths'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
-import { familyOf, itemKey, keyOf, parseRef } from './refs'
+import { itemKey, keyOf, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
 import type { RemoteIo } from './remote'
-import { ICON } from './theme'
+import { adapterOfKind } from './sources/adapter'
 import { remoteFileOf } from './web'
 
 type PaneState = PluginState['peek']
@@ -325,22 +325,9 @@ export async function refresh(io: NavIo, href: string) {
   if (next) await io.view.update(() => next)
 }
 
-// The header shortens a crumb by keeping its first two characters as the icon,
-// so every trail piece needs one.
-export function trailIcon(kind: string, index: number, count: number): string {
-  const family = familyOf(kind)
-  if (family === 'gh') return index === 0 && count > 1 ? '\u{f09b}' : ICON['gh-repo']
-  if (family === 'linear') return index === 0 ? '\u{f0c0}' : ICON['linear-project']
-  if (family === 'slack') return index === 0 ? ICON['slack-thread'] : '\u{f086}'
-  return '\u{f0ac}'
-}
-
-const TIER_NAMES: Record<string, string> = { 'gh-cli': 'via gh', 'web-cli': 'via curl', 'web-api': 'via web fetch', 'linear-api': 'via Linear API', 'slack-mcp': 'via Slack MCP', 'slack-cli': 'via slack' }
-
 export function sourceLine(remote: NonNullable<View['remote']>, now: number): string {
   const { tier, fetchedAt, staleSince } = remote
-  const family = familyOf(remote.record?.kind ?? 'web')
-  const name = tier === 'session' ? 'from this session' : (TIER_NAMES[`${family}-${tier}`] ?? `via ${tier ?? '?'}`)
+  const name = adapterOfKind(remote.record?.kind ?? 'web').tierLabel(tier)
   const seconds = fetchedAt === undefined ? 0 : Math.max(0, Math.round((now - fetchedAt) / 1000))
   const age = fetchedAt === undefined ? '' : seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
   const stale = staleSince === undefined ? '' : ` · stale since ${describeAge(staleSince, now)}`
