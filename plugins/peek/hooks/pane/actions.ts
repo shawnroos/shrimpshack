@@ -3,8 +3,8 @@ import { nextOf } from '../gallery'
 import type { RoleFilter, Scope } from '../gallery'
 import { setStar, toggleExpanded, toggleGroupStar } from '../groups-session'
 import { switchMode } from '../navigation'
-import type { NavIo } from '../navigation'
-import { ICON } from '../theme'
+import type { Cell, NavIo } from '../navigation'
+import { ICON, ROLE_ICON, SCOPE_ICON } from '../theme'
 import type { Action, PaneActions } from './types'
 
 export const MODES: { id: Mode; label: string; icon: string; hotkey: string; row: string; about: string; isMenuSwitch: boolean }[] = [
@@ -14,10 +14,8 @@ export const MODES: { id: Mode; label: string; icon: string; hotkey: string; row
   { id: 'groups', label: 'Groups', icon: ICON.groups, hotkey: 'e', row: 'groups', about: 'files and links the agent bundled', isMenuSwitch: true },
 ]
 
-export const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
-export const SCOPES: Scope[] = ['session', 'worktree', 'repo']
-export const SCOPE_ICON: Record<Scope, string> = { session: '\u{f0b79}', worktree: '\u{f418}', repo: '\u{f401}' }
-const ROLE_ICON: Record<RoleFilter, string> = { all: '\u{f0c9}', artifacts: '◆', touched: '◇' }
+const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
+const SCOPES: Scope[] = ['session', 'worktree', 'repo']
 
 export const MOVE_KEYS = new Set(['next', 'prev', 'left', 'right'])
 
@@ -40,37 +38,38 @@ export const modeRows = (io: NavIo, hasView: boolean): Action[] =>
     run: one.isMenuSwitch ? () => void switchMode(io, one.id) : () => void io.mode.update(() => one.id),
   }))
 
-export const roleAction = (actions: PaneActions, role: RoleFilter): Action => ({
-  id: 'role',
-  label: `Show: ${role}`,
-  hotkey: 'a',
-  run: () => void actions.roleFilter.update(one => nextOf(ROLES, one)),
-})
+function cycleActions<T extends string>(spec: {
+  id: string
+  hotkey: string
+  label: string
+  values: readonly T[]
+  icon: Record<T, string>
+  cell: (actions: PaneActions) => Cell<T>
+}) {
+  return {
+    action: (actions: PaneActions, current: T): Action => ({
+      id: spec.id,
+      label: `${spec.label}: ${current}`,
+      hotkey: spec.hotkey,
+      run: () => void spec.cell(actions).update(one => nextOf(spec.values, one)),
+    }),
+    rows: (actions: PaneActions): Action[] =>
+      spec.values.map(one => ({
+        id: `${spec.id}-${one}`,
+        icon: spec.icon[one],
+        label: `${spec.label}: ${one}`,
+        hintFrom: spec.id,
+        run: () => void spec.cell(actions).update(() => one),
+      })),
+  }
+}
 
-export const roleRows = (actions: PaneActions): Action[] =>
-  ROLES.map(one => ({
-    id: `role-${one}`,
-    icon: ROLE_ICON[one],
-    label: `Show: ${one}`,
-    hintFrom: 'role',
-    run: () => void actions.roleFilter.update(() => one),
-  }))
-
-export const scopeAction = (actions: PaneActions, scope: Scope): Action => ({
-  id: 'scope',
-  label: `Scope: ${scope}`,
-  hotkey: 's',
-  run: () => void actions.scope.update(one => nextOf(SCOPES, one)),
-})
-
-export const scopeRows = (actions: PaneActions): Action[] =>
-  SCOPES.map(one => ({
-    id: `scope-${one}`,
-    icon: SCOPE_ICON[one],
-    label: `Scope: ${one}`,
-    hintFrom: 'scope',
-    run: () => void actions.scope.update(() => one),
-  }))
+const role = cycleActions({ id: 'role', hotkey: 'a', label: 'Show', values: ROLES, icon: ROLE_ICON, cell: actions => actions.roleFilter })
+const scope = cycleActions({ id: 'scope', hotkey: 's', label: 'Scope', values: SCOPES, icon: SCOPE_ICON, cell: actions => actions.scope })
+export const roleAction = role.action
+export const roleRows = role.rows
+export const scopeAction = scope.action
+export const scopeRows = scope.rows
 
 export const selectActions = (actions: PaneActions): Action[] => [
   { id: 'next', label: 'Down', hotkey: 'j', run: () => void actions.moveSelection('down') },

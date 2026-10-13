@@ -1,4 +1,5 @@
 import { fitName } from '../measure'
+import { ICON } from '../theme'
 import type { ItemLook } from './look'
 import type { HoverProps, PictureBudget, WidgetCtx } from './types'
 
@@ -53,7 +54,7 @@ export function ItemIcon(ctx: WidgetCtx, slot: IconSlot) {
   const { Box, Button, Image } = ctx
   const boxes = slot.boxes
   const picture = slot.png && !slot.isStarred && Image && <Image key={slot.imageKey} source={{ png: slot.png }} columns={2} rows={1} alt={slot.icon} />
-  const button = <Button key={slot.buttonKey} label={slot.isStarred ? '\u{f51a}' : slot.png ? ' ' : slot.icon} plain autoFocus={slot.autoFocus} onPress={slot.onPress} />
+  const button = <Button key={slot.buttonKey} label={slot.isStarred ? ICON.star : slot.png ? ' ' : slot.icon} plain autoFocus={slot.autoFocus} onPress={slot.onPress} />
   return [
     picture && (boxes ? <Box {...keyed(boxes.image)} flexShrink={0}>{picture}</Box> : picture),
     boxes ? <Box {...keyed(boxes.button)} flexShrink={0}>{button}</Box> : button,

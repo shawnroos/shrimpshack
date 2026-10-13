@@ -8,7 +8,7 @@ import { nav, remoteRef, sessionRefContext } from './navigation'
 import { titlesByKey } from './refresh'
 import type { NavIo } from './navigation'
 import { remoteNaming } from './pane/look'
-import { fileHref, kindOf, parseHref, resolvePath } from './paths'
+import { baseName, dirName, fileHref, kindOf, parseHref, resolvePath } from './paths'
 import { keyOf, parseRef } from './refs'
 
 const roots = new Map<string, { root: string; isWorktree: boolean } | null>()
@@ -54,7 +54,10 @@ export async function remember(
     }
     return out
   }
-  const urls = texts.flatMap(urlCandidates).map(url => (parseRef(url)?.kind === 'slack-thread' ? (parseRef(url)?.address ?? url) : url))
+  const urls = texts.flatMap(urlCandidates).map(url => {
+    const ref = parseRef(url)
+    return ref?.kind === 'slack-thread' ? ref.address : url
+  })
   const artifacts = [...(await toHrefs([...texts.flatMap(pathCandidates), ...created])), ...urls]
   const worked = await toHrefs(touched)
   if (!artifacts.length && !worked.length) return
@@ -144,16 +147,16 @@ export async function sessionEntries(io: NavIo, list: readonly Mention[]): Promi
   for (const one of [...list].reverse()) {
     const file = parseHref(one.href)
     const path = file?.path ?? one.href
-    const name = path.split('/').pop() || path
     const stat = file ? await io.stat(path).catch(() => null) : null
     if (file && !stat) continue
     const ref = file ? null : remoteRef(one.href)
     const label = ref ? remoteTitles.get(keyOf(ref)) : undefined
+    const head = { href: one.href, path }
+    const tail = { mentions: one.count, mentionedAt: one.at, role: one.isArtifact ? ('artifact' as const) : ('touched' as const) }
     if (ref) {
       const naming = remoteNaming(ref, label, { bare: path, namesThread: true, host: () => new URL(ref.address).hostname })
       out.push({
-        href: one.href,
-        path,
+        ...head,
         name: naming.name,
         folder: naming.where,
         kind: naming.kind,
@@ -161,23 +164,18 @@ export async function sessionEntries(io: NavIo, list: readonly Mention[]): Promi
         favicon: (await remotePicture(io, label?.favicon))?.file,
         mtimeMs: 0,
         size: 0,
-        mentions: one.count,
-        mentionedAt: one.at,
-        role: one.isArtifact ? 'artifact' : 'touched',
+        ...tail,
       })
       continue
     }
     out.push({
-      href: one.href,
-      path,
-      name,
-      folder: path.slice(0, Math.max(0, path.length - name.length - 1)),
+      ...head,
+      name: baseName(path),
+      folder: dirName(path),
       kind: file ? (stat?.kind === 'dir' ? 'folder' : kindOf(path)) : 'web',
       mtimeMs: stat?.mtimeMs ?? 0,
       size: stat?.size ?? 0,
-      mentions: one.count,
-      mentionedAt: one.at,
-      role: one.isArtifact ? 'artifact' : 'touched',
+      ...tail,
     })
   }
   return out
@@ -188,13 +186,13 @@ async function loadScope(io: NavIo, scope: Exclude<Scope, 'session'>, cwd: strin
   if (!git) return []
   if (scope === 'worktree') return listRoot(io, git.root, git.root.split('/').pop())
   const ran = await io.run(['git', '-C', git.root, 'worktree', 'list', '--porcelain']).catch(() => null)
-  const roots = (ran?.stdout ?? '')
+  const worktreeRoots = (ran?.stdout ?? '')
     .split('\n')
     .filter(line => line.startsWith('worktree '))
     .map(line => line.slice('worktree '.length))
     .slice(0, MAX_WORKTREES)
   const all: FileEntry[] = []
-  for (const root of roots.length ? roots : [git.root]) all.push(...(await listRoot(io, root, root.split('/').pop())))
+  for (const root of worktreeRoots.length ? worktreeRoots : [git.root]) all.push(...(await listRoot(io, root, root.split('/').pop())))
   return all
 }
 

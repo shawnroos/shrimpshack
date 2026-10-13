@@ -35,7 +35,6 @@ export type SourceAdapter = {
   load: (io: RemoteIo, ref: Ref, now: number) => Promise<Loaded>
   fromCapture?: (captured: Captured, ref: Ref) => Loaded | null
   capture?: CaptureReader
-  failureText: (kind: RemoteFailure) => FailureText
 }
 
 export function failureText(kind: RemoteFailure): FailureText {
@@ -82,7 +81,6 @@ const GITHUB: SourceAdapter = {
   fromCapture: githubFromCapture,
   // Slack's own tools name no item; a GitHub-shaped read on a Slack server has always been read as GitHub.
   capture: { servers: /github|slack/i, refOf: capturedGithubRef },
-  failureText,
 }
 
 const LINEAR: SourceAdapter = {
@@ -95,7 +93,6 @@ const LINEAR: SourceAdapter = {
   load: loadLinear,
   fromCapture: linearFromCapture,
   capture: { servers: /linear/i, refOf: (_name, args, text) => capturedLinearRef(args, text), learn: learnLinear },
-  failureText,
 }
 
 const SLACK: SourceAdapter = {
@@ -106,7 +103,6 @@ const SLACK: SourceAdapter = {
   tierLabel: tierLabels({ mcp: 'via Slack MCP', cli: 'via slack' }),
   trailIcon: index => (index === 0 ? ICON['slack-thread'] : '\u{f086}'),
   load: loadSlack,
-  failureText,
 }
 
 const WEB: SourceAdapter = {
@@ -118,7 +114,6 @@ const WEB: SourceAdapter = {
   trailIcon: () => '\u{f0ac}',
   load: loadWeb,
   fromCapture: webFromCapture,
-  failureText,
 }
 
 const ADAPTERS: readonly SourceAdapter[] = [GITHUB, LINEAR, SLACK, WEB]

@@ -2,6 +2,7 @@ import { itemKey, keyOf, parseRef } from './refs'
 import type { Ref, RefKind } from './refs'
 import { captureReaderOf } from './sources/adapter'
 import { ghRead, ghSource } from './parsers/gh-argv'
+import type { GhRead } from './parsers/gh-argv'
 import type { Ports } from './ports'
 
 export type CaptureIo = Pick<Ports, 'mcpCall' | 'now'>
@@ -38,20 +39,19 @@ function splitMcp(tool: string): { server: string; name: string } | null {
   return { server: rest.slice(0, cut), name: rest.slice(cut + 2) }
 }
 
-export function isReadCall(tool: string, input: Record<string, unknown>): boolean {
+const bashGh = (tool: string, input: Record<string, unknown>) => (tool === 'Bash' ? ghRead(input.command) : null)
+
+export function isReadCall(tool: string, input: Record<string, unknown>, gh: GhRead | null = bashGh(tool, input)): boolean {
   if (tool === 'WebFetch') return typeof input.url === 'string'
-  if (tool === 'Bash') return ghRead(input.command) !== null
+  if (tool === 'Bash') return gh !== null
   const mcp = splitMcp(tool)
   if (!mcp || !captureReaderOf(mcp.server)) return false
   return READ_PREFIX.test(mcp.name) || READ_EXACT.has(mcp.name) || SLACK_READ.test(mcp.name)
 }
 
-function isSingleItem(tool: string, input: Record<string, unknown>): boolean {
+function isSingleItem(tool: string, input: Record<string, unknown>, gh: GhRead | null): boolean {
   if (tool === 'WebFetch') return true
-  if (tool === 'Bash') {
-    const gh = ghRead(input.command)
-    return gh !== null && (gh.sub === 'api' || gh.verb === 'view')
-  }
+  if (tool === 'Bash') return gh !== null && (gh.sub === 'api' || gh.verb === 'view')
   const name = splitMcp(tool)?.name ?? ''
   // Only method `get` returns the item itself; get_diff, get_files and the rest would overwrite it with text no page can draw.
   if (READ_EXACT.has(name)) return input.method === undefined || input.method === 'get'
@@ -85,13 +85,17 @@ function remoteRefs(text: string): Ref[] {
   return [...seen.values()]
 }
 
-function captureSourceOf(tool: string, args: Record<string, unknown>, text: string): { ref: Ref; source: CaptureSource; server?: string; name: string } | null {
+function captureSourceOf(
+  tool: string,
+  args: Record<string, unknown>,
+  text: string,
+  gh: GhRead | null,
+): { ref: Ref; source: CaptureSource; server?: string; name: string } | null {
   if (tool === 'WebFetch') {
     const ref = typeof args.url === 'string' ? parseRef(args.url) : null
     return ref ? { ref, source: 'webfetch', name: tool } : null
   }
   if (tool === 'Bash') {
-    const gh = ghRead(args.command)
     const ref = gh ? ghSource(gh) : null
     return ref ? { ref, source: 'bash', name: tool } : null
   }
@@ -124,7 +128,8 @@ export function record(input: Record<string, unknown>, answer: unknown, at: numb
   const tool = typeof input.tool === 'string' ? input.tool : ''
   const reply = answer as { isError?: unknown; deny?: unknown } | null
   if (!reply || reply.isError || reply.deny !== undefined) return none
-  if (!isReadCall(tool, input)) return none
+  const gh = bashGh(tool, input)
+  if (!isReadCall(tool, input, gh)) return none
   const text = textOf(answer)
   if (text === null) return none
   const args = Object.fromEntries(Object.entries(input).filter(([key]) => !RESERVED.has(key)))
@@ -132,8 +137,8 @@ export function record(input: Record<string, unknown>, answer: unknown, at: numb
   const server = splitMcp(tool)?.server
   const learned = server ? (captureReaderOf(server)?.learn?.(found) ?? false) : false
   const addresses = new Set<string>()
-  if (isSingleItem(tool, input) && text.length <= MAX_TEXT) {
-    const source = captureSourceOf(tool, args, text)
+  if (isSingleItem(tool, input, gh) && text.length <= MAX_TEXT) {
+    const source = captureSourceOf(tool, args, text, gh)
     if (source) {
       keep({ address: source.ref.address, kind: source.ref.kind, source: source.source, server: source.server, tool: source.name, args, result: text, at })
       addresses.add(source.ref.address)

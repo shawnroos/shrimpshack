@@ -94,7 +94,7 @@ export function filterRole(entries: readonly FileEntry[], filter: RoleFilter): F
 
 const VIEWABLE = new RegExp(`\\.(?:${PATH_EXTS})$`, 'i')
 
-export function isViewable(path: string): boolean {
+function isViewable(path: string): boolean {
   return VIEWABLE.test(path)
 }
 

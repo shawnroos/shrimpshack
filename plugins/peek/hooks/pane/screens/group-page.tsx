@@ -21,7 +21,6 @@ type Opened = NonNullable<PluginState['peek']['openGroup']>
 
 export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, page: { home: GroupHome | null; opened: Opened; shown: Group; project: string }): Promise<Screen> {
   const { Box, Text, Image, C, textWidth } = ctx
-  const w = ctx
   const io = actions.io
   const { home, opened, shown, project } = page
   groupPage.goneNotice = ''
@@ -47,7 +46,7 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
   const missing = looks.filter(one => one.state === 'missing').length
   const row = (one: ItemLook, index: number) => {
     const isSelected = index === selected
-    return ItemRow(w, one, {
+    return ItemRow(ctx, one, {
       key: `group-row-${index}`,
       width: textWidth,
       isSelected,
@@ -80,13 +79,13 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
     const list = blockLooks.length > 0 && (
       <Box key={`group-block-${b}`} flexDirection="column" width={textWidth}>
         {layout.lines(blockLooks, (one, index) => ({ href: one.href, key: `group-row-${index}`, groupItem: { group: shown.id, title: shown.title, key: one.key } }), row)}
-        {HoverLayer(w, `hover-group-${b}`, { kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) })}
+        {HoverLayer(ctx, `hover-group-${b}`, { kind: 'rows', width: textWidth, height: blockLooks.length, starX: 0, starY: 0, items: blockLooks.map(one => ({ href: one.href, isStarred: starKeys.has(one.key) })) })}
       </Box>
     )
     if (b === 0) return list ? <Box key="group-top" flexDirection="column" width={textWidth} marginBottom={1}>{list}</Box> : null
     return (
       <Box key={`group-part-${b}`} flexDirection="column" width={textWidth} marginBottom={1}>
-        <Box key={`group-section-${b - 1}`}>{SectionRule(w, block.title.toUpperCase(), `${block.items.length}`, textWidth)}</Box>
+        <Box key={`group-section-${b - 1}`}>{SectionRule(ctx, block.title.toUpperCase(), `${block.items.length}`, textWidth)}</Box>
         {list || (
           <Box key={`group-empty-${b - 1}`}>
             <Text color={C.overlay0}>empty</Text>
@@ -98,7 +97,7 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
   const content = (
     <Box flexDirection="column" width={textWidth}>
       <Box key="group-page-title">
-        <Text color={C.accent} bold>{`${shown.starred ? '\u{f51a}' : ICON.groups} ${shown.title}`}</Text>
+        <Text color={C.accent} bold>{`${shown.starred ? ICON.star : ICON.groups} ${shown.title}`}</Text>
       </Box>
       {shown.description ? <Text color={C.subtext0}>{shown.description}</Text> : null}
       <Box height={1} />
@@ -113,7 +112,7 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
   return {
     crumbs: [
       { label: `${ICON.groups} ${project}`, fg: C.overlay1, bg: C.surface0, canShrink: true },
-      { label: `${shown.starred ? '\u{f51a}' : ICON.groups} ${shown.title}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true },
+      { label: `${shown.starred ? ICON.star : ICON.groups} ${shown.title}`, fg: C.appBg, bg: C.accent, bold: true, canShrink: true },
     ],
     content,
     info: `${shown.title} · ${plural(looks.length, 'item')} · ${missing} missing`,

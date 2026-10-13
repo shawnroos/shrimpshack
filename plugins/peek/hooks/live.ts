@@ -2,6 +2,7 @@ import type { ProcessRunResult } from 'claude-code'
 
 import type { Ports } from './ports'
 import type { LiveFailure } from '../types'
+import { asObj, parseUrl, tryJson } from './wire'
 
 const HELPER_SOURCE = 'helper/peek-web.swift'
 const CACHE_DIR = '.cache/claude-peek/bin'
@@ -78,14 +79,8 @@ const isNumber = (value: unknown): value is number => typeof value === 'number' 
 const isBool = (value: unknown): value is boolean => typeof value === 'boolean'
 
 export function parseEvent(line: string): LiveEvent | null {
-  let raw: unknown
-  try {
-    raw = JSON.parse(line)
-  } catch {
-    return null
-  }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-  const e = raw as Record<string, unknown>
+  const e = asObj(tryJson(line))
+  if (!e) return null
   switch (e.t) {
     case 'ready':
       return isString(e.socket) && isString(e.dir) ? { t: 'ready', socket: e.socket, dir: e.dir, isThrottled: e.throttled === true } : null
@@ -147,14 +142,6 @@ export type LiveCommand = 'navigate' | 'back' | 'reload' | 'resize' | 'input'
 
 const LIVE_STALL_MS = 10_000
 const LIVE_IDLE_MS = 60_000
-
-function parseUrl(url: string): URL | null {
-  try {
-    return new URL(url)
-  } catch {
-    return null
-  }
-}
 
 export function isWebUrl(url: string): boolean {
   const protocol = parseUrl(url)?.protocol

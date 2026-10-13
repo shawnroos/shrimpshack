@@ -61,7 +61,7 @@ export function fitCell(text: string, width: number): string {
   return `${flat.slice(0, Math.max(0, width - 1))}…`
 }
 
-export function jsonSummary(value: unknown): string {
+function jsonSummary(value: unknown): string {
   if (Array.isArray(value)) return `array · ${value.length} items`
   if (value && typeof value === 'object') return `object · ${Object.keys(value).length} keys`
   return typeof value

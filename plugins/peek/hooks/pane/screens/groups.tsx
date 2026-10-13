@@ -12,7 +12,7 @@ import { parseHref } from '../../paths'
 import { cached } from '../../refresh'
 import { ICON } from '../../theme'
 import { MOVE_KEYS, closeAction, expandAction, modeActions, selectActions } from '../actions'
-import { CARD_GAP, CARD_MIN, CARD_ROWS, layoutBuilder, rowCounter } from '../layout'
+import { CARD_GAP, CARD_MIN, CARD_ROWS, chunked, layoutBuilder, rowCounter } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemCard, ItemIcon, type IconSlot } from '../widgets'
@@ -22,7 +22,6 @@ const GROUP_CARD_LINES = 3
 
 export async function groupCards(ctx: DrawContext, actions: PaneActions, groups: readonly Group[], prefix: string, firstIndex: number, selected: number) {
   const { Box, Text, Button, Image, C, textWidth, now } = ctx
-  const w = ctx
   const io = actions.io
   const inner = Math.max(8, textWidth - 4)
   const perRow = Math.min(2, gridColumns(inner, CARD_MIN, CARD_GAP))
@@ -55,7 +54,7 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
       const open = (look: ItemLook) => void io.cursor.update(() => index).then(() => openGroupHref(io, group, look.key, look.href))
       let layers = 0
       const layer = (kind: 'rows' | 'cards', height: number, row: ItemLook[]) =>
-        HoverLayer(w, `hover-${prefix}-items-${i}-${layers++}`, { kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) })
+        HoverLayer(ctx, `hover-${prefix}-items-${i}-${layers++}`, { kind, width: inner, height, cardWidth: itemWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: kind === 'cards' ? 2 : 0, starY: kind === 'cards' ? 1 : 0, items: row.map(one => ({ href: one.href, isStarred: starKeys.has(one.key), inGroup: group.id, key: one.key })) })
       const iconSlot = (look: ItemLook, n: number): IconSlot => {
         const isStarred = starKeys.has(look.key)
         return {
@@ -69,7 +68,7 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
         }
       }
       const itemCard = (look: ItemLook, n: number) =>
-        ItemCard(w, look, {
+        ItemCard(ctx, look, {
           key: `${prefix}-card-${i}-${n}`,
           width: itemWidth,
           height: CARD_ROWS,
@@ -83,7 +82,7 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
         })
       const line = (look: ItemLook, n: number) => (
         <Box key={`${prefix}-line-${i}-${n}`} height={1} flexDirection="row" width={inner} overflow="hidden" hover={{ backgroundColor: C.surface0 }}>
-          {ItemIcon(w, iconSlot(look, n))}
+          {ItemIcon(ctx, iconSlot(look, n))}
           <Box key={`${prefix}-itname-${i}-${n}`} flexShrink={0}>
             <Text color={look.state === 'missing' ? C.overlay0 : C.text} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, Math.max(8, inner - 6))}`}</Text>
           </Box>
@@ -98,7 +97,7 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
       const size = rowCounter()
       const parts = shown.map((block, b) => {
         const blockLooks = looks[b] ?? []
-        const rows = Array.from({ length: Math.ceil(blockLooks.length / perRow) }, (_, r) => blockLooks.slice(r * perRow, r * perRow + perRow))
+        const rows = chunked(blockLooks, perRow)
         const body = !blockLooks.length
           ? [size.line(<Text key={`${prefix}-empty-${i}-${b}`} color={C.overlay0}>empty</Text>)]
           : block.layout === 'list'
@@ -152,7 +151,7 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
               <Box flexShrink={0}>
                 <Button
                   key={`item-${index}`}
-                  label={group.starred ? '\u{f51a}' : ICON.groups}
+                  label={group.starred ? ICON.star : ICON.groups}
                   plain
                   autoFocus={isSelected ? true : undefined}
                   onPress={() => void io.cursor.update(() => index).then(() => openGroupPage(io, group.id))}
@@ -164,7 +163,7 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
               <Box flexShrink={0} marginLeft={1}>
                 <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
               </Box>
-              {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] })}
+              {HoverLayer(ctx, `hover-${prefix}-${i}`, { kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] })}
             </Box>,
           )}
           {lines.length > 0 && size.line(<Box height={1} />)}

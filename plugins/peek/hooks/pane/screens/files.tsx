@@ -7,7 +7,7 @@ import { iconFor } from '../../kinds'
 import { shortPath } from '../../paths'
 import { CARD_GAP, CARD_MIN, CARD_ROWS, layoutBuilder } from '../layout'
 import { lookOf } from '../look'
-import { SCOPE_ICON } from '../actions'
+import { SCOPE_ICON } from '../../theme'
 import type { Crumb, DrawContext, PaneActions } from '../types'
 import { HoverLayer, ItemCard, SectionRule } from '../widgets'
 
@@ -15,7 +15,6 @@ import { HoverLayer, ItemCard, SectionRule } from '../widgets'
 // favouritesBlock and Recent's own blocks all add to.
 export async function fileListing(ctx: DrawContext, actions: PaneActions) {
   const { Box, Text, Image, C, textWidth, list, now, cwd, home } = ctx
-  const w = ctx
   const io = actions.io
   const scope = await actions.scope.read()
   const role = await actions.roleFilter.read()
@@ -44,15 +43,15 @@ export async function fileListing(ctx: DrawContext, actions: PaneActions) {
   const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
   const selected = await io.cursor.read()
   const layout = layoutBuilder()
-  const cardGrid = (list: readonly FileEntry[], prefix: string) =>
-    layout.grid(list, perRow, (one, r) => ({ href: one.href, key: `${prefix}-${r}` }), (cards, r, first) => (
+  const cardGrid = (items: readonly FileEntry[], prefix: string) =>
+    layout.grid(items, perRow, (one, r) => ({ href: one.href, key: `${prefix}-${r}` }), (cards, r, first) => (
       <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
         {cards.map((one, c) => {
           const index = first + c
           const isSelected = index === selected
           const { look, isStarred, png } = looks(one)
           const { where, age } = describe(one)
-          return ItemCard(w, look, {
+          return ItemCard(ctx, look, {
             key: `${prefix}-${r}-${c}`,
             width: cardWidth,
             height: CARD_ROWS,
@@ -73,7 +72,7 @@ export async function fileListing(ctx: DrawContext, actions: PaneActions) {
             metaColor: isSelected ? C.overlay1 : C.overlay0,
           })
         })}
-        {HoverLayer(w, `hover-${prefix}-${r}`, { kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
+        {HoverLayer(ctx, `hover-${prefix}-${r}`, { kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
       </Box>
     ))
   const favouritesBlock = (shownFavs: readonly FileEntry[]) => {
@@ -81,7 +80,7 @@ export async function fileListing(ctx: DrawContext, actions: PaneActions) {
     const grid = layout.section(() => cardGrid(shownFavs, 'favs'))
     return (
       <Box flexDirection="column" width={textWidth}>
-        {SectionRule(w, 'FAVOURITES', `${shownFavs.length}`, textWidth)}
+        {SectionRule(ctx, 'FAVOURITES', `${shownFavs.length}`, textWidth)}
         <Box height={1} />
         {grid}
       </Box>

@@ -4,7 +4,7 @@ import { colorFor, iconFor } from '../../../kinds'
 import type { NavIo } from '../../../navigation'
 import { fileHref, kindOf } from '../../../paths'
 import { ICON } from '../../../theme'
-import { LIST_CHUNK } from '../../layout'
+import { LIST_CHUNK, chunked } from '../../layout'
 import type { DrawContext } from '../../types'
 import { blockJumps } from './blocks'
 import type { ViewBody } from './blocks'
@@ -26,9 +26,7 @@ export function dirBody(ctx: DrawContext, io: NavIo, folderPath: string, dir: No
       }
     }),
   ]
-  const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
-    items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
-  )
+  const chunks = chunked(items, LIST_CHUNK)
   const body = (
     <Box flexDirection="column" width={textWidth}>
       {items.length === 0 && <Text color={C.overlay0}>Empty folder.</Text>}

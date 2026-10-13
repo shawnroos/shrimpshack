@@ -3,7 +3,8 @@ import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'c
 
 import type { RemoteFailure } from '../types'
 import type { SourceIo } from '../hooks/source-io'
-import { hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/source-io'
+import { hasCurl, httpText, probe, runGh } from '../hooks/source-io'
+import { linearPaged, linearQuery } from '../hooks/sources/linear-transport'
 import { failureText } from '../hooks/sources/adapter'
 import { exited } from './fixtures/results'
 

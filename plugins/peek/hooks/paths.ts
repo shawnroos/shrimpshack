@@ -5,6 +5,10 @@ const MARKDOWN_EXTS = ['md', 'markdown', 'mdx']
 export const PATH_EXTS =
   'md|markdown|mdx|txt|png|jpe?g|gif|webp|heic|tiff?|bmp|svg|html?|mmd|mermaid|json|ya?ml|toml|ts|tsx|js|jsx|mjs|py|rs|go|sh|css|sql|csv|tsv|log'
 
+export const baseName = (path: string) => path.split('/').pop() || path
+
+export const dirName = (path: string) => path.slice(0, Math.max(0, path.length - baseName(path).length - 1))
+
 export function extOf(path: string): string {
   const name = path.split('/').pop() ?? ''
   const dot = name.lastIndexOf('.')

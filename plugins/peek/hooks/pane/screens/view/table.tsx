@@ -2,7 +2,7 @@ import type { View } from '../../../../types'
 import type { NavIo } from '../../../navigation'
 import { columnWidths, fitCell } from '../../../tabular'
 import { PAGE_TOP } from '../../chrome'
-import { LIST_CHUNK } from '../../layout'
+import { LIST_CHUNK, chunked } from '../../layout'
 import type { DrawContext } from '../../types'
 import { blockJumps } from './blocks'
 import type { ViewBody } from './blocks'
@@ -11,9 +11,7 @@ export function tableBody(ctx: DrawContext, io: NavIo, table: NonNullable<View['
   const { Box, Text, C, textWidth, offset } = ctx
   const widths = columnWidths([table.header, ...table.rows], textWidth)
   const line = (row: readonly string[]) => widths.map((width, c) => fitCell(row[c] ?? '', width)).join('  ')
-  const chunks = Array.from({ length: Math.ceil(table.rows.length / LIST_CHUNK) }, (_, i) =>
-    table.rows.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
-  )
+  const chunks = chunked(table.rows, LIST_CHUNK)
   const body = (
     <Box flexDirection="column" width={textWidth}>
       <Text color={C.accent} bold wrap="truncate-end">{line(table.header)}</Text>

@@ -10,7 +10,7 @@ export const LIVE_FRAME = 'live-frame'
 // No API reports a cell's pixel size; 8 CSS px a column keeps text near its normal size at the 1 MB/s frame budget.
 const LIVE_PX_PER_COLUMN = 8
 const CELL_ASPECT = 2.1
-export const LINE_SCROLL_PX = 80
+const LINE_SCROLL_PX = 80
 export const WHEEL_SCROLL_PX = 60
 
 export const liveSession = {
@@ -112,8 +112,10 @@ export function liveActions(io: NavIo, isStarred = false): Action[] {
   ]
 }
 
+const runKey = (actions: readonly Action[], key: string) => actions.find(one => one.hotkey === key || one.keys?.includes(key))?.run()
+
 export async function liveKey(io: NavIo, key: string) {
-  return liveActions(io).find(one => one.hotkey === key || one.keys?.includes(key))?.run()
+  return runKey(liveActions(io), key)
 }
 
 export type LiveInputEvent = { seq: number; type: 'click'; x: number; y: number } | ({ seq: number; type: 'key' } & TypedKey)
@@ -121,6 +123,7 @@ export type LiveInputEvent = { seq: number; type: 'click'; x: number; y: number 
 export async function onLiveInput(io: NavIo, events: readonly LiveInputEvent[]) {
   const fresh = events.filter(one => one.seq > liveSession.lastInputSeq).sort((a, b) => a.seq - b.seq)
   let typed: TypedKey[] = []
+  let actions: Action[] | undefined
   const flush = () => {
     sendInput(typedInput(typed))
     typed = []
@@ -133,7 +136,7 @@ export async function onLiveInput(io: NavIo, events: readonly LiveInputEvent[]) 
     } else if (liveSession.isTyping) typed.push(one)
     else {
       flush()
-      await liveKey(io, one.key)
+      await runKey((actions ??= liveActions(io)), one.key)
     }
   }
   flush()

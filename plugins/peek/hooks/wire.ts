@@ -42,6 +42,12 @@ export function parseUrl(raw: string, base?: string): URL | null {
   }
 }
 
+export function bareHost(url: URL): string
+export function bareHost(url: string): string | undefined
+export function bareHost(url: URL | string): string | undefined {
+  return (typeof url === 'string' ? parseUrl(url) : url)?.hostname.replace(/^www\./, '')
+}
+
 export type Entity = 'nbsp' | 'lt' | 'gt' | 'quot' | '#39' | 'apos' | 'amp'
 
 // &amp; runs last so `&amp;lt;` decodes once, to `&lt;`.

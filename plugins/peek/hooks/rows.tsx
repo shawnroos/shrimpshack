@@ -2,6 +2,7 @@ import type { ClientModule } from 'claude-code'
 
 import { hoverable, paletteOf } from './hover'
 import type { Hovered } from './hover'
+import { ICON } from './theme'
 
 type Row = { href: string; icon: string; color: string; name: string; folder: string; meta: string; isStarred?: boolean; canStar?: boolean }
 type Props = { width: number; rows: Row[]; selected?: number; muted?: boolean }
@@ -34,7 +35,7 @@ const Rows: ClientModule<Props, Hovered> = (props, surface) => {
             <Box width={room}>
               <Text wrap="truncate-end">
                 {row.canStar !== false && (row.isStarred || isHot) ? (
-                  <Text color={C.accent}>{`${row.isStarred ? '\u{f51a}' : '\u{f41e}'}  `}</Text>
+                  <Text color={C.accent}>{`${row.isStarred ? ICON.star : ICON.unstarred}  `}</Text>
                 ) : (
                   <Text color={tone(row.color)}>{`${row.icon}  `}</Text>
                 )}

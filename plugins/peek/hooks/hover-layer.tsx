@@ -4,7 +4,7 @@ import { hoverable } from './hover'
 import type { Hovered } from './hover'
 import type { PaneWire } from './pane/messages'
 import type { HoverItem, HoverProps } from './pane/types'
-import { C } from './theme'
+import { C, ICON } from './theme'
 
 type Spot = { index: number; x: number; y: number }
 
@@ -44,7 +44,7 @@ const HoverLayer: ClientModule<HoverProps, Hovered> = (props, surface) => {
     <Box width={props.width} height={props.height}>
       {item && (
         <Box position="absolute" top={top} left={left} width={2} height={1}>
-          <Text color={C.accent} backgroundColor={C.surface0}>{item.isStarred ? '\u{f51a}' : '\u{f41e}'}</Text>
+          <Text color={C.accent} backgroundColor={C.surface0}>{item.isStarred ? ICON.star : ICON.unstarred}</Text>
         </Box>
       )}
     </Box>

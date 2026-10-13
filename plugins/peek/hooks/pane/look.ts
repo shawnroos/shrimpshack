@@ -1,6 +1,9 @@
+import type { View } from '../../types'
 import type { FileEntry } from '../gallery'
+import { parseRef } from '../refs'
 import type { Ref } from '../refs'
 import type { TitleEntry } from '../refresh'
+import type { DrawContext } from './types'
 
 export type ItemState = 'ok' | 'missing' | 'unavailable'
 
@@ -27,6 +30,10 @@ export function remoteNaming(
     kind: title?.kind ?? ref?.kind ?? 'web',
   }
 }
+
+// The menu row and the live view both gate on this, so they cannot disagree about whether a page can go live.
+export const canGoLive = (ctx: Pick<DrawContext, 'surface' | 'Image'>, current: View) =>
+  ctx.surface === 'terminal' && Boolean(ctx.Image) && current.remote !== undefined && parseRef(current.href)?.kind === 'web'
 
 export function lookOf(entry: FileEntry, where: string): ItemLook {
   return { key: entry.href, href: entry.href, name: entry.name, kind: entry.kind, where, state: 'ok', favicon: entry.favicon }

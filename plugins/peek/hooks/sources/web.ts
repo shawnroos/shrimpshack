@@ -7,7 +7,7 @@ import { hasCurl, httpDetail, httpText } from '../source-io'
 import { fromHttpStatus } from './classify'
 import { ok } from './result'
 import type { Failed, SourceIo } from '../source-io'
-import { decodeEntities, parseUrl } from '../wire'
+import { bareHost, decodeEntities, parseUrl } from '../wire'
 import { sessionMemo } from '../cache'
 import { PAGE_FORMAT, pageStatus } from '../parsers/curl'
 import { PROTO, fetchPicture } from '../net'
@@ -243,10 +243,6 @@ async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: st
   return { ok: true, text: ran.stdout, finalUrl }
 }
 
-function hostOf(url: string): string | undefined {
-  return parseUrl(url)?.hostname.replace(/^www\./, '') || undefined
-}
-
 export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
   const address = parseUrl(ref.address)
   if (!address || (address.protocol !== 'http:' && address.protocol !== 'https:')) return { ok: false, failure: 'query-bug' }
@@ -256,7 +252,7 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
   const finalUrl = page.finalUrl ?? address.href
   const html = page.text.slice(0, MAX_PAGE)
   const head = parseHead(html, finalUrl)
-  const host = hostOf(finalUrl) ?? address.hostname
+  const host = bareHost(finalUrl) || address.hostname
   const [image, favicon, cleaned] = await Promise.all([
     isCli ? fetchPicture(io, head.image) : undefined,
     isCli ? faviconFor(io, host, head.icons) : undefined,
@@ -282,7 +278,7 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
 
 export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   const address = ref.address || captured.address
-  const host = hostOf(address)
+  const host = bareHost(address)
   if (!host) return null
   const body = typeof captured.result === 'string' ? captured.result : ''
   const heading = /^#{1,6}[ \t]+(.+?)[ \t#]*$/m.exec(body)?.[1]?.trim()

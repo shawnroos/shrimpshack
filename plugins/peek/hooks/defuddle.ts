@@ -1,5 +1,5 @@
 import type { SourceIo } from './source-io'
-import { asObj, tryJson } from './wire'
+import { asObj, parseUrl, tryJson } from './wire'
 
 // Pinned: npm runs with install scripts off, and a new version is a reviewed bump, never a silent upgrade.
 const VERSION = '0.19.4'
@@ -31,11 +31,8 @@ async function ensureInstalled(io: SourceIo, dir: string, cli: string): Promise<
 function absoluteLinks(markdown: string, base: string): string {
   return markdown.replace(/(!?\[[^\]]*\]\()([^)\s]+)/g, (whole, open: string, target: string) => {
     if (target.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(target)) return whole
-    try {
-      return open + new URL(target, base).href
-    } catch {
-      return whole
-    }
+    const href = parseUrl(target, base)?.href
+    return href === undefined ? whole : open + href
   })
 }
 

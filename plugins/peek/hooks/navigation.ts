@@ -69,6 +69,8 @@ const LINEAR_BOOT_TTL_MS = 24 * 3600_000
 // viewOf runs on every refresh tick and redraw; each fence costs one mermaid-ascii process.
 const drawnRecords = new Map<string, RemoteRecord>()
 const MAX_DRAWN_RECORDS = 50
+const MAX_BACK_STACK = 20
+const TICK_MS = 15_000
 const repoContexts = new Map<string, string | null>()
 let isTicking = false
 let showGeneration = 0
@@ -144,7 +146,7 @@ export async function openFromPage(io: NavIo, href: string) {
   const current = await io.view.read()
   if (current && (await io.mode.read()) === 'view') {
     nav.backStack.push({ view: current, key: nav.topBlockKey })
-    if (nav.backStack.length > 20) nav.backStack.shift()
+    if (nav.backStack.length > MAX_BACK_STACK) nav.backStack.shift()
   }
   await show(io, href, true)
 }
@@ -178,7 +180,7 @@ export async function saveTitles(io: NavIo) {
 export function startTicking(io: NavIo) {
   if (isTicking) return
   isTicking = true
-  io.every(15_000, () => void tickRemote(io).catch(() => undefined))
+  io.every(TICK_MS, () => void tickRemote(io).catch(() => undefined))
 }
 
 export async function loadRemote(io: NavIo, ref: Ref, canReplay = false): Promise<View> {

@@ -1,4 +1,5 @@
 import type { Group, GroupItem, GroupOp, GroupResult } from '../types/groups'
+import { sessionMemo } from './cache'
 import { gitRoot, toHref } from './entries'
 import { toggleStar } from './gallery'
 import { applyGroupOps, groupsDir, isScheme, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'
@@ -8,10 +9,12 @@ import { nav, navigate, saveTitles, remoteLoader, remoteRef, show, starKeyOf, st
 import type { NavIo } from './navigation'
 import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
 import type { Action } from './pane/types'
-import { fileHref, kindOf, parseHref, resolvePath } from './paths'
+import { baseName, dirName, fileHref, kindOf, parseHref, resolvePath } from './paths'
 import { cached, refreshItem } from './refresh'
 import type { TitleEntry } from './refresh'
 import { itemKey } from './refs'
+import { ICON } from './theme'
+import { parseUrl } from './wire'
 
 export async function setStar(io: NavIo, raw: string, wanted?: boolean): Promise<boolean> {
   const canonical = remoteRef(raw)?.address ?? raw
@@ -75,7 +78,7 @@ export async function starInGroupsTab(io: NavIo, id: string) {
   io.invalidate()
 }
 
-export async function personGroupWrite(io: NavIo, id: string, title: string, op: Extract<GroupOp, { op: 'addItem' | 'removeItem' }>) {
+async function personGroupWrite(io: NavIo, id: string, title: string, op: Extract<GroupOp, { op: 'addItem' | 'removeItem' }>) {
   const verb = op.op === 'addItem' ? 'add to' : 'remove from'
   await personWrite(
     io,
@@ -92,7 +95,7 @@ export async function personGroupWrite(io: NavIo, id: string, title: string, op:
   )
 }
 
-export async function personGroupAdd(io: NavIo, id: string, title: string, href: string) {
+async function personGroupAdd(io: NavIo, id: string, title: string, href: string) {
   const target = await groupTarget(io, href, (await groupHome(io))?.worktreeRoot, true)
   if ('error' in target) io.toast(`Could not add to ${title}: ${target.error}.`)
   else await personGroupWrite(io, id, title, { op: 'addItem', ref: target.ref })
@@ -108,7 +111,7 @@ export async function groupMenuRows(io: NavIo, on: GroupMenuFor): Promise<Action
   const open = on.group
   const own: Action[] = open
     ? [
-        { id: 'group-star', icon: '\u{f51a}', label: `${open.starred ? 'Unstar' : 'Star'} this group`, hint: on.starHint ?? '', run: () => void toggleGroupStar(io, open.id) },
+        { id: 'group-star', icon: ICON.star, label: `${open.starred ? 'Unstar' : 'Star'} this group`, hint: on.starHint ?? '', run: () => void toggleGroupStar(io, open.id) },
         ...(on.selectedRef !== undefined
           ? [{ id: 'group-remove-here', icon: '\u{f068}', label: 'Remove from this group', hint: '', run: () => void personGroupWrite(io, open.id, open.title, { op: 'removeItem', ref: on.selectedRef ?? '' }) }]
           : []),
@@ -170,8 +173,8 @@ export async function groupItemLook(io: NavIo, item: GroupItem, worktreeRoot: st
   const file = refPath(item.ref, worktreeRoot)
   if (file) {
     const { state, stat } = await fileState(io, file.path)
-    const name = file.path.split('/').pop() || file.path
-    const folder = file.path.slice(0, Math.max(0, file.path.length - name.length - 1))
+    const name = baseName(file.path)
+    const folder = dirName(file.path)
     const where = worktreeRoot && folder.startsWith(worktreeRoot) ? folder.slice(worktreeRoot.length + 1) : folder
     return { key, href: fileHref(file.path, file.line), name: item.label ?? name, kind: stat?.kind === 'dir' ? 'folder' : kindOf(file.path), where, state }
   }
@@ -180,13 +183,7 @@ export async function groupItemLook(io: NavIo, item: GroupItem, worktreeRoot: st
   const ref = remoteRef(item.ref)
   const address = ref?.address ?? item.ref
   const title = known.get(key)
-  const host = () => {
-    try {
-      return new URL(address).hostname
-    } catch {
-      return ''
-    }
-  }
+  const host = () => parseUrl(address)?.hostname ?? ''
   const naming = remoteNaming(ref, title, { label: item.label, bare: address, namesThread: false, host })
   return {
     key,
@@ -211,7 +208,8 @@ export function loadGroupRemote(io: NavIo, address: string) {
 
 export type GroupHome = { place: GroupPlace; worktreeRoot?: string }
 
-const groupHomes = new Map<string, Promise<GroupHome | null>>()
+// Any `keep` makes a rejected lookup drop out, so the next call retries it; every resolved one stays.
+const groupHomes = sessionMemo<GroupHome | null>({ keep: () => true })
 
 async function findGroupHome(io: NavIo, root: string): Promise<GroupHome | null> {
   const homeDir = await io.home()
@@ -224,14 +222,7 @@ async function findGroupHome(io: NavIo, root: string): Promise<GroupHome | null>
 export async function groupHome(io: NavIo): Promise<GroupHome | null> {
   const root = await io.sessionRoot()
   const key = `${await io.sessionId()}|${root}`
-  const known = groupHomes.get(key)
-  if (known) return known
-  const found = findGroupHome(io, root)
-  groupHomes.set(key, found)
-  found.catch(() => {
-    if (groupHomes.get(key) === found) groupHomes.delete(key)
-  })
-  return found
+  return groupHomes.get(key, () => findGroupHome(io, root))
 }
 
 export type GroupTarget = { raw: string; ref: string } | { raw: string; error: string }
@@ -251,7 +242,7 @@ export async function groupTarget(io: NavIo, raw: string, worktreeRoot: string |
 }
 
 // stat rejects for a missing path and for any other failure, so only a failed stat asks exists which one it was.
-export async function fileState(io: NavIo, path: string): Promise<{ state: ItemState; stat: { kind: string } | null }> {
+async function fileState(io: NavIo, path: string): Promise<{ state: ItemState; stat: { kind: string } | null }> {
   const stat = await io.stat(path).catch(() => null)
   if (stat) return { state: 'ok', stat }
   const state = await io.exists(path).then(

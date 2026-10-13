@@ -1,6 +1,7 @@
 import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection, SectionLayout } from '../types/groups'
 import { parseHref } from './paths'
 import { itemKey } from './refs'
+import { asObj, tryJson } from './wire'
 
 // A group file at these caps stays far under the 4 MiB fs.read limit.
 export const GROUP_CAPS = { groups: 50, items: 200, sections: 20, removed: 100, description: 500, label: 200 }
@@ -281,7 +282,7 @@ const GROUP_ID = /^[0-9a-z]{8}$/
 
 export const isGroupId = (id: string) => GROUP_ID.test(id)
 
-export function projectHash(key: string): string {
+function projectHash(key: string): string {
   let a = 0x811c9dc5
   let b = 0x01000193 ^ key.length
   for (let i = 0; i < key.length; i++) {
@@ -342,14 +343,8 @@ const parseSection = (one: unknown): GroupSection[] =>
   isLoose(one) && typeof one.id === 'string' && typeof one.title === 'string' ? [{ id: one.id, title: one.title, layout: layoutOf(one) }] : []
 
 function parseGroup(text: string, projectKey: string): Group | null {
-  let raw: unknown
-  try {
-    raw = JSON.parse(text)
-  } catch {
-    return null
-  }
-  const group = raw as Partial<Group> | null
-  if (!group || typeof group !== 'object') return null
+  const group = asObj(tryJson(text)) as Partial<Group> | null
+  if (!group) return null
   if (group.projectKey !== projectKey || typeof group.id !== 'string' || typeof group.title !== 'string') return null
   if (!Array.isArray(group.sections) || !Array.isArray(group.items) || !Array.isArray(group.removed)) return null
   const sections = (group.sections as unknown[]).flatMap(parseSection)

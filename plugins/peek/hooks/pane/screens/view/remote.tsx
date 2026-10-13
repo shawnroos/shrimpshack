@@ -8,8 +8,9 @@ import { chunkMarkdown, estimateRows, fitName } from '../../../measure'
 import { openFromPage, pressLink, refContext } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { parseRef } from '../../../refs'
-import { adapterOfKind } from '../../../sources/adapter'
+import { adapterOfKind, failureText } from '../../../sources/adapter'
 import { ICON, META_ICON, mute } from '../../../theme'
+import { parseUrl } from '../../../wire'
 import type { DrawContext, PictureBudget } from '../../types'
 import { SectionRule, fitPicture } from '../../widgets'
 import { DiagramEmbed, Embed, fullWidthOf, newBlocks, settleBlocks } from './blocks'
@@ -19,20 +20,22 @@ import { slackThread } from './slack'
 const MAX_BLOCK_MEMO = 400
 const blockMemo = new Map<string, { chunk: string; rows: number }[]>()
 
+const BODY_LABEL: Partial<Record<string, string>> = { 'gh-repo': 'README', web: 'Page', 'slack-thread': 'Message' }
+const LISTS_FIRST = new Set(['gh-repo', 'linear-issue'])
+
 export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: NonNullable<View['remote']>): ViewBody {
   const { Box, Text, Button, Markdown, Image, C, textWidth, isMenuOpen, now } = ctx
-  const w = ctx
   const fullWidth = fullWidthOf(ctx)
   const record = remote.record
   const blocks = newBlocks()
   const { drawnParts, note } = blocks
   const sectionRule = (key: string, label: string, right = '') => {
-    drawnParts.push(SectionRule(w, label.toUpperCase(), right, textWidth, key))
+    drawnParts.push(SectionRule(ctx, label.toUpperCase(), right, textWidth, key))
     note(1, label)
   }
   const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
   const budget: PictureBudget = { used: 0 }
-  const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
+  const ghRef = record && adapterOfKind(record.kind).id === 'github' ? parseRef(record.address) : null
   const refs = refContext(ghRef && 'owner' in ghRef && ghRef.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
   const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
   const mediaBlock = (index: number, alt: string, url: string, heading: string) => {
@@ -41,13 +44,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     const picture = remote.pictures?.[url]
     const loadedPng = picture && pixels.get(picture.file)
     const png = fitPicture(budget, loadedPng)
-    const host = (() => {
-      try {
-        return new URL(url).host
-      } catch {
-        return url
-      }
-    })()
+    const host = parseUrl(url)?.host ?? url
     drawnParts.push(
       Embed(ctx, key, one?.play ? '\u{f03d}' : ICON.image, one?.play ? 'VIDEO' : 'IMAGE', alt || host, C.teal, (
         <Box flexDirection="column">
@@ -120,7 +117,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     }
   }
   if (!record) {
-    const message = adapterOfKind(current.kind ?? 'web').failureText(remote.failure ?? 'offline')
+    const message = failureText(remote.failure ?? 'offline')
     drawnParts.push(
       <Box key="remote-failure" flexDirection="column">
         <Text color={C.red} bold>{message.title}</Text>
@@ -221,7 +218,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     }
     const description = () => {
       if (!record.body?.trim()) return
-      const label = record.kind === 'gh-repo' ? 'README' : record.kind === 'web' ? 'Page' : record.kind === 'slack-thread' ? 'Message' : 'Description'
+      const label = BODY_LABEL[record.kind] ?? 'Description'
       sectionRule('body-head', label)
       markdownBlocks('body', record.body, label)
     }
@@ -229,7 +226,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     if (lead) {
       sectionRule('thread-head', 'Thread', record.status ?? '')
       slackThread({ ctx, io, remote, blocks, budget, refs }, lead, record.comments?.shown ?? [])
-    } else if (record.kind === 'gh-repo' || record.kind === 'linear-issue') {
+    } else if (LISTS_FIRST.has(record.kind)) {
       lists()
       description()
     } else {

@@ -25,7 +25,7 @@ export const CARD_GAP = 2
 
 type Placed = Omit<NavItem, 'line' | 'col'>
 
-const chunked = <T>(items: readonly T[], size: number) => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size))
+export const chunked = <T>(items: readonly T[], size: number) => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size))
 
 // Lays a list screen out top to bottom. Each call draws its nodes through the callback and, in the same step,
 // adds their keyboard order, block starts and rows, so the counts cannot drift from what is drawn. `first` is

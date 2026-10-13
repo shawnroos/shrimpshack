@@ -32,6 +32,7 @@ import { WHEEL_SCROLL_PX, leaveLive, liveSession, onLiveInput, scrollLive } from
 import { UiGallery } from './ui-gallery'
 import { groupHome, groupPage, openCardItem, openGroupHref, openGroupPage, setStar, starInGroupsTab, toggleGroupStar } from './groups-session'
 import { forgetPath, guess, noteCapture, pathExists, remember, toHref } from './entries'
+import { asObj } from './wire'
 
 const PANE = 'peek'
 const view = atom({ plugin: 'peek', key: 'view' } as const, null)
@@ -251,8 +252,8 @@ function liveIoOf($: EngineInterface, ports: Ports): LiveIo {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     nav.lastActivity = await $.clock.now()
-    const savedTitles = await $.store.get('titles').catch(() => undefined)
-    if (savedTitles && typeof savedTitles === 'object' && !Array.isArray(savedTitles)) hydrateTitles(savedTitles as Record<string, TitleEntry>)
+    const savedTitles = asObj(await $.store.get('titles').catch(() => undefined))
+    if (savedTitles) hydrateTitles(savedTitles as Record<string, TitleEntry>)
     void bootLinear(navIoOf($)).catch(() => undefined)
     const saved = await $.store.get('stars').catch(() => undefined)
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
@@ -359,10 +360,11 @@ export const register: Register = on => {
     const { Box, Text, Markdown } = $.ui.resolve(e)
     const cwd = await $.session.cwd()
     const home = (await $.env.get('HOME')) ?? ''
+    const io = navIoOf($)
     const real = new Map<string, string>()
     for (const raw of pathCandidates(e.props.text)) {
       const abs = resolvePath(raw, cwd, home)
-      if (await pathExists(navIoOf($), abs)) real.set(raw, abs)
+      if (await pathExists(io, abs)) real.set(raw, abs)
     }
     const linked = linkify(
       e.props.text,
@@ -370,12 +372,12 @@ export const register: Register = on => {
         const abs = real.get(raw)
         return abs ? fileHref(abs, line) : null
       },
-      refContext(await repoContext(navIoOf($), cwd)),
+      refContext(await repoContext(io, cwd)),
     )
     const text = linked.length <= 10000 ? linked : e.props.text
     if (text.length > 10000) return next(e)
 
-    const body = <Markdown key="reply" text={text} onLinkPress={link => void show(navIoOf($), link.href)} />
+    const body = <Markdown key="reply" text={text} onLinkPress={link => void show(io, link.href)} />
     if (!e.props.isFirstOfReply) return body
 
     return (
@@ -509,7 +511,7 @@ export const register: Register = on => {
       layout: () => paneLayout,
     }
     const actions = paneActionsOf($)
-    const lists = menuLists(ctx, actions)
+    const lists = isMenuOpen ? menuLists(ctx, actions) : { lead: [], tail: [] }
     const screen = await SCREENS[chosen](ctx, actions)
     // Only the group page that drew it keeps `group`; any other screen ends it.
     paneLayout = { ...paneLayout, ...screen.layout, group: screen.layout.group }

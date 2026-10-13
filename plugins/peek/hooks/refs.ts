@@ -1,4 +1,4 @@
-import { parseUrl } from './wire'
+import { bareHost, parseUrl } from './wire'
 
 export type GithubItemRef = { kind: 'gh-pr' | 'gh-issue'; address: string; owner: string; repo: string; number: number }
 // An unresolved `#123` or `owner/repo#123`: only parseRef returns it, and loading resolves it to a pull request or an issue.
@@ -55,7 +55,7 @@ function slackThread(host: string, parts: string[], threadTs: string | null): Sl
 
 function fromUrl(url: URL): Ref | null {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
-  const host = url.hostname.toLowerCase().replace(/^www\./, '')
+  const host = bareHost(url)
   const parts = url.pathname.split('/').filter(Boolean)
   if (host === 'github.com') {
     const [owner = '', rawRepo = '', section, number] = parts

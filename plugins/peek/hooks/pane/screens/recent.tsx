@@ -14,7 +14,6 @@ const PINNED_GROUPS = 4
 
 export async function recentScreen(ctx: DrawContext, actions: PaneActions): Promise<Screen> {
   const { Box, Text, C, textWidth } = ctx
-  const w = ctx
   const io = actions.io
   const { rest, favourites, scopeNote, role, scopeCrumbs, waiting, selected, layout, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
   const favs = selectEntries(favourites, 'all', '', 'recent')
@@ -31,7 +30,7 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
     const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
     return (
       <Box flexDirection="column" width={textWidth}>
-        {SectionRule(w, 'STARRED GROUPS', count, textWidth)}
+        {SectionRule(ctx, 'STARRED GROUPS', count, textWidth)}
         <Box height={1} />
         {grid}
       </Box>
@@ -48,7 +47,7 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
           const { where, age } = describe(one)
           const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
           const meta = `${one.status ? `${one.status} · ` : ''}${where}${count}${age}`
-          return ItemRow(w, look, {
+          return ItemRow(ctx, look, {
             key: `${prefix}-${i}-${j}`,
             width: textWidth,
             isSelected,
@@ -68,7 +67,7 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
             metaColor: C.overlay0,
           })
         })}
-        {HoverLayer(w, `hover-${prefix}-${i}`, { kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
+        {HoverLayer(ctx, `hover-${prefix}-${i}`, { kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) })}
       </Box>
     ))
   const groups = groupsOf(recentList).map(group => ({ ...group, list: layout.section(() => rowList(group.items, group.id)) }))
@@ -87,9 +86,9 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
       )}
       {groups.map(group => (
         <Box key={`group-${group.id}`} flexDirection="column" width={textWidth} marginBottom={1}>
-          {SectionRule(w, group.label, `${group.items.length}`, textWidth)}
+          {SectionRule(ctx, group.label, `${group.items.length}`, textWidth)}
           <Box height={1} />
-          {group.list as never}
+          {group.list}
         </Box>
       ))}
     </Box>

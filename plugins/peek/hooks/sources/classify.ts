@@ -43,12 +43,12 @@ export function fromHttpStatus(status: number, context: StatusContext): RemoteFa
 
 export type PatternRules = readonly (readonly [RegExp, RemoteFailure])[]
 
-export function fromPatterns(text: string, rules: PatternRules): RemoteFailure | null {
+function fromPatterns(text: string, rules: PatternRules): RemoteFailure | null {
   return rules.find(([pattern]) => pattern.test(text))?.[1] ?? null
 }
 
 // First match wins: a 403 that names a rate limit is rate-limited.
-export const GH_RULES: PatternRules = [
+const GH_RULES: PatternRules = [
   [/rate limit|secondary rate|HTTP 429/i, 'rate-limited'],
   [/gh auth login|not logged in|authentication|HTTP 401|bad credentials/i, 'cli-unauthed'],
   [/HTTP 403|no access|permission/i, 'not-found-or-no-access'],
@@ -61,7 +61,7 @@ export function ghFailure(stderr: string): RemoteFailure {
 }
 
 // null: this transport's token is refused, so the next transport may still serve the thread.
-export const SLACK_CODES: Readonly<Record<string, RemoteFailure | null>> = {
+const SLACK_CODES: Readonly<Record<string, RemoteFailure | null>> = {
   thread_not_found: 'gone',
   message_not_found: 'gone',
   channel_not_found: 'not-found-or-no-access',
@@ -81,4 +81,9 @@ export const SLACK_CODES: Readonly<Record<string, RemoteFailure | null>> = {
 export function slackFailure(message: string): RemoteFailure | null {
   const code = /execution_failed:\s*([a-z_]+)/.exec(message)?.[1] ?? /^\s*([a-z_]+)\s*$/.exec(message)?.[1] ?? ''
   return Object.hasOwn(SLACK_CODES, code) ? (SLACK_CODES[code] ?? null) : 'query-bug'
+}
+
+export function isPolicyRefusal(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /polic|blocked|not allowed|\bdenied\b|refused by/i.test(message)
 }

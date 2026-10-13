@@ -1,3 +1,5 @@
+import type { RenderChildren } from 'claude-code'
+
 import type { Mode } from '../../types'
 import { groupMenuRows } from '../groups-session'
 import { C as BASE } from '../theme'
@@ -27,7 +29,7 @@ function chipOf(id: Mode, chosen: Mode, isTabCompact: boolean) {
   return isTabCompact && id !== chosen ? ` ${one.icon} ` : ` ${one.icon} ${one.label.toUpperCase()} `
 }
 
-export function fitCrumbs(parts: readonly Crumb[], geom: { columns: number; isNarrow: boolean; chosen: Mode }) {
+function fitCrumbs(parts: readonly Crumb[], geom: { columns: number; isNarrow: boolean; chosen: Mode }) {
   const { columns, isNarrow, chosen } = geom
   const width = (label: string) => label.length + 2
   const fullTabs = MODES.reduce((sum, one) => sum + ` ${one.icon} ${one.label} `.length, 0)
@@ -94,17 +96,17 @@ function TabStrip(ctx: DrawContext, key: string, tabs: { id: Mode; label: string
   )
 }
 
-function Header(ctx: DrawContext, middle: unknown, isTabCompact: boolean) {
+function Header(ctx: DrawContext, middle: RenderChildren, isTabCompact: boolean) {
   const { Box, C, chosen } = ctx
   const label = (id: Mode) => chipOf(id, chosen, isTabCompact)
   return ctx.isNarrow ? (
     <Box flexDirection="row" justifyContent="center" width={ctx.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
-      {middle as never}
+      {middle}
     </Box>
   ) : (
     <Box flexDirection="row" justifyContent="space-between" width={ctx.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
       {TabStrip(ctx, 'tabs-left', [{ id: 'view', label: label('view'), isOn: chosen === 'view' }])}
-      {middle as never}
+      {middle}
       {TabStrip(ctx, 'tabs-right', [
         { id: 'recent', label: label('recent'), isOn: chosen === 'recent' },
         { id: 'gallery', label: label('gallery'), isOn: chosen === 'gallery' },
@@ -147,7 +149,7 @@ export async function frame(ctx: DrawContext, actions: PaneActions, lists: MenuL
       <Box height={HEADER_ROWS} />
       <Box flexDirection="column" width={ctx.pageWidth} backgroundColor={screen.pageBg ?? C.panelBg} paddingX={ctx.isNarrow ? 0 : 2} paddingY={1}>
         <Box flexDirection="column" width={ctx.textWidth}>
-          {screen.content as never}
+          {screen.content}
         </Box>
       </Box>
       <Box height={FOOTER_ROWS} />
@@ -187,7 +189,7 @@ export async function frame(ctx: DrawContext, actions: PaneActions, lists: MenuL
           paddingX={2}
           paddingY={1}
         >
-          {Menu(ctx, actions, menuRows(lists, screen.actions, groupMenu), screen.actions) as never}
+          {Menu(ctx, actions, menuRows(lists, screen.actions, groupMenu), screen.actions)}
         </Box>
       )}
     </Box>

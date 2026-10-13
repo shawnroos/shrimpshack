@@ -1,3 +1,5 @@
+import type { RenderChildren } from 'claude-code'
+
 import { IMAGE_ROWS, imageBox } from '../../../measure'
 import { nav } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
@@ -8,7 +10,7 @@ import type { DrawContext } from '../../types'
 
 export type Jumps = { next: () => void; prev: () => void }
 
-export type ViewBody = { body: unknown; jumps: Jumps; position: string; layout: ScreenLayout }
+export type ViewBody = { body: RenderChildren; jumps: Jumps; position: string; layout: ScreenLayout }
 
 const rowOf = (starts: readonly number[], scale: number, index: number) => PAGE_TOP + (starts[index] ?? 0) * scale
 
@@ -39,7 +41,7 @@ export const pictureRowsOf = (ctx: DrawContext) => Math.max(IMAGE_ROWS, ctx.body
 
 export const fullWidthOf = (ctx: DrawContext) => (width: number, height: number) => imageBox(width, height, ctx.textWidth - 2, pictureRowsOf(ctx))
 
-export function Embed(ctx: DrawContext, key: string, icon: string, label: string, detail: string, color: string, child: unknown) {
+export function Embed(ctx: DrawContext, key: string, icon: string, label: string, detail: string, color: string, child: RenderChildren) {
   const { Box, Text, C, textWidth } = ctx
   return (
     <Box key={key} flexDirection="column" width={textWidth} backgroundColor={C.appBg} paddingX={1} paddingY={1}>
@@ -50,7 +52,7 @@ export function Embed(ctx: DrawContext, key: string, icon: string, label: string
       </Box>
       <Text color={C.panelBg} wrap="truncate-end">{'─'.repeat(Math.max(1, textWidth - 2))}</Text>
       <Box flexDirection="column" width={textWidth - 2}>
-        {child as never}
+        {child}
       </Box>
     </Box>
   )
@@ -61,10 +63,10 @@ export function DiagramEmbed(ctx: DrawContext, key: string, info: string, text: 
   return Embed(ctx, key, ICON.mermaid, 'DIAGRAM', info, C.mauve, <Text color={C.subtext0}>{text}</Text>)
 }
 
-export type Blocks = { drawnParts: unknown[]; partRows: number[]; partHeadings: string[]; note: (rows: number, heading?: string) => void }
+export type Blocks = { drawnParts: RenderChildren[]; partRows: number[]; partHeadings: string[]; note: (rows: number, heading?: string) => void }
 
 export function newBlocks(): Blocks {
-  const drawnParts: unknown[] = []
+  const drawnParts: RenderChildren[] = []
   const partRows: number[] = []
   const partHeadings: string[] = []
   const note = (rows: number, heading = '') => {
@@ -102,7 +104,7 @@ export function settleBlocks(ctx: DrawContext, io: NavIo, { drawnParts, partRows
       <Box flexDirection="column" width={textWidth}>
         {drawnParts.map((part, blockIndex) => (
           <Box key={`block-${blockIndex}`} flexDirection="column" marginBottom={1}>
-            {part as never}
+            {part}
           </Box>
         ))}
       </Box>

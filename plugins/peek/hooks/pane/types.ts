@@ -1,4 +1,4 @@
-import type { BoxProps, ButtonProps, ClientProps, CodeProps, ElementConstructor, ImageProps, InputProps, MarkdownProps, PluginState, RenderSurface, TextProps } from 'claude-code'
+import type { BoxProps, ButtonProps, ClientProps, CodeProps, ElementConstructor, ImageProps, InputProps, MarkdownProps, PluginState, RenderChildren, RenderSurface, TextProps } from 'claude-code'
 
 import type { Mode, View } from '../../types'
 import type { GroupMenuFor } from '../groups-session'
@@ -94,4 +94,4 @@ export type Action = {
 
 export type Crumb = { label: string; fg: string; bg: string; bold?: boolean; canShrink?: boolean }
 
-export type Screen = { crumbs: Crumb[]; content: unknown; info: string; actions: Action[]; menuOn?: GroupMenuFor; pageBg?: string; layout: ScreenLayout }
+export type Screen = { crumbs: Crumb[]; content: RenderChildren; info: string; actions: Action[]; menuOn?: GroupMenuFor; pageBg?: string; layout: ScreenLayout }

@@ -3,13 +3,13 @@ import { itemKey, parseRef } from './refs'
 import { adapterFor, adapterOfAddress } from './sources/adapter'
 import type { SourceId } from './sources/adapter'
 
-export const ON_SCREEN_MS = 60_000
-export const BACKGROUND_MS = 5 * 60_000
+const ON_SCREEN_MS = 60_000
+const BACKGROUND_MS = 5 * 60_000
 export const BACKGROUND_CAP = 20
 export const IDLE_MS = 10 * 60_000
-export const BACKOFF_START_MS = 60_000
-export const BACKOFF_MAX_MS = 30 * 60_000
-export const MAX_SAVED_TITLES = 500
+const BACKOFF_START_MS = 60_000
+const BACKOFF_MAX_MS = 30 * 60_000
+const MAX_SAVED_TITLES = 500
 
 export type CacheState = 'loading' | 'fresh' | 'refreshing' | 'stale-since' | 'frozen' | 'failed'
 
@@ -206,8 +206,12 @@ export function hydrateTitles(saved: Readonly<Record<string, TitleEntry>>): void
   titles = next
 }
 
+// `titles` is only ever replaced, never mutated, so a view keyed on its identity stays current.
+let titlesView: { of: Readonly<Record<string, TitleEntry>>; map: ReadonlyMap<string, TitleEntry> } | undefined
+
 export function titlesByKey(): ReadonlyMap<string, TitleEntry> {
-  return new Map(Object.entries(titles))
+  if (titlesView?.of !== titles) titlesView = { of: titles, map: new Map(Object.entries(titles)) }
+  return titlesView.map
 }
 
 export function snapshotTitles(): Record<string, TitleEntry> {

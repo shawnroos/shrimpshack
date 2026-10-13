@@ -7,11 +7,12 @@ import { LIVE_FRAME, liveActions, liveBox, liveSession, toggleLive } from '../..
 import { goBack, nav, openExternally, refresh, sourceLine, starKeyOf } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { parseHref, shortPath } from '../../../paths'
-import { itemKey, parseRef } from '../../../refs'
+import { itemKey } from '../../../refs'
 import { adapterOfKind } from '../../../sources/adapter'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
 import { closeAction, modeActions } from '../../actions'
+import { canGoLive } from '../../look'
 import type { Action, DrawContext, PaneActions, Screen } from '../../types'
 import { noJumps } from './blocks'
 import type { Jumps, ViewBody } from './blocks'
@@ -73,7 +74,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
   else if (current.code) ({ body, jumps, position, layout } = codeBody(ctx, io, current.code))
   else if (current.image && Image && png) ({ body, jumps, position, layout } = imageBody(ctx, Image, current, current.image, png))
   const liveState = liveSession.live?.state()
-  const canLive = ctx.surface === 'terminal' && Boolean(Image) && current.remote !== undefined && parseRef(current.href)?.kind === 'web'
+  const canLive = canGoLive(ctx, current)
   const liveRows = Math.max(4, ctx.bodyRows - PAGE_TOP - FOOTER_ROWS - 2)
   const viewport = liveBox(textWidth, liveRows)
   const isLiveHere = canLive && liveSession.href === current.href && liveState !== undefined && liveState.phase !== 'off'
@@ -110,8 +111,8 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
   const remote = current.remote
   const source = remote?.record ? sourceLine(remote, now) : ''
   const info = liveFrame
-    ? [isStarred ? '\u{f51a} starred' : '', liveStatus].filter(Boolean).join(' · ')
-    : [liveStatus, isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
+    ? [isStarred ? `${ICON.star} starred` : '', liveStatus].filter(Boolean).join(' · ')
+    : [liveStatus, isStarred ? `${ICON.star} starred` : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
   const remoteCrumbs = remote
     ? [
         ...(remote.record?.trail ?? []).map((label, index, all) => ({
@@ -162,7 +163,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
             <Text color={C.subtext0}>{notice.hint}</Text>
           </Box>
         )}
-        {body as never}
+        {body}
       </Box>
     ),
     info,

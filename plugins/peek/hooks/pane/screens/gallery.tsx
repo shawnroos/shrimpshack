@@ -11,7 +11,6 @@ const SORTS: GallerySort[] = ['recent', 'name', 'size', 'mentions']
 
 export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Promise<Screen> {
   const { Box, Text, C, textWidth, Input } = ctx
-  const w = ctx
   const { rest, favourites, scopeNote, scope, role, scopeCrumbs, waiting, selected, layout, cardGrid, favouritesBlock, groupsOf } = await fileListing(ctx, actions)
   const type = await actions.galleryType.read()
   const sort = await actions.gallerySort.read()
@@ -43,7 +42,7 @@ export async function galleryScreen(ctx: DrawContext, actions: PaneActions): Pro
       {rest && picked.length === 0 && favs.length === 0 && <Text color={C.overlay0}>No files match.</Text>}
       {groups.map(group => (
         <Box key={`group-${group.id}`} flexDirection="column" width={textWidth}>
-          {SectionRule(w, group.label, `${group.items.length}`, textWidth)}
+          {SectionRule(ctx, group.label, `${group.items.length}`, textWidth)}
           <Box height={1} />
           {group.grid}
         </Box>

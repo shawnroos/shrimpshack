@@ -1,3 +1,5 @@
+import type { RenderChildren } from 'claude-code'
+
 import type { RemoteComment, View } from '../../../../types'
 import { pixels } from '../../../images'
 import { isWebUrl } from '../../../live'
@@ -23,7 +25,7 @@ export function slackThread(page: RemotePage, lead: RemoteComment, replies: read
   const pictureRows = pictureRowsOf(ctx)
   const openInSlack = (href: string | undefined) => void (href && isWebUrl(href) && io.run(['open', href]).catch(() => undefined))
   const slackFiles = (key: string, one: RemoteComment, width: number) => {
-    const rows: unknown[] = []
+    const rows: RenderChildren[] = []
     let height = 0
     for (const [fi, file] of (one.files ?? []).entries()) {
       const picture = remote.pictures?.[`slack-file:${file.id}`]
@@ -60,7 +62,7 @@ export function slackThread(page: RemotePage, lead: RemoteComment, replies: read
     const avatarPng = avatar && pixels.get(avatar.file)
     const face = Image ? fitPicture(budget, avatarPng) : undefined
     const when = whenLabel(one.at, now)
-    const bodyParts: unknown[] = []
+    const bodyParts: RenderChildren[] = []
     let bodyRows = 0
     let pending: string[] = []
     const flush = () => {
@@ -107,8 +109,8 @@ export function slackThread(page: RemotePage, lead: RemoteComment, replies: read
             {one.href ? <Button key={`slack-time-${index}`} label={when} plain onPress={() => openInSlack(one.href)} /> : <Text color={C.overlay0}>{when}</Text>}
           </Box>
         </Box>
-        {bodyParts as never}
-        {files.rows as never}
+        {bodyParts}
+        {files.rows}
       </Box>
     )
     drawnParts.push(

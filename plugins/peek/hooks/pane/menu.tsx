@@ -3,10 +3,10 @@ import { setStar } from '../groups-session'
 import { iconFor } from '../kinds'
 import { liveKey, liveSession, toggleLive } from '../live-pane'
 import { openExternally, refresh, setMenu, show } from '../navigation'
-import { kindOf, parseHref } from '../paths'
-import { parseRef } from '../refs'
-import { C as BASE } from '../theme'
+import { baseName, kindOf, parseHref } from '../paths'
+import { C as BASE, ICON } from '../theme'
 import { MOVE_KEYS, modeRows, roleRows, scopeRows } from './actions'
+import { canGoLive } from './look'
 import type { Action, DrawContext, PaneActions } from './types'
 
 const KEY_ICON = '\u{f11c}'
@@ -18,7 +18,7 @@ export type MenuLists = { lead: Action[]; tail: Action[] }
 
 // Built when the draw starts: the live labels read the live session before anything the draw awaits can change it.
 export function menuLists(ctx: DrawContext, actions: PaneActions): MenuLists {
-  const { current, list, now, surface, Image } = ctx
+  const { current, list, now } = ctx
   const io = actions.io
   return {
     lead: [
@@ -33,14 +33,14 @@ export function menuLists(ctx: DrawContext, actions: PaneActions): MenuLists {
             ...(current.remote
               ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hintFrom: 'refresh', run: () => void refresh(io, current.href) }]
               : []),
-            ...(surface === 'terminal' && Image && current.remote && parseRef(current.href)?.kind === 'web'
+            ...(canGoLive(ctx, current)
               ? [{ id: 'live', icon: '\u{f0ac}', label: liveSession.href === current.href ? 'Reader view: leave the live page' : 'Live view: the real page, clickable', hintFrom: 'live', run: () => void toggleLive(io, current, liveSession.viewport ?? { width: 600, height: 400 }) }]
               : []),
             ...(liveSession.href === current.href && liveSession.live?.state().canBack
               ? [{ id: 'live-back', icon: '\u{f060}', label: 'Back in the live page', hintFrom: 'back', run: () => void liveKey(io, 'b') }]
               : []),
             { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hintFrom: 'copy', run: () => void io.copy({ text: current.location }) },
-            { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hintFrom: 'star', run: () => void setStar(io, current.href) },
+            { id: 'star', icon: ICON.star, label: 'Star or unstar this file', hintFrom: 'star', run: () => void setStar(io, current.href) },
           ]
         : []),
     ],
@@ -55,7 +55,7 @@ export function menuLists(ctx: DrawContext, actions: PaneActions): MenuLists {
           return {
             id: `file-${index}`,
             icon: iconFor(kind),
-            label: `Go to ${target.split('/').pop() || target}`,
+            label: `Go to ${baseName(target)}`,
             hint: describeAge(one.at, now),
             run: () => void show(io, one.href),
           }

@@ -1,6 +1,7 @@
 import type { View } from '../../../../types'
 import type { NavIo } from '../../../navigation'
 import type { DrawContext } from '../../types'
+import { chunked } from '../../layout'
 import { blockJumps } from './blocks'
 import type { ViewBody } from './blocks'
 
@@ -9,7 +10,7 @@ const CHUNK = 10
 export function codeBody(ctx: DrawContext, io: NavIo, code: NonNullable<View['code']>): ViewBody {
   const { Box, Text, Code, C, textWidth, isMenuOpen, offset } = ctx
   const lines = code.source.split('\n')
-  const chunks = Array.from({ length: Math.ceil(lines.length / CHUNK) }, (_, i) => lines.slice(i * CHUNK, i * CHUNK + CHUNK))
+  const chunks = chunked(lines, CHUNK)
   const body = (
     <Box flexDirection="column" width={textWidth}>
       {chunks.map((part, i) => (

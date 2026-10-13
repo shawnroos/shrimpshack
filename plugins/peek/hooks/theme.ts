@@ -1,3 +1,5 @@
+import type { RoleFilter, Scope } from './gallery'
+
 // The tuirealm toy's palette (herdr's gruvbox), so peek reads as the same family.
 export const C = {
   appBg: '#1e1e1e',
@@ -46,7 +48,12 @@ export const ICON = {
   'linear-issue': '\u{f0ae}',
   'linear-project': '\u{f0e8}',
   'slack-thread': '\u{f198}',
+  star: '\u{f51a}',
+  unstarred: '\u{f41e}',
 } as const
+
+export const SCOPE_ICON: Record<Scope, string> = { session: '\u{f0b79}', worktree: '\u{f418}', repo: '\u{f401}' }
+export const ROLE_ICON: Record<RoleFilter, string> = { all: '\u{f0c9}', artifacts: '◆', touched: '◇' }
 
 export const META_ICON: Record<string, string> = {
   State: '\u{f0765}',

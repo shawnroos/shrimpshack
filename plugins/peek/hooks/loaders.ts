@@ -5,12 +5,13 @@ import { drawMermaid, toPng, withDrawnMermaid } from './images'
 import { fitMarkdown, htmlToMarkdown, linkTasks, outlineOf } from './markdown'
 import { loadRemote } from './navigation'
 import type { NavIo } from './navigation'
-import { extOf, fileHref, kindOf } from './paths'
+import { baseName, extOf, fileHref, kindOf } from './paths'
 import type { Kind } from './paths'
 import { parseRef } from './refs'
 import { parseDelimited, prettyJson, tomlSections } from './tabular'
 import { remoteFileOf } from './sources/web'
 import { downloadFile } from './net'
+import { bareHost } from './wire'
 
 export const fullText = new Map<string, string>()
 
@@ -104,7 +105,7 @@ const LOADERS: Record<Kind, Loader> = {
 }
 
 export async function loadFile(io: NavIo, href: string, path: string, line?: number): Promise<View> {
-  const title = path.split('/').pop() || path
+  const title = baseName(path)
   const folderOf = path.slice(0, Math.max(1, path.length - title.length - 1))
   const git = await gitRoot(io, folderOf)
   const base: View = { href, title, location: line ? `${path}:${line}` : path, root: git?.root, isWorktree: git?.isWorktree }
@@ -134,7 +135,7 @@ function urlName(url: URL): string {
 }
 
 function videoView(url: URL, now: number): View {
-  const host = url.hostname.replace(/^www\./, '')
+  const host = bareHost(url)
   const record: RemoteRecord = {
     address: url.href,
     kind: 'web',
