@@ -68,6 +68,7 @@ type PaneOptions = {
   images?: readonly string[]
   pull?: () => Record<string, unknown>
   webTitle?: string
+  isHomeBrokenOnce?: boolean
 }
 
 type Pane = {
@@ -107,7 +108,14 @@ async function paneWorld(on: On, options: PaneOptions): Promise<Pane> {
   on('session.id', () => ({ value: 'recipe-pane' }))
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.root', () => ({ value: '/repo' }))
-  on('env.get', (_$, e) => ({ value: w.env[e.name as keyof typeof w.env] }))
+  let isHomeBroken = options.isHomeBrokenOnce === true
+  on('env.get', (_$, e) => {
+    if (e.name === 'HOME' && isHomeBroken) {
+      isHomeBroken = false
+      throw new Error('env unavailable')
+    }
+    return { value: w.env[e.name as keyof typeof w.env] }
+  })
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.toast', (_$, e) => {
     toasts.push(e.text)
@@ -218,6 +226,31 @@ test('covers AE1: a recipe matching github.com without an override leaves a pull
   const ui = await mount(driver)
   expect(await ui.find({ text: /#42 Teach the parser trailing commas/ })).toBeDefined()
   expect(pane.scripts()).toEqual([])
+  await ui.unmount()
+})
+
+test('a recipe folder that cannot be read leaves every web link opening as before', async (driver, on) => {
+  const pane = await paneWorld(on, { files: figmaRecipe(), approve: ['figma-files'], isHomeBrokenOnce: true })
+  await peek(driver, PR)
+  const ui = await mount(driver)
+  expect(await ui.find({ text: /#42 Teach the parser trailing commas/ })).toBeDefined()
+  expect(pane.scripts()).toEqual([])
+  await ui.unmount()
+})
+
+test('a markdown link to an absolute path on a recipe page opens that file, and b returns', async (driver, on) => {
+  const plan = `${HOME}/notes/plan.md`
+  const page = { title: 'With a file', sections: [{ block: { type: 'markdown', text: `See [the plan](${plan}).` } }] }
+  await paneWorld(on, { files: { ...figmaRecipe(), [plan]: '# Plan\n\nShip it.\n' }, approve: ['figma-files'], pages: () => answer(page) })
+  await peek(driver, FIGMA)
+  let ui = await mount(driver)
+  await ui.press({ key: 'section-0-md-md-0', link: { href: plan } } as never)
+  await until(ui, async () => (await ui.find({ text: /Ship it/ })) !== undefined)
+  expect(await ui.find({ text: /Ship it/ })).toBeDefined()
+  await ui.press({ key: 'back' })
+  await ui.unmount()
+  ui = await mount(driver)
+  expect(await ui.find({ text: 'With a file' })).toBeDefined()
   await ui.unmount()
 })
 

@@ -769,7 +769,8 @@ function loadPage($: EngineInterface, link: string, allowDraft: boolean, onRoute
   const loading = (async (): Promise<PageLoad> => {
     const ref = parseRef(link)
     if (!ref) return { kind: 'none' }
-    const { recipes, approvals } = await loadRecipes(recipesIoOf($))
+    // Every web link passes through here: a folder that cannot be read means no recipe, not a broken open.
+    const { recipes, approvals } = await loadRecipes(recipesIoOf($)).catch(() => ({ recipes: [], approvals: {} }))
     const route = routeOf(ref, link, recipes, approvals, { allowDraft })
     if (route.kind === 'conflict') return { kind: 'conflict', ids: route.ids }
     if (route.kind !== 'recipe') return { kind: 'none' }
@@ -1798,7 +1799,7 @@ async function pressLink($: EngineInterface, href: string) {
       return
     }
   }
-  await openFromPage($, href)
+  await openFromPage($, current?.page ? paneHref(href) : href)
 }
 
 async function docImage($: EngineInterface, src: string, docPath: string) {
