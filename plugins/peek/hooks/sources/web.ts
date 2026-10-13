@@ -76,13 +76,13 @@ export function parseHead(html: string, pageUrl: string): Head {
 
 
 const FILE_PATH = /\.(md|mdx|markdown|txt|png|jpe?g|gif|webp|bmp|svg|csv|tsv|json|jsonc|ya?ml|toml|mmd|mermaid|ts|tsx|m?js|cjs|jsx|py|rb|sh|swift|rs|go|css|log|diff|patch)$/i
-const VIDEO_FILE = /\.(mp4|m4v|webm|mov)$/i
+const VIDEO_EXT = /\.(mp4|m4v|webm|mov)$/i
 
 // A blob URL is GitHub's HTML page around the file; the raw host serves the file itself.
 export function remoteFileOf(address: string): { kind: 'file'; fetchUrl: string; ext: string } | { kind: 'video' } | null {
   const url = parseUrl(address)
   if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null
-  if (VIDEO_FILE.test(url.pathname)) return { kind: 'video' }
+  if (VIDEO_EXT.test(url.pathname)) return { kind: 'video' }
   const ext = FILE_PATH.exec(url.pathname)?.[1]?.toLowerCase()
   if (!ext) return null
   const blob = url.hostname === 'github.com' ? /^\/([^/]+)\/([^/]+)\/blob\/(.+)$/.exec(url.pathname) : null
@@ -167,10 +167,9 @@ async function pageMedia(texts: readonly string[], posters: Map<string, string>,
 
 const IMG_ROW = /^(?:<img\b[^>]*>\s*)+$/i
 const BARE_URL = /^<?(https?:\/\/[^\s<>]+)>?$/
-const VIDEO_PATH = /\.(mp4|m4v|webm|mov)$/i
 
 function isVideoUrl(url: URL): boolean {
-  return Boolean(youtubeId(url)) || VIDEO_PATH.test(url.pathname) || (url.hostname === 'github.com' && url.pathname.startsWith('/user-attachments/assets/'))
+  return Boolean(youtubeId(url)) || VIDEO_EXT.test(url.pathname) || (url.hostname === 'github.com' && url.pathname.startsWith('/user-attachments/assets/'))
 }
 
 // GitHub writes an upload as an <img> tag and a video upload as a bare URL on its own line; both become picture lines.

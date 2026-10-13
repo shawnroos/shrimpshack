@@ -29,7 +29,7 @@ const CLI_TIMEOUT_MS = 20_000
 // The public Slack CLI's `_fingerprint` answer, from the Slack plugin's slack-cli skill; another `slack` binary is not it.
 const CLI_FINGERPRINT = 'd41d8cd98f00b204e9800998ecf8427e'
 const CLI_PROBE = `if [ -x "$HOME/.slack/bin/slack" ]; then echo "$HOME/.slack/bin/slack"; elif command -v slack >/dev/null 2>&1 && [ "$(slack _fingerprint 2>/dev/null)" = ${CLI_FINGERPRINT} ]; then command -v slack; fi`
-const TITLE_CAP = 100
+const MAX_TITLE_CHARS = 100
 const SLACK_ENTITIES = ['lt', 'gt', 'amp'] as const
 
 const USER_ID = /^[UWB][A-Z0-9]+$/
@@ -85,7 +85,7 @@ function plainLine(text: string): string {
     .replace(/<([^>]+)>/g, '$1')
     .replace(/^([*_~]+)(.+?)\1$/, '$2')
   const plain = decodeEntities(stripped, SLACK_ENTITIES).trim()
-  return plain.length > TITLE_CAP ? `${plain.slice(0, TITLE_CAP - 1)}…` : plain
+  return plain.length > MAX_TITLE_CHARS ? `${plain.slice(0, MAX_TITLE_CHARS - 1)}…` : plain
 }
 
 function isoOf(ts: string): string {

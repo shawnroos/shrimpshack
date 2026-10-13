@@ -9,7 +9,7 @@ export const BACKGROUND_CAP = 20
 export const IDLE_MS = 10 * 60_000
 export const BACKOFF_START_MS = 60_000
 export const BACKOFF_MAX_MS = 30 * 60_000
-export const TITLE_CAP = 500
+export const MAX_SAVED_TITLES = 500
 
 export type CacheState = 'loading' | 'fresh' | 'refreshing' | 'stale-since' | 'frozen' | 'failed'
 
@@ -185,7 +185,7 @@ export function withTitle(
   address: string,
   entry: Omit<TitleEntry, 'updatedAt'>,
   now: number,
-  cap = TITLE_CAP,
+  cap = MAX_SAVED_TITLES,
 ): Record<string, TitleEntry> {
   const next: Record<string, TitleEntry> = { ...map, [address]: { ...entry, updatedAt: now } }
   const keys = Object.keys(next)
