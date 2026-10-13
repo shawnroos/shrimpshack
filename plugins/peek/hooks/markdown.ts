@@ -201,6 +201,8 @@ export function outlineOf(markdown: string): Outline {
   return found
 }
 
+const TASK_OPEN = '\u{f0131}'
+const TASK_DONE = '\u{f0135}'
 const TASK = /^(\s*[-*+]\s+)\[( |x|X)\]\s+(.*)$/
 const IMAGE_LINE = /^\s*!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)\s*$/
 
@@ -217,11 +219,27 @@ export function linkTasks(text: string, base: string): { text: string; done: num
     total += 1
     const isDone = match[2] !== ' '
     if (isDone) done += 1
-    const box = isDone ? '\u{f0135}' : '\u{f0131}'
+    const box = isDone ? TASK_DONE : TASK_OPEN
     const label = isDone ? `~~${match[3]}~~` : match[3]
     return `${match[1]}[${box}](${base}#task-${index + 1}) ${label}`
   })
   return { text: lines.join('\n'), done, total }
+}
+
+// For text peek cannot write back to, such as a pull request body: the same
+// glyphs as linkTasks, with no link to press.
+export function taskGlyphs(text: string): string {
+  let inFence = false
+  return text
+    .split('\n')
+    .map(line => {
+      if (/^\s*(```|~~~)/.test(line)) inFence = !inFence
+      const match = inFence ? null : TASK.exec(line)
+      if (!match) return line
+      const isDone = match[2] !== ' '
+      return `${match[1]}${isDone ? TASK_DONE : TASK_OPEN} ${isDone ? `~~${match[3]}~~` : match[3]}`
+    })
+    .join('\n')
 }
 
 export function toggleTaskLine(text: string, lineNumber: number): string | null {

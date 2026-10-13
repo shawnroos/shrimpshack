@@ -3,7 +3,7 @@ import { describeAge } from '../../../format'
 import { pixels } from '../../../images'
 import { colorFor, iconFor } from '../../../kinds'
 import { isWebUrl } from '../../../live'
-import { linkify, splitTables } from '../../../markdown'
+import { linkify, splitTables, taskGlyphs } from '../../../markdown'
 import { chunkMarkdown, estimateRows, fitName } from '../../../measure'
 import { openFromPage, pressLink, refContext } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
@@ -115,7 +115,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     let chunks = blockMemo.get(memoKey)
     if (!chunks) {
       if (blockMemo.size > MAX_BLOCK_MEMO) blockMemo.clear()
-      chunks = chunkMarkdown(linkify(text, () => null, refs)).map(chunk => ({ chunk, rows: estimateRows(chunk, textWidth - indent) }))
+      chunks = chunkMarkdown(linkify(taskGlyphs(text), () => null, refs)).map(chunk => ({ chunk, rows: estimateRows(chunk, textWidth - indent) }))
       blockMemo.set(memoKey, chunks)
     }
     for (const [i, { chunk, rows }] of chunks.entries()) {

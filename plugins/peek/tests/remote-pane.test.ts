@@ -327,6 +327,19 @@ test('a table in a pull request body draws as aligned columns, and a table in a 
   await ui.unmount()
 })
 
+test('task lists in a pull request body draw as checkboxes, a done one struck through, and a fenced one stays as typed', async ($, on) => {
+  fakeWorld(on, { pull: { body: 'Follow-ups:\n\n- [ ] P2 \u2014 split `remoteBody`\n  - [X] nested done\n* [x] shipped\n\n```\n- [ ] in a fence\n```\n' } })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  const page = JSON.stringify(await ui.drawn())
+  expect(page).toContain('- \u{f0131} P2 \u2014 split `remoteBody`')
+  expect(page).toContain('  - \u{f0135} ~~nested done~~')
+  expect(page).toContain('* \u{f0135} ~~shipped~~')
+  expect(page).toContain('- [ ] in a fence')
+  expect(page).not.toContain('- [ ] P2')
+  await ui.unmount()
+})
+
 test('Recent and Gallery match a star by its stored href, so a star saved as /issues/42 does not star the /pull/42 entry', async ($, on) => {
   fakeWorld(on)
   const issue = 'https://github.com/acme/widgets/issues/42'
