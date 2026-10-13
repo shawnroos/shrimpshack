@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { armEscape, nav, personClose } from '../hooks/navigation'
+import { armEscape, nav, personClose, setMenu } from '../hooks/navigation'
 import type { NavIo } from '../hooks/navigation'
 
 function fakeIo() {
@@ -41,4 +41,19 @@ test('arming asks the pane only when the answer changes', () => {
   armEscape(io, false, false, back)
   armEscape(io, false, false, back)
   expect(opens.length).toBe(2)
+})
+
+test('opening the menu asks for the keys on its filter; closing it does not', async () => {
+  const asked: string[] = []
+  const store = { value: '' as string | boolean }
+  const io = {
+    open: async () => undefined,
+    focus: async (key: string) => void asked.push(key),
+    menuFilter: { update: async (change: (old: string) => string) => void (store.value = change('')) },
+    menuOpen: { update: async (change: (old: boolean) => boolean) => void (store.value = change(false)) },
+  } as unknown as NavIo
+  await setMenu(io, true)
+  expect(asked).toEqual(['menu-filter'])
+  await setMenu(io, false)
+  expect(asked).toEqual(['menu-filter'])
 })

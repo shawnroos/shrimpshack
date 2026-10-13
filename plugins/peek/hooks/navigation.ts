@@ -51,6 +51,7 @@ export type NavIo = Pick<Ports, 'now' | 'every' | 'cwd' | 'home' | 'sessionId' |
   fork: (request: Parameters<Model['fork']>[0]) => ReturnType<Model['fork']>
   scroll: (options: Without<Parameters<Ui['scroll']>[0], 'in'>) => ReturnType<Ui['scroll']>
   open: (options: Without<Parameters<Ui['open']>[0], 'id'>) => ReturnType<Ui['open']>
+  focus: (key: string) => ReturnType<Ui['focus']>
   remoteIo: () => RemoteIo
   liveIo: () => LiveIo
   groupsIo: () => GroupsIo
@@ -360,6 +361,8 @@ export async function setMenu(io: NavIo, isOpen: boolean) {
   await io.menuOpen.update(() => isOpen)
   nav.isEscapeArmed = isOpen
   await io.open(isOpen ? { title: 'Peek', focus: true, closeOnEscape: true } : { title: 'Peek' })
+  // The filter's autoFocus yields to a ring the person already moved, so the open moves it there itself.
+  if (isOpen) void io.focus('menu-filter').catch(() => undefined)
 }
 
 // Esc reaches peek only as a close, and only while the pane is opened with

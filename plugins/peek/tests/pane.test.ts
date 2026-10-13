@@ -285,6 +285,22 @@ test('ctrl+k opens a menu that filters and runs commands', async ($, on) => {
   await ui.unmount()
 })
 
+test('ctrl+k marks the closest match, which Enter runs', async ($, on) => {
+  fakeDisk(on)
+  await $.command.run({ command: 'peek', args: `${WORKTREE}/docs/handoff.md` } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await $.command.run({ command: 'peek-menu' } as never)
+  await ui.redraw()
+  await ui.input({ key: 'menu-filter', text: 'gallery', kind: 'change' })
+  await ui.redraw()
+  expect((await ui.find({ key: 'menu-row-gallery' }))?.props.backgroundColor).toBeDefined()
+  expect((await ui.find({ key: 'menu-row-recent' }))?.props.backgroundColor).toBeUndefined()
+  await ui.input({ key: 'menu-filter', text: 'gallery' })
+  await ui.redraw()
+  expect(await ui.find({ key: 'menu-filter' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('the scope switch lists the worktree, and the gallery shows its files as cards by type', async ($, on) => {
   fakeDisk(on)
   FILES['/repo/docs/plan.md'] = '# Plan\n'

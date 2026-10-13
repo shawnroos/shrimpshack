@@ -178,6 +178,7 @@ function navIoOf($: EngineInterface): NavIo {
     toast: text => $.ui.toast(text),
     fork: request => $.model.fork(request),
     scroll: options => $.ui.scroll({ in: PANE, ...options }),
+    focus: key => $.ui.focus({ requestId: PANE, key }),
     open: options => {
       if (options.title) nav.paneTitle = options.title
       // Every open resets closeOnEscape, so one that does not name it keeps Esc armed while it is.

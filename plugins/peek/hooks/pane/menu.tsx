@@ -6,6 +6,7 @@ import { openExternally, refresh, setMenu, show } from '../navigation'
 import { baseName, kindOf, parseHref } from '../paths'
 import { C as BASE, ICON } from '../theme'
 import { MOVE_KEYS, modeRows, roleRows, scopeRows } from './actions'
+import { rankCommands } from './rank'
 import { canGoLive } from './look'
 import type { Action, DrawContext, PaneActions } from './types'
 
@@ -73,7 +74,7 @@ export function menuRows(lists: MenuLists, footer: readonly Action[], groupRows:
 export function Menu(ctx: DrawContext, actions: PaneActions, rows: readonly Action[], footer: readonly Action[]) {
   const { Box, Text, Button, Input } = ctx
   const menuWidth = menuWidthOf(ctx.columns)
-  const words = ctx.filter.toLowerCase().split(/\s+/).filter(Boolean)
+  const hasFilter = ctx.filter.trim().length > 0
   const closeMenu = () => void setMenu(actions.io, false)
   const runCommand = (one: Action | undefined) => {
     if (!one) return
@@ -82,9 +83,7 @@ export function Menu(ctx: DrawContext, actions: PaneActions, rows: readonly Acti
   }
   let others = 0
   // Group rows sit outside the 20-row cap, so every one of the first eight shows however long the rest of the menu is.
-  const matches = rows.filter(
-    one => (words.length > 0 || !one.isFilteredOnly) && words.every(word => one.label.toLowerCase().includes(word)) && (one.isGroupRow || others++ < 20),
-  )
+  const matches = rankCommands(rows.filter(one => hasFilter || !one.isFilteredOnly), ctx.filter).filter(one => one.isGroupRow || others++ < 20)
   const moves = footer.filter(one => MOVE_KEYS.has(one.id)).map(one => one.hotkey)
   return (
     <Box flexDirection="column" width={menuWidth}>
@@ -117,8 +116,14 @@ export function Menu(ctx: DrawContext, actions: PaneActions, rows: readonly Acti
         </Box>
       )}
       {matches.length === 0 && <Text color={BASE.overlay0}>No command matches.</Text>}
-      {matches.map(one => (
-        <Box key={`menu-row-${one.id}`} flexDirection="row" justifyContent="space-between" width={menuWidth}>
+      {matches.map((one, index) => (
+        <Box
+          key={`menu-row-${one.id}`}
+          flexDirection="row"
+          justifyContent="space-between"
+          width={menuWidth}
+          {...(hasFilter && index === 0 ? { backgroundColor: BASE.surface0 } : {})}
+        >
           <Box flexDirection="row" flexShrink={1}>
             <Text color={BASE.accent}>{`${one.icon}  `}</Text>
             <Button key={`menu-${one.id}`} label={one.label} plain onPress={() => runCommand(one)} />
