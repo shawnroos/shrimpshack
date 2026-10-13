@@ -70,6 +70,7 @@ type PaneOptions = {
   webTitle?: string
   isHomeBrokenOnce?: boolean
   isToolAllowed?: boolean
+  isViewWriteRefused?: (page: { isRefreshing?: boolean; fetchedAt?: number }) => boolean
 }
 
 type Pane = {
@@ -126,8 +127,9 @@ async function paneWorld(on: On, options: PaneOptions): Promise<Pane> {
   // A timed run hashes the recipe folder with crypto.subtle before and after its script, work the mock clock's
   // advance and settle cannot see, so a test waits for the run's last write to the page instead.
   on('state.set', async (_$, e, next) => {
+    const write = e as { key?: string; value?: { page?: { isRefreshing?: boolean; fetchedAt?: number } } | null }
+    if (write.key === 'view' && write.value?.page && options.isViewWriteRefused?.(write.value.page)) return { deny: 'state write refused' }
     const answered = await next(e)
-    const write = e as { key?: string; value?: { page?: { isRefreshing?: boolean } } | null }
     if (write.key === 'view') {
       const isNowRefreshing = write.value?.page?.isRefreshing === true
       if (isRefreshing && !isNowRefreshing) refreshes += 1
@@ -732,4 +734,58 @@ test('a draft preview with a timer runs only when the agent opens it, never on a
   await ui.unmount()
   await stayActive(driver, pane, 12)
   expect(pane.scripts()).toEqual([FIGMA])
+})
+
+const figmaAll = () => folder('figma-all', { name: 'All of Figma', match: [{ host: 'figma.com' }], source: { run: ['./all.sh'] } }, { 'all.sh': '#!/bin/sh\n' })
+
+test('u on a conflict between two draft recipes the agent opened keeps the draft preview: the conflict stays, and a lifted conflict runs the draft', async (driver, on) => {
+  const pane = await paneWorld(on, { files: { ...figmaRecipe(), ...figmaAll() }, isToolAllowed: true })
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await driver.tool.call({ tool: 'mcp__peek__open', tool_use_id: 'open-conflict', link: FIGMA } as never)
+  const ui = await mount(driver)
+  expect(await ui.find({ text: /recipe conflict/ })).toBeDefined()
+  await ui.press({ key: 'refresh' })
+  await until(ui, async () => (await ui.find({ text: 'Figma web page' })) !== undefined)
+  expect(await ui.find({ text: 'Figma web page' })).toBeUndefined()
+  expect(await ui.find({ text: /recipe conflict/ })).toBeDefined()
+  pane.w.write(`${ROOT}/figma-all/recipe.json`, JSON.stringify({ name: 'All of Figma', match: [{ host: 'example.com' }], source: { run: ['./all.sh'] } }))
+  await ui.press({ key: 'refresh' })
+  await until(ui, async () => (await ui.find({ text: /recipe figma-files · draft/ })) !== undefined || (await ui.find({ text: 'Figma web page' })) !== undefined)
+  expect(await ui.find({ text: /recipe figma-files · draft/ })).toBeDefined()
+  expect(await ui.find({ text: 'Figma web page' })).toBeUndefined()
+  expect(pane.scripts()).toEqual([FIGMA])
+  await ui.unmount()
+})
+
+test('u on a conflict between two approved recipes keeps the conflict page', async (driver, on) => {
+  const pane = await paneWorld(on, { files: { ...figmaRecipe(), ...figmaAll() }, approve: ['figma-files', 'figma-all'] })
+  await peek(driver, FIGMA)
+  const ui = await mount(driver)
+  await ui.press({ key: 'refresh' })
+  await until(ui, async () => (await ui.find({ text: 'Figma web page' })) !== undefined)
+  expect(await ui.find({ text: /recipe conflict/ })).toBeDefined()
+  expect(pane.scripts()).toEqual([])
+  await ui.unmount()
+})
+
+test('a timed run whose page write fails once does not leave the page refreshing, and the next timed run still goes', async (driver, on) => {
+  let isArmed = false
+  const isViewWriteRefused = (page: { isRefreshing?: boolean; fetchedAt?: number }) => {
+    if (!isArmed || page.isRefreshing || page.fetchedAt === NOW) return false
+    isArmed = false
+    return true
+  }
+  const pane = await paneWorld(on, { files: timedRecipe(), approve: ['figma-files'], isViewWriteRefused })
+  await peek(driver, FIGMA)
+  isArmed = true
+  for (let minute = 0; minute < 8 && isArmed; minute++) await stayActive(driver, pane, 1)
+  expect(isArmed).toBe(false)
+  await stayActive(driver, pane, 1)
+  const ui = await mount(driver)
+  await until(ui, async () => pane.scripts().length === 3 && (await ui.find({ text: /refreshing/ })) === undefined)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA, FIGMA])
+  expect(await ui.find({ text: /refreshing/ })).toBeUndefined()
+  expect(await ui.find({ text: 'Design system' })).toBeDefined()
+  expect(await ui.find({ text: /recipe figma-files · approved/ })).toBeDefined()
+  await ui.unmount()
 })

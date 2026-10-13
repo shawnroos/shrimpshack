@@ -807,36 +807,46 @@ async function recipeView($: EngineInterface, href: string, raw: string, allowDr
   const state: RecipePage =
     loaded.kind === 'ran'
       ? loaded.state
-      : { id: '', name: 'Recipe conflict', link, isDraft: false, digest: '', refreshMinutes: 0, failure: conflictText(loaded.ids), failureKind: 'conflict' }
+      : { id: '', name: 'Recipe conflict', link, isDraft: allowDraft, digest: '', refreshMinutes: 0, failure: conflictText(loaded.ids), failureKind: 'conflict' }
   await notePageTitle($, href, state)
   return pageView(href, state)
 }
 
 async function refreshPage($: EngineInterface, href: string, was: RecipePage): Promise<boolean> {
   if (!was.id) {
-    await show($, was.link)
+    await show($, was.link, false, { allowDraft: was.isDraft })
     return true
   }
   const write = (state: RecipePage) => update($, view, now => (now?.href === href && now.page ? pageView(href, state) : now))
   const { isRefreshing: _, refreshFailure: __, ...kept } = was
   await write({ ...kept, isRefreshing: true })
-  const loaded = await loadPage($, was.link, was.isDraft).catch((error: unknown) => ({ kind: 'error' as const, message: error instanceof Error ? error.message : String(error) }))
-  const fresh = loaded.kind === 'ran' && loaded.state.id === was.id ? loaded.state : undefined
-  if (fresh?.page) {
-    pageBackoff.delete(href)
-    await notePageTitle($, href, fresh)
-    await write(fresh)
-    return true
+  try {
+    const loaded = await loadPage($, was.link, was.isDraft).catch((error: unknown) => ({ kind: 'error' as const, message: error instanceof Error ? error.message : String(error) }))
+    const fresh = loaded.kind === 'ran' && loaded.state.id === was.id ? loaded.state : undefined
+    if (fresh?.page) {
+      pageBackoff.delete(href)
+      await notePageTitle($, href, fresh)
+      await write(fresh)
+      return true
+    }
+    const reason =
+      fresh?.failure ??
+      (loaded.kind === 'error'
+        ? `Recipe "${was.name}" (${was.id}) could not be read: ${loaded.message}`
+        : loaded.kind === 'conflict'
+          ? conflictText(loaded.ids)
+          : `Recipe "${was.name}" (${was.id}) no longer handles this link: it was edited, removed or replaced. Open the link again.`)
+    await write(was.page ? { ...kept, refreshFailure: reason } : { ...kept, failure: reason, failureKind: fresh?.failureKind ?? 'route' })
+    return false
+  } catch (error) {
+    // tickPage skips a page marked refreshing, so a marker left by a failed write would stop its timer for the session.
+    await update($, view, now => {
+      if (now?.href !== href || !now.page?.isRefreshing) return now
+      const { isRefreshing: _, ...settled } = now.page
+      return pageView(href, settled)
+    }).catch(() => undefined)
+    throw error
   }
-  const reason =
-    fresh?.failure ??
-    (loaded.kind === 'error'
-      ? `Recipe "${was.name}" (${was.id}) could not be read: ${loaded.message}`
-      : loaded.kind === 'conflict'
-        ? conflictText(loaded.ids)
-        : `Recipe "${was.name}" (${was.id}) no longer handles this link: it was edited, removed or replaced. Open the link again.`)
-  await write(was.page ? { ...kept, refreshFailure: reason } : { ...kept, failure: reason, failureKind: fresh?.failureKind ?? 'route' })
-  return false
 }
 
 function fetchedAge(fetchedAt: number | undefined, now: number): string {
