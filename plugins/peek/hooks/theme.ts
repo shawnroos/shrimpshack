@@ -42,7 +42,7 @@ export const ICON = {
   recent: '\u{f017}',
   gallery: '\u{f0c6c}',
   groups: '\u{f247}',
-  'gh-pr': '\u{f407}',
+  'gh-pr': '\u{f04c2}',
   'gh-issue': '\u{f41b}',
   'gh-repo': '\u{f401}',
   'linear-issue': '\u{f0ae}',
