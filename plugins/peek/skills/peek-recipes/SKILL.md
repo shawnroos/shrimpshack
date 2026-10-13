@@ -77,7 +77,7 @@ Steps:
    - **Script (the default).** One script in the folder, run as `./name` with a `#!` line, such as `#!/usr/bin/env python3` or `#!/bin/sh`. It gets the link as its last argument and in `PEEK_URL`, and prints one Page as JSON on stdout.
    - **MCP.** Use it only when the tool itself returns a Page as JSON. Most tools return their own data shape, and peek cannot reshape it. A recipe that calls an MCP tool works only in sessions where that server is connected. Elsewhere its links show the error page. Say this to the person when you choose it.
 4. Keep the folder self-contained.
-   - Use only tools already on `PATH` (`curl`, `python3`, `/bin/sh`). Check with `command -v` before you rely on one.
+   - Use only tools macOS already has on `PATH`: `/bin/sh`, `python3` (standard library only) and `curl`.
    - Never install anything: no `npm install`, no virtualenv, no downloaded binaries.
    - Never call code outside the folder. The approval covers only the folder, and the approval surface warns about outside paths.
    - The script gets no environment except `HOME`, `PATH`, `LANG`, `TMPDIR`, `PEEK_URL` and the names listed in `source.env`. List a secret such as an API token in `env` by name. Never write its value into the folder.

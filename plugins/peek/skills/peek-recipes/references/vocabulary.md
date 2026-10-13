@@ -163,9 +163,9 @@ When a source fails, peek shows an error page that names the recipe and the prob
 | `invalid-recipe` | The folder no longer loads, or `run[0]` is not a regular file inside the folder |
 | `changed-during-run` | The folder changed before or while the source ran |
 | `needs-permission` | A draft asked to run something this session's permissions do not allow |
-| `started-failed` | The script could not start, for example no executable bit or a bad `#!` line |
+| `started-failed` | Peek could not start the process at all |
 | `timeout` | The source ran past `timeoutSeconds` |
-| `exit-nonzero` | The script exited with a code other than 0 |
+| `exit-nonzero` | The script exited with a code other than 0. Exit 126 with `Permission denied` means the script lacks `chmod +x`. Exit 127 means the `#!` interpreter was not found on `PATH`. |
 | `output-truncated` | stdout was too large |
 | `not-JSON` | stdout or the tool text was empty or not JSON |
 | `server-not-connected` | The MCP call was refused, usually because the server is not connected |
