@@ -79,6 +79,7 @@ type Pane = {
   copies: string[]
   toasts: string[]
   started: string[]
+  refreshesDone: (count: number) => Promise<void>
   clock: ReturnType<typeof mock.clock>
 }
 
@@ -93,6 +94,10 @@ async function paneWorld(on: On, options: PaneOptions): Promise<Pane> {
   resetRefresh()
   const clock = mock.clock(on, { now: NOW })
   const started: string[] = []
+  let refreshes = 0
+  let isRefreshing = false
+  const waiters: { count: number; resolve: () => void }[] = []
+  const refreshesDone = (count: number) => new Promise<void>(resolve => (refreshes >= count ? resolve() : waiters.push({ count, resolve })))
   const w = world({
     files: options.files,
     script: child => {
@@ -118,6 +123,22 @@ async function paneWorld(on: On, options: PaneOptions): Promise<Pane> {
     return { value: w.env[e.name as keyof typeof w.env] }
   })
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  // A timed run hashes the recipe folder with crypto.subtle before and after its script, work the mock clock's
+  // advance and settle cannot see, so a test waits for the run's last write to the page instead.
+  on('state.set', async (_$, e, next) => {
+    const answered = await next(e)
+    const write = e as { key?: string; value?: { page?: { isRefreshing?: boolean } } | null }
+    if (write.key === 'view') {
+      const isNowRefreshing = write.value?.page?.isRefreshing === true
+      if (isRefreshing && !isNowRefreshing) refreshes += 1
+      isRefreshing = isNowRefreshing
+      for (const one of waiters.filter(waiter => refreshes >= waiter.count)) {
+        waiters.splice(waiters.indexOf(one), 1)
+        one.resolve()
+      }
+    }
+    return answered
+  })
   if (options.isToolAllowed) on('tool.check', () => ({ decision: 'allow' as const }))
   on('ui.toast', (_$, e) => {
     toasts.push(e.text)
@@ -178,7 +199,7 @@ async function paneWorld(on: On, options: PaneOptions): Promise<Pane> {
     return done(0)
   })
   const scripts = () => ran.filter(argv => argv[0] === '/usr/bin/env').map(argv => argv.at(-1) ?? '')
-  return { w, ran, scripts, copies, toasts, started, clock }
+  return { w, ran, scripts, copies, toasts, started, refreshesDone, clock }
 }
 
 const props = { title: 'Peek', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
@@ -631,6 +652,7 @@ test('an opted-in recipe page re-runs after its minutes on screen, and the ticke
   await stayActive(driver, pane, 4)
   expect(pane.scripts()).toEqual([FIGMA])
   await stayActive(driver, pane, 2)
+  await pane.refreshesDone(1)
   expect(pane.scripts()).toEqual([FIGMA, FIGMA])
   const ui = await mount(driver)
   expect(await ui.find({ text: 'Design system' })).toBeDefined()
@@ -662,6 +684,7 @@ test('a failing timed run keeps the last page with its failure marker and backs 
   await peek(driver, FIGMA)
   isBroken = true
   await stayActive(driver, pane, 6)
+  await pane.refreshesDone(1)
   expect(pane.scripts()).toEqual([FIGMA, FIGMA])
   const ui = await mount(driver)
   expect(await ui.find({ text: 'Design system' })).toBeDefined()
@@ -672,6 +695,7 @@ test('a failing timed run keeps the last page with its failure marker and backs 
   expect(pane.scripts()).toEqual([FIGMA, FIGMA])
   isBroken = false
   await stayActive(driver, pane, 5)
+  await pane.refreshesDone(2)
   expect(pane.scripts()).toEqual([FIGMA, FIGMA, FIGMA])
   const after = await mount(driver)
   expect(await after.find({ text: /refresh failed/ })).toBeUndefined()
@@ -683,10 +707,12 @@ test('after ten idle minutes timed runs pause, and the next activity resumes the
   await peek(driver, FIGMA)
   await stayActive(driver, pane, 1)
   await pane.clock.advance(4 * 60_000 + 30_000)
+  await pane.refreshesDone(1)
   expect(pane.scripts()).toEqual([FIGMA, FIGMA])
   await pane.clock.advance(15 * 60_000)
   expect(pane.scripts()).toEqual([FIGMA, FIGMA])
   await stayActive(driver, pane, 1)
+  await pane.refreshesDone(2)
   expect(pane.scripts()).toEqual([FIGMA, FIGMA, FIGMA])
 })
 
