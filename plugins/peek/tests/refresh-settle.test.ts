@@ -79,4 +79,16 @@ describe('a settle that throws', () => {
     await expect(refreshItem(pr(7), async () => malformed, 0)).rejects.toThrow()
     expect(dueAddresses(input)).toEqual([pr(6)])
   })
+
+  test('after the throw, the next refresh of that item loads again instead of sharing the failed one', async () => {
+    resetRefresh()
+    let calls = 0
+    const load = async () => {
+      calls++
+      return calls === 1 ? malformed : good(pr(8), 0)
+    }
+    await expect(refreshItem(pr(8), load, 0)).rejects.toThrow()
+    expect((await refreshItem(pr(8), load, 10)).state).toBe('fresh')
+    expect(calls).toBe(2)
+  })
 })

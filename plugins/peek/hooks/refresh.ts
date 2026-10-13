@@ -102,17 +102,20 @@ export function refreshItem(address: string, load: Load, now: number): Promise<C
     previous?.record ? { ...previous, attemptedAt: now, state: 'refreshing' } : { address, attemptedAt: now, state: 'loading' },
   )
   const promise = (async () => {
-    let result: Loaded
     try {
-      result = await load(address)
-    } catch {
-      result = { ok: false, failure: 'offline' }
+      let result: Loaded
+      try {
+        result = await load(address)
+      } catch {
+        result = { ok: false, failure: 'offline' }
+      }
+      const entry = settle(previous, address, result, now)
+      entries.set(key, entry)
+      if (entry.record) noteTitle(entry.record, now)
+      return entry
+    } finally {
+      inFlight.delete(key)
     }
-    const entry = settle(previous, address, result, now)
-    entries.set(key, entry)
-    if (entry.record) noteTitle(entry.record, now)
-    inFlight.delete(key)
-    return entry
   })()
   inFlight.set(key, promise)
   return promise
