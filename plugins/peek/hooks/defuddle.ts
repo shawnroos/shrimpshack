@@ -1,4 +1,4 @@
-import type { SourceIo } from './sources'
+import type { SourceIo } from './source-io'
 import { asObj, tryJson } from './wire'
 
 // Pinned: npm runs with install scripts off, and a new version is a reviewed bump, never a silent upgrade.

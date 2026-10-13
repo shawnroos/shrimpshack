@@ -3,7 +3,7 @@ import type { HttpInit, HttpResponse, ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
 import { bootstrapLinear, fromCapture, loadLinear } from '../hooks/sources/linear'
-import type { SourceIo } from '../hooks/sources'
+import type { SourceIo } from '../hooks/source-io'
 import { ISSUE_NO_PROJECT, ISSUE_WITH_PROJECT, PROJECT, openIssue } from './fixtures/linear/api'
 import { MCP_ISSUE, MCP_PROJECT } from './fixtures/linear/mcp'
 import { parseRef } from '../hooks/refs'

@@ -3,7 +3,7 @@ import { lookup, replay } from './capture'
 import type { Ref } from './refs'
 import { adapterFor } from './sources/adapter'
 import type { RemoteIo } from './sources/adapter'
-import type { SourceIo } from './sources'
+import type { SourceIo } from './source-io'
 import { withRemoteMedia } from './sources/web'
 
 export type { RemoteIo } from './sources/adapter'

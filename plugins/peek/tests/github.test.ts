@@ -3,7 +3,7 @@ import type { ProcessRunResult } from 'claude-code'
 
 import type { Captured } from '../hooks/capture'
 import { ciSummary, ciTone, fromCapture, loadGithub, resolveNumber } from '../hooks/sources/github'
-import type { SourceIo } from '../hooks/sources'
+import type { SourceIo } from '../hooks/source-io'
 import { checks, conversation, issueList, issueView, issuesApiIssue, issuesApiPull, mcpPullRead, pullList, pullView, repoView } from './fixtures/github/items'
 import type { Loaded } from '../types'
 import { exited, meta, record, ref } from './fixtures/results'

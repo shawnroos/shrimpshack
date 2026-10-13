@@ -2,8 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { RemoteFailure } from '../types'
-import type { SourceIo } from '../hooks/sources'
-import { hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/sources'
+import type { SourceIo } from '../hooks/source-io'
+import { hasCurl, httpText, linearPaged, linearQuery, probe, runGh } from '../hooks/source-io'
 import { failureText } from '../hooks/sources/adapter'
 import { exited } from './fixtures/results'
 
