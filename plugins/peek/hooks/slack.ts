@@ -2,6 +2,8 @@ import type { CaptureIo } from './capture'
 import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
 import type { SourceIo } from './sources'
+import { asObj, asStr } from './wire'
+import type { Json } from './wire'
 import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
 
 export type SlackIo = Pick<SourceIo, 'sessionId' | 'run'> &
@@ -44,20 +46,12 @@ const cliPaths = new Map<string, Promise<string | null>>()
 const filePictures = new Map<string, Promise<string | undefined>>()
 const avatarFiles = new Map<string, Promise<string | undefined>>()
 
-type Obj = Record<string, unknown>
 type Unavailable = { ok: false; failure: 'unavailable' }
 
 function isUnavailable(result: Loaded | Unavailable): result is Unavailable {
   return !result.ok && result.failure === 'unavailable'
 }
 
-function obj(value: unknown): Obj | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Obj) : null
-}
-
-function str(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
 
 function inline(text: string): string {
   return text
@@ -222,8 +216,8 @@ export function threadRecord(ref: SlackThreadRef, thread: SlackThread, channelNa
 
 function blockText(content: unknown[]): string {
   return content
-    .map(block => obj(block))
-    .filter((block): block is Obj => block?.type === 'text' && typeof block.text === 'string')
+    .map(block => asObj(block))
+    .filter((block): block is Json => block?.type === 'text' && typeof block.text === 'string')
     .map(block => block.text as string)
     .join('\n')
 }
@@ -231,7 +225,7 @@ function blockText(content: unknown[]): string {
 // The server wraps its transcript in {"messages": "...", "pagination_info": "..."}; a bare transcript is read as-is.
 function unwrap(text: string): { messages: string; more: boolean } {
   try {
-    const parsed = obj(JSON.parse(text))
+    const parsed = asObj(JSON.parse(text))
     if (parsed && typeof parsed.messages === 'string') {
       return { messages: parsed.messages, more: /there are more messages/i.test(String(parsed.pagination_info ?? '')) }
     }
@@ -269,7 +263,7 @@ function sizeLabel(bytes: number): string {
 async function filePicture(io: SlackIo, server: string, file: RemoteFile): Promise<string | undefined> {
   const answer = await io.mcpCall(server, 'slack_read_file', { file_id: file.id }).catch(() => null)
   if (!answer || answer.isError) return undefined
-  const image = answer.content.map(block => obj(block)).find(block => block?.type === 'image' && typeof block.data === 'string')
+  const image = answer.content.map(block => asObj(block)).find(block => block?.type === 'image' && typeof block.data === 'string')
   const ext = IMAGE_EXT[String(image?.mimeType ?? file.type)]
   if (!image || !ext) return undefined
   const path = `${SCRATCH}/slack-${file.id}.${ext}`
@@ -304,7 +298,7 @@ async function searchedAvatar(io: SlackIo, server: string, one: SlackMessage): P
   const raw = blockText(answer.content)
   let results = raw
   try {
-    const parsed = obj(JSON.parse(raw))
+    const parsed = asObj(JSON.parse(raw))
     if (parsed && typeof parsed.results === 'string') results = parsed.results
   } catch {}
   const mine = new RegExp(`^User ID: ${one.userId}\\s*$`, 'm')
@@ -379,34 +373,34 @@ async function findCli(io: SlackIo): Promise<string | null> {
   return pending
 }
 
-async function cliApi(io: SlackIo, bin: string, args: readonly string[]): Promise<{ ok: true; body: Obj } | { ok: false; failure: FailureKind | 'unavailable' }> {
+async function cliApi(io: SlackIo, bin: string, args: readonly string[]): Promise<{ ok: true; body: Json } | { ok: false; failure: FailureKind | 'unavailable' }> {
   const ran = await io.run([bin, 'api', ...args], { timeoutMs: CLI_TIMEOUT_MS }).catch(() => null)
   if (!ran) return { ok: false, failure: 'offline' }
-  let body: Obj | null = null
+  let body: Json | null = null
   try {
-    body = obj(JSON.parse(ran.stdout))
+    body = asObj(JSON.parse(ran.stdout))
   } catch {}
   if (!body) return { ok: false, failure: ran.exitCode === 0 ? 'query-bug' : 'unavailable' }
-  if (body.ok !== true) return { ok: false, failure: slackFailure(str(body.error) ?? '') }
+  if (body.ok !== true) return { ok: false, failure: slackFailure(asStr(body.error) ?? '') }
   return { ok: true, body }
 }
 
-function cliAuthor(message: Obj): string {
-  const profile = obj(message.user_profile)
-  return str(profile?.real_name) ?? str(profile?.display_name) ?? str(obj(message.bot_profile)?.name) ?? str(message.username) ?? str(message.user) ?? 'Unknown'
+function cliAuthor(message: Json): string {
+  const profile = asObj(message.user_profile)
+  return asStr(profile?.real_name) ?? asStr(profile?.display_name) ?? asStr(asObj(message.bot_profile)?.name) ?? asStr(message.username) ?? asStr(message.user) ?? 'Unknown'
 }
 
-function cliFiles(message: Obj): RemoteFile[] {
+function cliFiles(message: Json): RemoteFile[] {
   const raw = Array.isArray(message.files) ? message.files : []
   return raw
-    .map(one => obj(one))
-    .filter((one): one is Obj => one !== null && typeof one.id === 'string' && /^F[A-Z0-9]+$/.test(one.id))
-    .map(one => ({ id: one.id as string, name: str(one.name) ?? (one.id as string), type: str(one.mimetype) ?? 'file', size: typeof one.size === 'number' ? sizeLabel(one.size) : '' }))
+    .map(one => asObj(one))
+    .filter((one): one is Json => one !== null && typeof one.id === 'string' && /^F[A-Z0-9]+$/.test(one.id))
+    .map(one => ({ id: one.id as string, name: asStr(one.name) ?? (one.id as string), type: asStr(one.mimetype) ?? 'file', size: typeof one.size === 'number' ? sizeLabel(one.size) : '' }))
 }
 
-function cliMessage(one: Obj): SlackMessage {
-  const user = str(one.user)
-  const avatarUrl = str(obj(one.user_profile)?.image_72)
+function cliMessage(one: Json): SlackMessage {
+  const user = asStr(one.user)
+  const avatarUrl = asStr(asObj(one.user_profile)?.image_72)
   return {
     author: cliAuthor(one),
     ts: one.ts as string,
@@ -427,12 +421,12 @@ async function loadViaCli(io: SlackIo, ref: SlackThreadRef, channel: string, ts:
   if (!replies.ok) return { ok: false, failure: replies.failure }
   const raw = Array.isArray(replies.body.messages) ? replies.body.messages : []
   const messages = raw
-    .map(one => obj(one))
-    .filter((one): one is Obj => one !== null && typeof one.ts === 'string')
+    .map(one => asObj(one))
+    .filter((one): one is Json => one !== null && typeof one.ts === 'string')
     .map(one => cliMessage(one))
   const [parent, ...rest] = messages
   if (!parent) return { ok: false, failure: 'query-bug' }
-  const name = info.ok ? str(obj(info.body.channel)?.name) : undefined
+  const name = info.ok ? asStr(asObj(info.body.channel)?.name) : undefined
   const thread = { parent, replies: rest, hasMore: replies.body.has_more === true }
   const record = await withPictures(io, threadRecord(ref, thread, name), messages, undefined)
   return { ok: true, record, tier: 'cli', fetchedAt: now }
