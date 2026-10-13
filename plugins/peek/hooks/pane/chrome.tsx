@@ -19,8 +19,8 @@ const MAX_CPL = 104
 export function geometryOf(bodyColumns: number) {
   const columns = Math.max(20, bodyColumns - 1)
   const isNarrow = bodyColumns < NARROW
-  const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 6))
-  const pageWidth = isNarrow ? columns : textWidth + 4
+  const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 4))
+  const pageWidth = columns
   return { columns, isNarrow, textWidth, pageWidth }
 }
 
@@ -174,7 +174,7 @@ export async function frame(ctx: DrawContext, actions: PaneActions, lists: MenuL
       width={bodyColumns}
     >
       <Box height={HEADER_ROWS} />
-      <Box flexDirection="column" width={ctx.pageWidth} backgroundColor={screen.pageBg ?? C.panelBg} paddingX={ctx.isNarrow ? 0 : 2} paddingY={1}>
+      <Box flexDirection="column" alignSelf="flex-start" alignItems="center" width={ctx.pageWidth} backgroundColor={screen.pageBg ?? C.panelBg} paddingX={ctx.isNarrow ? 0 : 2} paddingY={1}>
         <Box flexDirection="column" width={ctx.textWidth}>
           {screen.content}
         </Box>

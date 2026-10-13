@@ -88,7 +88,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
       liveSession.viewport = viewport
       void liveSession.live?.command('resize', viewport)
     }
-    liveSession.geom = { left: Math.floor((ctx.bodyColumns - pageWidth) / 2) + (isNarrow ? 0 : 2), top: HEADER_ROWS + 1 - offset, columns: textWidth, rows: liveRows }
+    liveSession.geom = { left: isNarrow ? 0 : 2 + Math.floor((pageWidth - 4 - textWidth) / 2), top: HEADER_ROWS + 1 - offset, columns: textWidth, rows: liveRows }
     body = (
       <Box width={textWidth} height={liveRows}>
         <Image

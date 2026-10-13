@@ -304,8 +304,8 @@ test('a group card spans the full text width at 60 and 100 columns', async ($, o
   for (const bodyColumns of [60, 100]) {
     const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...PANE_PROPS, bodyColumns }, requestId: 'peek' })
     await ui.press({ key: 'mode-groups' })
-    expect((await ui.find({ key: 'groups-0' }))?.props.width).toBe(bodyColumns - 7)
-    expect((await ui.find({ key: 'groups-morebar-0' }))?.props.width).toBe(bodyColumns - 11)
+    expect((await ui.find({ key: 'groups-0' }))?.props.width).toBe(bodyColumns - 5)
+    expect((await ui.find({ key: 'groups-morebar-0' }))?.props.width).toBe(bodyColumns - 9)
     await ui.unmount()
   }
 })

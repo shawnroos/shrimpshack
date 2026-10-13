@@ -1044,12 +1044,12 @@ const EXPECTED: Record<string, Expected> = {
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Live,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Refresh,copy|Copy link,close|Close"
       ],
       "next": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "prev": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":-80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
@@ -1085,37 +1085,37 @@ const EXPECTED: Record<string, Expected> = {
         "live frame"
       ],
       "input j": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "input down": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "input k": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":-80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "input up": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":-80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "input  ": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":430}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":430}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "input pagedown": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":430}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":430}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "input pageup": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-430}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":-430}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
@@ -1240,12 +1240,12 @@ const EXPECTED: Record<string, Expected> = {
         "live frame"
       ],
       "next": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],
       "prev": [
-        "post input {\"events\":[{\"type\":\"scroll\",\"x\":372,\"y\":269,\"dy\":-80}]}",
+        "post input {\"events\":[{\"type\":\"scroll\",\"x\":380,\"y\":269,\"dy\":-80}]}",
         "footer mode-view|Peek,mode-recent|Recent,mode-gallery|Gallery,mode-groups|Groups,live|Reader,next|Down,prev|Up,star|Star,open|Open in browser,refresh|Reload,back|Back,copy|Copy link,close|Close",
         "live frame"
       ],

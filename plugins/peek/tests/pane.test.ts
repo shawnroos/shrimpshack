@@ -181,9 +181,10 @@ test('a narrow pane drops the tabs and the side spacing but keeps the hidden key
   expect(await ui.find({ text: /100% · § Handoff/ })).toBeDefined()
   await ui.unmount()
   const wide = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...props, bodyColumns: 200 }, requestId: 'peek' })
-  const page = (await wide.drawn()) as unknown as { children: { props: { width?: number; paddingX?: number } }[] }
+  const page = (await wide.drawn()) as unknown as { children: { props: { width?: number; paddingX?: number }; children?: { props: { width?: number } }[] }[] }
   const card = page.children.find(child => child.props.paddingX === 2)
-  expect(card?.props.width).toBe(104 + 4)
+  expect(card?.props.width).toBe(199)
+  expect(card?.children?.[0]?.props.width).toBe(104)
   await wide.unmount()
 })
 
