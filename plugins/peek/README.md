@@ -8,7 +8,7 @@ transcript.
 
 | File | In the pane |
 |---|---|
-| Markdown | One scrolling page with styled headings, quotes, code, diagrams, images and clickable tasks |
+| Markdown | One scrolling page with styled headings, quotes, tables, code, diagrams, images and clickable tasks |
 | Code | Syntax colours and line numbers |
 | Images (PNG, JPG, GIF, WebP, HEIC, SVG) | The picture, on terminals that draw images |
 | Mermaid (`.mmd`, or fenced in markdown) | Drawn as text boxes and arrows when `mermaid-ascii` is installed |

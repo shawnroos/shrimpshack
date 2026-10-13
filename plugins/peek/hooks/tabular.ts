@@ -55,10 +55,12 @@ export function columnWidths(rows: readonly (readonly string[])[], width: number
   return widths
 }
 
-export function fitCell(text: string, width: number): string {
+export function fitCell(text: string, width: number, align: 'left' | 'right' | 'center' = 'left'): string {
   const flat = text.replace(/\s+/g, ' ')
-  if (flat.length <= width) return flat.padEnd(width)
-  return `${flat.slice(0, Math.max(0, width - 1))}…`
+  if (flat.length > width) return `${flat.slice(0, Math.max(0, width - 1))}…`
+  if (align === 'right') return flat.padStart(width)
+  if (align === 'center') return flat.padStart(flat.length + Math.floor((width - flat.length) / 2)).padEnd(width)
+  return flat.padEnd(width)
 }
 
 function jsonSummary(value: unknown): string {

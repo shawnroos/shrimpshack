@@ -129,3 +129,28 @@ test('segmentsOf groups consecutive linked tasks into one block with depth and s
     { href: 'file:///w/t.md', line: 4, isDone: false, text: 'three', depth: 0 },
   ])
 })
+
+describe('tables', () => {
+  test('segmentsOf lifts a pipe table with its alignment, cells cleaned of inline marks', () => {
+    const doc = ['intro', '| Name | Count | Note |', '|:-----|------:|:----:|', '| **a** | 1 | x \\| y |', '| `b` | 22 |', 'after'].join('\n')
+    const parts = segmentsOf(doc)
+    expect(parts.map(one => one.kind)).toEqual(['markdown', 'table', 'markdown'])
+    expect(parts[1]).toEqual({
+      kind: 'table',
+      header: ['Name', 'Count', 'Note'],
+      align: ['left', 'right', 'center'],
+      rows: [['a', '1', 'x | y'], ['b', '22', '']],
+    })
+  })
+
+  test('a pipe line without a delimiter row stays prose, and a table in a fence stays code', () => {
+    expect(segmentsOf('a | b\nc | d').map(one => one.kind)).toEqual(['markdown'])
+    expect(segmentsOf('```\n| a | b |\n|---|---|\n```').map(one => one.kind)).toEqual(['code'])
+  })
+
+  test('a table without outer pipes still parses, and a blank line ends it', () => {
+    const parts = segmentsOf('a | b\n--- | ---\n1 | 2\n\nafter')
+    expect(parts.map(one => one.kind)).toEqual(['table', 'markdown'])
+    expect(parts[0]?.kind === 'table' && parts[0].rows).toEqual([['1', '2']])
+  })
+})

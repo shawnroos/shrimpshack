@@ -542,6 +542,21 @@ test('the hover star paints over Recent rows and every row of Gallery cards, and
   await ui.unmount()
 })
 
+test('a markdown table draws as aligned columns under an accent header', async ($, on) => {
+  fakeDisk(on)
+  FILES['/repo/notes/table.md'] = ['# Plan', '', '| Step | Owner | Days |', '|------|-------|-----:|', '| Build | **Ana** | 3 |', '| Ship | Bo | 12 |'].join('\n')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+
+  await $.command.run({ command: 'peek', args: '/repo/notes/table.md' } as never)
+  await ui.redraw()
+  const page = JSON.stringify(await ui.drawn())
+  expect(page).toMatch(/\["Step +Owner +Days"\]/)
+  expect(page).toMatch(/\["Build +Ana +   3"\]/)
+  expect(page).toMatch(/\["Ship +Bo +  12"\]/)
+  expect(page).not.toContain('|------|')
+  await ui.unmount()
+})
+
 test('an html file reads as markdown, and a code file opened at a line starts ten lines above it', async ($, on) => {
   fakeDisk(on)
   FILES['/repo/site/page.html'] = '<html><body><h1>Hello page</h1><p>Some <b>bold</b> words</p></body></html>'

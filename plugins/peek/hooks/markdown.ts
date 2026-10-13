@@ -244,6 +244,23 @@ export type DocPart =
   | { kind: 'heading'; level: number; text: string }
   | { kind: 'quote'; text: string }
   | { kind: 'tasks'; items: TaskItem[] }
+  | { kind: 'table'; header: string[]; align: CellAlign[]; rows: string[][] }
+
+export type CellAlign = 'left' | 'right' | 'center'
+
+const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+// A `\|` inside a cell is a literal pipe, not a column break.
+function tableCells(line: string): string[] {
+  const inner = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '')
+  return inner.split(/(?<!\\)\|/).map(cell => plainInline(cell.trim().replace(/\\\|/g, '|')))
+}
+
+function cellAlign(rule: string): CellAlign {
+  const cell = rule.trim()
+  if (cell.startsWith(':') && cell.endsWith(':')) return 'center'
+  return cell.endsWith(':') ? 'right' : 'left'
+}
 
 export function plainInline(text: string): string {
   return text
@@ -269,6 +286,7 @@ export function segmentsOf(page: string): DocPart[] {
     if (tasks.length) out.push({ kind: 'tasks', items: tasks })
     tasks = []
   }
+  let table: Extract<DocPart, { kind: 'table' }> | null = null
   let code: { lang: string; info: string; lines: string[] } | null = null
   for (const line of page.split('\n')) {
     const fence = /^\s*(```|~~~)\s*([\w+#.-]*)\s*(.*)$/.exec(line)
@@ -280,6 +298,26 @@ export function segmentsOf(page: string): DocPart[] {
         code.lines.push(line)
       }
       continue
+    }
+    if (table) {
+      if (line.includes('|') && line.trim()) {
+        const cells = tableCells(line)
+        table.rows.push(table.header.map((_, c) => cells[c] ?? ''))
+        continue
+      }
+      out.push(table)
+      table = null
+    }
+    const header = buffer[buffer.length - 1]
+    if (header?.includes('|') && TABLE_RULE.test(line) && line.includes('-')) {
+      const rule = tableCells(line)
+      const names = tableCells(header)
+      if (rule.length === names.length) {
+        buffer.pop()
+        flush()
+        table = { kind: 'table', header: names, align: rule.map(cellAlign), rows: [] }
+        continue
+      }
     }
     if (fence) {
       flush()
@@ -330,6 +368,7 @@ export function segmentsOf(page: string): DocPart[] {
   flush()
   flushQuote()
   flushTasks()
+  if (table) out.push(table)
   if (code) out.push({ kind: 'code', lang: code.lang, info: code.info, text: code.lines.join('\n') })
   return out
 }

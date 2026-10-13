@@ -4,6 +4,7 @@ import { diagramType, plainInline, segmentsOf } from '../../../markdown'
 import { IMAGE_ROWS, chunkMarkdown, estimateRows, imageBox, taskRows } from '../../../measure'
 import { fullText } from '../../../loaders'
 import { pressLink } from '../../../navigation'
+import { columnWidths, fitCell } from '../../../tabular'
 import type { NavIo } from '../../../navigation'
 import { fileHref } from '../../../paths'
 import { ICON } from '../../../theme'
@@ -124,6 +125,24 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
         </Box>,
       )
       note(part.items.reduce((rows, item) => rows + Math.max(1, Math.ceil(item.text.length / Math.max(10, textWidth - 2 - item.depth * 2))), 0))
+      continue
+    }
+    if (part.kind === 'table') {
+      const { header, align, rows } = part
+      const widths = columnWidths([header, ...rows], textWidth)
+      const line = (row: readonly string[]) => widths.map((width, c) => fitCell(row[c] ?? '', width, align[c])).join('  ')
+      drawnParts.push(
+        <Box key={`table-${index}`} flexDirection="column" width={textWidth}>
+          <Text color={C.accent} bold wrap="truncate-end">{line(header)}</Text>
+          <Text color={C.surface1} wrap="truncate-end">{widths.map(width => '─'.repeat(width)).join('  ')}</Text>
+          {rows.map((row, r) => (
+            <Text key={`table-${index}-row-${r}`} color={isMenuOpen ? C.overlay1 : C.text} backgroundColor={r % 2 ? C.cardBg : undefined} wrap="truncate-end">
+              {line(row)}
+            </Text>
+          ))}
+        </Box>,
+      )
+      note(2 + rows.length)
       continue
     }
     if (part.kind === 'quote') {
