@@ -385,6 +385,17 @@ export function outlineOf(page: Page): Outline {
   }
 }
 
+export type FocusItem = { section: number; title: string; href?: string }
+
+// The pane's arrow order: drawPage pushes nav items section by section, in item order, for these three blocks only.
+export function focusItemsOf(page: Page): FocusItem[] {
+  return page.sections.flatMap(({ block }, section): FocusItem[] => {
+    if (block.type === 'cards' || block.type === 'list') return block.items.map(one => ({ section, title: one.title, ...optional('href', one.href) }))
+    if (block.type === 'table') return block.rows.map(row => ({ section, title: row.cells.join(' | '), ...optional('href', row.href) }))
+    return []
+  })
+}
+
 function mutatingWord(tool: string): string | undefined {
   const words = tool
     .replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')

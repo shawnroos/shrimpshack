@@ -590,7 +590,7 @@ test('a media item whose download fails draws an [open image] link, and the page
   await ui.unmount()
 })
 
-test('validatePage production callers: the open and refresh paths both refuse a page outside the vocabulary, through runRecipe', async (driver, on) => {
+test('validatePage production callers: the open path, the refresh path and check_recipe all refuse a page outside the vocabulary, through runRecipe', async (driver, on) => {
   let block: Page = { type: 'markdown', text: 'fine' }
   await paneWorld(on, { files: figmaRecipe(), approve: ['figma-files'], pages: () => answer({ title: 'Checked', sections: [{ block }] }) })
   block = { type: 'chart', points: [1, 2] }
@@ -608,6 +608,11 @@ test('validatePage production callers: the open and refresh paths both refuse a 
   expect(JSON.stringify(await ui.drawn())).toContain('sections[0].block.items[0].href')
   expect(await ui.find({ text: /Local service/ })).toBeUndefined()
   await ui.unmount()
+  block = { type: 'chart', points: [1, 2] }
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  const checked = (await driver.tool.call({ tool: 'mcp__peek__check_recipe', tool_use_id: 'check-callers', recipe: 'figma-files', link: FIGMA } as never)) as { result?: unknown }
+  expect(String(checked.result)).toMatch(/^Check failed/)
+  expect(String(checked.result)).toContain('"path":"sections[0].block.type"')
   expect(runRecipe.toString()).toContain('validatePage(')
 })
 
