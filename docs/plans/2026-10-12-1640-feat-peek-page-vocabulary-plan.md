@@ -16,7 +16,7 @@ deepened: 2026-10-12
 - **Objective:** An agent can give peek a readable, navigable page for a document type peek has never seen. The page works in every session of that user (a recipe that calls an MCP tool works wherever that server is connected), and adding the type edits no peek file and needs no peek release.
 - **Means:** A closed page vocabulary inside peek, user-level recipes that return pages in it, person-only approval kept in peek's own store, and a skill shipped with peek that teaches the agent the whole loop (KTD1–KTD11).
 - **Product authority:** Shawn. The Product Contract wins on behaviour; Key Technical Decisions win on mechanism. New top-level tabs, sharing recipes, recipes for local files, and moving the built-in pages onto the vocabulary are not active scope.
-- **Open blockers:** PR #102 (Slack threads as pages) must merge before this work starts; then rebase onto `main` (KTD11).
+- **Open blockers:** None. PR #102 (Slack threads as pages) merged on 2026-10-13 and this branch is rebased onto it (KTD11).
 - **Execution profile:** Test-first per unit with observed red, pane tests through `claude-code/testing`, then a live look in a real session after `/reload-plugins`.
 - **Stop conditions:** Stop and ask Shawn if a mod plugin cannot ship a skill at runtime and the fallback in KTD9 is not enough, if the U8 hoist cannot keep the existing pane tests green, or if a settled decision proves infeasible.
 - **Who finishes:** `ce-work` implements and verifies; Shawn approves the fresh-agent eval page and the PR.
