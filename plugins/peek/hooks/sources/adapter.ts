@@ -16,7 +16,6 @@ export type SourceId = 'github' | 'linear' | 'slack' | 'web'
 
 export type FailureText = { title: string; hint: string }
 
-// How a source reads a captured MCP call: which servers it claims, the item a call names, and what it learns.
 export type CaptureReader = {
   servers: RegExp
   refOf: (name: string, args: Record<string, unknown>, text: string) => Ref | null
