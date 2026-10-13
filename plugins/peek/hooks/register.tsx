@@ -3810,9 +3810,13 @@ export const register: Register = on => {
     const embed = (key: string, icon: string, label: string, detail: string, color: string, child: unknown) => (
       <Box key={key} flexDirection="column" width={textWidth} backgroundColor={C.appBg} paddingX={1} paddingY={1}>
         <Box flexDirection="row" width={textWidth - 2}>
-          <Text color={color}>{`${icon} `}</Text>
-          <Text color={color} bold>{label}</Text>
-          <Text color={C.overlay1} wrap="truncate-end">{detail ? ` ${detail}` : ''}</Text>
+          <Box flexShrink={0}>
+            <Text color={color}>{`${icon} `}</Text>
+            <Text color={color} bold>{label}</Text>
+          </Box>
+          <Box flexShrink={1}>
+            <Text color={C.overlay1} wrap="truncate-end">{detail ? ` ${detail}` : ''}</Text>
+          </Box>
         </Box>
         <Text color={C.panelBg} wrap="truncate-end">{'─'.repeat(Math.max(1, textWidth - 2))}</Text>
         <Box flexDirection="column" width={textWidth - 2}>
@@ -3918,7 +3922,7 @@ export const register: Register = on => {
                 !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink($, link.href)} />
               )}
               {one?.play && (
-                <Button key={`media-play-${index}`} label="\u{f04b} Play video" plain onPress={() => void (isWebUrl(url) && $.process.run(['open', url]).catch(() => undefined))} />
+                <Button key={`media-play-${index}`} label={'\u{f04b} Play video'} plain onPress={() => void (isWebUrl(url) && $.process.run(['open', url]).catch(() => undefined))} />
               )}
             </Box>
           )),

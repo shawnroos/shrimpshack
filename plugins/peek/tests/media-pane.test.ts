@@ -49,6 +49,8 @@ test('a video in a reader page shows a play button that opens it in the browser'
   expect(await ui.find({ text: /Intro text for the post/ })).toBeDefined()
   expect(await ui.find({ text: /^VIDEO$/ })).toBeDefined()
   expect(await ui.find({ text: /Closing text/ })).toBeDefined()
+  expect((await ui.find({ key: 'media-play-0' }))?.props.label).toBe('\u{f04b} Play video')
+  expect(JSON.stringify(await ui.drawn())).not.toContain('\\\\u{')
   await ui.press({ key: 'media-play-0' })
   expect(w.ran.at(-1)).toEqual(['open', VIDEO])
   await ui.unmount()
