@@ -214,6 +214,12 @@ describe('linearPaged', () => {
     expect(JSON.parse(fetches[1]?.init?.body ?? '{}').variables).toEqual({ team: 't', first: 50, after: '50' })
   })
 
+  test('a next page with no cursor stops after one request and says so', async () => {
+    const { $, fetches } = keyed({ fetch: () => answer(200, { data: { issues: { nodes: [{ id: 0 }], pageInfo: { hasNextPage: true, endCursor: null } } } }) })
+    expect(await seen(linearPaged($, ISSUE, {}, pick))).toEqual({ ok: true, nodes: [{ id: 0 }], isPartial: true })
+    expect(fetches.length).toBe(1)
+  })
+
   test('more than ten pages stops at ten and says so', async () => {
     const { $, fetches } = keyed({ fetch: pages(5000) })
     const result = await seen(linearPaged($, ISSUE, {}, pick))
