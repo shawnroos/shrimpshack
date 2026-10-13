@@ -1,6 +1,6 @@
 import type { RenderChildren } from 'claude-code'
 
-import type { TablePart } from '../../../markdown'
+import type { ChecklistItem, TablePart } from '../../../markdown'
 import { IMAGE_ROWS, imageBox } from '../../../measure'
 import { columnWidths, fitCell, fitsWidth } from '../../../tabular'
 import { nav } from '../../../navigation'
@@ -109,6 +109,24 @@ export function TableBlock(ctx: DrawContext, key: string, { header, align, rows 
     </Box>
   )
   return { node, rows: 2 + rows.length }
+}
+
+export function ChecklistBlock(ctx: DrawContext, key: string, items: readonly ChecklistItem[], onLink: (href: string) => void, width = ctx.textWidth): { node: RenderChildren; rows: number } {
+  const { Box, Text, Markdown, C, isMenuOpen } = ctx
+  const node = (
+    <Box key={key} flexDirection="column" width={width}>
+      {items.map((item, i) => (
+        <Box key={`${key}-item-${i}`} flexDirection="row" marginLeft={item.depth * 2}>
+          <Text color={item.isDone ? C.overlay0 : C.accent}>{item.isDone ? '\u{f0135} ' : '\u{f0131} '}</Text>
+          <Box flexShrink={1}>
+            <Markdown dimColor={isMenuOpen || item.isDone} key={`${key}-text-${i}`} text={item.isDone ? `~~${item.text}~~` : item.text} onLinkPress={link => onLink(link.href)} />
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
+  const rows = items.reduce((sum, item) => sum + Math.max(1, Math.ceil(item.text.length / Math.max(10, width - 2 - item.depth * 2))), 0)
+  return { node, rows }
 }
 
 export type Blocks = { drawnParts: RenderChildren[]; partRows: number[]; partHeadings: string[]; note: (rows: number, heading?: string) => void }

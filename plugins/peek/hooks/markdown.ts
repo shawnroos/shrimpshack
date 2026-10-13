@@ -226,20 +226,42 @@ export function linkTasks(text: string, base: string): { text: string; done: num
   return { text: lines.join('\n'), done, total }
 }
 
-// For text peek cannot write back to, such as a pull request body: the same
-// glyphs as linkTasks, with no link to press.
-export function taskGlyphs(text: string): string {
+export type ChecklistItem = { depth: number; isDone: boolean; text: string }
+
+// For text peek cannot write back to, such as a pull request body. An indented
+// line under a task that is not itself a list item continues that task.
+export function splitChecklist(text: string): ({ kind: 'markdown'; text: string } | { kind: 'checklist'; items: ChecklistItem[] })[] {
+  const out: ({ kind: 'markdown'; text: string } | { kind: 'checklist'; items: ChecklistItem[] })[] = []
+  let buffer: string[] = []
+  let items: ChecklistItem[] = []
   let inFence = false
-  return text
-    .split('\n')
-    .map(line => {
-      if (/^\s*(```|~~~)/.test(line)) inFence = !inFence
-      const match = inFence ? null : TASK.exec(line)
-      if (!match) return line
-      const isDone = match[2] !== ' '
-      return `${match[1]}${isDone ? TASK_DONE : TASK_OPEN} ${isDone ? `~~${match[3]}~~` : match[3]}`
-    })
-    .join('\n')
+  const flush = () => {
+    if (buffer.join('').trim()) out.push({ kind: 'markdown', text: buffer.join('\n') })
+    buffer = []
+  }
+  const flushItems = () => {
+    if (items.length) out.push({ kind: 'checklist', items })
+    items = []
+  }
+  for (const line of text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence
+    const task = inFence ? null : TASK.exec(line)
+    if (task) {
+      flush()
+      items.push({ depth: Math.floor((task[1] ?? '').replace(/\t/g, '  ').search(/\S/) / 2), isDone: task[2] !== ' ', text: (task[3] ?? '').trim() })
+      continue
+    }
+    const last = items[items.length - 1]
+    if (last && !inFence && /^\s+\S/.test(line) && !/^\s*([-*+]|\d+[.)])\s/.test(line)) {
+      last.text = `${last.text} ${line.trim()}`
+      continue
+    }
+    flushItems()
+    buffer.push(line)
+  }
+  flushItems()
+  flush()
+  return out
 }
 
 export function toggleTaskLine(text: string, lineNumber: number): string | null {
@@ -379,6 +401,11 @@ export function segmentsOf(page: string): DocPart[] {
         text: isDone ? text.slice(2, -2) : text,
         depth: Math.floor((task[1] ?? '').replace(/\t/g, '  ').length / 2),
       })
+      continue
+    }
+    const lastTask = tasks[tasks.length - 1]
+    if (lastTask && /^\s+\S/.test(line) && !/^\s*([-*+]|\d+[.)])\s/.test(line)) {
+      lastTask.text = `${lastTask.text} ${line.trim()}`
       continue
     }
     if (tasks.length && line.trim() === '') {

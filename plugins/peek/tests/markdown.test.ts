@@ -154,3 +154,10 @@ describe('tables', () => {
     expect(parts[0]?.kind === 'table' && parts[0].rows).toEqual([['1', '2']])
   })
 })
+
+test('segmentsOf joins an indented continuation line onto the task above it', () => {
+  const linked = linkTasks('- [ ] one\n  more words\n- [x] two\n\nafter', 'file:///w/t.md').text
+  const parts = segmentsOf(linked)
+  expect(parts.map(one => one.kind)).toEqual(['tasks', 'markdown'])
+  expect(parts[0]?.kind === 'tasks' && parts[0].items.map(item => item.text)).toEqual(['one more words', 'two'])
+})

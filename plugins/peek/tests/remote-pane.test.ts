@@ -327,16 +327,20 @@ test('a table in a pull request body draws as aligned columns, and a table in a 
   await ui.unmount()
 })
 
-test('task lists in a pull request body draw as checkboxes, a done one struck through, and a fenced one stays as typed', async ($, on) => {
-  fakeWorld(on, { pull: { body: 'Follow-ups:\n\n- [ ] P2 \u2014 split `remoteBody`\n  - [X] nested done\n* [x] shipped\n\n```\n- [ ] in a fence\n```\n' } })
+test('task lists in a pull request body draw as a checklist: no bullet, continuation lines joined, done struck, fenced kept', async ($, on) => {
+  fakeWorld(on, { pull: { body: 'Follow-ups:\n\n- [ ] P2 \u2014 split `remoteBody`\n  into module functions.\n  - [X] nested done\n* [x] shipped\n\nAfter.\n\n```\n- [ ] in a fence\n```\n' } })
   await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
   const page = JSON.stringify(await ui.drawn())
-  expect(page).toContain('- \u{f0131} P2 \u2014 split `remoteBody`')
-  expect(page).toContain('  - \u{f0135} ~~nested done~~')
-  expect(page).toContain('* \u{f0135} ~~shipped~~')
+  expect(page).toContain('"text":"P2 \u2014 split `remoteBody` into module functions."')
+  expect(page).toContain('"text":"~~nested done~~"')
+  expect(page).toContain('"text":"~~shipped~~"')
+  expect(page).toContain('"marginLeft":2')
+  expect(page).toContain('\u{f0131} ')
+  expect(page).toContain('\u{f0135} ')
+  expect(page).not.toMatch(/[-*] (\[[ xX]\]|\u{f0131}|\u{f0135}) (P2|nested|shipped)/u)
   expect(page).toContain('- [ ] in a fence')
-  expect(page).not.toContain('- [ ] P2')
+  expect(page).toContain('After.')
   await ui.unmount()
 })
 

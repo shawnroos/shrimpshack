@@ -3,7 +3,7 @@ import { describeAge } from '../../../format'
 import { pixels } from '../../../images'
 import { colorFor, iconFor } from '../../../kinds'
 import { isWebUrl } from '../../../live'
-import { linkify, splitTables, taskGlyphs } from '../../../markdown'
+import { linkify, splitChecklist, splitTables } from '../../../markdown'
 import { chunkMarkdown, estimateRows, fitName } from '../../../measure'
 import { openFromPage, pressLink, refContext } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
@@ -13,7 +13,7 @@ import { ICON, META_ICON, mute } from '../../../theme'
 import { parseUrl } from '../../../wire'
 import type { DrawContext, PictureBudget } from '../../types'
 import { SectionRule, fitPicture } from '../../widgets'
-import { DiagramEmbed, Embed, TableBlock, fullWidthOf, newBlocks, settleBlocks } from './blocks'
+import { ChecklistBlock, DiagramEmbed, Embed, TableBlock, fullWidthOf, newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
 import { slackThread } from './slack'
 
@@ -100,10 +100,18 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     flush()
   }
   const markdownChunks = (key: string, text: string, heading: string, indent = 0) => {
-    if (!text.includes('|')) return proseChunks(key, text, heading, indent)
+    if (!text.includes('|') && !/\[[ xX]\]/.test(text)) return proseChunks(key, text, heading, indent)
     for (const [i, part] of splitTables(text).entries()) {
-      if (part.kind === 'markdown') proseChunks(`${key}-t${i}`, part.text, heading, indent)
-      else {
+      if (part.kind === 'markdown') {
+        for (const [j, piece] of splitChecklist(part.text).entries()) {
+          if (piece.kind === 'markdown') proseChunks(`${key}-t${i}-c${j}`, piece.text, heading, indent)
+          else {
+            const list = ChecklistBlock(ctx, `${key}-list-${i}-${j}`, piece.items, href => void pressLink(io, href), textWidth - indent)
+            drawnParts.push(<Box key={`${key}-t${i}-c${j}`} marginLeft={indent}>{list.node}</Box>)
+            note(list.rows, heading)
+          }
+        }
+      } else {
         const table = TableBlock(ctx, `${key}-table-${i}`, part, textWidth - indent)
         drawnParts.push(<Box key={`${key}-t${i}`} marginLeft={indent}>{table.node}</Box>)
         note(table.rows, heading)
@@ -115,7 +123,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     let chunks = blockMemo.get(memoKey)
     if (!chunks) {
       if (blockMemo.size > MAX_BLOCK_MEMO) blockMemo.clear()
-      chunks = chunkMarkdown(linkify(taskGlyphs(text), () => null, refs)).map(chunk => ({ chunk, rows: estimateRows(chunk, textWidth - indent) }))
+      chunks = chunkMarkdown(linkify(text, () => null, refs)).map(chunk => ({ chunk, rows: estimateRows(chunk, textWidth - indent) }))
       blockMemo.set(memoKey, chunks)
     }
     for (const [i, { chunk, rows }] of chunks.entries()) {
