@@ -66,7 +66,7 @@ Shawn wants to name a document type nobody has thought of yet and have an agent 
 **Recipes**
 
 - R6. A recipe lives in a user-level folder, loads in every session and project of that user, and survives peek updates and reinstalls.
-- R7. A recipe declares which web links (http or https) it handles and one data source: a script peek runs, or an MCP tool peek calls. The source returns one Page in the vocabulary.
+- R7. A recipe declares which web links (http or https) it handles and one data source: a script peek runs, or an MCP tool peek calls whose result a map script in the recipe turns into the page. The source returns one Page in the vocabulary.
 - R8. When a link matches both a specific built-in page type (GitHub, Linear, Slack) and a recipe, the built-in type wins unless the recipe declares that it overrides that type. The generic web page is a fallback: any matching recipe wins over it.
 - R9. A recipe page loads when opened and reloads when the person refreshes it. It refreshes on a timer only when the recipe opts in.
 - R10. When a recipe's source fails, times out, or returns something outside the vocabulary, peek shows an error page that names the recipe and the problem, never a captured copy or the generic web page.
@@ -161,7 +161,7 @@ flowchart TB
 - `docs/plans/2026-10-12-1002-feat-peek-groups-plan.md`: the list of what adding a mode touched.
 - `docs/solutions/architecture-patterns/a-skill-calling-mcp-tools-must-load-them-with-toolsearch-first.md`, `docs/solutions/architecture-patterns/command-and-skill-sharing-a-name.md`, `docs/solutions/security-issues/a-validator-proven-correct-and-proven-unused.md`, `docs/solutions/logic-errors/a-checks-scanner-crash-reads-as-a-clean-result.md`, `docs/solutions/performance-issues/live-frame-streaming-is-capped-by-bytes-per-second-the-sender-cannot-see.md`.
 
-**Product Contract preservation:** changed R7, R10, R14 and added R21, R22, AE6, AE7, after Shawn chose pane approval and confirmed the plan's scoping call-outs on 2026-10-12. Deepening sharpened R21 (the person sees what the recipe runs; approval cannot be written through peek or file edits) and added the forged-marker case to AE6, to carry out that same decision. Document review then narrowed R21's claim to peek's tools and file edits, added the check to R22, and qualified the Objective for MCP-backed recipes, all approved by Shawn on 2026-10-12. The Objective's wording was corrected to match Success Criteria. Planning questions moved into the Key Technical Decisions below.
+**Product Contract preservation:** changed R7, R10, R14 and added R21, R22, AE6, AE7, after Shawn chose pane approval and confirmed the plan's scoping call-outs on 2026-10-12. Deepening sharpened R21 (the person sees what the recipe runs; approval cannot be written through peek or file edits) and added the forged-marker case to AE6, to carry out that same decision. Document review then narrowed R21's claim to peek's tools and file edits, added the check to R22, and qualified the Objective for MCP-backed recipes, all approved by Shawn on 2026-10-12. The Objective's wording was corrected to match Success Criteria. Planning questions moved into the Key Technical Decisions below. On 2026-10-13, at Shawn's direction, R7 gained the MCP map script (U11), and U12 added the background builder.
 
 ---
 
@@ -170,7 +170,7 @@ flowchart TB
 ### Key Technical Decisions
 
 - KTD1. **Recipes are folders under `~/.local/share/claude-peek/recipes/<id>/`.** Each folder holds a `recipe.json` declaration and the script it runs. The id is the folder name and must match `^[a-z0-9-]{1,40}$` before it becomes a path. The location sits beside the groups store (`plugins/peek/hooks/groups.ts:295`) and outside the plugin, so reinstalls keep it (R6). Peek reads the folder on each link resolution, so edits apply on the next open (R11). The agent writes recipe files with its own tools; peek never writes into the folder, so no lease lock is needed.
-- KTD2. **Matching is host plus path glob, and overlap is decidable.** A recipe lists `match` entries of a host (`figma.com` or `*.figma.com`) and an optional path glob using only `*`, and may list `overrides` by family: `github`, `linear` or `slack`. Without regular expressions, the check can decide exactly when two recipes overlap: a host pattern intersects and neither path glob excludes the other (R19). If two approved recipes still overlap at open time, peek shows an error page naming both. Serves R7, R8, R19.
+- KTD2. **Matching is host plus path glob, and overlap is decidable.** A recipe lists `match` entries of a host (`figma.com` or `*.figma.com`) and an optional path glob using only `*`, and may list `overrides` by family: `github`, `linear` or `slack`. Without regular expressions, the check can decide exactly when two recipes overlap: a host pattern intersects and neither path glob excludes the other (R19). If two approved recipes still overlap at open time, peek shows an error page naming both. Serves R7, R8, R19. An exact host matches only itself: `figma.com` does not match `www.figma.com`, so a recipe lists both forms or uses `*.figma.com`.
 - KTD3. **Routing is a pure function, and recipe pages bypass the remote loader.**
   - `routeOf(link, recipes, { allowDraft })` returns one of four routes: built-in, recipe, web fallback, or conflict. It runs after `parseRef` (`plugins/peek/hooks/refs.ts:62`); a `web` result, or an overridden family, goes to the recipe.
   - Recipe loads never enter `remote.ts` `sourceFor`/`loadItem`. That code silently loads GitHub by default and replays session captures on failure, which would hide the error page (R10).
@@ -186,7 +186,7 @@ flowchart TB
     - The timeout is 20 s by default, and a recipe may raise it to 60 s. Output is capped at `$.process.run`'s 4 MiB.
   - **MCP source: fetch, then map.** It names a server, a tool and arguments (`{{url}}` replaced by the link), plus a required `map` script in the folder. Peek calls the tool through the engine's own connection, then runs the map script under the script rules above with `{ "text": …, "structured": … }` on stdin (the tool's joined text content and its structured content, when present); the script prints the Page. This mirrors the built-in pages: Slack fetches with `slack_read_thread` and maps with `parseThreadText`, GitHub and Linear fetch JSON and map it in `github.ts` and `linear.ts`. Real MCP tools return their own data, never a Page.
   - **The agent can write the map.** The agent calls the same MCP tool itself with a sample link, saves the result to `$TMPDIR` in the stdin format, and runs the map script against it locally until it prints a valid Page. When the map step fails, `check_recipe` returns the exact stdin peek gave the script (capped, under fetched data), so a live result that differs from the sample is visible.
-  - **Typed outcomes.** Every outcome has a type: started-failed, exit-nonzero, timeout, output-truncated, not-JSON, server-not-connected, tool-error, invalid-page (with paths), changed-during-run, and needs-permission.
+  - **Typed outcomes.** Every outcome has a type: started-failed, exit-nonzero, timeout, output-truncated, not-JSON, server-not-connected, tool-error, invalid-page (with paths), changed-during-run, needs-permission, invalid-recipe (the folder no longer loads, or `argv[0]` escapes it), and empty-result (an MCP tool returned nothing).
   - **Stderr.** The excerpt is capped at 500 characters, and the values of the declared variables are redacted from it.
   - **One runner for both callers.** The check tool and the pane call the same runner, so a recipe cannot pass the check and fail in the pane.
   - **Drafts run only what the session would run anyway.** Before running a draft source (`allowDraft`), the runner asks `$.tool.check` about the equivalent call: Bash with the script's argv in the recipe folder, or `mcp__<server>__<tool>` with the substituted arguments. It runs only on `allow`. On `ask` or `deny` it returns a needs-permission outcome naming the command or tool, so the agent asks the person to allow it. A draft therefore never gives the agent more reach than its own Bash and MCP permissions.
@@ -200,7 +200,7 @@ flowchart TB
     - It applies the same link rule to every link inside markdown text.
     - It requires `copy` text to be one line of at most 500 characters.
     - It allows at most 9 Actions, one per hotkey.
-  - **Who calls it.** The pane's load path, the check tool and the skill's example test. A test counts the production callers (`docs/solutions/security-issues/a-validator-proven-correct-and-proven-unused.md`).
+  - **Who calls it.** The pane's load path, the check tool and the skill's example test. A test proves each production path refuses what the validator refuses (`docs/solutions/security-issues/a-validator-proven-correct-and-proven-unused.md`). The test engine has no file access, so this is a behavioural proof, not a static count of call sites.
   - **The outline.** The same module produces the outline the tools return.
 - KTD6. **Hoist the block writers, then draw pages with them.**
   - Today `markdownBlocks`, `markdownChunks`, `mediaBlock`, `fitsPane` and `sectionRule` exist only inside the `if (current.remote)` branch (`plugins/peek/hooks/register.tsx:3343-3450`). `cardGrid` and `rowList` exist only inside the Recent/Gallery branch (`register.tsx:2957`, `3134`).
@@ -297,7 +297,8 @@ recipe.json
   match: [{ host: "figma.com", path: "/file/*" }, { host: "figma.com", path: "/design/*" }]
   overrides: []                       # any of github | linear | slack
   source: { run: ["./fetch.sh"], timeoutSeconds: 20, env: ["FIGMA_TOKEN"] }
-       or { mcp: { server: "figma", tool: "get_file", args: { url: "{{url}}" } } }
+       or { mcp: { server: "figma", tool: "get_file", args: { url: "{{url}}" } },
+            map: ["./map.py"], env: [] }    # map reads { text, structured } on stdin
   refreshMinutes: 0                   # 0 = on demand only
 
 Page (stdout of the source)
@@ -346,6 +347,7 @@ flowchart LR
 - **Code outside the folder.** The digest pins only the recipe folder. A script that calls code elsewhere can change behaviour without returning to draft; the approval surface warns on such paths (KTD7).
 - **Prompt injection back into the agent.** Tool results label page text as data and cap it (KTD8).
 - **MCP permission behaviour is unknown.** The engine says `$.mcp.call` never prompts, but the Slack branch says Slack tools ask. U3 treats a rejected call as server-not-connected, and the live look records what actually happens.
+- **`register.tsx` grew anyway.** Each new recipe type adds nothing to it, but this feature added about 590 lines of recipe I/O, loading and tool code. Moving it to its own module behind io ports is a follow-up (PR #106 residual findings).
 - **Hoist regressions.** U8 changes the code every remote page draws with. Mitigation: U8 changes no behaviour and is pinned by the existing `remote-pane`, `media-pane` and `groups-pane` tests.
 
 ### System-Wide Impact
@@ -635,7 +637,7 @@ flowchart LR
 - **Goal:** The build loop (sample, map, test, `check_recipe`, preview) runs in the background on Haiku 5.5, so the main session keeps working and the person only reviews and approves.
 - **Requirements:** R12, R13, R14, R20, R21; KTD8, KTD9.
 - **Dependencies:** U11.
-- **Files:** `plugins/peek/.claude-plugin/plugin.json` (agents key), `plugins/peek/agents/peek-recipe-builder.md` (new), `plugins/peek/skills/peek-recipes/SKILL.md`, `plugins/peek/README.md`, `plugins/peek/tests/skill-examples.test.ts` (shape checks).
+- **Files:** `plugins/peek/agents/peek-recipe-builder.md` (new; shipped from the `agents/` folder by convention, because `claude plugin validate` rejects `"agents": "./agents"` and plugins in this repo declare no key. If the live look shows no agent, declare the array form `["./agents/peek-recipe-builder.md"]`), `plugins/peek/skills/peek-recipes/SKILL.md`, `plugins/peek/README.md`, `plugins/peek/tests/skill-examples.test.ts` (shape checks).
 - **Approach:**
   1. First prove a mod plugin's agent loads at runtime (manifest key, `/reload-plugins`, agent listed). If it does not, the skill dispatches a general background agent pinned to `haiku` with the same brief, and this file becomes that brief.
   2. The agent definition: `model: haiku`; tools limited to ToolSearch, `mcp__peek__check_recipe`, `mcp__peek__open`, Read, Write, Edit, and Bash for `python3`, `chmod` and the local map test. Its body is the loop: sample the source, write `recipe.json` and the map or script, test locally, repeat `check_recipe` until it passes or after five failed attempts, then `open` the draft preview.
@@ -723,6 +725,7 @@ Run plugin commands from `plugins/peek`, as its README documents.
 | Hoist safety | The same suite before and after U8, with no edits to existing test files | U8 changed no behaviour |
 | Mutation proof | Break one pinned line per new test file and watch it go red | The new tests can fail |
 | Personal lint | `/lint-router:lint-router` on the changed files | Changed JS/TS passes the personal overlay |
+| Skill example mirror | `python3 tests/mirror-skill-examples.py --check` | The skill's example recipes, sample pages and agent frontmatter match the test fixtures; `claude plugin test` cannot see this drift |
 | Live look | Sync to `~/.claude/mods/peek`, `/reload-plugins`, open a fixture recipe link | Loading, page, error page, draft preview, approval surface and approval work in a real pane; record whether an MCP recipe prompts for permission |
 | Skill load | Invoke the skill in a fresh session | A mod plugin's skill loads at runtime (KTD9) |
 | Fresh-agent eval | A new session with only the skill builds a recipe for a type peek does not handle | Success Criteria; `git status plugins/peek` stays clean |
