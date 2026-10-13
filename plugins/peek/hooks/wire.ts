@@ -12,6 +12,11 @@ export function asNum(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+export function asPositiveInt(value: unknown): number | null {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN
+  return Number.isInteger(number) && number > 0 ? number : null
+}
+
 export function asArr(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }

@@ -1,6 +1,7 @@
-import { itemKey, keyOf, LINEAR_KEY, parseRef } from './refs'
+import { githubAddressRef, itemKey, keyOf, LINEAR_KEY, parseRef } from './refs'
 import type { Ref, RefKind } from './refs'
-import { asObj, tryJson } from './wire'
+import { asObj, asPositiveInt, tryJson } from './wire'
+import { ghRead, ghSource } from './parsers/gh-argv'
 
 export type CaptureIo = {
   mcpCall: (server: string, tool: string, args: Record<string, unknown>) => Promise<{ content: unknown[]; isError: boolean }>
@@ -26,8 +27,6 @@ const RESERVED = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])
 const READ_PREFIX = /^(?:get|list|search)_/
 const READ_EXACT = new Set(['issue_read', 'pull_request_read'])
 const SLACK_READ = /^slack_(?:read|search)_/
-const SHELL_META = /[;&|`\n\r<>]|\$\(/
-const GH_API_WRITE = /^(?:-[^-]*[XfF]|--(?:method|field|raw-field|input)(?:=|$))/
 const REMOTE_URL = /https:\/\/(?:www\.)?(?:github\.com|linear\.app|[a-z0-9-]+\.slack\.com)\/[^\s"'<>)\]}\\,]+/g
 
 const store = new Map<string, Captured>()
@@ -41,33 +40,6 @@ function splitMcp(tool: string): { server: string; name: string } | null {
   const cut = rest.lastIndexOf('__')
   if (cut <= 0) return null
   return { server: rest.slice(0, cut), name: rest.slice(cut + 2) }
-}
-
-function words(command: string): string[] | null {
-  const out: string[] = []
-  const pattern = /'([^']*)'|"([^"\\$]*)"|(\S+)/g
-  for (const match of command.trim().matchAll(pattern)) {
-    const token = match[1] ?? match[2] ?? match[3] ?? ''
-    if (match[3] && /['"\\]/.test(token)) return null
-    out.push(token)
-  }
-  return out
-}
-
-type GhRead = { sub: 'pr' | 'issue' | 'repo' | 'api'; verb?: string; argv: string[] }
-
-function ghRead(command: unknown): GhRead | null {
-  if (typeof command !== 'string' || SHELL_META.test(command)) return null
-  if (!/^\s*(?:gh\s|'gh'|"gh")/.test(command)) return null
-  const argv = words(command)
-  if (!argv || argv[0] !== 'gh') return null
-  const [, sub, verb] = argv
-  if (sub === 'api') return argv.slice(2).some(token => GH_API_WRITE.test(token)) ? null : { sub, argv }
-  const hasJson = argv.some(token => token === '--json' || token.startsWith('--json='))
-  if (!hasJson) return null
-  if ((sub === 'pr' || sub === 'issue') && (verb === 'view' || verb === 'list')) return { sub, verb, argv }
-  if (sub === 'repo' && verb === 'view') return { sub, verb, argv }
-  return null
 }
 
 export function isReadCall(tool: string, input: Record<string, unknown>): boolean {
@@ -122,16 +94,6 @@ function topLevelUrl(text: string): string | null {
   return typeof url === 'string' ? url : null
 }
 
-function asNumber(value: unknown): number | null {
-  const number = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN
-  return Number.isInteger(number) && number > 0 ? number : null
-}
-
-function githubAddress(owner: unknown, repo: unknown, number: number, isPull: boolean): Ref | null {
-  if (typeof owner !== 'string' || typeof repo !== 'string') return null
-  return parseRef(`https://github.com/${owner}/${repo}/${isPull ? 'pull' : 'issues'}/${number}`)
-}
-
 function linearSource(args: Record<string, unknown>, text: string): Ref | null {
   const id = [args.id, args.issueId, args.identifier, args.query].find((one): one is string => typeof one === 'string')
   const fromResult = topLevelUrl(text)
@@ -147,44 +109,11 @@ function linearSource(args: Record<string, unknown>, text: string): Ref | null {
 }
 
 function githubMcpSource(name: string, args: Record<string, unknown>): Ref | null {
-  const pull = asNumber(args.pullNumber ?? args.pull_number)
-  const issue = asNumber(args.issue_number ?? args.issueNumber)
-  if (pull !== null) return githubAddress(args.owner, args.repo, pull, true)
-  if (issue !== null) return githubAddress(args.owner, args.repo, issue, name.includes('pull'))
+  const pull = asPositiveInt(args.pullNumber ?? args.pull_number)
+  const issue = asPositiveInt(args.issue_number ?? args.issueNumber)
+  if (pull !== null) return githubAddressRef(args.owner, args.repo, pull, true)
+  if (issue !== null) return githubAddressRef(args.owner, args.repo, issue, name.includes('pull'))
   return null
-}
-
-function flagValue(argv: string[], long: string, short: string): string | undefined {
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i] ?? ''
-    if (token === long || token === short) return argv[i + 1]
-    if (token.startsWith(`${long}=`)) return token.slice(long.length + 1)
-  }
-  return undefined
-}
-
-function ghSource(gh: GhRead): Ref | null {
-  if (gh.sub === 'api') {
-    const path = gh.argv.slice(2).find(token => !token.startsWith('-') && /^\/?repos\//.test(token))
-    const match = path ? /^\/?repos\/([^/]+)\/([^/?]+)(?:\/(pulls|issues)\/(\d+))?\/?(?:\?.*)?$/.exec(path) : null
-    if (!match) return null
-    const [, owner, repo, section, number] = match
-    if (!section) return parseRef(`https://github.com/${owner}/${repo}`)
-    return githubAddress(owner, repo, Number(number), section === 'pulls')
-  }
-  if (gh.verb !== 'view') return null
-  const positional = gh.argv.slice(3).find((token, i, rest) => !token.startsWith('-') && !/^-/.test(rest[i - 1] ?? ''))
-  const repo = flagValue(gh.argv, '--repo', '-R')
-  if (gh.sub === 'repo') {
-    const target = positional ?? repo
-    if (!target) return null
-    return parseRef(/^https?:/.test(target) ? target : `https://github.com/${target}`)
-  }
-  if (!positional) return null
-  if (/^https?:/.test(positional)) return parseRef(positional)
-  const number = asNumber(positional.replace(/^#/, ''))
-  const [owner, name] = repo?.split('/') ?? []
-  return number !== null ? githubAddress(owner, name, number, gh.sub === 'pr') : null
 }
 
 function captureSourceOf(tool: string, args: Record<string, unknown>, text: string): { ref: Ref; source: CaptureSource; server?: string; name: string } | null {

@@ -103,6 +103,12 @@ export function parseRef(input: string, context: RefContext = {}): Ref | null {
   return null
 }
 
+// Built through parseRef so an owner or repo name GitHub would reject reads as no item.
+export function githubAddressRef(owner: unknown, repo: unknown, number: number, isPull: boolean): Ref | null {
+  if (typeof owner !== 'string' || typeof repo !== 'string') return null
+  return parseRef(`https://github.com/${owner}/${repo}/${isPull ? 'pull' : 'issues'}/${number}`)
+}
+
 export function familyOf(kind: string): 'gh' | 'linear' | 'slack' | 'web' {
   if (kind.startsWith('gh-')) return 'gh'
   if (kind.startsWith('linear-')) return 'linear'
