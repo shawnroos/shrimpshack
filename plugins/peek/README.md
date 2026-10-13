@@ -145,6 +145,53 @@ returns "not found", shows as **missing** and is counted in the status line.
 An item peek cannot load right now, such as a link that times out, shows as
 **unavailable**; it is not counted as missing.
 
+## Recipes
+
+A recipe gives peek a page for a kind of link it does not handle, such as Figma
+files or an internal wiki. Ask the agent to "show Figma files in peek". It uses
+the `peek-recipes` skill to write the recipe, check it and show it to you.
+
+A recipe is a folder in `~/.local/share/claude-peek/recipes/<id>/`. It holds a
+`recipe.json` that names the links it handles, and one data source:
+
+- a script in the folder, which gets the link and prints a page as JSON, or
+- an MCP tool that returns a page. This works only in sessions where that MCP server is connected.
+
+The page is built from a fixed vocabulary: a title, details, sections (markdown,
+media, table, cards, list or fields) and up to 9 actions that open a link or copy
+text. Peek draws every recipe page with the same keys as its other pages. The
+arrow keys move through cards, list items and table rows, enter opens one, and
+actions have keys `1` to `9` in the ⌃k menu. Recipes live outside the plugin, so
+they work in every session and survive peek updates.
+
+A recipe page runs its source when you open it, when you press `u`, and on a
+timer only when the recipe asks for one (every 5 minutes or more). Groups, stars
+and Recent never run it. When the source fails, the page names the recipe and the
+error. It does not fall back to the web page. A GitHub, Linear or Slack link
+stays on its built-in page unless the recipe says it overrides that page.
+
+**Drafts and approval.** A new recipe is a draft, and normal link opens ignore
+it. The agent previews a draft in the pane, marked unapproved. Above the page,
+the approval surface shows what the recipe runs, the links it matches, the
+environment names it reads, warnings for MCP tools that look like they change
+something and for paths outside the folder, and the full text of every file.
+Press **Approve** there to make it live. Only that button approves a recipe: no
+agent tool, command or file write can. Any later change to a file in the folder
+turns the recipe back into a draft until you approve it again. While a recipe is
+a draft, it runs only what the session's permissions already allow.
+
+The agent uses two tools. Both are deferred, so the agent loads them with
+ToolSearch first:
+
+| Tool | Does |
+|---|---|
+| `check_recipe` | Runs a recipe once against a real link. Reports whether it matched, which page wins the link, any recipe whose links overlap, and whether the page fits the vocabulary. It never approves. |
+| `open` | Opens a link in the pane through normal routing, drafts included. Returns the page outline or the error. |
+
+The skill is `skills/peek-recipes/SKILL.md`. The full vocabulary is in its
+`references/vocabulary.md`, and `examples/` holds a script recipe and an MCP
+recipe with their sample pages.
+
 ## Commands
 
 | Command | Does |
@@ -201,4 +248,11 @@ Web reader pages are cleaned with [Defuddle](https://github.com/kepano/defuddle)
 ```
 claude plugin validate .
 claude plugin test .
+python3 tests/mirror-skill-examples.py --check
 ```
+
+The test sandbox cannot read JSON files, so `tests/fixtures/skill-examples.ts`
+is a copy of the skill's examples. After you edit an example, run
+`python3 tests/mirror-skill-examples.py` to rewrite the copy. `--check` fails
+when the copy is out of date or when the script example's output no longer
+equals its sample page.

@@ -202,3 +202,15 @@ claims and a script or MCP tool that returns a Page in the page vocabulary. It l
 outside the plugin, so it survives peek updates and works in every session of that user.
 A specific built-in page type (GitHub, Linear, Slack) wins a link both claim unless the recipe
 says it overrides it; the generic web page always yields to a recipe.
+
+A recipe is a draft until the person approves it, and becomes one again after any change to
+any file in its folder. Normal link opens ignore drafts. Only the agent's preview shows one,
+marked unapproved, and a draft runs only what the session's own permissions already allow.
+
+### Approval
+The person's decision, made by pressing Approve in the pane, that a recipe's folder may run
+as it stands. Peek records it in its own store against a digest of every file in the folder,
+so it covers those exact bytes and nothing outside the folder. No agent tool, command or file
+write records an approval, and a marker file in the recipe folder is ignored. Approval
+protects against agent mistakes and against injected instructions; it does not protect against
+a process the user runs that edits peek's store directly.
