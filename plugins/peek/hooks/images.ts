@@ -3,6 +3,7 @@ import type { EngineInterface, ProcessRunInit, ProcessRunResult } from 'claude-c
 import type { RemoteRecord } from '../types'
 import { mermaidFences, swapMermaidFences } from './markdown'
 import { extOf, resolvePath } from './paths'
+import { SCRATCH } from './net'
 
 export type ImageIo = {
   run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
@@ -14,7 +15,6 @@ export type ImageIo = {
 
 export type Picture = { file: string; width: number; height: number }
 
-export const SCRATCH = '/tmp/claude-peek'
 const MERMAID_ASCII = '/.cache/claude-peek/bin/mermaid-ascii'
 const MAX_PNG_BYTES = 2 * 1024 * 1024
 // A pane is about 100 columns of 8 px, so 800 px is already sharper than it can show, and keeps each picture small.

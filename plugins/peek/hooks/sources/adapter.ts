@@ -6,7 +6,7 @@ import type { Ref } from '../refs'
 import { loadSlack } from './slack'
 import type { SourceIo } from '../source-io'
 import { ICON } from '../theme'
-import { downloadFile, fromCapture as webFromCapture, loadWeb } from './web'
+import { fromCapture as webFromCapture, loadWeb } from './web'
 import { parseUrl } from '../wire'
 
 export type RemoteIo = SourceIo & CaptureIo
@@ -63,14 +63,6 @@ function tierLabels(names: Partial<Record<Tier, string>>): (tier: Tier | undefin
   return tier => (tier === 'session' ? 'from this session' : ((tier && names[tier]) ?? `via ${tier ?? '?'}`))
 }
 
-function loadSlackPage(io: RemoteIo, ref: Ref, now: number): Promise<Loaded> {
-  const downloadImage = async (url: string, ext: string) => {
-    const got = await downloadFile(io, url, ext)
-    return got && (!got.type || got.type.startsWith('image/')) ? got.file : undefined
-  }
-  return loadSlack({ ...io, downloadImage }, ref, now)
-}
-
 const GITHUB: SourceAdapter = {
   id: 'github',
   matches: kind => kind.startsWith('gh-'),
@@ -102,7 +94,7 @@ const SLACK: SourceAdapter = {
   isTimed: () => true,
   tierLabel: tierLabels({ mcp: 'via Slack MCP', cli: 'via slack' }),
   trailIcon: index => (index === 0 ? ICON['slack-thread'] : '\u{f086}'),
-  load: loadSlackPage,
+  load: loadSlack,
   failureText,
 }
 

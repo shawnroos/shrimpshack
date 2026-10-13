@@ -2,6 +2,7 @@ import type { CaptureIo } from '../capture'
 import type { Ref, SlackThreadRef } from '../refs'
 import { describeAge } from '../format'
 import { sessionMemo } from '../cache'
+import { IMAGE_MIME_EXT, SCRATCH, downloadImage } from '../net'
 import { slackFailure } from './classify'
 import { ok } from './result'
 import type { SourceIo } from '../source-io'
@@ -11,8 +12,15 @@ import type { SlackMessage, SlackThread } from '../parsers/slack-transcript'
 import type { Json } from '../wire'
 import type { Loaded, RemoteComment, RemoteFailure, RemoteFile, RemoteRecord } from '../../types'
 
-export type SlackIo = Pick<SourceIo, 'sessionId' | 'run'> &
-  Pick<CaptureIo, 'mcpCall'> & { downloadImage?: (url: string, ext: string) => Promise<string | undefined> }
+type DownloadImage = (url: string, ext: string) => Promise<string | undefined>
+
+// The source passes its whole port and downloads through net.ts; a narrower port may bring its own downloadImage, or none.
+export type SlackIo = Pick<SourceIo, 'sessionId' | 'run'> & Pick<CaptureIo, 'mcpCall'> & ({ downloadImage?: DownloadImage } | SourceIo)
+
+function imageDownloader(io: SlackIo): DownloadImage | undefined {
+  if ('downloadImage' in io && io.downloadImage) return io.downloadImage
+  return 'fetch' in io && 'linearKeyEnv' in io ? (url, ext) => downloadImage(io, url, ext) : undefined
+}
 
 // `$.mcp.call` accepts the tool-name spelling of a server: the Slack plugin's tools are mcp__plugin_slack_slack__*,
 // the claude.ai connector's mcp__claude_ai_Slack__*. `plugin:slack:slack` is the /mcp spelling, in case only that one resolves.
@@ -26,7 +34,6 @@ const TITLE_CAP = 100
 const SLACK_ENTITIES = ['lt', 'gt', 'amp'] as const
 
 const USER_ID = /^[UWB][A-Z0-9]+$/
-const SCRATCH = '/tmp/claude-peek'
 // Each read is a file download and, the first time, a permission prompt; past these the rest show as file rows.
 const MAX_FILE_READS = 6
 const MAX_SPEAKERS = 12
@@ -34,7 +41,6 @@ const MAX_SPEAKERS = 12
 const MAX_FILE_BYTES = 10_000_000
 // The pane draws an avatar 4 columns by 2 rows; Slack's 72 px variant is about 12 KB where the original was 1.4 MB.
 const AVATAR_PX = 72
-const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }
 
 const preferredServer = new Map<string, string>()
 // Only a found CLI is kept, so an install later in the session is noticed.
@@ -193,7 +199,7 @@ async function filePicture(io: SlackIo, server: string, file: RemoteFile): Promi
   const answer = await io.mcpCall(server, 'slack_read_file', { file_id: file.id }).catch(() => null)
   if (!answer || answer.isError) return undefined
   const image = answer.content.map(block => asObj(block)).find(block => block?.type === 'image' && typeof block.data === 'string')
-  const ext = IMAGE_EXT[String(image?.mimeType ?? file.type)]
+  const ext = IMAGE_MIME_EXT[String(image?.mimeType ?? file.type)]
   if (!image || !ext) return undefined
   const path = `${SCRATCH}/slack-${file.id}.${ext}`
   const made = await io.run(['mkdir', '-p', SCRATCH], { timeoutMs: 5000 }).catch(() => null)
@@ -225,16 +231,17 @@ async function searchedAvatar(io: SlackIo, server: string, one: SlackMessage): P
 
 async function avatarFile(io: SlackIo, server: string | undefined, one: SlackMessage): Promise<string | undefined> {
   const found = one.avatarUrl ?? (server ? await searchedAvatar(io, server, one) : undefined)
-  if (!found || !io.downloadImage) return undefined
+  const download = imageDownloader(io)
+  if (!found || !download) return undefined
   const url = smallAvatar(found)
   const ext = /\.(png|jpe?g|gif|webp)$/i.exec(new URL(url).pathname)?.[1]?.toLowerCase() ?? 'png'
-  return io.downloadImage(url, ext)
+  return download(url, ext)
 }
 
 async function withPictures(io: SlackIo, record: RemoteRecord, messages: readonly SlackMessage[], server: string | undefined): Promise<RemoteRecord> {
   const session = await io.sessionId()
   const images = server
-    ? messages.flatMap(one => one.files).filter(file => IMAGE_EXT[file.type] && bytesOf(file.size) <= MAX_FILE_BYTES).slice(0, MAX_FILE_READS)
+    ? messages.flatMap(one => one.files).filter(file => IMAGE_MIME_EXT[file.type] && bytesOf(file.size) <= MAX_FILE_BYTES).slice(0, MAX_FILE_READS)
     : []
   const speakers = [...new Map(messages.filter(one => one.userId).map(one => [one.userId ?? '', one])).values()].slice(0, MAX_SPEAKERS)
   const [files, faces] = await Promise.all([
