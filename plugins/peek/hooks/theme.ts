@@ -46,6 +46,7 @@ export const ICON = {
   'linear-issue': '\u{f0ae}',
   'linear-project': '\u{f0e8}',
   'slack-thread': '\u{f198}',
+  recipe: '\u{f0431}',
 } as const
 
 export const META_ICON: Record<string, string> = {
@@ -97,6 +98,7 @@ export const KIND_COLOR: Record<string, string> = {
   'linear-issue': C.blue,
   'linear-project': C.mauve,
   'slack-thread': C.yellow,
+  recipe: C.mauve,
 }
 
 export function iconFor(kind: string | undefined): string {

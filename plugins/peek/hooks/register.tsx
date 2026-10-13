@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, Picture, RecipePage, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts, speakerColor } from './theme'
 import { capturedLinearContext, record } from './capture'
@@ -15,6 +15,12 @@ import type { RemoteIo } from './remote'
 import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
+import type { Page } from './page'
+import { drawPage } from './page-view'
+import { loadRecipes, recipesDir, routeOf } from './recipes'
+import type { RecipesIo } from './recipes'
+import { failureText as recipeFailureText, runRecipe } from './recipe-run'
+import type { RunIo } from './recipe-run'
 import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint } from './live'
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
@@ -184,7 +190,7 @@ async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
 
 async function openNav($: EngineInterface, one: NavItem | undefined) {
   if (one?.group) await openGroupPage($, one.group)
-  else if (one?.href) await show($, one.href)
+  else if (one?.href) await openLink($, one.href)
 }
 
 const ROLES: RoleFilter[] = ['all', 'artifacts', 'touched']
@@ -605,13 +611,19 @@ function remoteLoader($: EngineInterface, canReplay: boolean) {
   }
 }
 
-async function noteTitle($: EngineInterface, entry: CacheEntry) {
-  if (!entry.record) return
-  const next = titleOf(entry.record)
-  const { updatedAt: _, ...known } = titles[entry.record.address] ?? { updatedAt: 0 }
+async function saveTitle($: EngineInterface, address: string, next: Omit<TitleEntry, 'updatedAt'>) {
+  const { updatedAt: _, ...known } = titles[address] ?? { updatedAt: 0 }
   if (JSON.stringify(known) === JSON.stringify(next)) return
-  titles = withTitle(titles, entry.record.address, next, await $.clock.now())
+  titles = withTitle(titles, address, next, await $.clock.now())
   await $.store.set('titles', titles).catch(() => undefined)
+}
+
+async function noteTitle($: EngineInterface, entry: CacheEntry) {
+  if (entry.record) await saveTitle($, entry.record.address, titleOf(entry.record))
+}
+
+async function notePageTitle($: EngineInterface, href: string, state: RecipePage) {
+  if (state.page) await saveTitle($, href, { title: state.page.title, kind: 'web', trail: [state.name] })
 }
 
 function startTicking($: EngineInterface) {
@@ -674,6 +686,175 @@ async function mediaPictures($: EngineInterface, media: RemoteRecord['media']) {
   return Object.keys(pictures).length ? pictures : undefined
 }
 
+function recipesIoOf($: EngineInterface): RecipesIo {
+  return {
+    home: () => $.env.get('HOME'),
+    list: dir => $.fs.list(dir),
+    read: path => $.fs.read(path, { as: 'bytes' }),
+    // The runner refuses a script it cannot follow to a real path, so without resolve every script recipe fails.
+    stat: path => $.fs.stat(path, { resolve: true }),
+    storeGet: key => $.store.get(key),
+  }
+}
+
+function runIoOf($: EngineInterface): RunIo {
+  return {
+    ...recipesIoOf($),
+    envGet: async name => {
+      if (name === 'HOME') return $.env.get('HOME')
+      if (name === 'PATH') return $.env.get('PATH')
+      if (name === 'LANG') return $.env.get('LANG')
+      if (name === 'TMPDIR') return $.env.get('TMPDIR')
+      // $.env.get takes only a literal name, so a name a recipe declares is read the way its script would see it.
+      const ran = await $.process.run(['/usr/bin/printenv', name]).catch(() => null)
+      return ran?.exitCode === 0 ? ran.stdout.replace(/\n$/, '') : undefined
+    },
+    run: (argv, init) => $.process.run(argv, init),
+    mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
+    toolCheck: check => $.tool.check(check),
+    now: () => $.clock.now(),
+    sleep: ms => $.clock.sleep(ms),
+  }
+}
+
+const PAGE_PICTURES = 12
+const PICTURE_LINES = /^\s*!\[[^\]]*\]\(([^)\s]+)\)\s*$/gm
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg)$/i
+
+function imageExt(url: string): string {
+  try {
+    return IMAGE_EXT.exec(new URL(url).pathname)?.[1]?.toLowerCase() ?? 'img'
+  } catch {
+    return 'img'
+  }
+}
+
+async function pageMedia($: EngineInterface, page: Page): Promise<Pick<RecipePage, 'media' | 'pictures'>> {
+  const media: Record<string, { file?: string; play?: string }> = {}
+  const images: string[] = []
+  const addImage = (url: string) => {
+    if (url && !(url in media)) {
+      media[url] = {}
+      images.push(url)
+    }
+  }
+  for (const { block } of page.sections) {
+    if (block.type === 'media') for (const one of block.items) one.kind === 'video' ? (media[one.url] = { play: one.url }) : addImage(one.url)
+    if (block.type === 'markdown') for (const found of block.text.matchAll(PICTURE_LINES)) addImage(found[1] ?? '')
+    if (block.type === 'cards') for (const one of block.items) addImage(one.image ?? '')
+  }
+  if (Object.keys(media).length === 0) return {}
+  const io = remoteIoOf($)
+  const found = await Promise.all(
+    images.slice(0, PAGE_PICTURES).map(async url => {
+      const got = await downloadFile(io, url, imageExt(url)).catch(() => undefined)
+      if (!got || /^text\//i.test(got.type ?? '')) return [url, undefined] as const
+      media[url] = { file: got.file }
+      return [url, await remotePicture($, got.file)] as const
+    }),
+  )
+  const pictures = Object.fromEntries(found.filter((one): one is readonly [string, Picture] => Boolean(one[1])))
+  return { media, ...(Object.keys(pictures).length ? { pictures } : {}) }
+}
+
+type PageLoad = { kind: 'none' } | { kind: 'conflict'; ids: string[] } | { kind: 'ran'; state: RecipePage }
+
+const pageLoads = new Map<string, Promise<PageLoad>>()
+
+// One load per link at a time: a second u press or open while the source runs waits for the same answer.
+function loadPage($: EngineInterface, link: string, allowDraft: boolean, onRouted: (state: RecipePage) => Promise<void> = async () => undefined): Promise<PageLoad> {
+  const key = `${allowDraft ? 'draft' : 'approved'}|${link}`
+  const running = pageLoads.get(key)
+  if (running) return running
+  const loading = (async (): Promise<PageLoad> => {
+    const ref = parseRef(link)
+    if (!ref) return { kind: 'none' }
+    const { recipes, approvals } = await loadRecipes(recipesIoOf($))
+    const route = routeOf(ref, link, recipes, approvals, { allowDraft })
+    if (route.kind === 'conflict') return { kind: 'conflict', ids: route.ids }
+    if (route.kind !== 'recipe') return { kind: 'none' }
+    const base: RecipePage = { id: route.id, name: route.recipe.name, link, isDraft: route.draft, digest: route.digest, refreshMinutes: route.recipe.refreshMinutes }
+    await onRouted(base)
+    try {
+      const root = recipesDir((await $.env.get('HOME')) ?? '')
+      const outcome = await runRecipe(runIoOf($), { root, id: route.id, digest: route.digest, draft: route.draft }, link)
+      if (!outcome.ok) return { kind: 'ran', state: { ...base, failure: recipeFailureText(outcome), failureKind: outcome.kind } }
+      return { kind: 'ran', state: { ...base, fetchedAt: outcome.ranAt, page: outcome.page, ...(await pageMedia($, outcome.page)) } }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { kind: 'ran', state: { ...base, failure: `Recipe "${base.name}" (${base.id}) could not run: ${message}`, failureKind: 'started-failed' } }
+    }
+  })().finally(() => pageLoads.delete(key))
+  pageLoads.set(key, loading)
+  return loading
+}
+
+const conflictText = (ids: readonly string[]) =>
+  `Recipes ${ids.map(id => `"${id}"`).join(' and ')} both handle this link, so peek ran neither. Change one recipe's match so only one claims it.`
+
+const pageView = (href: string, state: RecipePage): View => ({ href, title: state.page?.title ?? state.name, location: state.link, kind: 'recipe', page: state })
+
+async function recipeView($: EngineInterface, href: string, raw: string, allowDraft: boolean, onRouted: (state: RecipePage) => Promise<void>): Promise<View | null> {
+  const link = raw.trim()
+  if (!/^https?:\/\//i.test(link)) return null
+  const loaded = await loadPage($, link, allowDraft, onRouted)
+  if (loaded.kind === 'none') return null
+  const state: RecipePage =
+    loaded.kind === 'ran'
+      ? loaded.state
+      : { id: '', name: 'Recipe conflict', link, isDraft: false, digest: '', refreshMinutes: 0, failure: conflictText(loaded.ids), failureKind: 'conflict' }
+  await notePageTitle($, href, state)
+  return pageView(href, state)
+}
+
+async function refreshPage($: EngineInterface, href: string, was: RecipePage) {
+  if (!was.id) {
+    await show($, was.link)
+    return
+  }
+  const write = (state: RecipePage) => update($, view, now => (now?.href === href && now.page ? pageView(href, state) : now))
+  const { isRefreshing: _, refreshFailure: __, ...kept } = was
+  await write({ ...kept, isRefreshing: true })
+  const loaded = await loadPage($, was.link, was.isDraft).catch((error: unknown) => ({ kind: 'error' as const, message: error instanceof Error ? error.message : String(error) }))
+  const fresh = loaded.kind === 'ran' && loaded.state.id === was.id ? loaded.state : undefined
+  if (fresh?.page) {
+    await notePageTitle($, href, fresh)
+    await write(fresh)
+    return
+  }
+  const reason =
+    fresh?.failure ??
+    (loaded.kind === 'error'
+      ? `Recipe "${was.name}" (${was.id}) could not be read: ${loaded.message}`
+      : loaded.kind === 'conflict'
+        ? conflictText(loaded.ids)
+        : `Recipe "${was.name}" (${was.id}) no longer handles this link: it was edited, removed or replaced. Open the link again.`)
+  await write(was.page ? { ...kept, refreshFailure: reason } : { ...kept, failure: reason, failureKind: fresh?.failureKind ?? 'route' })
+}
+
+function fetchedAge(fetchedAt: number | undefined, now: number): string {
+  if (fetchedAt === undefined) return ''
+  const seconds = Math.max(0, Math.round((now - fetchedAt) / 1000))
+  return seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
+}
+
+function pageSourceLine(state: RecipePage, now: number): string {
+  if (!state.id) return 'recipe conflict'
+  const marker = state.isRefreshing ? 'refreshing…' : state.refreshFailure ? 'refresh failed' : ''
+  return [`recipe ${state.id}`, state.isDraft ? 'draft' : 'approved', fetchedAge(state.fetchedAt, now), marker].filter(Boolean).join(' · ')
+}
+
+const paneHref = (href: string) => (href.startsWith('/') ? fileHref(href) : href)
+
+async function isPageOnScreen($: EngineInterface): Promise<boolean> {
+  return (await read($, mode)) === 'view' && Boolean((await read($, view))?.page)
+}
+
+// From a recipe page a link goes through openFromPage, so b comes back to the page.
+async function openLink($: EngineInterface, href: string) {
+  await ((await isPageOnScreen($)) ? openFromPage($, href) : show($, href))
+}
+
 function remoteRef(href: string, context: RefContext = {}): Ref | null {
   if (parseHref(href)) return null
   const ref = parseRef(href, context)
@@ -681,7 +862,7 @@ function remoteRef(href: string, context: RefContext = {}): Ref | null {
   return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
 }
 
-async function show($: EngineInterface, raw: string, isFromGroupChain = false) {
+async function show($: EngineInterface, raw: string, isFromGroupChain = false, options: { allowDraft?: boolean } = {}) {
   if (!isFromGroupChain) groupBack = null
   const generation = ++showGeneration
   const ref = remoteRef(raw)
@@ -699,16 +880,25 @@ async function show($: EngineInterface, raw: string, isFromGroupChain = false) {
   void $.ui.open({ id: PANE, title: 'Peek' })
   let next: View
   try {
-    next = file ? await loadFile($, href, file.path, file.line) : ref ? await loadRemote($, ref) : await loadUrl($, href)
+    const onRouted = async (state: RecipePage) => {
+      if (generation === showGeneration) await update($, view, () => pageView(href, state))
+    }
+    const recipe = file ? null : await recipeView($, href, raw, options.allowDraft === true, onRouted)
+    next = recipe ?? (file ? await loadFile($, href, file.path, file.line) : ref ? await loadRemote($, ref) : await loadUrl($, href))
   } catch (error) {
     next = { ...loading, title: 'Could not open', error: error instanceof Error ? error.message : String(error) }
   }
   if (generation !== showGeneration) return
+  if (next.page) await update($, cursorAtom, () => 0)
   await update($, view, () => next)
   void $.ui.open({ id: PANE, title: next.title })
 }
 
 async function openExternally($: EngineInterface, current: View) {
+  if (current.page) {
+    if (isWebUrl(current.page.link)) await $.process.run(['open', current.page.link])
+    return
+  }
   const file = parseHref(current.href)
   if (!file) {
     await $.process.run(['open', current.href])
@@ -1530,6 +1720,11 @@ function freshId(others: readonly Group[]): string {
 }
 
 async function refresh($: EngineInterface, href: string) {
+  const current = await read($, view)
+  if (current?.page && current.href === href) {
+    await refreshPage($, href, current.page)
+    return
+  }
   const ref = remoteRef(href)
   if (ref) {
     const entry = await refreshItem(ref.address, remoteLoader($, true), await $.clock.now())
@@ -1560,14 +1755,15 @@ function sourceLine(remote: NonNullable<View['remote']>, now: number): string {
   const { tier, fetchedAt, staleSince } = remote
   const family = familyOf(remote.record?.kind ?? 'web')
   const name = tier === 'session' ? 'from this session' : (TIER_NAMES[`${family}-${tier}`] ?? `via ${tier ?? '?'}`)
-  const seconds = fetchedAt === undefined ? 0 : Math.max(0, Math.round((now - fetchedAt) / 1000))
-  const age = fetchedAt === undefined ? '' : seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
+  const age = fetchedAge(fetchedAt, now)
   const stale = staleSince === undefined ? '' : ` · stale since ${describeAge(staleSince, now)}`
   return `${name}${age ? ` · ${age}` : ''}${stale}`
 }
 
 async function redrawIfCurrent($: EngineInterface, address: string) {
   const current = await read($, view)
+  // A background load of an overridden link must not turn the recipe page on screen back into the built-in page.
+  if (current?.page) return
   const ref = current && remoteRef(current.href)
   const entry = cached(address)
   if (!current || !ref || !entry || !isCurrent(current.href, address)) return
@@ -2089,7 +2285,7 @@ export const register: Register = on => {
     }
     const starring = e.data as { star?: unknown } | null
     if (e.requestId === PANE && starring && typeof starring.star === 'string') {
-      await setStar($, starring.star).catch(() => undefined)
+      if (starring.star) await setStar($, starring.star).catch(() => undefined)
       return {}
     }
     const data = e.data as { toggle?: unknown } | null
@@ -2120,9 +2316,10 @@ export const register: Register = on => {
       return {}
     }
     if (e.requestId === PANE && opening && typeof opening.open === 'string') {
+      if (!opening.open) return {}
       const rows = await groupPageRows($).catch(() => null)
       const at = rows ? rows.hrefs.indexOf(opening.open) : -1
-      await (rows && at >= 0 ? openGroupItem($, rows, at) : show($, opening.open)).catch(() => undefined)
+      await (rows && at >= 0 ? openGroupItem($, rows, at) : openLink($, opening.open)).catch(() => undefined)
       return {}
     }
     return next(e)
@@ -2136,7 +2333,8 @@ export const register: Register = on => {
         return {}
       }
     }
-    const isList = (await read($, mode).catch(() => 'view')) !== 'view' || !(await read($, view).catch(() => null))
+    const shown = await read($, view).catch(() => null)
+    const isList = (await read($, mode).catch(() => 'view')) !== 'view' || !shown || (Boolean(shown.page?.page) && navOrder.length > 0)
     if (isList && !e.pointer && e.origin.kind === 'person' && Math.abs(e.by) === 1 && !(await read($, menuOpen).catch(() => false))) {
       await moveSelection($, e.by > 0 ? 'down' : 'up').catch(() => undefined)
       return {}
@@ -2288,6 +2486,7 @@ export const register: Register = on => {
 
     const filter = await read($, menuFilter)
     const closeMenu = () => void setMenu($, false)
+    const isPageError = Boolean(current?.page && !current.page.page)
     const commands: MenuCommand[] = [
       ...(current
         ? [
@@ -2316,7 +2515,7 @@ export const register: Register = on => {
       ...(current
         ? [
             { id: 'open', icon: '\u{f08e}', label: 'Open in its own app', hint: 'o', run: () => void openExternally($, current) },
-            ...(current.remote
+            ...(current.remote || current.page
               ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hint: 'u', run: () => void refresh($, current.href) }]
               : []),
             ...(e.surface === 'terminal' && Image && current.remote && parseRef(current.href)?.kind === 'web'
@@ -2325,8 +2524,8 @@ export const register: Register = on => {
             ...(liveHref === current.href && live?.state().canBack
               ? [{ id: 'live-back', icon: '\u{f060}', label: 'Back in the live page', hint: 'b', run: () => void liveKey($, 'b') }]
               : []),
-            { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
-            { id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar($, current.href) },
+            { id: 'copy', icon: '\u{f0c5}', label: current.remote || current.page ? 'Copy link' : 'Copy path', hint: 'c', run: () => void $.ui.copy({ text: current.location }) },
+            ...(isPageError ? [] : [{ id: 'star', icon: '\u{f51a}', label: 'Star or unstar this file', hint: 'f', run: () => void setStar($, current.href) }]),
           ]
         : []),
       { id: 'close', icon: '\u{f00d}', label: 'Close the pane', hint: 'x', run: () => void $.ui.close({ id: PANE }) },
@@ -3481,7 +3680,62 @@ export const register: Register = on => {
     let body: unknown = null
     let position = ''
     let jumps: { next: () => void; prev: () => void } = { next: () => {}, prev: () => {} }
-    if (current.remote) {
+    let pageKeys: Key[] = []
+    if (current.page) {
+      const state = current.page
+      const shownPage = state.page
+      if (shownPage) {
+        const pictures = state.pictures
+        const starKeys = new Set((await read($, stars)).map(one => itemKey(remoteRef(one)?.address ?? one)))
+        const memoBase = `${current.href}|${state.fetchedAt}|${textWidth}`
+        const drawn = drawPage(
+          {
+            elements: { Box, Text, Button, ...(Client ? { Client } : {}) },
+            colors: C,
+            blocks: sink => blockWriters({ ...sink, media: state.media, pictures, memoBase, refs: refContext() }),
+            cards: cardGridOf,
+            rows: rowListOf,
+            isStarred: href => starKeys.has(itemKey(remoteRef(href)?.address ?? href)),
+            link: paneHref,
+            picture: url => {
+              const one = pictures?.[url]
+              return one ? pixels.get(one.file) : undefined
+            },
+            pick: index => void selectAndOpen($, index),
+            open: href => void openFromPage($, paneHref(href)),
+            copy: text => void $.ui.copy({ text }),
+            notice: text => $.ui.toast(text),
+          },
+          shownPage,
+          { width: textWidth, selected: await read($, cursorAtom) },
+        )
+        navOrder = drawn.nav
+        pageKeys = drawn.keys
+        ;({ body, jumps, position } = settleBlocks(drawn.parts, drawn.rows, drawn.headings))
+      } else {
+        navOrder = []
+        const { drawnParts, partRows, partHeadings, note } = newBlocks()
+        if (state.failure) {
+          drawnParts.push(
+            <Box key="page-failure" flexDirection="column">
+              <Text color={C.red} bold>Recipe page failed</Text>
+              <Text color={C.subtext0}>{state.failure}</Text>
+              <Text color={C.overlay0}>Press u to try again, or o to open the link in the browser.</Text>
+            </Box>,
+          )
+          note(estimateRows(state.failure, textWidth) + 2)
+        } else {
+          drawnParts.push(
+            <Box key="page-loading" flexDirection="column">
+              <Text color={C.overlay1}>{`Running ${state.name}…`}</Text>
+              <Text color={C.overlay0} wrap="truncate-end">{state.link}</Text>
+            </Box>,
+          )
+          note(2)
+        }
+        ;({ body, jumps, position } = settleBlocks(drawnParts, partRows, partHeadings))
+      }
+    } else if (current.remote) {
       const remote = current.remote
       const record = remote.record
       const { drawnParts, partRows, partHeadings, note } = newBlocks()
@@ -4043,7 +4297,7 @@ export const register: Register = on => {
     const starTarget = (liveFrame && liveState?.url) || current.href
     const isStarred = (await read($, stars)).some(one => itemKey(remoteRef(one)?.address ?? one) === itemKey(starTarget))
     const remote = current.remote
-    const source = remote?.record ? sourceLine(remote, now) : ''
+    const source = remote?.record ? sourceLine(remote, now) : current.page ? pageSourceLine(current.page, now) : ''
     const info = liveFrame
       ? [isStarred ? '\u{f51a} starred' : '', liveStatus].filter(Boolean).join(' · ')
       : [liveStatus, isStarred ? '\u{f51a} starred' : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
@@ -4057,7 +4311,23 @@ export const register: Register = on => {
           })),
           { label: `${iconFor(current.kind)} ${liveFrame && liveState?.title ? liveState.title : current.title}`, fg: C.appBg, bg: C.accent, bold: true },
         ]
-      : null
+      : current.page
+        ? [
+            { label: `${ICON.recipe} ${current.page.name}`, fg: C.subtext0 as string, bg: C.surface1 as string, canShrink: true },
+            { label: `${ICON.web} ${current.title}`, fg: C.appBg, bg: C.accent, bold: true },
+          ]
+        : null
+    const pageNotice = current.page?.isRefreshing ? (
+      <Box key="page-refreshing" marginBottom={1}>
+        <Text color={C.overlay1}>Refreshing…</Text>
+      </Box>
+    ) : current.page?.refreshFailure ? (
+      <Box key="page-refresh-failed" marginBottom={1}>
+        <Text color={C.red}>{`Refresh failed: ${current.page.refreshFailure}`}</Text>
+      </Box>
+    ) : null
+    const isPageNav = Boolean(current.page?.page) && navOrder.length > 0
+    const sideKeys = isPageNav ? selectKeys.filter(one => one.key === 'left' || one.key === 'right') : []
 
     return frame(
       crumbs(remoteCrumbs ?? [
@@ -4081,6 +4351,7 @@ export const register: Register = on => {
               <Text color={C.subtext0}>{notice.hint}</Text>
             </Box>
           )}
+          {pageNotice}
           {body as never}
       </Box>,
       info,
@@ -4092,23 +4363,27 @@ export const register: Register = on => {
           ...(liveFrame && isTyping
             ? [{ key: 'done-typing', label: 'Done typing', hotkey: 'd', menu: 'Done typing: give the keys back to peek', onPress: () => { isTyping = false; $.ui.invalidate('ui.render') } }]
             : []),
-          { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : goNext },
-          { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : goPrev },
-          { key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) },
-          { key: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
-          ...(remote ? [{ key: 'refresh', label: liveFrame ? 'Reload' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }] : []),
+          { key: 'next', label: 'Down', hotkey: 'j', onPress: liveFrame ? () => scrollLive(LINE_SCROLL_PX) : isPageNav ? () => void moveSelection($, 'down') : goNext },
+          { key: 'prev', label: 'Up', hotkey: 'k', onPress: liveFrame ? () => scrollLive(-LINE_SCROLL_PX) : isPageNav ? () => void moveSelection($, 'up') : goPrev },
+          ...sideKeys,
+          ...(isPageError ? [] : [{ key: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', onPress: liveFrame ? () => void liveKey($, 'f') : () => void setStar($, current.href) }]),
+          { key: 'open', label: remote || current.page ? 'Open in browser' : 'Open', hotkey: 'o', onPress: liveFrame ? () => void liveKey($, 'o') : () => void openExternally($, current) },
+          ...(remote || current.page
+            ? [{ key: 'refresh', label: liveFrame ? 'Reload' : isPageError ? 'Retry' : 'Refresh', hotkey: 'u', onPress: liveFrame ? () => void liveKey($, 'u') : () => void refresh($, current.href) }]
+            : []),
           ...(liveFrame || backStack.length || groupBack
             ? [{ key: 'back', label: 'Back', hotkey: 'b', menu: liveFrame ? undefined : groupBack && backStack.length <= groupBack.depth ? `Back to ${groupBack.title}` : 'Back to the previous page', onPress: liveFrame ? () => void liveKey($, 'b') : () => void goBack($) }]
             : []),
           {
             key: 'copy',
-            label: remote ? 'Copy link' : 'Copy path',
+            label: remote || current.page ? 'Copy link' : 'Copy path',
             hotkey: 'c',
             onPress: liveFrame ? () => void liveKey($, 'c') : () => void $.ui.copy({ text: current.location }),
           },
           { key: 'close', label: 'Close', hotkey: 'x', onPress: () => void $.ui.close({ id: PANE }) },
+          ...pageKeys,
       ].map(one => (isTyping ? { ...one, onPress: () => { isTyping = false; one.onPress() } } : one)),
-      { menuOn: { target: current.error || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href } },
+      { menuOn: { target: current.error || (remote?.failure && !remote.record) || isPageError || isLiveHere ? undefined : current.href } },
     )
   })
 }

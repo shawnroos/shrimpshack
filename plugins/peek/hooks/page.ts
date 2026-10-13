@@ -1,25 +1,8 @@
 import { isPrivateHost } from './web'
 
-export type Detail = { label: string; value: string }
-export type MediaItem = { url: string; alt?: string; kind: 'image' | 'video' }
-export type TableRow = { cells: string[]; href?: string }
-export type CardItem = { title: string; meta?: string; href?: string; image?: string }
-export type ListItem = { title: string; meta?: string; href?: string }
+import type { Action, Block, BlockType, CardItem, Detail, ListItem, MediaItem, Page, Section, TableRow } from '../types'
 
-export type MarkdownBlock = { type: 'markdown'; text: string }
-export type MediaBlock = { type: 'media'; items: MediaItem[] }
-export type TableBlock = { type: 'table'; columns: string[]; rows: TableRow[] }
-export type CardsBlock = { type: 'cards'; items: CardItem[] }
-export type ListBlock = { type: 'list'; items: ListItem[] }
-export type FieldsBlock = { type: 'fields'; rows: Detail[] }
-export type Block = MarkdownBlock | MediaBlock | TableBlock | CardsBlock | ListBlock | FieldsBlock
-export type BlockType = Block['type']
-
-export type Section = { heading?: string; block: Block }
-export type OpenAction = { label: string; open: string }
-export type CopyAction = { label: string; copy: string }
-export type Action = OpenAction | CopyAction
-export type Page = { title: string; details?: Detail[]; sections: Section[]; actions?: Action[] }
+export type { Action, Block, BlockType, CardItem, CardsBlock, CopyAction, Detail, FieldsBlock, ListBlock, ListItem, MarkdownBlock, MediaBlock, MediaItem, OpenAction, Page, Section, TableBlock, TableRow } from '../types'
 
 export type Problem = { path: string; message: string }
 export type PageCheck = { ok: true; page: Page } | { ok: false; problems: Problem[] }

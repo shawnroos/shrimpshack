@@ -1,4 +1,4 @@
-import type { BoxProps, ButtonProps, ElementConstructor, TextProps } from 'claude-code'
+import type { BoxProps, ButtonProps, ClientProps, ElementConstructor, TextProps } from 'claude-code'
 
 import { columnWidths, fitCell } from './lib'
 import { PAGE_CAPS } from './page'
@@ -27,12 +27,13 @@ export type PageBlockWriters = {
 export type PageItemBuilder = <T>(sink: PageNavSink, lookOf: (one: T) => PageItemLook) => (items: readonly T[], prefix: string) => unknown[]
 export type PageColors = { accent: string; text: string; subtext0: string; overlay0: string; overlay1: string; surface0: string; surface1: string }
 export type PageWriters = {
-  elements: { Box: ElementConstructor<BoxProps>; Text: ElementConstructor<TextProps>; Button: ElementConstructor<ButtonProps> }
+  elements: { Box: ElementConstructor<BoxProps>; Text: ElementConstructor<TextProps>; Button: ElementConstructor<ButtonProps>; Client?: ElementConstructor<ClientProps> }
   colors: PageColors
   blocks: (sink: PagePartSink) => PageBlockWriters
   cards: PageItemBuilder
   rows: PageItemBuilder
   isStarred: (href: string) => boolean
+  link?: (href: string) => string
   picture?: (url: string) => string | undefined
   pick: (index: number) => void
   open: (href: string) => void
@@ -70,7 +71,7 @@ const iconOf = (href: string | undefined) => (!href ? ICON.text : href.startsWit
 const shorten = (text: string) => (text.length > NOTICE_TEXT ? `${text.slice(0, NOTICE_TEXT - 1)}…` : text)
 
 export function drawPage(writers: PageWriters, page: Page, view: { width: number; selected: number }): DrawnPage {
-  const { Box, Text, Button } = writers.elements
+  const { Box, Text, Button, Client } = writers.elements
   const C = writers.colors
   const { width, selected } = view
   const parts: unknown[] = []
@@ -85,11 +86,13 @@ export function drawPage(writers: PageWriters, page: Page, view: { width: number
   const blocks = writers.blocks({ drawnParts: parts, note })
   const sink: PageNavSink = { nav: [], keys: [], starts: [], cursor: 0, line: 0, selected }
 
+  const linkOf = (href: string | undefined) => (href ? (writers.link?.(href) ?? href) : '')
   const lookOf = (one: CardItem | ListItem): PageItemLook => {
     const png = 'image' in one && one.image ? writers.picture?.(one.image) : undefined
+    const href = linkOf(one.href)
     return {
-      href: one.href ?? '',
-      isStarred: one.href ? writers.isStarred(one.href) : false,
+      href,
+      isStarred: href ? writers.isStarred(href) : false,
       favicon: png && blocks.fitsPane(png) ? png : undefined,
       icon: iconOf(one.href),
       name: one.title,
@@ -128,14 +131,26 @@ export function drawPage(writers: PageWriters, page: Page, view: { width: number
     const room = Math.max(1, width - 2)
     const widths = columnWidths([block.columns, ...block.rows.map(one => one.cells)], room)
     const line = (cells: readonly string[]) => widths.map((w, c) => fitCell(cells[c] ?? '', w)).join('  ')
+    const hrefs = block.rows.map(row => linkOf(row.href))
     parts.push(
       <Box key={key} flexDirection="column" width={width}>
+        {Client && (
+          <Box position="absolute" top={2} left={0} width={width} height={block.rows.length}>
+            <Client
+              key={`hover-${key}`}
+              module="./hover-layer.tsx"
+              props={{ kind: 'rows', width, height: block.rows.length, starX: 0, starY: 0, items: hrefs.map(href => ({ href, isStarred: href ? writers.isStarred(href) : false })) }}
+              width={width}
+              height={block.rows.length}
+            />
+          </Box>
+        )}
         <Text key={`${key}-head`} color={C.accent} bold wrap="truncate-end">{`  ${line(block.columns)}`}</Text>
         <Text key={`${key}-rule`} color={C.surface1} wrap="truncate-end">{`  ${widths.map(w => '─'.repeat(w)).join('  ')}`}</Text>
         {block.rows.map((row, r) => {
           const index = sink.nav.length
           const rowKey = `${key}-row-${r}`
-          sink.nav.push({ href: row.href ?? '', key: rowKey, line: sink.line++, col: 0 })
+          sink.nav.push({ href: hrefs[r] ?? '', key: rowKey, line: sink.line++, col: 0 })
           const isSelected = index === selected
           return (
             <Box key={rowKey} flexDirection="row" height={1} width={width} backgroundColor={isSelected ? C.surface0 : undefined} hover={{ backgroundColor: C.surface0 }}>

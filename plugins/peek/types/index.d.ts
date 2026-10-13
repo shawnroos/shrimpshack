@@ -85,6 +85,7 @@ export type View = {
   code?: { source: string; language: string; startLine: number; focusLine?: number }
   image?: { file: string; width: number; height: number }
   error?: string
+  page?: RecipePage
   remote?: {
     record?: RemoteRecord
     tier?: Tier
@@ -97,6 +98,48 @@ export type View = {
     pictures?: Record<string, { file: string; width: number; height: number }>
     avatars?: Record<string, { file: string; width: number; height: number }>
   }
+}
+
+export type Detail = { label: string; value: string }
+export type MediaItem = { url: string; alt?: string; kind: 'image' | 'video' }
+export type TableRow = { cells: string[]; href?: string }
+export type CardItem = { title: string; meta?: string; href?: string; image?: string }
+export type ListItem = { title: string; meta?: string; href?: string }
+
+export type MarkdownBlock = { type: 'markdown'; text: string }
+export type MediaBlock = { type: 'media'; items: MediaItem[] }
+export type TableBlock = { type: 'table'; columns: string[]; rows: TableRow[] }
+export type CardsBlock = { type: 'cards'; items: CardItem[] }
+export type ListBlock = { type: 'list'; items: ListItem[] }
+export type FieldsBlock = { type: 'fields'; rows: Detail[] }
+export type Block = MarkdownBlock | MediaBlock | TableBlock | CardsBlock | ListBlock | FieldsBlock
+export type BlockType = Block['type']
+
+export type Section = { heading?: string; block: Block }
+export type OpenAction = { label: string; open: string }
+export type CopyAction = { label: string; copy: string }
+export type Action = OpenAction | CopyAction
+export type Page = { title: string; details?: Detail[]; sections: Section[]; actions?: Action[] }
+
+export type Picture = { file: string; width: number; height: number }
+
+// A page a recipe drew. `page` holds the last good page; `failure` with no `page` is the error page, and
+// `refreshFailure` is a failed refresh drawn over the page it kept. `id` is empty when two recipes claimed the link.
+export type RecipePage = {
+  id: string
+  name: string
+  link: string
+  isDraft: boolean
+  digest: string
+  refreshMinutes: number
+  fetchedAt?: number
+  page?: Page
+  media?: Record<string, { file?: string; play?: string }>
+  pictures?: Record<string, Picture>
+  failure?: string
+  failureKind?: string
+  isRefreshing?: boolean
+  refreshFailure?: string
 }
 
 export type GroupActor = 'agent' | 'person'
