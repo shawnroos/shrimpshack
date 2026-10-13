@@ -188,6 +188,20 @@ ToolSearch first:
 | `check_recipe` | Runs a recipe once against a real link. Reports whether it matched, which page wins the link, any recipe whose links overlap, and whether the page fits the vocabulary. It never approves. |
 | `open` | Opens a link in the pane through normal routing, drafts included. Returns the page outline or the error. |
 
+**Background builder.** The skill does not build the recipe in your session.
+It gathers the type, a sample link and the source, then hands the build to the
+`peek-recipe-builder` agent (`agents/peek-recipe-builder.md`), which runs in the
+background on Haiku while the session goes on. The builder writes the folder,
+tests the script or map, runs `check_recipe` up to five failed times and opens
+the draft preview. It returns `ready`, `stuck` or `needs-permission`; it never
+approves and never calls the type done. On `ready` the agent asks you to press
+Approve, and reports done only when `check_recipe` says the recipe is approved.
+The builder cannot answer permission prompts, so a check that needs one comes
+back as `needs-permission` with the exact rule to allow. For an MCP source the
+session calls the tool once itself and passes the result as a sample, because
+the builder can use only peek's tools. If the agent type does not load, the skill
+runs the same file as the brief for a general background agent on Haiku.
+
 The skill is `skills/peek-recipes/SKILL.md`. The full vocabulary is in its
 `references/vocabulary.md`, and `examples/` holds a script recipe and an MCP
 recipe with their sample pages. The MCP recipe also holds a sample tool result

@@ -172,7 +172,7 @@ parses its text, and the GitHub and Linear pages map the JSON their tools return
 
 **Writing the map: sample, map, test locally, check.**
 
-1. Call the MCP tool yourself, with the recipe's arguments and a real sample link.
+1. Call the MCP tool yourself, with the recipe's arguments and a real sample link. The `peek-recipes` skill does this step before it dispatches the builder agent, which cannot call other MCP tools.
 2. Save its result in the stdin shape as `$TMPDIR/sample.json`: the tool's text in `text`, its structured content (or `null`) in `structured`. For example, with the tool's text saved as `$TMPDIR/tool.txt`: `python3 -c 'import json,sys; print(json.dumps({"text": sys.stdin.read().rstrip("\n"), "structured": None}, separators=(",", ":"), ensure_ascii=False))' < $TMPDIR/tool.txt > $TMPDIR/sample.json`.
 3. Write `map.py` with only the `python3` standard library. It reads stdin and prints one Page.
 4. From the recipe folder, run `python3 map.py < $TMPDIR/sample.json` until it prints a valid Page.
