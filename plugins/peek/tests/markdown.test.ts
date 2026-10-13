@@ -82,7 +82,7 @@ describe('tasks, images and diagrams in markdown', () => {
   })
 
   test('segmentsOf pulls standalone images out of the text', () => {
-    expect(segmentsOf(doc).map(one => one.kind)).toEqual(['heading', 'markdown', 'code', 'image'])
+    expect(segmentsOf(doc).map(one => one.kind)).toEqual(['heading', 'list', 'code', 'image'])
     expect(segmentsOf(doc)[3]).toEqual({ kind: 'image', alt: 'shot', src: 'img/a.png' })
   })
 

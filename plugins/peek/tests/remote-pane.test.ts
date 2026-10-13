@@ -344,6 +344,21 @@ test('task lists in a pull request body draw as a checklist: no bullet, continua
   await ui.unmount()
 })
 
+test('bullet lists in a pull request body draw with an accent arrow, nested ones indented; numbered lists stay as written', async ($, on) => {
+  fakeWorld(on, { pull: { body: 'Notes:\n\n- first point\n  wraps here\n  - nested point\n* star point\n\n1. numbered\n\n---\n' } })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  const page = JSON.stringify(await ui.drawn())
+  expect(page).toContain(`"color":"${C.accent}"},"children":["\u23f5 "]`)
+  expect(page).toContain('"text":"first point wraps here"')
+  expect(page).toContain('"text":"nested point"')
+  expect(page).toContain('"text":"star point"')
+  expect(page).toContain('"marginLeft":2')
+  expect(page).not.toMatch(/"text":"[^"]*- first point/)
+  expect(page).toMatch(/1\. numbered/)
+  await ui.unmount()
+})
+
 test('Recent and Gallery match a star by its stored href, so a star saved as /issues/42 does not star the /pull/42 entry', async ($, on) => {
   fakeWorld(on)
   const issue = 'https://github.com/acme/widgets/issues/42'

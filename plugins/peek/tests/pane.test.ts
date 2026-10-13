@@ -574,6 +574,21 @@ test('a table too wide for the pane stacks each row as label and value lines; a 
   await wide.unmount()
 })
 
+test('a bullet list in a markdown file draws with an accent arrow instead of a dash', async ($, on) => {
+  fakeDisk(on)
+  FILES['/repo/notes/list.md'] = ['# List', '', '- alpha', '- beta with `code`', '  - inner'].join('\n')
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await $.command.run({ command: 'peek', args: '/repo/notes/list.md' } as never)
+  await ui.redraw()
+  const page = JSON.stringify(await ui.drawn())
+  expect(page).toContain(`"color":"${C.accent}"},"children":["\u23f5 "]`)
+  expect(page).toContain('"text":"alpha"')
+  expect(page).toContain('"text":"beta with `code`"')
+  expect(page).toContain('"text":"inner"')
+  expect(page).not.toContain('- alpha')
+  await ui.unmount()
+})
+
 test('an html file reads as markdown, and a code file opened at a line starts ten lines above it', async ($, on) => {
   fakeDisk(on)
   FILES['/repo/site/page.html'] = '<html><body><h1>Hello page</h1><p>Some <b>bold</b> words</p></body></html>'

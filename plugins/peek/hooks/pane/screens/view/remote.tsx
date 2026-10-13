@@ -3,7 +3,7 @@ import { describeAge } from '../../../format'
 import { pixels } from '../../../images'
 import { colorFor, iconFor } from '../../../kinds'
 import { isWebUrl } from '../../../live'
-import { linkify, splitChecklist, splitTables } from '../../../markdown'
+import { linkify, splitLists, splitTables } from '../../../markdown'
 import { chunkMarkdown, estimateRows, fitName } from '../../../measure'
 import { openFromPage, pressLink, refContext } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
@@ -13,7 +13,7 @@ import { ICON, META_ICON, mute } from '../../../theme'
 import { parseUrl } from '../../../wire'
 import type { DrawContext, PictureBudget } from '../../types'
 import { SectionRule, fitPicture } from '../../widgets'
-import { ChecklistBlock, DiagramEmbed, Embed, TableBlock, fullWidthOf, newBlocks, settleBlocks } from './blocks'
+import { DiagramEmbed, Embed, ListBlock, TableBlock, fullWidthOf, newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
 import { slackThread } from './slack'
 
@@ -100,13 +100,13 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     flush()
   }
   const markdownChunks = (key: string, text: string, heading: string, indent = 0) => {
-    if (!text.includes('|') && !/\[[ xX]\]/.test(text)) return proseChunks(key, text, heading, indent)
+    if (!text.includes('|') && !/^\s*[-*+]\s/m.test(text)) return proseChunks(key, text, heading, indent)
     for (const [i, part] of splitTables(text).entries()) {
       if (part.kind === 'markdown') {
-        for (const [j, piece] of splitChecklist(part.text).entries()) {
+        for (const [j, piece] of splitLists(linkify(part.text, () => null, refs)).entries()) {
           if (piece.kind === 'markdown') proseChunks(`${key}-t${i}-c${j}`, piece.text, heading, indent)
           else {
-            const list = ChecklistBlock(ctx, `${key}-list-${i}-${j}`, piece.items, href => void pressLink(io, href), textWidth - indent)
+            const list = ListBlock(ctx, `${key}-list-${i}-${j}`, piece.items, href => void pressLink(io, href), textWidth - indent)
             drawnParts.push(<Box key={`${key}-t${i}-c${j}`} marginLeft={indent}>{list.node}</Box>)
             note(list.rows, heading)
           }

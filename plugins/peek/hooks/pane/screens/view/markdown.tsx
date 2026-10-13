@@ -8,7 +8,7 @@ import type { NavIo } from '../../../navigation'
 import { fileHref } from '../../../paths'
 import { ICON } from '../../../theme'
 import type { DrawContext } from '../../types'
-import { DiagramEmbed, Embed, TableBlock, newBlocks, settleBlocks } from './blocks'
+import { DiagramEmbed, Embed, ListBlock, TableBlock, newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
 
 export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, markdown: string, path: string): Promise<ViewBody> {
@@ -130,6 +130,12 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
       const table = TableBlock(ctx, `table-${index}`, part)
       drawnParts.push(table.node)
       note(table.rows)
+      continue
+    }
+    if (part.kind === 'list') {
+      const list = ListBlock(ctx, `list-${index}`, part.items, href => void pressLink(io, href))
+      drawnParts.push(list.node)
+      note(list.rows)
       continue
     }
     if (part.kind === 'quote') {

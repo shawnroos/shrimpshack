@@ -226,33 +226,41 @@ export function linkTasks(text: string, base: string): { text: string; done: num
   return { text: lines.join('\n'), done, total }
 }
 
-export type ChecklistItem = { depth: number; isDone: boolean; text: string }
+export type ListItem = { depth: number; marker: 'bullet' | 'open' | 'done'; text: string }
+export type ListPart = { kind: 'list'; items: ListItem[] }
 
-// For text peek cannot write back to, such as a pull request body. An indented
-// line under a task that is not itself a list item continues that task.
-export function splitChecklist(text: string): ({ kind: 'markdown'; text: string } | { kind: 'checklist'; items: ChecklistItem[] })[] {
-  const out: ({ kind: 'markdown'; text: string } | { kind: 'checklist'; items: ChecklistItem[] })[] = []
+const BULLET = /^(\s*)[-*+]\s+(.*\S.*)$/
+const THEMATIC_BREAK = /^\s*([-*_])(\s*\1){2,}\s*$/
+const LIST_START = /^\s*([-*+]|\d+[.)])\s/
+
+// Bullet and task lines peek draws itself. An indented line under an item that
+// is not itself a list item continues that item. Fenced lines never count.
+export function splitLists(text: string): ({ kind: 'markdown'; text: string } | ListPart)[] {
+  const out: ({ kind: 'markdown'; text: string } | ListPart)[] = []
   let buffer: string[] = []
-  let items: ChecklistItem[] = []
+  let items: ListItem[] = []
   let inFence = false
   const flush = () => {
     if (buffer.join('').trim()) out.push({ kind: 'markdown', text: buffer.join('\n') })
     buffer = []
   }
   const flushItems = () => {
-    if (items.length) out.push({ kind: 'checklist', items })
+    if (items.length) out.push({ kind: 'list', items })
     items = []
   }
+  const depthOf = (indent: string) => Math.floor(indent.replace(/\t/g, '  ').length / 2)
   for (const line of text.split('\n')) {
     if (/^\s*(```|~~~)/.test(line)) inFence = !inFence
     const task = inFence ? null : TASK.exec(line)
-    if (task) {
+    const bullet = inFence || task || THEMATIC_BREAK.test(line) ? null : BULLET.exec(line)
+    if (task || bullet) {
       flush()
-      items.push({ depth: Math.floor((task[1] ?? '').replace(/\t/g, '  ').search(/\S/) / 2), isDone: task[2] !== ' ', text: (task[3] ?? '').trim() })
+      if (task) items.push({ depth: depthOf(/^\s*/.exec(line)?.[0] ?? ''), marker: task[2] === ' ' ? 'open' : 'done', text: (task[3] ?? '').trim() })
+      else items.push({ depth: depthOf(bullet?.[1] ?? ''), marker: 'bullet', text: (bullet?.[2] ?? '').trim() })
       continue
     }
     const last = items[items.length - 1]
-    if (last && !inFence && /^\s+\S/.test(line) && !/^\s*([-*+]|\d+[.)])\s/.test(line)) {
+    if (last && !inFence && /^\s+\S/.test(line) && !LIST_START.test(line)) {
       last.text = `${last.text} ${line.trim()}`
       continue
     }
@@ -285,6 +293,7 @@ export type DocPart =
   | { kind: 'quote'; text: string }
   | { kind: 'tasks'; items: TaskItem[] }
   | { kind: 'table'; header: string[]; align: CellAlign[]; rows: string[][] }
+  | { kind: 'list'; items: ListItem[] }
 
 export type CellAlign = 'left' | 'right' | 'center'
 
@@ -358,7 +367,7 @@ export function segmentsOf(page: string): DocPart[] {
   let tasks: TaskItem[] = []
   let inFence = false
   const flush = () => {
-    out.push(...splitTables(buffer.join('\n')))
+    for (const part of splitTables(buffer.join('\n'))) out.push(...(part.kind === 'markdown' ? splitLists(part.text) : [part]))
     buffer = []
   }
   const flushQuote = () => {
