@@ -1,9 +1,0 @@
-{
-  "name": "Acme wiki pages",
-  "match": [{ "host": "wiki.acme.example", "path": "/pages/*" }],
-  "source": {
-    "mcp": { "server": "acme-wiki", "tool": "get_peek_page", "args": { "url": "{{url}}" } },
-    "timeoutSeconds": 20
-  },
-  "refreshMinutes": 15
-}

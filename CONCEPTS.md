@@ -198,7 +198,8 @@ page type cannot invent its own layout.
 
 ### Recipe
 A user-level description of a document type peek does not handle itself: the links it
-claims and a script or MCP tool that returns a Page in the page vocabulary. It lives
+claims and a source that returns a Page in the page vocabulary: a script, or an MCP tool whose
+result a map script turns into the Page. It lives
 outside the plugin, so it survives peek updates and works in every session of that user.
 A specific built-in page type (GitHub, Linear, Slack) wins a link both claim unless the recipe
 says it overrides it; the generic web page always yields to a recipe.

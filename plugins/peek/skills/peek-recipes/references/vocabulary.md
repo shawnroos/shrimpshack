@@ -139,20 +139,48 @@ One rule applies to `href`, `Action.open` and every link found inside markdown.
 - stdout must be one Page as JSON. stderr shows on the error page when the exit code is not 0 (up to 500 characters).
 - **Never write into the recipe folder.** Peek hashes the folder again after the run. A write there discards the page and makes the recipe a draft. Write scratch files under `$TMPDIR`.
 
-### MCP source
+### MCP source: fetch, then map
 
 ```
-"source": { "mcp": { "server": "name", "tool": "tool_name", "args": { "url": "{{url}}" } }, "timeoutSeconds": 20 }
+"source": { "mcp": { "server": "name", "tool": "tool_name", "args": { "id": "{{url}}" } }, "map": ["./map.py"], "timeoutSeconds": 20, "env": ["NAME"] }
 ```
 
-- `server` is the MCP server name as Claude Code knows it. It can contain spaces, for example `claude.ai Linear`.
+An MCP tool returns its own data, never a Page. Peek calls the tool, then runs
+your map script on the tool's result, and the map script prints the Page. Peek's
+built-in pages work the same way: the Slack page calls `slack_read_thread` and
+parses its text, and the GitHub and Linear pages map the JSON their tools return.
+
+- `server` is the MCP server name as Claude Code knows it. It can contain spaces, for example `claude.ai Notion`.
 - `tool` is 1 to 64 characters of `A-Z a-z 0-9 _ . -`.
 - `args` is an object, at most 4000 characters as JSON. Peek replaces `{{url}}` with the link in every string, at any depth.
-- `env` is refused on an MCP source.
-- The tool's result must be the Page: its text content, joined with newlines, parsed as JSON, or its `structuredContent` when it has no text. Most third-party tools return their own data shape, not a Page. Those need a script source, or a tool built to return Pages.
+- `map` is required. It follows every rule of a script source's `run`: `map[0]` starts with `./` and names a regular file inside the folder, it needs a `#!` line and `chmod +x`, it gets the link as its last argument and in `PEEK_URL`, it runs in the recipe folder with only the script environment, and it must never write into the folder.
+- `env` names variables for the map script, as for a script source. The tool itself gets no environment.
+- `timeoutSeconds` is one limit for both steps: the tool call and the map run share it.
 - A tool name with a word such as create, update, delete, send, post, set, close or merge gets a warning. A recipe only reads.
 - The recipe works only in sessions where that server is connected. Elsewhere its links show the error page.
-- For a draft, the permission to grant is `mcp__<server>__<tool>`. In the server name, each character outside `A-Z a-z 0-9 _ -` becomes `_`.
+- For a draft, the session must allow both steps: the tool, as `mcp__<server>__<tool>` (each character of the server name outside `A-Z a-z 0-9 _ -` becomes `_`), and the map, as a Bash rule on its absolute path. Peek checks both before it runs either.
+
+**The map's stdin.** Peek writes exactly one JSON object, then a newline:
+
+```
+{"text": <the tool's text content blocks joined with "\n", or "">, "structured": <the tool's structuredContent, or null>}
+```
+
+- `text` joins only the text blocks. Images and other blocks are dropped. Many tools put JSON inside `text`, so the map parses it a second time (`json.loads(source["text"])`).
+- `structured` is `null` when the tool has no structured content.
+- When the tool returns no text and no structured content, the map does not run, and the result is `empty-result`.
+
+**Writing the map: sample, map, test locally, check.**
+
+1. Call the MCP tool yourself, with the recipe's arguments and a real sample link.
+2. Save its result in the stdin shape as `$TMPDIR/sample.json`: the tool's text in `text`, its structured content (or `null`) in `structured`. For example, with the tool's text saved as `$TMPDIR/tool.txt`: `python3 -c 'import json,sys; print(json.dumps({"text": sys.stdin.read(), "structured": None}, separators=(",", ":")))' < $TMPDIR/tool.txt > $TMPDIR/sample.json`.
+3. Write `map.py` with only the `python3` standard library. It reads stdin and prints one Page.
+4. From the recipe folder, run `python3 map.py < $TMPDIR/sample.json` until it prints a valid Page.
+5. Run `check_recipe`. When the map fails there, `fetched.stdin` holds the exact stdin peek gave it (declared env values redacted, cut at 8000 characters). If it differs from your sample, save it as the new sample and go back to step 4.
+
+`examples/notion-pages/` is a complete MCP recipe. `examples/notion-pages.sample.json`
+is a made-up sample in the shape the Notion MCP server's `notion-fetch` tool returns,
+saved as map stdin, and `examples/notion-pages.page.json` is what `map.py` prints for it.
 
 ## Failures
 
@@ -160,14 +188,15 @@ When a source fails, peek shows an error page that names the recipe and the prob
 
 | Kind | Cause |
 |---|---|
-| `invalid-recipe` | The folder no longer loads, or `run[0]` is not a regular file inside the folder |
+| `invalid-recipe` | The folder no longer loads, or `run[0]` or `map[0]` is not a regular file inside the folder |
 | `changed-during-run` | The folder changed before or while the source ran |
 | `needs-permission` | A draft asked to run something this session's permissions do not allow |
 | `started-failed` | Peek could not start the process at all |
-| `timeout` | The source ran past `timeoutSeconds` |
-| `exit-nonzero` | The script exited with a code other than 0. Exit 126 with `Permission denied` means the script lacks `chmod +x`. Exit 127 means the `#!` interpreter was not found on `PATH`. |
+| `timeout` | The source ran past `timeoutSeconds`. For an MCP source, the tool call and the map share that limit. |
+| `exit-nonzero` | The script or map exited with a code other than 0. For a map, `fetched.stdin` holds its input. Exit 126 with `Permission denied` means the script lacks `chmod +x`. Exit 127 means the `#!` interpreter was not found on `PATH`. |
 | `output-truncated` | stdout was too large |
-| `not-JSON` | stdout or the tool text was empty or not JSON |
+| `not-JSON` | The script or map printed nothing, or something that is not JSON. For a map, `fetched.stdin` holds its input. |
 | `server-not-connected` | The MCP call was refused, usually because the server is not connected |
 | `tool-error` | The MCP tool returned an error |
-| `invalid-page` | The JSON is outside this vocabulary. Each problem names its path, such as `sections[0].block.type`. |
+| `empty-result` | The MCP tool returned no text and no structured content, so the map did not run |
+| `invalid-page` | The JSON is outside this vocabulary. Each problem names its path, such as `sections[0].block.type`. For a map, `fetched.stdin` holds its input. |

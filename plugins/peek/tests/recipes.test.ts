@@ -162,9 +162,12 @@ describe('loadRecipes', () => {
     expect(valid((await loadRecipes(world.io)).recipes, 'figma').files['bin/fetch.sh']).toMatch(/^[0-9a-f]{64}$/)
   })
 
-  test('an mcp recipe needs no script file', async () => {
-    const world = fakeFs({ [`${ROOT}/lin/recipe.json`]: recipeJson({ source: { mcp: { server: 'linear', tool: 'get_doc' } } }) })
-    expect(valid((await loadRecipes(world.io)).recipes, 'lin').recipe.source).toEqual({ mcp: { server: 'linear', tool: 'get_doc' } })
+  test('an mcp recipe must name a map script inside the folder', async () => {
+    const source = { mcp: { server: 'linear', tool: 'get_doc' }, map: ['./map.py'] }
+    const missing = fakeFs({ [`${ROOT}/lin/recipe.json`]: recipeJson({ source }) })
+    expect(invalid((await loadRecipes(missing.io)).recipes, 'lin').problems).toEqual([{ path: 'source.map[0]', message: expect.stringContaining('./map.py') }])
+    const present = fakeFs({ [`${ROOT}/lin/recipe.json`]: recipeJson({ source }), [`${ROOT}/lin/map.py`]: 'x' })
+    expect(valid((await loadRecipes(present.io)).recipes, 'lin').recipe.source).toEqual(source)
   })
 
   test('a symlink in the folder makes the recipe invalid, named by its path', async () => {

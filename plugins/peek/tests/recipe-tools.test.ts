@@ -314,6 +314,42 @@ test('the check reports a failing source by kind and keeps stderr under the fetc
   expect(json.outcome.stderr).toBeUndefined()
 })
 
+const docsRecipe = () =>
+  folder('figma-files', { source: { mcp: { server: 'docs', tool: 'get_doc', args: { id: '{{url}}' } }, map: ['./map.py'] } }, { 'map.py': '#!/usr/bin/env python3\n' })
+
+test('a map that exits 1 fails the check, and fetched.stdin is the exact stdin the map read, never in the first line', async (driver, on) => {
+  const doc = JSON.stringify({ title: 'Setup guide', body: 'Steps for a new laptop.' })
+  const pane = await paneWorld(on, { files: docsRecipe(), approve: ['figma-files'], pages: () => ({ exitCode: 1, stderr: "KeyError: 'name'" }) })
+  on('mcp.call', () => ({ value: { content: [{ type: 'text', text: doc }], isError: false } }))
+  const text = await call(driver, 'check_recipe', { recipe: 'figma-files', link: FIGMA })
+  const json = jsonOf(text)
+  expect(json.pass).toBe(false)
+  expect(json.outcome).toEqual({ kind: 'exit-nonzero', exitCode: 1 })
+  expect(json.fetched.stderr).toBe("KeyError: 'name'")
+  expect(json.fetched.stdin).toBe(`${JSON.stringify({ text: doc, structured: null })}\n`)
+  expect(json.fetched.stdin).toBe(pane.w.calls.children[0]?.stdin)
+  expect(firstLine(text)).not.toContain('Setup guide')
+  expect(firstLine(text)).toContain('fetched.stdin')
+})
+
+test('a map printing an unknown block fails the check with the page path and the stdin under fetched', async (driver, on) => {
+  await paneWorld(on, { files: docsRecipe(), approve: ['figma-files'], pages: () => ({ stdout: JSON.stringify({ title: 't', sections: [{ block: { type: 'chart' } }] }) }) })
+  on('mcp.call', () => ({ value: { content: [{ type: 'text', text: 'raw' }], isError: false } }))
+  const json = jsonOf(await call(driver, 'check_recipe', { recipe: 'figma-files', link: FIGMA }))
+  expect(json.outcome).toEqual({ kind: 'invalid-page' })
+  expect(json.problems).toContainEqual(expect.objectContaining({ in: 'page', path: 'sections[0].block.type' }))
+  expect(json.fetched.stdin).toBe('{"text":"raw","structured":null}\n')
+})
+
+test('a tool that returns nothing fails the check as empty-result, and the map never runs', async (driver, on) => {
+  const pane = await paneWorld(on, { files: docsRecipe(), approve: ['figma-files'] })
+  on('mcp.call', () => ({ value: { content: [], isError: false } }))
+  const text = await call(driver, 'check_recipe', { recipe: 'figma-files', link: FIGMA })
+  expect(jsonOf(text).outcome).toEqual({ kind: 'empty-result', server: 'docs', tool: 'get_doc' })
+  expect(firstLine(text)).toContain('returned nothing')
+  expect(pane.scripts()).toEqual([])
+})
+
 test('open on a working draft returns the outline in the pane focus order, marked unapproved, with the page shown before', async (driver, on) => {
   await paneWorld(on, { files: figmaRecipe(), decision: 'allow' })
   await peek(driver, 'https://example.com/page')

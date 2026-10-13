@@ -376,14 +376,19 @@ test("an overriding recipe's surface shows overrides: github before Approve", as
 })
 
 test('an MCP recipe calling create_comment shows the server, tool, arguments and the mutating warning, even when its page failed', async (driver, on) => {
-  const files = folder('figma-comments', { source: { mcp: { server: 'figma', tool: 'create_comment', args: { fileKey: 'abc' } } } })
+  const map = '#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps({"title": json.load(sys.stdin)["text"], "sections": []}))\n'
+  const files = folder('figma-comments', { source: { mcp: { server: 'figma', tool: 'create_comment', args: { fileKey: 'abc' } }, map: ['./map.py'] } }, { 'map.py': map })
   await paneWorld(on, { files })
   await preview(driver, FIGMA)
   const ui = await mount(driver)
   await until(ui, async () => (await ui.find({ text: /Recipe page failed/ })) !== undefined)
   const tree = await textOf(ui)
-  expect(tree).toContain('MCP server \\"figma\\", tool \\"create_comment\\"')
+  expect(tree).toContain('MCP server \\"figma\\", tool \\"create_comment\\" (mcp__figma__create_comment)')
   expect(tree).toContain('fileKey')
+  expect(tree).toContain('then maps its result through ./map.py <link>')
+  expect(tree).toContain('New file: map.py')
+  expect(tree.indexOf('json.load(sys.stdin)')).toBeGreaterThan(-1)
+  expect(tree.indexOf('json.load(sys.stdin)')).toBeLessThan(tree.indexOf('"approve"'))
   expect(tree).toMatch(/looks like it changes something/)
   expect(tree.indexOf('looks like it changes something')).toBeLessThan(tree.indexOf('"approve"'))
   expect(await ui.find({ key: 'approve' })).toBeDefined()

@@ -1,0 +1,13 @@
+{
+  "name": "Notion pages",
+  "match": [
+    { "host": "notion.so" },
+    { "host": "www.notion.so" },
+    { "host": "*.notion.site" }
+  ],
+  "source": {
+    "mcp": { "server": "claude.ai Notion", "tool": "notion-fetch", "args": { "id": "{{url}}" } },
+    "map": ["./map.py"],
+    "timeoutSeconds": 30
+  }
+}

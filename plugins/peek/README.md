@@ -155,7 +155,7 @@ A recipe is a folder in `~/.local/share/claude-peek/recipes/<id>/`. It holds a
 `recipe.json` that names the links it handles, and one data source:
 
 - a script in the folder, which gets the link and prints a page as JSON, or
-- an MCP tool that returns a page. This works only in sessions where that MCP server is connected.
+- an MCP tool, whose result a map script in the folder turns into a page. This works only in sessions where that MCP server is connected.
 
 The page is built from a fixed vocabulary: a title, details, sections (markdown,
 media, table, cards, list or fields) and up to 9 actions that open a link or copy
@@ -190,7 +190,8 @@ ToolSearch first:
 
 The skill is `skills/peek-recipes/SKILL.md`. The full vocabulary is in its
 `references/vocabulary.md`, and `examples/` holds a script recipe and an MCP
-recipe with their sample pages.
+recipe with their sample pages. The MCP recipe also holds a sample tool result
+for its map script.
 
 ## Commands
 

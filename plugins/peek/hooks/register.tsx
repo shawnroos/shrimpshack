@@ -1685,12 +1685,18 @@ type RunFailed = Extract<RunResult, { ok: false }>
 // Text a source printed goes under fetched; the outcome keeps only what peek itself decided.
 function splitFailure(outcome: RunFailed): { outcome: Record<string, unknown>; text?: Record<string, string>; quiet: RunFailed } {
   const { ok: _, id: __, name: ___, ...rest } = outcome
+  const stdin = 'stdin' in outcome && outcome.stdin !== undefined ? { stdin: outcome.stdin } : undefined
   switch (outcome.kind) {
     case 'exit-nonzero': {
-      return { outcome: { kind: outcome.kind, exitCode: outcome.exitCode }, text: { stderr: outcome.stderr }, quiet: { ...outcome, stderr: '' } }
+      return { outcome: { kind: outcome.kind, exitCode: outcome.exitCode }, text: { stderr: outcome.stderr, ...stdin }, quiet: { ...outcome, stderr: '' } }
+    }
+    case 'not-JSON': {
+      return { outcome: { kind: outcome.kind }, text: { message: outcome.message, ...stdin }, quiet: { ...outcome, message: 'see fetched.message' } }
+    }
+    case 'invalid-page': {
+      return { outcome: { kind: outcome.kind }, ...(stdin ? { text: stdin } : {}), quiet: outcome }
     }
     case 'started-failed':
-    case 'not-JSON':
     case 'server-not-connected':
     case 'tool-error': {
       const { message, ...kept } = rest as typeof rest & { message: string }
@@ -1700,8 +1706,7 @@ function splitFailure(outcome: RunFailed): { outcome: Record<string, unknown>; t
       const first = /^(?:'(?:[^']|'\\'')*'|\S+)/.exec(outcome.command ?? '')?.[0]
       return { outcome: { ...rest, allow: first ? `Bash(${first}:*)` : outcome.tool }, quiet: outcome }
     }
-    case 'invalid-recipe':
-    case 'invalid-page': {
+    case 'invalid-recipe': {
       return { outcome: { kind: outcome.kind }, quiet: outcome }
     }
     default: {
@@ -1773,7 +1778,8 @@ async function checkRecipeTool($: EngineInterface, input: { recipe?: unknown; li
     const split = splitFailure(outcome)
     const problems = outcome.kind === 'invalid-page' || outcome.kind === 'invalid-recipe' ? problemsIn(outcome.kind === 'invalid-page' ? 'page' : 'recipe', outcome.problems) : []
     const allow = typeof split.outcome.allow === 'string' ? ` Ask the person to allow ${split.outcome.allow} in the session's permissions, or to approve the recipe in the pane.` : ''
-    return failed(`${recipeFailureText(split.quiet)}.${allow}${also}`, {
+    const input = split.text?.stdin === undefined ? '' : ' The map script read the input under fetched.stdin; save it and run the map on it locally.'
+    return failed(`${recipeFailureText(split.quiet)}.${input}${allow}${also}`, {
       ...head,
       outcome: split.outcome,
       problems,

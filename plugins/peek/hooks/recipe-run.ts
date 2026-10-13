@@ -1,8 +1,8 @@
 import type { McpToolResult, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import { cleanText, RECIPE_CAPS, validatePage } from './page'
-import type { Page, Problem, Recipe } from './page'
-import { loadRecipe } from './recipes'
+import { cleanText, RECIPE_CAPS, UNSAFE, validatePage } from './page'
+import type { McpSource, Page, Problem, Recipe } from './page'
+import { loadRecipe, mcpToolName } from './recipes'
 import type { RecipesIo } from './recipes'
 
 export type RunIo = RecipesIo & {
@@ -22,24 +22,28 @@ export type RunFailure =
   | { kind: 'needs-permission'; tool: string; command?: string; decision: 'ask' | 'deny'; reason?: string }
   | { kind: 'started-failed'; message: string }
   | { kind: 'timeout'; limitSeconds: number }
-  | { kind: 'exit-nonzero'; exitCode: number; stderr: string }
+  | { kind: 'exit-nonzero'; exitCode: number; stderr: string; stdin?: string }
   | { kind: 'output-truncated' }
-  | { kind: 'not-JSON'; message: string }
+  | { kind: 'not-JSON'; message: string; stdin?: string }
   | { kind: 'server-not-connected'; server: string; message: string }
   | { kind: 'tool-error'; server: string; tool: string; message: string }
-  | { kind: 'invalid-page'; problems: Problem[] }
+  | { kind: 'empty-result'; server: string; tool: string }
+  | { kind: 'invalid-page'; problems: Problem[]; stdin?: string }
 
 export type RunOutcome =
   | { ok: true; kind: 'page'; id: string; name: string; digest: string; page: Page; ranAt: number }
   | ({ ok: false; id: string; name: string } & RunFailure)
 
 export const EXCERPT_CHARS = 500
+export const STDIN_ECHO_CHARS = 8000
 export const SCRIPT_ENV = ['HOME', 'PATH', 'LANG', 'TMPDIR'] as const
 const ENV_BIN = '/usr/bin/env'
 const REDACTED = '[redacted]'
 
 type Loaded = Extract<Awaited<ReturnType<typeof loadRecipe>>, { ok: true }>
-type Ran = { ok: true; text: string; secrets?: readonly string[] } | { ok: true; value: unknown } | ({ ok: false } & RunFailure)
+type Ran = { ok: true; text: string; secrets: readonly string[]; stdin?: string } | ({ ok: false } & RunFailure)
+type Script = { field: 'run' | 'map'; argv: readonly string[]; env?: readonly string[] }
+type Resolved = { folder: string; argv: string[]; command: string }
 
 const timeoutOf = (recipe: Recipe) => Math.min(recipe.source.timeoutSeconds ?? RECIPE_CAPS.defaultTimeoutSeconds, RECIPE_CAPS.timeoutSeconds)
 
@@ -51,9 +55,15 @@ function redact(text: string, secrets: readonly string[]): string {
 
 export const excerpt = (text: string, secrets: readonly string[] = []): string => cleanText(redact(text, secrets).slice(0, EXCERPT_CHARS))
 
-const shellWord = (word: string) => (/^[\w/.,:@%+=-]+$/.test(word) ? word : `'${word.replaceAll("'", String.raw`'\''`)}'`)
+// The stdin is JSON, so unsafe characters are escaped rather than stripped: the echo still parses to what the map read.
+const stdinEcho = (stdin: string, secrets: readonly string[]): string =>
+  redact(stdin, secrets)
+    .slice(0, STDIN_ECHO_CHARS)
+    .replaceAll(UNSAFE, char => `${String.raw`\u`}${(char.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`)
 
-export const mcpToolName = (server: string, tool: string) => `mcp__${server.replaceAll(/[^\w-]/g, '_')}__${tool}`
+export const mapStdin = (text: string, structured: unknown): string => `${JSON.stringify({ text, structured: structured ?? null })}\n`
+
+const shellWord = (word: string) => (/^[\w/.,:@%+=-]+$/.test(word) ? word : `'${word.replaceAll("'", String.raw`'\''`)}'`)
 
 function substitute(value: unknown, url: string): unknown {
   if (typeof value === 'string') return value.replaceAll('{{url}}', url)
@@ -62,16 +72,24 @@ function substitute(value: unknown, url: string): unknown {
   return value
 }
 
-async function scriptPath(io: RunIo, loaded: Loaded, run0: string): Promise<{ ok: true; script: string; folder: string } | { ok: false; problems: Problem[] }> {
-  const refuse = (message: string) => ({ ok: false as const, problems: [{ path: 'source.run[0]', message: `"${run0}" ${message}` }] })
+async function resolveScript(io: RunIo, loaded: Loaded, script: Script, url: string): Promise<{ ok: true; resolved: Resolved } | { ok: false; problems: Problem[] }> {
+  const run0 = script.argv[0] ?? ''
+  const refuse = (message: string) => ({ ok: false as const, problems: [{ path: `source.${script.field}[0]`, message: `"${run0}" ${message}` }] })
   const folder = await io.stat(loaded.dir).catch(() => undefined)
-  const script = await io.stat(`${loaded.dir}/${run0.replace(/^\.\//, '')}`).catch(() => undefined)
-  if (!folder?.realPath || !script?.realPath) return refuse('could not be resolved to a real path')
-  if (script.isLink || script.kind !== 'file') return refuse('is not a regular file')
-  if (!script.realPath.startsWith(`${folder.realPath}/`)) return refuse(`lands at ${script.realPath}, outside the recipe folder`)
+  const file = await io.stat(`${loaded.dir}/${run0.replace(/^\.\//, '')}`).catch(() => undefined)
+  if (!folder?.realPath || !file?.realPath) return refuse('could not be resolved to a real path')
+  if (file.isLink || file.kind !== 'file') return refuse('is not a regular file')
+  if (!file.realPath.startsWith(`${folder.realPath}/`)) return refuse(`lands at ${file.realPath}, outside the recipe folder`)
   // /usr/bin/env reads any leading NAME=value word as an assignment, so a path holding = would not run as a command.
-  if (script.realPath.includes('=')) return refuse('has = in its path, which env would read as a variable')
-  return { ok: true, script: script.realPath, folder: folder.realPath }
+  if (file.realPath.includes('=')) return refuse('has = in its path, which env would read as a variable')
+  const argv = [file.realPath, ...script.argv.slice(1), url]
+  return { ok: true, resolved: { folder: folder.realPath, argv, command: argv.map(word => shellWord(word)).join(' ') } }
+}
+
+async function refusedBash(io: RunIo, resolved: Resolved): Promise<({ ok: false } & RunFailure) | undefined> {
+  const check = await io.toolCheck({ tool: 'Bash', input: { command: resolved.command } })
+  if (check.decision === 'allow') return undefined
+  return { ok: false, kind: 'needs-permission', tool: 'Bash', command: resolved.command, decision: check.decision, ...(check.reason ? { reason: check.reason } : {}) }
 }
 
 async function timed<T>(io: RunIo, limitMs: number, call: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; isTimeout: boolean; error: unknown }> {
@@ -83,15 +101,7 @@ async function timed<T>(io: RunIo, limitMs: number, call: () => Promise<T>): Pro
   }
 }
 
-async function runScript(io: RunIo, loaded: Loaded, source: { run: string[]; env?: string[] }, url: string, draft: boolean): Promise<Ran> {
-  const resolved = await scriptPath(io, loaded, source.run[0] ?? '')
-  if (!resolved.ok) return { ok: false, kind: 'invalid-recipe', problems: resolved.problems }
-  const argv = [resolved.script, ...source.run.slice(1), url]
-  if (draft) {
-    const command = argv.map(word => shellWord(word)).join(' ')
-    const check = await io.toolCheck({ tool: 'Bash', input: { command } })
-    if (check.decision !== 'allow') return { ok: false, kind: 'needs-permission', tool: 'Bash', command, decision: check.decision, ...(check.reason ? { reason: check.reason } : {}) }
-  }
+async function exec(io: RunIo, resolved: Resolved, script: Script, url: string, limit: { seconds: number; leftMs: number }, stdin?: string): Promise<Ran> {
   const pairs: string[] = []
   for (const name of SCRIPT_ENV) {
     const value = await io.envGet(name)
@@ -99,39 +109,55 @@ async function runScript(io: RunIo, loaded: Loaded, source: { run: string[]; env
   }
   pairs.push(`PEEK_URL=${url}`)
   const secrets: string[] = []
-  for (const name of source.env ?? []) {
+  for (const name of script.env ?? []) {
     if ((SCRIPT_ENV as readonly string[]).includes(name) || name === 'PEEK_URL') continue
     const value = await io.envGet(name)
     if (value === undefined) continue
     pairs.push(`${name}=${value}`)
     if (value) secrets.push(value)
   }
-  const limitSeconds = timeoutOf(loaded.recipe)
-  const limitMs = limitSeconds * 1000
-  const ran = await timed(io, limitMs, () => io.run([ENV_BIN, '-i', ...pairs, ...argv], { cwd: resolved.folder, timeoutMs: limitMs }))
+  const echo = stdin === undefined ? {} : { stdin: stdinEcho(stdin, secrets) }
+  const init: ProcessRunInit = { cwd: resolved.folder, timeoutMs: limit.leftMs, ...(stdin === undefined ? {} : { stdin }) }
+  const ran = await timed(io, limit.leftMs, () => io.run([ENV_BIN, '-i', ...pairs, ...resolved.argv], init))
   if (!ran.ok) {
-    return ran.isTimeout ? { ok: false, kind: 'timeout', limitSeconds } : { ok: false, kind: 'started-failed', message: excerpt(String(ran.error), secrets) }
+    return ran.isTimeout ? { ok: false, kind: 'timeout', limitSeconds: limit.seconds } : { ok: false, kind: 'started-failed', message: excerpt(String(ran.error), secrets) }
   }
   const result = ran.value
-  if (result.exitCode !== 0) return { ok: false, kind: 'exit-nonzero', exitCode: result.exitCode, stderr: excerpt(result.stderr, secrets) }
+  if (result.exitCode !== 0) return { ok: false, kind: 'exit-nonzero', exitCode: result.exitCode, stderr: excerpt(result.stderr, secrets), ...echo }
   if (result.isStdoutTruncated) return { ok: false, kind: 'output-truncated' }
-  return { ok: true, text: result.stdout, secrets }
+  return { ok: true, text: result.stdout, secrets, ...echo }
 }
 
-async function runMcp(io: RunIo, loaded: Loaded, source: { server: string; tool: string; args?: Record<string, unknown> }, url: string, draft: boolean): Promise<Ran> {
-  const { server, tool } = source
-  const args = substitute(source.args ?? {}, url) as Record<string, unknown>
+async function runScript(io: RunIo, loaded: Loaded, source: { run: string[]; env?: string[] }, url: string, draft: boolean): Promise<Ran> {
+  const script: Script = { field: 'run', argv: source.run, ...(source.env ? { env: source.env } : {}) }
+  const found = await resolveScript(io, loaded, script, url)
+  if (!found.ok) return { ok: false, kind: 'invalid-recipe', problems: found.problems }
+  const refused = draft ? await refusedBash(io, found.resolved) : undefined
+  if (refused) return refused
+  const seconds = timeoutOf(loaded.recipe)
+  return exec(io, found.resolved, script, url, { seconds, leftMs: seconds * 1000 })
+}
+
+async function runMcp(io: RunIo, loaded: Loaded, source: McpSource, url: string, draft: boolean): Promise<Ran> {
+  const { server, tool } = source.mcp
+  const args = substitute(source.mcp.args ?? {}, url) as Record<string, unknown>
+  const script: Script = { field: 'map', argv: source.map, ...(source.env ? { env: source.env } : {}) }
+  const found = await resolveScript(io, loaded, script, url)
+  if (!found.ok) return { ok: false, kind: 'invalid-recipe', problems: found.problems }
   if (draft) {
     const name = mcpToolName(server, tool)
     const check = await io.toolCheck({ tool: name, input: args })
     if (check.decision !== 'allow') return { ok: false, kind: 'needs-permission', tool: name, decision: check.decision, ...(check.reason ? { reason: check.reason } : {}) }
+    const refused = await refusedBash(io, found.resolved)
+    if (refused) return refused
   }
-  const limitSeconds = timeoutOf(loaded.recipe)
-  const limitMs = limitSeconds * 1000
+  const seconds = timeoutOf(loaded.recipe)
+  const limitMs = seconds * 1000
+  const startedAt = await io.now()
   const expired = Symbol('expired')
   const ran = await timed(io, limitMs, () => Promise.race([io.mcpCall(server, tool, args), io.sleep(limitMs).then(() => expired)]))
   if (!ran.ok) return { ok: false, kind: 'server-not-connected', server, message: excerpt(String(ran.error)) }
-  if (ran.value === expired) return { ok: false, kind: 'timeout', limitSeconds }
+  if (ran.value === expired) return { ok: false, kind: 'timeout', limitSeconds: seconds }
   const result = ran.value as McpToolResult
   const text = result.content
     .map(block => block as { type?: unknown; text?: unknown })
@@ -139,8 +165,10 @@ async function runMcp(io: RunIo, loaded: Loaded, source: { server: string; tool:
     .map(block => block.text)
     .join('\n')
   if (result.isError) return { ok: false, kind: 'tool-error', server, tool, message: excerpt(text || 'the tool reported an error and said nothing more') }
-  if (!text.trim() && result.structuredContent !== undefined) return { ok: true, value: result.structuredContent }
-  return { ok: true, text }
+  if (!text.trim() && (result.structuredContent ?? null) === null) return { ok: false, kind: 'empty-result', server, tool }
+  const leftMs = limitMs - ((await io.now()) - startedAt)
+  if (leftMs <= 0) return { ok: false, kind: 'timeout', limitSeconds: seconds }
+  return exec(io, found.resolved, script, url, { seconds, leftMs }, mapStdin(text, result.structuredContent))
 }
 
 export async function runRecipe(io: RunIo, target: RunTarget, url: string): Promise<RunOutcome> {
@@ -149,26 +177,23 @@ export async function runRecipe(io: RunIo, target: RunTarget, url: string): Prom
   const named = { id: target.id, name: before.recipe.name }
   if (before.digest !== target.digest) return { ok: false, ...named, kind: 'changed-during-run', phase: 'before' }
   const { source } = before.recipe
-  const ran = 'run' in source ? await runScript(io, before, source, url, target.draft) : await runMcp(io, before, source.mcp, url, target.draft)
+  const ran = 'run' in source ? await runScript(io, before, source, url, target.draft) : await runMcp(io, before, source, url, target.draft)
   const ranAt = await io.now()
   if (!ran.ok && (ran.kind === 'invalid-recipe' || ran.kind === 'needs-permission')) return { ...ran, ...named }
   const after = await loadRecipe(io, target.root, target.id)
   if (!after.ok || after.digest !== target.digest) return { ok: false, ...named, kind: 'changed-during-run', phase: 'after' }
   if (!ran.ok) return { ...ran, ...named }
+  const echo = ran.stdin === undefined ? {} : { stdin: ran.stdin }
+  if (!ran.text.trim()) return { ok: false, ...named, kind: 'not-JSON', message: 'the source printed nothing; it must print one Page as JSON', ...echo }
   let raw: unknown
-  if ('value' in ran) raw = ran.value
-  else {
-    if (!ran.text.trim()) return { ok: false, ...named, kind: 'not-JSON', message: 'the source printed nothing; it must print one Page as JSON' }
-    const secrets = ran.secrets ?? []
-    try {
-      raw = JSON.parse(ran.text)
-    } catch (error) {
-      // The parser's own message quotes the stdout it choked on, so it is redacted like the excerpt.
-      return { ok: false, ...named, kind: 'not-JSON', message: `${excerpt(String(error), secrets)}; output began ${JSON.stringify(excerpt(ran.text.trim(), secrets).slice(0, 80))}` }
-    }
+  try {
+    raw = JSON.parse(ran.text)
+  } catch (error) {
+    // The parser's own message quotes the stdout it choked on, so it is redacted like the excerpt.
+    return { ok: false, ...named, kind: 'not-JSON', message: `${excerpt(String(error), ran.secrets)}; output began ${JSON.stringify(excerpt(ran.text.trim(), ran.secrets).slice(0, 80))}`, ...echo }
   }
   const checked = validatePage(raw)
-  if (!checked.ok) return { ok: false, ...named, kind: 'invalid-page', problems: checked.problems }
+  if (!checked.ok) return { ok: false, ...named, kind: 'invalid-page', problems: checked.problems, ...echo }
   return { ok: true, kind: 'page', ...named, digest: target.digest, page: checked.page, ranAt }
 }
 
@@ -207,6 +232,9 @@ export function failureText(outcome: Extract<RunOutcome, { ok: false }>): string
     }
     case 'tool-error': {
       return `${who}: the MCP tool ${outcome.tool} on "${outcome.server}" reported an error: ${outcome.message}`
+    }
+    case 'empty-result': {
+      return `${who}: the MCP tool ${outcome.tool} on "${outcome.server}" returned nothing, no text and no structured content`
     }
     case 'invalid-page': {
       return `${who} returned a page outside the vocabulary: ${outcome.problems.map(problem => `${problem.path} ${problem.message}`).join('; ')}`

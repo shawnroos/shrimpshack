@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { loadRecipe } from '../hooks/recipes'
-import { failureText, runRecipe } from '../hooks/recipe-run'
+import type { McpToolResult } from 'claude-code'
+
+import { failureText, runRecipe, STDIN_ECHO_CHARS } from '../hooks/recipe-run'
 import type { RunOutcome } from '../hooks/recipe-run'
 import { PAGE_RESULT, PAGE_RESULT_PAGE, structuredResult, TOOL_ERROR, textResult } from './fixtures/mcp'
 import { HOME, mcpFolder, PAGE, ROOT, scriptFolder, world } from './fixtures/recipes/world'
-import type { World } from './fixtures/recipes/world'
+import type { Child, ScriptAnswer, World } from './fixtures/recipes/world'
 
 const LINK = 'https://figma.com/file/abc/Design'
 const DIR = `${ROOT}/figma-files`
@@ -309,8 +311,6 @@ describe('runRecipe: MCP source', () => {
   test('text that is not JSON is not-JSON; a bad page is invalid-page', async () => {
     const prose = world({ files: mcpFolder('figma-files', { server: 'linear', tool: 'get_issue' }), mcp: () => textResult('Here is the issue') })
     failed(await run(prose), 'not-JSON')
-    const empty = world({ files: mcpFolder('figma-files', { server: 'linear', tool: 'get_issue' }), mcp: () => ({ content: [], isError: false }) })
-    failed(await run(empty), 'not-JSON')
     const bad = world({ files: mcpFolder('figma-files', { server: 'linear', tool: 'get_issue' }), mcp: () => textResult('{"title":""}') })
     failed(await run(bad), 'invalid-page')
   })
@@ -330,6 +330,164 @@ describe('runRecipe: MCP source', () => {
       },
     })
     expect(failed(await run(w), 'changed-during-run').phase).toBe('after')
+  })
+})
+
+describe('runRecipe: an MCP source fetches, then maps through a script', () => {
+  const MAP = `${DIR}/map.py`
+  const ISSUE = { identifier: 'DOC-7', title: 'Write the setup guide', state: 'Todo', body: 'Steps for a new laptop.' }
+  const toPage = (issue: typeof ISSUE) => ({
+    title: `${issue.identifier} ${issue.title}`,
+    details: [{ label: 'State', value: issue.state }],
+    sections: [{ heading: 'Body', block: { type: 'markdown', text: issue.body } }],
+  })
+  const mapIssue = (child: Child): ScriptAnswer => ({ stdout: JSON.stringify(toPage(JSON.parse(JSON.parse(child.stdin ?? '').text) as typeof ISSUE)) })
+  const issueFolder = (extra: Record<string, unknown> = {}) => mcpFolder('figma-files', { server: 'docs', tool: 'get_doc', args: { id: '{{url}}' } }, extra)
+
+  test('the map script turns a tool result that is not a page into the page', async () => {
+    const w = world({ files: issueFolder(), mcp: () => textResult(JSON.stringify(ISSUE)), script: mapIssue })
+    const outcome = await run(w)
+    if (!outcome.ok) throw new Error(JSON.stringify(outcome))
+    expect(outcome.page).toEqual(toPage(ISSUE))
+    expect(w.calls.mcp).toEqual([{ server: 'docs', tool: 'get_doc', args: { id: LINK } }])
+    const [child] = w.calls.children
+    expect(child?.argv).toEqual([MAP, LINK])
+    expect(child?.cwd).toBe(DIR)
+    expect(child?.env).toEqual({ HOME, PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', TMPDIR: '/tmp/u/', PEEK_URL: LINK })
+    expect(w.calls.run[0]?.argv.slice(0, 2)).toEqual(['/usr/bin/env', '-i'])
+  })
+
+  test('the map stdin is exactly {"text","structured"} and a newline: text blocks joined with \\n, other blocks dropped', async () => {
+    const result = { content: [{ type: 'text', text: 'first' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }, { type: 'text', text: 'second "q"' }], isError: false, structuredContent: { n: 1 } }
+    const both = world({ files: issueFolder(), mcp: () => result as McpToolResult, script: () => ({ stdout: JSON.stringify(PAGE) }) })
+    await run(both)
+    expect(both.calls.children[0]?.stdin).toBe('{"text":"first\\nsecond \\"q\\"","structured":{"n":1}}\n')
+    const plain = world({ files: issueFolder(), mcp: () => textResult('only text'), script: () => ({ stdout: JSON.stringify(PAGE) }) })
+    await run(plain)
+    expect(plain.calls.children[0]?.stdin).toBe('{"text":"only text","structured":null}\n')
+    const structured = world({ files: issueFolder(), mcp: () => structuredResult({ id: 7 }), script: () => ({ stdout: JSON.stringify(PAGE) }) })
+    await run(structured)
+    expect(structured.calls.children[0]?.stdin).toBe('{"text":"","structured":{"id":7}}\n')
+  })
+
+  test('a map that exits 1 is exit-nonzero and carries the exact stdin it was given', async () => {
+    const w = world({ files: issueFolder(), mcp: () => textResult(JSON.stringify(ISSUE)), script: () => ({ exitCode: 1, stderr: 'KeyError: identifier' }) })
+    const outcome = failed(await run(w), 'exit-nonzero')
+    expect(outcome.stderr).toContain('KeyError')
+    expect(outcome.stdin).toBe(w.calls.children[0]?.stdin)
+    expect(outcome.stdin).toBe(`${JSON.stringify({ text: JSON.stringify(ISSUE), structured: null })}\n`)
+  })
+
+  test('a map printing an unknown block is invalid-page with its path, carrying the stdin', async () => {
+    const w = world({ files: issueFolder(), mcp: () => textResult('x'), script: () => ({ stdout: JSON.stringify({ title: 't', sections: [{ block: { type: 'chart' } }] }) }) })
+    const outcome = failed(await run(w), 'invalid-page')
+    expect(outcome.problems.map(problem => problem.path)).toContain('sections[0].block.type')
+    expect(outcome.stdin).toBe('{"text":"x","structured":null}\n')
+  })
+
+  test('a map printing prose is not-JSON, carrying the stdin', async () => {
+    const w = world({ files: issueFolder(), mcp: () => textResult('x'), script: () => ({ stdout: 'oops' }) })
+    expect(failed(await run(w), 'not-JSON').stdin).toBe('{"text":"x","structured":null}\n')
+  })
+
+  test('a script source failure carries no stdin', async () => {
+    const w = world({ files: scriptFolder('figma-files'), script: () => ({ exitCode: 1 }) })
+    expect('stdin' in failed(await run(w), 'exit-nonzero')).toBe(false)
+  })
+
+  test('the stdin echo is redacted of the map env values, capped, and escapes what the page text rules strip', async () => {
+    const secret = 'tok_SECRET_MAP'
+    const long = `${secret} ${'y'.repeat(STDIN_ECHO_CHARS)}`
+    const w = world({ files: issueFolder({ env: ['TOKEN'] }), env: { TOKEN: secret }, mcp: () => textResult(long), script: () => ({ exitCode: 1 }) })
+    const outcome = failed(await run(w), 'exit-nonzero')
+    expect(w.calls.children[0]?.env.TOKEN).toBe(secret)
+    expect(outcome.stdin).not.toContain(secret)
+    expect(outcome.stdin?.startsWith('{"text":"[redacted] yyy')).toBe(true)
+    expect(outcome.stdin).toHaveLength(STDIN_ECHO_CHARS)
+    const bidi = world({ files: issueFolder(), mcp: () => textResult('a‮b'), script: () => ({ exitCode: 1 }) })
+    const echoed = failed(await run(bidi), 'exit-nonzero').stdin ?? ''
+    expect(echoed).toBe('{"text":"a\\u202eb","structured":null}\n')
+    expect(JSON.parse(echoed).text).toBe('a‮b')
+  })
+
+  test('a tool that returns no text and no structured content is empty-result, and the map never runs', async () => {
+    for (const result of [{ content: [], isError: false }, { content: [{ type: 'text', text: '  ' }], isError: false, structuredContent: null }]) {
+      const w = world({ files: issueFolder(), mcp: () => result as McpToolResult })
+      const outcome = failed(await run(w), 'empty-result')
+      expect(outcome.tool).toBe('get_doc')
+      expect(failureText(outcome)).toContain('returned nothing')
+      expect(w.calls.run).toHaveLength(0)
+    }
+  })
+
+  test('one time limit covers the tool call and the map run', async () => {
+    const w = world({
+      files: issueFolder(),
+      mcp: (_server, _tool, _args, self) => {
+        self.advance(15_000)
+        return textResult(JSON.stringify(ISSUE))
+      },
+      script: mapIssue,
+    })
+    expect((await run(w)).ok).toBe(true)
+    expect(w.calls.run[0]?.init?.timeoutMs).toBe(20_000 - 15_000 - 40)
+    const late = world({ files: issueFolder({ timeoutSeconds: 10 }), mcp: () => textResult('x'), script: () => 'timeout' })
+    expect(failed(await run(late), 'timeout').limitSeconds).toBe(10)
+    const spent = world({
+      files: issueFolder({ timeoutSeconds: 5 }),
+      mcp: (_server, _tool, _args, self) => {
+        self.advance(5_000)
+        return textResult('x')
+      },
+    })
+    expect(failed(await run(spent), 'timeout').limitSeconds).toBe(5)
+    expect(spent.calls.run).toHaveLength(0)
+  })
+
+  test('a draft whose tool is allowed but whose map the session would ask about is needs-permission, and neither step ran', async () => {
+    const w = world({ files: issueFolder(), mcp: () => textResult('x') })
+    w.io.toolCheck = async check => {
+      w.calls.check.push(check)
+      return check.tool === 'Bash' ? { decision: 'ask', reason: 'Bash needs approval' } : { decision: 'allow' }
+    }
+    const outcome = failed(await run(w, { draft: true }), 'needs-permission')
+    expect(outcome.tool).toBe('Bash')
+    expect(outcome.command).toBe(`${MAP} ${LINK}`)
+    expect(w.calls.check).toEqual([
+      { tool: 'mcp__docs__get_doc', input: { id: LINK } },
+      { tool: 'Bash', input: { command: `${MAP} ${LINK}` } },
+    ])
+    expect(w.calls.mcp).toHaveLength(0)
+    expect(w.calls.run).toHaveLength(0)
+  })
+
+  test('a draft whose tool and map are both allowed runs both; an approved one asks about neither', async () => {
+    const draft = world({ files: issueFolder(), mcp: () => textResult(JSON.stringify(ISSUE)), script: mapIssue, decision: 'allow' })
+    expect((await run(draft, { draft: true })).ok).toBe(true)
+    expect(draft.calls.check.map(one => one.tool)).toEqual(['mcp__docs__get_doc', 'Bash'])
+    const approved = world({ files: issueFolder(), mcp: () => textResult(JSON.stringify(ISSUE)), script: mapIssue, decision: 'deny' })
+    expect((await run(approved)).ok).toBe(true)
+    expect(approved.calls.check).toHaveLength(0)
+  })
+
+  test('a map that escapes the folder is refused at source.map[0] before the tool is called', async () => {
+    const w = world({ files: issueFolder() })
+    const stat = w.io.stat
+    w.io.stat = async path => (path === MAP ? { kind: 'file', size: 21, isLink: false, realPath: '/usr/bin/python3' } : stat(path))
+    expect(failed(await run(w), 'invalid-recipe').problems[0]?.path).toBe('source.map[0]')
+    expect(w.calls.mcp).toHaveLength(0)
+    expect(w.calls.run).toHaveLength(0)
+  })
+
+  test('editing map.py after the digest was taken runs nothing, so the approval no longer covers it', async () => {
+    const w = world({ files: issueFolder() })
+    const loaded = await loadRecipe(w.io, ROOT, 'figma-files')
+    if (!loaded.ok) throw new Error('did not load')
+    w.write(MAP, '#!/usr/bin/env python3\nprint("{}")\n')
+    const outcome = await runRecipe(w.io, { root: ROOT, id: 'figma-files', digest: loaded.digest, draft: false }, LINK)
+    expect(failed(outcome, 'changed-during-run').phase).toBe('before')
+    expect(w.calls.mcp).toHaveLength(0)
+    expect(w.calls.run).toHaveLength(0)
   })
 })
 

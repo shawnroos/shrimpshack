@@ -17,7 +17,7 @@ export type Outline = {
 export type RecipeFamily = 'github' | 'linear' | 'slack'
 export type RecipeMatch = { host: string; path?: string }
 export type ScriptSource = { run: string[]; timeoutSeconds?: number; env?: string[] }
-export type McpSource = { mcp: { server: string; tool: string; args?: Record<string, unknown> }; timeoutSeconds?: number }
+export type McpSource = { mcp: { server: string; tool: string; args?: Record<string, unknown> }; map: string[]; timeoutSeconds?: number; env?: string[] }
 export type RecipeSource = ScriptSource | McpSource
 export type Recipe = {
   id: string
@@ -72,7 +72,7 @@ const BLOCK_KEYS: Record<BlockType, readonly string[]> = {
 }
 
 // Zero-width joiners (U+200C, U+200D) stay: emoji sequences and some scripts need them.
-const UNSAFE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
+export const UNSAFE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
 const LINE_BREAKS = /[\t\n\r\u2028\u2029]/g
 const RUNS_CODE = /\.(?:app|command|terminal|workflow)$/i
 const MUTATING = new Set(['create', 'update', 'delete', 'send', 'post', 'set', 'close', 'merge'])
@@ -441,7 +441,7 @@ function scriptArg(sink: Sink, raw: unknown, path: string, first: boolean): stri
 }
 
 function source(sink: Sink, raw: unknown, warnings: string[]): RecipeSource | undefined {
-  const one = record(sink, raw, 'source', 'the source', ['run', 'mcp', 'timeoutSeconds', 'env'])
+  const one = record(sink, raw, 'source', 'the source', ['run', 'mcp', 'map', 'timeoutSeconds', 'env'])
   if (!one) return undefined
   if (('run' in one) === ('mcp' in one)) {
     report(sink, 'source', 'a source names exactly one of run (a script) or mcp (a tool)')
@@ -449,23 +449,23 @@ function source(sink: Sink, raw: unknown, warnings: string[]): RecipeSource | un
   }
   const timeoutSeconds = integer(sink, one.timeoutSeconds, 'source.timeoutSeconds', value => value >= 1 && value <= RECIPE_CAPS.timeoutSeconds, `whole seconds from 1 to ${RECIPE_CAPS.timeoutSeconds}`)
   const timeout = optional('timeoutSeconds', timeoutSeconds)
+  const env =
+    one.env === undefined
+      ? undefined
+      : listOf(sink, one.env, 'source.env', RECIPE_CAPS.env, 'names', (name, path) => {
+          if (typeof name === 'string' && ENV_NAME.test(name)) return name
+          report(sink, path, `${JSON.stringify(name)} is not an environment variable name`)
+          return undefined
+        })
   if ('run' in one) {
+    if ('map' in one) report(sink, 'source.map', 'map belongs to an MCP source; a script source prints its page itself')
     const run = listOf(sink, one.run, 'source.run', RECIPE_CAPS.argv, 'arguments', (arg, path) => scriptArg(sink, arg, path, path === 'source.run[0]'))
     if (run && run.length === 0) report(sink, 'source.run', 'needs the script to run')
-    const env =
-      one.env === undefined
-        ? undefined
-        : listOf(sink, one.env, 'source.env', RECIPE_CAPS.env, 'names', (name, path) => {
-            if (typeof name === 'string' && ENV_NAME.test(name)) return name
-            report(sink, path, `${JSON.stringify(name)} is not an environment variable name`)
-            return undefined
-          })
     return run && { run, ...timeout, ...optional('env', env) }
   }
-  if ('env' in one) {
-    report(sink, 'source.env', 'env applies only to a script source; an MCP tool gets no environment')
-    return undefined
-  }
+  if (one.map === undefined) report(sink, 'source.map', 'an MCP source needs a map script, as ["./map.py"]: the tool returns its own data, and the map script turns it into a Page')
+  const map = one.map === undefined ? undefined : listOf(sink, one.map, 'source.map', RECIPE_CAPS.argv, 'arguments', (arg, path) => scriptArg(sink, arg, path, path === 'source.map[0]'))
+  if (map && map.length === 0) report(sink, 'source.map', 'needs the map script to run')
   const mcp = record(sink, one.mcp, 'source.mcp', 'the mcp source', ['server', 'tool', 'args'])
   if (!mcp) return undefined
   const server = mcp.server
@@ -477,10 +477,10 @@ function source(sink: Sink, raw: unknown, warnings: string[]): RecipeSource | un
     report(sink, 'source.mcp.args', `must be an object of at most ${RECIPE_CAPS.args} characters as JSON`)
     return undefined
   }
-  if (typeof server !== 'string' || !MCP_SERVER.test(server) || typeof tool !== 'string' || !MCP_TOOL.test(tool)) return undefined
+  if (typeof server !== 'string' || !MCP_SERVER.test(server) || typeof tool !== 'string' || !MCP_TOOL.test(tool) || !map) return undefined
   const word = mutatingWord(tool)
   if (word) warnings.push(`The MCP tool "${tool}" looks like it changes something ("${word}"); a recipe should only read`)
-  return { mcp: { server, tool, ...optional('args', args) }, ...timeout }
+  return { mcp: { server, tool, ...optional('args', args) }, map, ...timeout, ...optional('env', env) }
 }
 
 export function validateRecipe(id: string, raw: unknown): RecipeCheck {

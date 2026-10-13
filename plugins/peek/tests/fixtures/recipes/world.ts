@@ -10,7 +10,7 @@ export const PAGE = { title: 'Design system', sections: [{ heading: 'Notes', blo
 type Node = { kind: 'file'; bytes: Uint8Array } | { kind: 'dir' } | { kind: 'link'; target: string }
 type Body = string | Uint8Array | { link: string }
 
-export type Child = { argv: readonly string[]; env: Record<string, string>; cwd?: string }
+export type Child = { argv: readonly string[]; env: Record<string, string>; cwd?: string; stdin?: string }
 export type ScriptAnswer = Partial<ProcessRunResult> | 'timeout' | Error
 export type McpAnswer = McpToolResult | Error | 'hang'
 
@@ -44,8 +44,16 @@ export function folder(id: string, recipe: Record<string, unknown>, extra: Recor
 export const scriptFolder = (id: string, source: Record<string, unknown> = {}, extra: Record<string, Body> = {}) =>
   folder(id, { source: { run: ['./fetch.sh'], ...source } }, { 'fetch.sh': '#!/bin/sh\necho page\n', ...extra })
 
-export const mcpFolder = (id: string, mcp: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
-  folder(id, { source: { mcp, ...extra } })
+export const MAP_SCRIPT = '#!/usr/bin/env python3\nimport json, sys\nprint(json.load(sys.stdin)["text"])\n'
+
+export const mcpFolder = (id: string, mcp: Record<string, unknown>, extra: Record<string, unknown> = {}, files: Record<string, Body> = {}) =>
+  folder(id, { source: { mcp, map: ['./map.py'], ...extra } }, { 'map.py': MAP_SCRIPT, ...files })
+
+// What a pass-through map prints: the tool's text, or its structured content when there is no text.
+export function passThrough(child: Child): ScriptAnswer {
+  const input = JSON.parse(child.stdin ?? '{}') as { text?: string; structured?: unknown }
+  return { stdout: input.text || JSON.stringify(input.structured) }
+}
 
 // A world whose fs folds `..` and follows links the way `$.fs.stat({ resolve: true })` does, whose `$.process.run`
 // applies `env -i` the way /usr/bin/env does, and whose clock moves only when a call takes time.
@@ -156,9 +164,9 @@ export function world(options: WorldOptions) {
           index++
         }
       }
-      const child: Child = { argv: argv.slice(index), env: childEnv, ...(init?.cwd === undefined ? {} : { cwd: init.cwd }) }
+      const child: Child = { argv: argv.slice(index), env: childEnv, ...(init?.cwd === undefined ? {} : { cwd: init.cwd }), ...(init?.stdin === undefined ? {} : { stdin: init.stdin }) }
       calls.children.push(child)
-      const answer = options.script ? options.script(child, self) : { stdout: JSON.stringify(PAGE) }
+      const answer = options.script ? options.script(child, self) : (child.stdin === undefined ? { stdout: JSON.stringify(PAGE) } : passThrough(child))
       if (answer === 'timeout') {
         clock += init?.timeoutMs ?? 30_000
         throw new Error(`command timed out: ${argv.join(' ')}`)

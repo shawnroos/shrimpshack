@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { BLOCK_TYPES, validatePage, validateRecipe } from '../hooks/page'
+import { mapStdin } from '../hooks/recipe-run'
 import { matches, overlaps } from '../hooks/recipes'
 import { EXAMPLES } from './fixtures/skill-examples'
 
@@ -24,6 +25,16 @@ test('the examples cover every block type and both source kinds', () => {
   expect([...BLOCK_TYPES].filter(type => !used.has(type))).toEqual([])
   const kinds = EXAMPLES.map(one => ('run' in one.recipe.source ? 'script' : 'mcp'))
   expect(kinds.toSorted()).toEqual(['mcp', 'script'])
+})
+
+test('an MCP example saves its sample tool result in exactly the stdin shape peek gives the map', () => {
+  const mcp = EXAMPLES.filter(one => 'mcp' in one.recipe.source)
+  expect(mcp.length).toBeGreaterThan(0)
+  for (const example of mcp) {
+    const sample = JSON.parse(example.sample ?? 'null') as { text: string; structured: unknown }
+    expect(Object.keys(sample)).toEqual(['text', 'structured'])
+    expect(example.sample).toBe(mapStdin(sample.text, sample.structured))
+  }
 })
 
 test('the examples do not claim each other links, so a person can copy both', () => {

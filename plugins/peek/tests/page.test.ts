@@ -217,26 +217,35 @@ describe('validateRecipe', () => {
     const result = validateRecipe('figma-comments', {
       name: 'Comments',
       match: [{ host: 'figma.com' }],
-      source: { mcp: { server: 'figma', tool: 'create_comment', args: { url: '{{url}}' } } },
+      source: { mcp: { server: 'figma', tool: 'create_comment', args: { url: '{{url}}' } }, map: ['./map.py'] },
     })
     if (!result.ok) throw new Error(JSON.stringify(result.problems))
     expect(result.warnings).toHaveLength(1)
     expect(result.warnings[0]).toContain('create_comment')
   })
 
-  test('a read-only mcp tool passes without a warning', () => {
-    const result = validateRecipe('figma-files', { name: 'Files', match: [{ host: 'figma.com' }], source: { mcp: { server: 'figma', tool: 'get_posts' } } })
+  test('a read-only mcp tool with a map script passes without a warning, and may declare env for the map', () => {
+    const source = { mcp: { server: 'figma', tool: 'get_posts' }, map: ['./map.py', '--compact'], env: ['FIGMA_TOKEN'] }
+    const result = validateRecipe('figma-files', { name: 'Files', match: [{ host: 'figma.com' }], source })
     expect(result).toEqual({
       ok: true,
-      recipe: { id: 'figma-files', name: 'Files', match: [{ host: 'figma.com' }], overrides: [], source: { mcp: { server: 'figma', tool: 'get_posts' } }, refreshMinutes: 0 },
+      recipe: { id: 'figma-files', name: 'Files', match: [{ host: 'figma.com' }], overrides: [], source, refreshMinutes: 0 },
       warnings: [],
     })
+  })
+
+  test('an mcp source needs a map script inside the folder; a script source takes no map', () => {
+    expect(recipeProblems('x', { ...RECIPE, source: { mcp: { server: 's', tool: 't' } } })).toEqual(['source.map'])
+    expect(recipeProblems('x', { ...RECIPE, source: { mcp: { server: 's', tool: 't' }, map: [] } })).toEqual(['source.map'])
+    expect(recipeProblems('x', { ...RECIPE, source: { mcp: { server: 's', tool: 't' }, map: ['/usr/bin/jq'] } })).toEqual(['source.map[0]'])
+    expect(recipeProblems('x', { ...RECIPE, source: { mcp: { server: 's', tool: 't' }, map: ['../m.py'] } })).toEqual(['source.map[0]'])
+    expect(recipeProblems('x', { ...RECIPE, source: { run: ['./a.sh'], map: ['./m.py'] } })).toEqual(['source.map'])
   })
 
   test('a source needs exactly one of run or mcp', () => {
     expect(recipeProblems('x', { ...RECIPE, source: {} })).toEqual(['source'])
     expect(recipeProblems('x', { ...RECIPE, source: { run: ['./a.sh'], mcp: { server: 's', tool: 't' } } })).toEqual(['source'])
-    expect(recipeProblems('x', { ...RECIPE, source: { mcp: { server: 's', tool: 't' }, env: ['A'] } })).toEqual(['source.env'])
+    expect(recipeProblems('x', { ...RECIPE, source: { mcp: { server: 's', tool: 't' }, map: ['./m.py'], env: ['A-B'] } })).toEqual(['source.env[0]'])
   })
 
   test('the script must sit inside the recipe folder', () => {

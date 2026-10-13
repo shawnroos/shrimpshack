@@ -1,5 +1,5 @@
 import type { RecipeReview, ReviewFile } from '../types'
-import { RECIPE_ID, cleanLine, cleanText, validateRecipe } from './page'
+import { RECIPE_CAPS, RECIPE_ID, cleanLine, cleanText, validateRecipe } from './page'
 import type { Problem, Recipe, RecipeFamily, RecipeMatch } from './page'
 import { familyOf } from './refs'
 import type { Ref } from './refs'
@@ -126,11 +126,10 @@ export async function loadRecipe(io: RecipesIo, root: string, id: string): Promi
   const checked = validateRecipe(id, raw)
   if (!checked.ok) return { ok: false, id, dir, problems: checked.problems }
   const { recipe, warnings } = checked
-  if ('run' in recipe.source) {
-    const script = scriptPath(recipe.source.run)
-    if (!entries.some(one => one.kind === 'file' && one.path === script)) {
-      return { ok: false, id, dir, problems: [{ path: 'source.run[0]', message: `"${recipe.source.run[0]}" names no file in the recipe folder` }] }
-    }
+  const [field, argv] = 'run' in recipe.source ? ['run', recipe.source.run] : ['map', recipe.source.map]
+  const script = scriptPath(argv)
+  if (!entries.some(one => one.kind === 'file' && one.path === script)) {
+    return { ok: false, id, dir, problems: [{ path: `source.${field}[0]`, message: `"${argv[0]}" names no file in the recipe folder` }] }
   }
   const manifest = JSON.stringify(entries.map(one => [one.path, one.kind, one.size, one.hash]))
   const digest = await sha256(new TextEncoder().encode(manifest))
@@ -240,12 +239,15 @@ function textOf(bytes: Uint8Array): string | undefined {
   return again.length === bytes.length && again.every((byte, index) => byte === bytes[index]) ? text : undefined
 }
 
+export const mcpToolName = (server: string, tool: string) => `mcp__${server.replaceAll(/[^\w-]/g, '_')}__${tool}`
+
 const matchLine = (one: RecipeMatch) => `${one.host}${one.path ?? ' (any path)'}`
 
 function runsLine(recipe: Recipe): string {
   const { source } = recipe
-  if ('run' in source) return `Runs ${source.run.join(' ')} <link> (timeout ${source.timeoutSeconds ?? 20}s)`
-  return `Calls MCP server "${source.mcp.server}", tool "${source.mcp.tool}", arguments ${JSON.stringify(source.mcp.args ?? {})}`
+  const timeout = `timeout ${source.timeoutSeconds ?? RECIPE_CAPS.defaultTimeoutSeconds}s`
+  if ('run' in source) return `Runs ${source.run.join(' ')} <link> (${timeout})`
+  return `Calls MCP server "${source.mcp.server}", tool "${source.mcp.tool}" (${mcpToolName(source.mcp.server, source.mcp.tool)}), arguments ${JSON.stringify(source.mcp.args ?? {})}, then maps its result through ${source.map.join(' ')} <link> (${timeout} for both)`
 }
 
 function outsideLines(path: string, text: string): string[] {
@@ -280,7 +282,7 @@ export async function reviewOf(io: RecipesIo, loaded: ReadyRecipe, recipes: read
     match: recipe.match.map(matchLine),
     overrides: [...recipe.overrides],
     refreshMinutes: recipe.refreshMinutes,
-    env: 'run' in recipe.source ? [...(recipe.source.env ?? [])] : [],
+    env: [...(recipe.source.env ?? [])],
     ...(overlap ? { overlap: overlap.id } : {}),
     warnings: [...loaded.warnings, ...shown],
     files,
