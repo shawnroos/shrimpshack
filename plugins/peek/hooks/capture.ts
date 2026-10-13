@@ -2,11 +2,9 @@ import { githubAddressRef, itemKey, keyOf, LINEAR_KEY, parseRef } from './refs'
 import type { Ref, RefKind } from './refs'
 import { asObj, asPositiveInt, tryJson } from './wire'
 import { ghRead, ghSource } from './parsers/gh-argv'
+import type { Ports } from './ports'
 
-export type CaptureIo = {
-  mcpCall: (server: string, tool: string, args: Record<string, unknown>) => Promise<{ content: unknown[]; isError: boolean }>
-  now: () => Promise<number>
-}
+export type CaptureIo = Pick<Ports, 'mcpCall' | 'now'>
 
 export type CaptureSource = 'mcp' | 'bash' | 'webfetch'
 

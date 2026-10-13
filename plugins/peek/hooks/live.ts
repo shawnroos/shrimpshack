@@ -1,5 +1,6 @@
-import type { ProcessRunInit, ProcessRunResult } from 'claude-code'
+import type { ProcessRunResult } from 'claude-code'
 
+import type { Ports } from './ports'
 import type { LiveFailure } from '../types'
 
 const HELPER_SOURCE = 'helper/peek-web.swift'
@@ -7,14 +8,7 @@ const CACHE_DIR = '.cache/claude-peek/bin'
 // A cold `swiftc -O` of the helper took 38 s on an M-series Mac; leave room for a slower machine.
 const BUILD_TIMEOUT_MS = 180_000
 
-// `$` cannot cross an import (claude plugin validate), so register.tsx builds this port from `$`.
-export type BuildIo = {
-  root: string
-  home: () => Promise<string | undefined>
-  read: (path: string) => Promise<string>
-  exists: (path: string) => Promise<boolean>
-  run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
-}
+export type BuildIo = { root: string } & Pick<Ports, 'home' | 'read' | 'exists' | 'run'>
 
 export function liveFailureText(kind: LiveFailure): { title: string; hint: string } {
   switch (kind) {
@@ -143,12 +137,11 @@ export type LiveState = {
 
 export type Timer = { cancel: () => void }
 
-export type LiveIo = BuildIo & {
-  spawn: (argv: readonly string[]) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, unknown>
-  post: (socket: string, path: string, body?: unknown) => Promise<boolean>
-  after: (ms: number, fn: () => void) => Timer
-  removeDir: (dir: string) => Promise<void>
-}
+export type LiveIo = BuildIo &
+  Pick<Ports, 'spawn' | 'after'> & {
+    post: (socket: string, path: string, body?: unknown) => Promise<boolean>
+    removeDir: (dir: string) => Promise<void>
+  }
 
 export type LiveCommand = 'navigate' | 'back' | 'reload' | 'resize' | 'input'
 

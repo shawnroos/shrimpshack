@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Mode } from '../types'
 import { C as BASE, MUTED } from './theme'
-import type { RemoteIo } from './remote'
+import type { Ports } from './ports'
 import { wheelPoint } from './live'
 import type { LiveIo } from './live'
 import { hydrateTitles } from './refresh'
@@ -123,23 +123,35 @@ const typed = atom({ plugin: 'peek', key: 'galleryText' } as const, '')
 const picked = atom({ plugin: 'peek', key: 'galleryPick' } as const, 'round')
 
 let paneColumns = 100
-function remoteIoOf($: EngineInterface): RemoteIo {
+
+function portsOf($: EngineInterface): Ports {
   return {
     sessionId: () => $.session.id(),
-    run: (argv, init) => $.process.run(argv, init),
-    fetch: (url, init) => $.http.fetch(url, init),
-    linearKeyEnv: () => $.env.get('LINEAR_API_KEY'),
+    sessionRoot: () => $.session.root(),
+    cwd: () => $.session.cwd(),
     home: () => $.env.get('HOME'),
+    linearKeyEnv: () => $.env.get('LINEAR_API_KEY'),
+    run: (argv, init) => $.process.run(argv, init),
+    spawn: argv => $.process.spawn({ argv }),
+    fetch: (url, init) => $.http.fetch(url, init),
     read: path => $.fs.read(path),
-    sleep: ms => $.clock.sleep(ms),
-    mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
+    readBytes: path => $.fs.read(path, { as: 'bytes' }),
+    write: (path, text) => $.fs.write(path, text),
+    list: path => $.fs.list(path),
+    stat: path => $.fs.stat(path),
+    exists: path => $.fs.exists(path),
     now: () => $.clock.now(),
+    sleep: ms => $.clock.sleep(ms),
+    every: (ms, fn) => $.clock.every(ms, fn),
+    after: (ms, fn) => $.clock.after(ms, fn),
+    mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
   }
 }
 
-
 function navIoOf($: EngineInterface): NavIo {
+  const ports = portsOf($)
   const io: NavIo = {
+    ...ports,
     view: { read: () => read($, view), update: change => update($, view, change) },
     mode: { read: () => read($, mode), update: change => update($, mode, change) },
     page: { read: () => read($, page), update: change => update($, page, change) },
@@ -149,20 +161,8 @@ function navIoOf($: EngineInterface): NavIo {
     cursor: { read: () => read($, cursorAtom), update: change => update($, cursorAtom, change) },
     menuOpen: { read: () => read($, menuOpen), update: change => update($, menuOpen, change) },
     menuFilter: { read: () => read($, menuFilter), update: change => update($, menuFilter, change) },
-    now: () => $.clock.now(),
-    every: (ms, fn) => $.clock.every(ms, fn),
-    cwd: () => $.session.cwd(),
-    home: () => $.env.get('HOME'),
-    sessionId: () => $.session.id(),
-    sessionRoot: () => $.session.root(),
-    stat: path => $.fs.stat(path),
-    exists: path => $.fs.exists(path),
-    run: (argv, init) => $.process.run(argv, init),
-    fetch: (url, init) => $.http.fetch(url, init),
-    readFile: path => $.fs.read(path),
-    readBytes: path => $.fs.read(path, { as: 'bytes' }),
-    list: path => $.fs.list(path),
-    writeFile: (path, text) => $.fs.write(path, text),
+    readFile: ports.read,
+    writeFile: ports.write,
     storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),
     invalidate: () => $.ui.invalidate('ui.render'),
@@ -172,14 +172,14 @@ function navIoOf($: EngineInterface): NavIo {
     fork: request => $.model.fork(request),
     scroll: options => $.ui.scroll({ in: PANE, ...options }),
     open: options => $.ui.open({ id: PANE, ...options }),
-    remoteIo: () => remoteIoOf($),
-    liveIo: () => liveIoOf($),
-    groupsIo: () => groupsIoOf($),
+    remoteIo: () => ports,
+    liveIo: () => liveIoOf($, ports),
+    groupsIo: () => groupsIoOf(ports),
     columns: () => paneColumns,
     selectedNav: () => selectedNav($),
-    shownGroups: place => groupStore.shown(groupsIoOf($), place),
-    shownGroup: (place, id) => groupStore.shownOne(groupsIoOf($), place, id),
-    writeGroup: (place, id, change) => groupStore.write(groupsIoOf($), place, id, change),
+    shownGroups: place => groupStore.shown(groupsIoOf(ports), place),
+    shownGroup: (place, id) => groupStore.shownOne(groupsIoOf(ports), place, id),
+    writeGroup: (place, id, change) => groupStore.write(groupsIoOf(ports), place, id, change),
     openGroupRemotes: () => groupPage.remotes,
     forgetPath,
     loadFile: (href, path, line) => loadFile(io, href, path, line),
@@ -188,15 +188,15 @@ function navIoOf($: EngineInterface): NavIo {
   return io
 }
 
-function groupsIoOf($: EngineInterface): GroupsIo {
+function groupsIoOf(ports: Ports): GroupsIo {
   return {
-    read: path => $.fs.read(path),
-    write: (path, text) => $.fs.write(path, text),
-    list: dir => $.fs.list(dir),
-    stat: path => $.fs.stat(path).catch(() => null),
-    run: argv => $.process.run(argv),
-    now: () => $.clock.now(),
-    sleep: ms => $.clock.sleep(ms),
+    read: ports.read,
+    write: ports.write,
+    list: ports.list,
+    stat: path => ports.stat(path).catch(() => null),
+    run: argv => ports.run(argv),
+    now: ports.now,
+    sleep: ports.sleep,
   }
 }
 
@@ -227,23 +227,23 @@ function paneActionsOf($: EngineInterface): PaneActions {
   }
 }
 
-function liveIoOf($: EngineInterface): LiveIo {
+function liveIoOf($: EngineInterface, ports: Ports): LiveIo {
   return {
     root: $.plugin.root,
-    home: () => $.env.get('HOME'),
-    read: path => $.fs.read(path),
-    exists: path => $.fs.exists(path),
-    run: (argv, init) => $.process.run(argv, init),
-    spawn: argv => $.process.spawn({ argv }),
+    home: ports.home,
+    read: ports.read,
+    exists: ports.exists,
+    run: ports.run,
+    spawn: ports.spawn,
     post: async (socket, path, body) => {
       const init = body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }
-      const answer = await $.http.fetch(`http://peek-web/${path}`, { method: 'POST', socketPath: socket, ...init })
+      const answer = await ports.fetch(`http://peek-web/${path}`, { method: 'POST', socketPath: socket, ...init })
       return answer.ok
     },
-    after: (ms, fn) => $.clock.after(ms, fn),
+    after: ports.after,
     removeDir: async dir => {
       // Only the helper's own mkdtemp directory: a malformed `ready` must never aim rm at anything else.
-      if (/\/peek-web\.[A-Za-z0-9]{6}$/.test(dir)) await $.process.run(['rm', '-rf', dir])
+      if (/\/peek-web\.[A-Za-z0-9]{6}$/.test(dir)) await ports.run(['rm', '-rf', dir])
     },
   }
 }

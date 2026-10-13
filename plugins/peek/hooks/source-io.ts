@@ -1,5 +1,4 @@
-import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
-
+import type { Ports } from './ports'
 import type { RemoteFailure } from '../types'
 import { fromHttpStatus, ghFailure } from './sources/classify'
 import { parseUrl, tryJson } from './wire'
@@ -14,16 +13,7 @@ const MAX_RETRY_WAIT_MS = 5000
 const DEFAULT_RETRY_WAIT_MS = 1000
 const GH_TIMEOUT_MS = 20_000
 
-// `$` cannot cross an import (claude plugin validate), so register.tsx builds this port from `$`.
-export type SourceIo = {
-  sessionId: () => Promise<string>
-  run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
-  fetch: (url: string, init?: HttpInit) => Promise<HttpResponse>
-  linearKeyEnv: () => Promise<string | undefined>
-  home: () => Promise<string | undefined>
-  read: (path: string) => Promise<string>
-  sleep: (ms: number) => Promise<void>
-}
+export type SourceIo = Pick<Ports, 'sessionId' | 'run' | 'fetch' | 'linearKeyEnv' | 'home' | 'read' | 'sleep'>
 
 export type Probe = {
   gh: RemoteFailure | null

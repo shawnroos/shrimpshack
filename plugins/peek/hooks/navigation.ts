@@ -1,4 +1,4 @@
-import type { EngineInterface, HttpInit, HttpResponse, PluginState, ProcessRunInit, ProcessRunResult } from 'claude-code'
+import type { EngineInterface, PluginState } from 'claude-code'
 
 import type { Group, GroupResult, Loaded, Mode, RemoteRecord, View } from '../types'
 import { capturedLinearContext } from './capture'
@@ -18,18 +18,18 @@ import { itemKey, keyOf, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
 import type { RemoteIo } from './remote'
+import type { Ports } from './ports'
 import { adapterOfKind } from './sources/adapter'
 import { remoteFileOf } from './sources/web'
 
 type PaneState = PluginState['peek']
 type Ui = EngineInterface['ui']
-type Fs = EngineInterface['fs']
 type Model = EngineInterface['model']
 type Without<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
 export type Cell<T> = { read: () => Promise<T>; update: (change: (value: T) => T) => Promise<T> }
 
-export type NavIo = {
+export type NavIo = Pick<Ports, 'now' | 'every' | 'cwd' | 'home' | 'sessionId' | 'sessionRoot' | 'stat' | 'exists' | 'run' | 'fetch' | 'readBytes' | 'list'> & {
   view: Cell<PaneState['view']>
   mode: Cell<PaneState['mode']>
   page: Cell<PaneState['page']>
@@ -39,20 +39,8 @@ export type NavIo = {
   cursor: Cell<PaneState['cursor']>
   menuOpen: Cell<PaneState['menuOpen']>
   menuFilter: Cell<PaneState['menuFilter']>
-  now: () => Promise<number>
-  every: (ms: number, fn: () => void) => void
-  cwd: () => Promise<string>
-  home: () => Promise<string | undefined>
-  sessionId: () => Promise<string>
-  sessionRoot: () => Promise<string>
-  stat: (path: string) => ReturnType<Fs['stat']>
-  exists: (path: string) => Promise<boolean>
-  run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
-  fetch: (url: string, init?: HttpInit) => Promise<HttpResponse>
-  readFile: (path: string) => Promise<string>
-  readBytes: (path: string) => Promise<{ base64: string }>
-  list: (path: string) => ReturnType<Fs['list']>
-  writeFile: (path: string, text: string) => Promise<unknown>
+  readFile: Ports['read']
+  writeFile: Ports['write']
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<unknown>
   invalidate: () => void
