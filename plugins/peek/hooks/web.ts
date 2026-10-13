@@ -5,6 +5,7 @@ import { readable } from './defuddle'
 import type { Ref } from './refs'
 import { hasCurl, httpDetail, httpText } from './sources'
 import { fromHttpStatus } from './sources/classify'
+import { ok } from './sources/result'
 import type { Failed, SourceIo } from './sources'
 import { decodeEntities, parseUrl } from './wire'
 import { DOWNLOAD_FORMAT, PAGE_FORMAT, downloadStatus, pageStatus } from './parsers/curl'
@@ -407,7 +408,7 @@ export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Load
     favicon,
     browserUrl: finalUrl,
   }
-  return { ok: true, record, tier: isCli ? 'cli' : 'api', fetchedAt: now }
+  return ok(record, isCli ? 'cli' : 'api', now)
 }
 
 export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
@@ -425,5 +426,5 @@ export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
     body: body || undefined,
     browserUrl: address,
   }
-  return { ok: true, record, tier: 'session', fetchedAt: captured.at }
+  return ok(record, 'session', captured.at)
 }

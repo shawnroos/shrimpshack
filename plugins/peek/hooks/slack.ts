@@ -2,6 +2,7 @@ import type { CaptureIo } from './capture'
 import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
 import { slackFailure } from './sources/classify'
+import { ok } from './sources/result'
 import type { SourceIo } from './sources'
 import { asObj, asStr, decodeEntities, parseUrl, tryJson } from './wire'
 import { channelName, parseThreadText, profilePicture, unwrapTranscript } from './parsers/slack-transcript'
@@ -271,7 +272,7 @@ async function loadViaMcp(io: SlackIo, ref: SlackThreadRef, channel: string, ts:
   const name = info && !info.isError ? channelName(info.text) : undefined
   const base = threadRecord(ref, { ...parsed, hasMore: more }, name)
   const record = await withPictures(io, base, [parsed.parent, ...parsed.replies], thread.server)
-  return { ok: true, record, tier: 'mcp', fetchedAt: now }
+  return ok(record, 'mcp', now)
 }
 
 async function findCli(io: SlackIo): Promise<string | null> {
@@ -347,7 +348,7 @@ async function loadViaCli(io: SlackIo, ref: SlackThreadRef, channel: string, ts:
   const name = 'body' in info ? asStr(asObj(info.body.channel)?.name) : undefined
   const thread = { parent, replies: rest, hasMore: replies.body.has_more === true }
   const record = await withPictures(io, threadRecord(ref, thread, name), messages, undefined)
-  return { ok: true, record, tier: 'cli', fetchedAt: now }
+  return ok(record, 'cli', now)
 }
 
 export async function loadSlack(io: SlackIo, ref: Ref, now: number): Promise<Loaded> {

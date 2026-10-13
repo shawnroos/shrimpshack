@@ -2,6 +2,7 @@ import type { Captured } from './capture'
 import { githubRef } from './refs'
 import type { GithubItemRef, Ref } from './refs'
 import { runGh } from './sources'
+import { ok } from './sources/result'
 import type { Failed, SourceIo } from './sources'
 import { asArr, asNum, asObj, tryJson } from './wire'
 import type { Json } from './wire'
@@ -289,7 +290,7 @@ function repoRecord(view: Json, owner: string, repo: string, readme?: string, li
 }
 
 function loaded(record: RemoteRecord | null, tier: Tier, now: number): Loaded | null {
-  return record ? { ok: true, record, tier, fetchedAt: now } : null
+  return record ? ok(record, tier, now) : null
 }
 
 async function loadRepo(io: SourceIo, owner: string, repo: string, now: number): Promise<Loaded> {

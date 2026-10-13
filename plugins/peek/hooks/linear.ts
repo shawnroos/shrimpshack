@@ -2,6 +2,7 @@ import type { Captured } from './capture'
 import { parseRef } from './refs'
 import type { LinearIssueRef, LinearProjectRef, Ref } from './refs'
 import { linearPaged, linearQuery } from './sources'
+import { ok } from './sources/result'
 import type { Connection, Failed, SourceIo } from './sources'
 import { asDay, asObj, asStr, tryJson } from './wire'
 import type { Json } from './wire'
@@ -236,7 +237,7 @@ async function loadIssue(io: SourceIo, ref: LinearIssueRef, now: number): Promis
   const hasOlder = asObj(asObj(issue.comments)?.pageInfo)?.hasPreviousPage === true
   const total = hasOlder ? await countComments(io, ref.key) : undefined
   const record = issueRecord(issue, ref, total)
-  return record ? { ok: true, record, tier: 'api', fetchedAt: now } : { ok: false, failure: 'query-bug' }
+  return record ? ok(record, 'api', now) : { ok: false, failure: 'query-bug' }
 }
 
 async function loadProject(io: SourceIo, ref: LinearProjectRef, now: number): Promise<Loaded> {
@@ -251,7 +252,7 @@ async function loadProject(io: SourceIo, ref: LinearProjectRef, now: number): Pr
   const issues = await linearPaged(io, PROJECT_ISSUES_QUERY, { id }, data => asObj(asObj(asObj(data)?.project)?.issues) as Connection | null)
   if (!issues.ok) return issues
   const record = projectRecord(project, ref, issues)
-  return record ? { ok: true, record, tier: 'api', fetchedAt: now } : { ok: false, failure: 'query-bug' }
+  return record ? ok(record, 'api', now) : { ok: false, failure: 'query-bug' }
 }
 
 export async function loadLinear(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
@@ -276,5 +277,5 @@ export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   if (!item || (ref.kind !== 'linear-issue' && ref.kind !== 'linear-project')) return null
   const issues = item.issues !== undefined ? { nodes: nodes(item.issues), isPartial: false } : undefined
   const record = captured.kind === 'linear-project' || ref.kind === 'linear-project' ? projectRecord(item, ref, issues) : issueRecord(item, ref)
-  return record ? { ok: true, record, tier: 'session', fetchedAt: captured.at } : null
+  return record ? ok(record, 'session', captured.at) : null
 }
