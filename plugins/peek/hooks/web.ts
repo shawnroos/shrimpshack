@@ -5,7 +5,7 @@ import { readable } from './defuddle'
 import type { Ref } from './refs'
 import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
 import type { Failed, SourceIo } from './sources'
-import { decodeEntities, parseUrl } from './wire'
+import { decodeEntities, markedStderr, parseUrl } from './wire'
 
 const SCRATCH = '/tmp/claude-peek'
 // The engine cuts stdout at 4 MiB, so the status line rides on stderr where the cut cannot drop it.
@@ -179,8 +179,7 @@ async function fetchToScratch(io: SourceIo, raw: string | undefined, ext: string
     const [code = '', size = '', ...rest] = ran.stdout.trim().split(' ')
     const status = Number.parseInt(code, 10)
     if (status >= 200 && status < 300) {
-      const cut = ran.stderr.lastIndexOf(TYPE_MARKER)
-      const type = cut >= 0 ? ran.stderr.slice(cut + TYPE_MARKER.length).trim() || undefined : undefined
+      const type = markedStderr(ran.stderr, TYPE_MARKER)?.trim() || undefined
       return Number.parseInt(size, 10) > 0 ? { file, type } : undefined
     }
     if (status < 300 || status >= 400) return undefined
@@ -375,11 +374,11 @@ async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: st
   const argv = ['curl', '-sL', ...PROTO, '--max-redirs', '10', '--max-time', '15', '-w', `%{stderr}${MARKER}%{http_code} %{url_effective}`, url]
   const ran = await io.run(argv, { timeoutMs: 20_000 }).catch(() => null)
   if (!ran) return { ok: false, failure: 'offline' }
-  const cut = ran.stderr.lastIndexOf(MARKER)
-  const [code = '', ...rest] = cut >= 0 ? ran.stderr.slice(cut + MARKER.length).trim().split(' ') : []
+  const marked = markedStderr(ran.stderr, MARKER)
+  const [code = '', ...rest] = marked !== null ? marked.trim().split(' ') : []
   const status = Number.parseInt(code, 10)
   const isUsable = status >= 200 && status < 300 && (ran.exitCode === 0 || ran.stdout.length > 0)
-  if (!isUsable) return cut >= 0 && status > 0 ? { ok: false, failure: httpFailure(status), detail: httpDetail(status, rest.join(' ') || url) } : { ok: false, failure: 'offline' }
+  if (!isUsable) return marked !== null && status > 0 ? { ok: false, failure: httpFailure(status), detail: httpDetail(status, rest.join(' ') || url) } : { ok: false, failure: 'offline' }
   return { ok: true, text: ran.stdout, finalUrl: rest.join(' ') || url }
 }
 
