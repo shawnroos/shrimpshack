@@ -67,7 +67,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     : shortPath(folderPath, cwd, home)
 
   let { body, jumps, position, layout }: ViewBody = { body: null, jumps: noJumps(), position: '', layout: {} }
-  if (current.remote) ({ body, jumps, position, layout } = remoteBody(ctx, io, current, current.remote))
+  if (current.remote) ({ body, jumps, position, layout } = await remoteBody(ctx, io, current, current.remote))
   else if (current.markdown !== undefined) ({ body, jumps, position, layout } = await markdownBody(ctx, io, current, current.markdown, path))
   else if (current.table) ({ body, jumps, position, layout } = tableBody(ctx, io, current.table))
   else if (current.dir) ({ body, jumps, position, layout } = dirBody(ctx, io, path, current.dir))

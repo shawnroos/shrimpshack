@@ -3,8 +3,8 @@ import { describeAge } from '../../../format'
 import { pixels } from '../../../images'
 import { colorFor, iconFor } from '../../../kinds'
 import { isWebUrl } from '../../../live'
-import { linkify, splitLists, splitTables } from '../../../markdown'
-import { chunkMarkdown, estimateRows, fitName } from '../../../measure'
+import { linkify } from '../../../markdown'
+import { estimateRows, fitName, imageBox } from '../../../measure'
 import { openFromPage, pressLink, refContext } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { parseRef } from '../../../refs'
@@ -13,17 +13,19 @@ import { ICON, META_ICON, mute } from '../../../theme'
 import { parseUrl } from '../../../wire'
 import type { DrawContext, PictureBudget } from '../../types'
 import { SectionRule, fitPicture } from '../../widgets'
-import { DiagramEmbed, Embed, ListBlock, TableBlock, fullWidthOf, newBlocks, settleBlocks } from './blocks'
+import { Embed, fullWidthOf, newBlocks, pictureRowsOf, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
+import { drawProse } from './prose'
+import type { ProseOptions } from './prose'
 import { slackThread } from './slack'
 
-const MAX_BLOCK_MEMO = 400
-const blockMemo = new Map<string, { chunk: string; rows: number }[]>()
+const MAX_LINK_MEMO = 400
+const linkMemo = new Map<string, string>()
 
 const BODY_LABEL: Partial<Record<string, string>> = { 'gh-repo': 'README', web: 'Page', 'slack-thread': 'Message' }
 const LISTS_FIRST = new Set(['gh-repo', 'linear-issue'])
 
-export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: NonNullable<View['remote']>): ViewBody {
+export async function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: NonNullable<View['remote']>): Promise<ViewBody> {
   const { Box, Text, Button, Markdown, Image, C, textWidth, isMenuOpen, now } = ctx
   const fullWidth = fullWidthOf(ctx)
   const record = remote.record
@@ -37,104 +39,44 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
   const budget: PictureBudget = { used: 0 }
   const ghRef = record && adapterOfKind(record.kind).id === 'github' ? parseRef(record.address) : null
   const refs = refContext(ghRef && 'owner' in ghRef && ghRef.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
-  const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
-  const mediaBlock = (index: number, alt: string, url: string, heading: string) => {
-    const key = `media-${index}`
+  const refsKey = `${refs.repo}|${refs.teamKeys?.join(',')}|${refs.workspace}`
+  const linked = (text: string) => {
+    const memoKey = `${refsKey}|${text}`
+    const cached = linkMemo.get(memoKey)
+    if (cached !== undefined) return cached
+    if (linkMemo.size > MAX_LINK_MEMO) linkMemo.clear()
+    const out = linkify(text, () => null, refs)
+    linkMemo.set(memoKey, out)
+    return out
+  }
+  let mediaCount = 0
+  const picture: ProseOptions['picture'] = (alt, url, _key, width) => {
     const one = record?.media?.[url]
-    const picture = remote.pictures?.[url]
-    const loadedPng = picture && pixels.get(picture.file)
-    const png = fitPicture(budget, loadedPng)
-    const host = parseUrl(url)?.host ?? url
-    drawnParts.push(
-      Embed(ctx, key, one?.play ? '\u{f03d}' : ICON.image, one?.play ? 'VIDEO' : 'IMAGE', alt || host, C.teal, (
+    if (!one) return null
+    const index = mediaCount++
+    const key = `media-${index}`
+    const shot = remote.pictures?.[url]
+    const png = fitPicture(budget, shot && pixels.get(shot.file))
+    const box = png && Image && shot ? imageBox(shot.width, shot.height, width, pictureRowsOf(ctx)) : null
+    return {
+      isVideo: Boolean(one.play),
+      rows: (box?.rows ?? 1) + (one.play ? 1 : 0),
+      child: (
         <Box flexDirection="column">
-          {png && Image && picture ? (
-            <Image key={`${key}-image`} source={{ png }} {...fullWidth(picture.width, picture.height)} alt={alt || 'image'} />
+          {box && png && Image ? (
+            <Image key={`${key}-image`} source={{ png }} {...box} alt={alt || 'image'} />
           ) : (
-            !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink(io, link.href)} />
+            !one.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink(io, link.href)} />
           )}
-          {one?.play && (
+          {one.play && (
             <Button key={`media-play-${index}`} label="\u{f04b} Play video" plain onPress={() => void (isWebUrl(url) && io.run(['open', url]).catch(() => undefined))} />
           )}
         </Box>
-      )),
-    )
-    note(png && picture ? fullWidth(picture.width, picture.height).rows + 4 : 4, heading)
-  }
-  let mediaCount = 0
-  // Splits out picture lines and drawn diagrams; a fence's contents stay in the text around them.
-  const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
-    if (!record?.media && !text.includes('```peek-diagram')) return markdownChunks(key, text, heading, indent)
-    let pending = ''
-    let segment = 0
-    let fence = ''
-    let diagram: { info: string; lines: string[] } | null = null
-    const flush = () => {
-      if (pending.trim()) markdownChunks(`${key}-${segment++}`, pending, heading, indent)
-      pending = ''
-    }
-    for (const line of text.split('\n')) {
-      if (diagram) {
-        if (/^\s*```\s*$/.test(line)) {
-          drawnParts.push(DiagramEmbed(ctx, `${key}-diagram-${segment++}`, diagram.info, diagram.lines.join('\n')))
-          note(diagram.lines.length + 4, heading)
-          diagram = null
-        } else diagram.lines.push(line)
-        continue
-      }
-      const marker = /^\s*(```|~~~)/.exec(line)?.[1]
-      const drawn = !fence && /^```peek-diagram\s*(.*)$/.exec(line)
-      if (drawn) {
-        flush()
-        diagram = { info: drawn[1] ?? '', lines: [] }
-        continue
-      }
-      if (marker && (!fence || marker === fence)) fence = fence ? '' : marker
-      const found = !fence && !marker && /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line.trim())
-      if (found && record?.media?.[found[2] ?? '']) {
-        flush()
-        mediaBlock(mediaCount++, found[1] ?? '', found[2] ?? '', heading)
-      } else pending += `${line}\n`
-    }
-    if (diagram) pending += ['```text', ...diagram.lines, '```'].join('\n')
-    flush()
-  }
-  const markdownChunks = (key: string, text: string, heading: string, indent = 0) => {
-    if (!text.includes('|') && !/^\s*[-*+]\s/m.test(text)) return proseChunks(key, text, heading, indent)
-    for (const [i, part] of splitTables(text).entries()) {
-      if (part.kind === 'markdown') {
-        for (const [j, piece] of splitLists(linkify(part.text, () => null, refs)).entries()) {
-          if (piece.kind === 'markdown') proseChunks(`${key}-t${i}-c${j}`, piece.text, heading, indent)
-          else {
-            const list = ListBlock(ctx, `${key}-list-${i}-${j}`, piece.items, href => void pressLink(io, href), textWidth - indent)
-            drawnParts.push(<Box key={`${key}-t${i}-c${j}`} marginLeft={indent}>{list.node}</Box>)
-            note(list.rows, heading)
-          }
-        }
-      } else {
-        const table = TableBlock(ctx, `${key}-table-${i}`, part, textWidth - indent)
-        drawnParts.push(<Box key={`${key}-t${i}`} marginLeft={indent}>{table.node}</Box>)
-        note(table.rows, heading)
-      }
+      ),
     }
   }
-  const proseChunks = (key: string, text: string, heading: string, indent = 0) => {
-    const memoKey = `${memoBase}|${key}`
-    let chunks = blockMemo.get(memoKey)
-    if (!chunks) {
-      if (blockMemo.size > MAX_BLOCK_MEMO) blockMemo.clear()
-      chunks = chunkMarkdown(linkify(text, () => null, refs)).map(chunk => ({ chunk, rows: estimateRows(chunk, textWidth - indent) }))
-      blockMemo.set(memoKey, chunks)
-    }
-    for (const [i, { chunk, rows }] of chunks.entries()) {
-      drawnParts.push(
-        <Box key={`${key}-${i}`} marginLeft={indent}>
-          <Markdown dimColor={isMenuOpen} key={`${key}-md-${i}`} text={chunk} onLinkPress={link => void pressLink(io, link.href)} />
-        </Box>,
-      )
-      note(rows, heading)
-    }
-  }
+  const markdownBlocks = (key: string, text: string, heading: string, indent = 0) =>
+    drawProse(ctx, io, blocks, key, linked(text), { picture, heading, indent })
   if (!record) {
     const message = failureText(remote.failure ?? 'offline')
     drawnParts.push(
@@ -235,21 +177,21 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
         note(Math.max(1, list.items.length) + (more ? 1 : 0), list.heading)
       }
     }
-    const description = () => {
+    const description = async () => {
       if (!record.body?.trim()) return
       const label = BODY_LABEL[record.kind] ?? 'Description'
       sectionRule('body-head', label)
-      markdownBlocks('body', record.body, label)
+      await markdownBlocks('body', record.body, label)
     }
     const lead = record.kind === 'slack-thread' ? record.lead : undefined
     if (lead) {
       sectionRule('thread-head', 'Thread', record.status ?? '')
-      slackThread({ ctx, io, remote, blocks, budget, refs }, lead, record.comments?.shown ?? [])
+      await slackThread({ ctx, io, remote, blocks, budget, linked }, lead, record.comments?.shown ?? [])
     } else if (LISTS_FIRST.has(record.kind)) {
       lists()
-      description()
+      await description()
     } else {
-      description()
+      await description()
       lists()
     }
     const comments = lead ? undefined : record.comments
@@ -269,7 +211,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
           </Box>,
         )
         note(1, 'Comments')
-        markdownBlocks(`comment-${i}-body`, one.body || '*(empty)*', 'Comments', indent)
+        await markdownBlocks(`comment-${i}-body`, one.body || '*(empty)*', 'Comments', indent)
       }
     }
   }

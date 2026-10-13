@@ -3,23 +3,22 @@ import type { RenderChildren } from 'claude-code'
 import type { RemoteComment, View } from '../../../../types'
 import { pixels } from '../../../images'
 import { isWebUrl } from '../../../live'
-import { linkify } from '../../../markdown'
-import { estimateRows, imageBox } from '../../../measure'
-import { pressLink } from '../../../navigation'
+import { imageBox } from '../../../measure'
 import type { NavIo } from '../../../navigation'
-import type { RefContext } from '../../../refs'
 import { initials, whenLabel } from '../../../format'
 import { ICON, mute, speakerColor } from '../../../theme'
 import type { DrawContext, PictureBudget } from '../../types'
 import { fitPicture } from '../../widgets'
 import { pictureRowsOf } from './blocks'
 import type { Blocks } from './blocks'
+import { proseParts } from './prose'
+import type { ProseOptions } from './prose'
 
-export type RemotePage = { ctx: DrawContext; io: NavIo; remote: NonNullable<View['remote']>; blocks: Blocks; budget: PictureBudget; refs: RefContext }
+export type RemotePage = { ctx: DrawContext; io: NavIo; remote: NonNullable<View['remote']>; blocks: Blocks; budget: PictureBudget; linked: (text: string) => string }
 
 // Draws into the page's blocks in order, spending the page's one picture budget after the favicon and preview.
-export function slackThread(page: RemotePage, lead: RemoteComment, replies: readonly RemoteComment[]) {
-  const { ctx, io, remote, blocks, budget, refs } = page
+export async function slackThread(page: RemotePage, lead: RemoteComment, replies: readonly RemoteComment[]) {
+  const { ctx, io, remote, blocks, budget, linked } = page
   const { Box, Text, Button, Markdown, Image, C, textWidth, isMenuOpen, now } = ctx
   const { drawnParts, note } = blocks
   const pictureRows = pictureRowsOf(ctx)
@@ -54,7 +53,7 @@ export function slackThread(page: RemotePage, lead: RemoteComment, replies: read
     }
     return { rows, height }
   }
-  const slackMessage = (index: number, one: RemoteComment, isReply: boolean) => {
+  const slackMessage = async (index: number, one: RemoteComment, isReply: boolean) => {
     const key = `slack-msg-${index}`
     const width = textWidth - (isReply ? 4 : 0)
     const color = isMenuOpen ? mute(speakerColor(one.authorId ?? one.author)) : speakerColor(one.authorId ?? one.author)
@@ -62,36 +61,16 @@ export function slackThread(page: RemotePage, lead: RemoteComment, replies: read
     const avatarPng = avatar && pixels.get(avatar.file)
     const face = Image ? fitPicture(budget, avatarPng) : undefined
     const when = whenLabel(one.at, now)
-    const bodyParts: RenderChildren[] = []
-    let bodyRows = 0
-    let pending: string[] = []
-    const flush = () => {
-      const chunk = pending.join('\n')
-      pending = []
-      if (!chunk.trim()) return
-      bodyParts.push(<Markdown dimColor={isMenuOpen} key={`${key}-md-${bodyParts.length}`} text={chunk} onLinkPress={link => void pressLink(io, link.href)} />)
-      bodyRows += estimateRows(chunk, width)
+    const picture: ProseOptions['picture'] = (alt, url, pictureKey, pictureWidth) => {
+      const shot = remote.pictures?.[url]
+      const png = Image ? fitPicture(budget, shot && pixels.get(shot.file)) : undefined
+      if (!png || !shot || !Image) return null
+      const box = imageBox(shot.width, shot.height, pictureWidth, pictureRows)
+      return { child: <Image key={pictureKey} source={{ png }} {...box} alt={alt || 'image'} />, rows: box.rows }
     }
-    for (const line of linkify(one.body || '*(empty)*', () => null, refs).split('\n')) {
-      const found = /^\s*!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line)
-      if (!found) {
-        pending.push(line)
-        continue
-      }
-      const [, alt = '', url = ''] = found
-      const picture = remote.pictures?.[url]
-      const loaded = picture && pixels.get(picture.file)
-      const png = Image ? fitPicture(budget, loaded) : undefined
-      if (!png || !picture || !Image) {
-        pending.push(`[${alt || 'open image'}](${url})`)
-        continue
-      }
-      flush()
-      const box = imageBox(picture.width, picture.height, width, pictureRows)
-      bodyParts.push(<Image key={`${key}-picture-${bodyParts.length}`} source={{ png }} {...box} alt={alt || 'image'} />)
-      bodyRows += box.rows
-    }
-    flush()
+    const parts = await proseParts({ ...ctx, textWidth: width }, io, `${key}-body`, linked(one.body || '*(empty)*'), { picture })
+    const bodyParts = parts.map(part => part.node)
+    const bodyRows = parts.reduce((sum, part) => sum + part.rows, 0) + Math.max(0, parts.length - 1)
     const files = slackFiles(`slack-file-${index}`, one, width)
     const rows = 2 + bodyRows + files.height
     const content = (
@@ -109,7 +88,7 @@ export function slackThread(page: RemotePage, lead: RemoteComment, replies: read
             {one.href ? <Button key={`slack-time-${index}`} label={when} plain onPress={() => openInSlack(one.href)} /> : <Text color={C.overlay0}>{when}</Text>}
           </Box>
         </Box>
-        {bodyParts}
+        <Box flexDirection="column" gap={1}>{bodyParts}</Box>
         {files.rows}
       </Box>
     )
@@ -127,6 +106,6 @@ export function slackThread(page: RemotePage, lead: RemoteComment, replies: read
     )
     note(rows, 'Thread')
   }
-  slackMessage(0, lead, false)
-  for (const [i, one] of replies.entries()) slackMessage(i + 1, one, true)
+  await slackMessage(0, lead, false)
+  for (const [i, one] of replies.entries()) await slackMessage(i + 1, one, true)
 }

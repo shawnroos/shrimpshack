@@ -359,6 +359,17 @@ test('bullet lists in a pull request body draw with an accent arrow, nested ones
   await ui.unmount()
 })
 
+test('a task line already linked to a local file inside a pull request body draws read-only, never as a tickable task', async ($, on) => {
+  fakeWorld(on, { pull: { body: '- [\u{f0131}](file:///Users/me/notes.md#task-3) linked task\n' } })
+  await $.command.run({ command: 'peek', args: 'https://github.com/acme/widgets/pull/42' } as never)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  const page = JSON.stringify(await ui.drawn())
+  expect(page).toContain('"text":"linked task"')
+  expect(page).not.toContain('tasks.tsx')
+  expect(page).not.toContain('"key":"task-3"')
+  await ui.unmount()
+})
+
 test('Recent and Gallery match a star by its stored href, so a star saved as /issues/42 does not star the /pull/42 entry', async ($, on) => {
   fakeWorld(on)
   const issue = 'https://github.com/acme/widgets/issues/42'

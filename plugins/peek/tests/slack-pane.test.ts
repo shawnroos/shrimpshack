@@ -128,7 +128,7 @@ test('an image file the page may read is drawn inline, beside the picture of a v
   expect((await ui.find({ key: 'slack-file-0-0' }))?.type).toBe('Image')
   expect((await ui.find({ key: 'slack-file-1-1' }))?.type).toBe('Image')
   expect((await ui.find({ key: 'slack-file-1-0' }))?.type).toBe('Box')
-  expect((await ui.find({ key: 'slack-msg-1-picture-1' }))?.type).toBe('Image')
+  expect((await ui.find({ key: 'slack-msg-1-body-1-picture' }))?.type).toBe('Image')
   expect(JSON.stringify(await ui.drawn())).toContain(PNG_HEAD)
   await ui.unmount()
 })
