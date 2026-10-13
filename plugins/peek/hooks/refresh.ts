@@ -1,5 +1,6 @@
 import type { FailureKind, Loaded, RemoteKind, RemoteRecord, Tier } from '../types'
 import { itemKey, parseRef } from './refs'
+import { parseUrl } from './wire'
 
 export const ON_SCREEN_MS = 60_000
 export const BACKGROUND_MS = 5 * 60_000
@@ -48,12 +49,9 @@ export function cached(address: string): CacheEntry | undefined {
 }
 
 export function sourceOf(address: string): Source {
-  let host = ''
-  try {
-    host = new URL(address).hostname.toLowerCase().replace(/^www\./, '')
-  } catch {
-    return 'web'
-  }
+  const url = parseUrl(address)
+  if (!url) return 'web'
+  const host = url.hostname.toLowerCase().replace(/^www\./, '')
   if (host === 'github.com') return 'github'
   if (host === 'linear.app') return 'linear'
   if (host.endsWith('.slack.com')) return 'slack'

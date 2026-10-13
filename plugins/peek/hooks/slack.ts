@@ -2,7 +2,7 @@ import type { CaptureIo } from './capture'
 import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
 import type { SourceIo } from './sources'
-import { asObj, asStr, decodeEntities, tryJson } from './wire'
+import { asObj, asStr, decodeEntities, parseUrl, tryJson } from './wire'
 import type { Json } from './wire'
 import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
 
@@ -268,12 +268,8 @@ async function filePicture(io: SlackIo, server: string, file: RemoteFile): Promi
 }
 
 function smallAvatar(raw: string): string {
-  let url: URL
-  try {
-    url = new URL(raw)
-  } catch {
-    return raw
-  }
+  const url = parseUrl(raw)
+  if (!url) return raw
   if (url.hostname === 'avatars.slack-edge.com') return raw.replace(/_(?:original|\d+)\.(png|jpe?g|gif)$/i, `_${AVATAR_PX}.$1`)
   if (url.hostname.endsWith('gravatar.com')) {
     url.searchParams.set('s', String(AVATAR_PX))

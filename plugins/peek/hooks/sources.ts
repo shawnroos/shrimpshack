@@ -1,7 +1,7 @@
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { FailureKind } from '../types'
-import { tryJson } from './wire'
+import { parseUrl, tryJson } from './wire'
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
 // Copied from herdr-board crates/board-daemon/src/linear/credential.rs: one Keychain item serves both tools.
@@ -288,10 +288,7 @@ const STATUS_TEXT: Record<number, string> = {
 }
 
 export function httpDetail(status: number, url: string): string {
-  let host = ''
-  try {
-    host = new URL(url).host
-  } catch {}
+  const host = parseUrl(url)?.host ?? ''
   return [`HTTP ${status}`, STATUS_TEXT[status], host && `from ${host}`].filter(Boolean).join(' ')
 }
 
@@ -304,12 +301,8 @@ export function httpFailure(status: number): FailureKind {
 }
 
 export async function httpText(io: SourceIo, url: string): Promise<{ ok: true; text: string; finalUrl?: string } | Failed> {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return { ok: false, failure: 'query-bug' }
-  }
+  const parsed = parseUrl(url)
+  if (!parsed) return { ok: false, failure: 'query-bug' }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { ok: false, failure: 'query-bug' }
   const target = parsed.href
   let response

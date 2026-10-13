@@ -5,7 +5,7 @@ import { readable } from './defuddle'
 import type { Ref } from './refs'
 import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
 import type { Failed, SourceIo } from './sources'
-import { decodeEntities } from './wire'
+import { decodeEntities, parseUrl } from './wire'
 
 const SCRATCH = '/tmp/claude-peek'
 // The engine cuts stdout at 4 MiB, so the status line rides on stderr where the cut cannot drop it.
@@ -40,17 +40,9 @@ function attributes(tag: string): Record<string, string> {
   return found
 }
 
-function safeParse(raw: string, base?: string): URL | null {
-  try {
-    return new URL(raw, base)
-  } catch {
-    return null
-  }
-}
-
 function resolve(raw: string | undefined, base: string): string | undefined {
   if (!raw?.trim()) return undefined
-  return safeParse(decode(raw.trim()), base)?.href
+  return parseUrl(decode(raw.trim()), base)?.href
 }
 
 export function parseHead(html: string, pageUrl: string): Head {
@@ -135,7 +127,7 @@ export function isPrivateHost(hostname: string): boolean {
 }
 
 function fetchable(raw: string | undefined): URL | null {
-  const url = raw ? safeParse(raw) : null
+  const url = raw ? parseUrl(raw) : null
   if (!url) return null
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
   if (!HOSTNAME.test(url.hostname)) return null
@@ -193,13 +185,13 @@ async function fetchToScratch(io: SourceIo, raw: string | undefined, ext: string
     }
     if (status < 300 || status >= 400) return undefined
     const next: string = rest.join(' ')
-    url = next ? fetchable(safeParse(next, url.href)?.href) : null
+    url = next ? fetchable(parseUrl(next, url.href)?.href) : null
   }
   return undefined
 }
 
 async function download(io: SourceIo, raw: string | undefined): Promise<string | undefined> {
-  const ext = IMAGE_EXT.exec(safeParse(raw ?? '')?.pathname ?? '')?.[1]?.toLowerCase() ?? 'img'
+  const ext = IMAGE_EXT.exec(parseUrl(raw ?? '')?.pathname ?? '')?.[1]?.toLowerCase() ?? 'img'
   return (await fetchToScratch(io, raw, ext, 10))?.file
 }
 
@@ -213,7 +205,7 @@ const VIDEO_FILE = /\.(mp4|m4v|webm|mov)$/i
 
 // A blob URL is GitHub's HTML page around the file; the raw host serves the file itself.
 export function remoteFileOf(address: string): { kind: 'file'; fetchUrl: string; ext: string } | { kind: 'video' } | null {
-  const url = safeParse(address)
+  const url = parseUrl(address)
   if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null
   if (VIDEO_FILE.test(url.pathname)) return { kind: 'video' }
   const ext = FILE_PATH.exec(url.pathname)?.[1]?.toLowerCase()
@@ -233,7 +225,7 @@ function attribute(tag: string, name: string): string | undefined {
 
 // An empty attribute would resolve to the page itself.
 function absolute(raw: string | undefined, base: string): string | undefined {
-  return raw ? safeParse(raw, base)?.href : undefined
+  return raw ? parseUrl(raw, base)?.href : undefined
 }
 
 function youtubeId(url: URL): string | undefined {
@@ -274,7 +266,7 @@ async function pageMedia(texts: readonly string[], posters: Map<string, string>,
       const row = PICTURE_ROW.test(raw.trim()) ? (raw.match(PICTURE) ?? []) : [raw]
       for (const line of row) {
         const found = PICTURE_LINE.exec(line.trim())
-        const url = found?.[2] ? safeParse(found[2]) : null
+        const url = found?.[2] ? parseUrl(found[2]) : null
         if (!found || !url) {
           lines.push(line)
           continue
@@ -318,14 +310,14 @@ function withPictureLines(markdown: string): string {
       const text = line.trim()
       if (IMG_ROW.test(text)) {
         const pictures = (text.match(/<img\b[^>]*>/gi) ?? []).map(tag => {
-          const src = safeParse(attribute(tag, 'src') ?? '')
+          const src = parseUrl(attribute(tag, 'src') ?? '')
           const isWeb = src?.protocol === 'https:' || src?.protocol === 'http:'
           return src && isWeb ? `![${(attribute(tag, 'alt') ?? '').replace(/[[\]]/g, '')}](${src.href})` : ''
         })
         return pictures.every(Boolean) ? pictures.join(' ') : line
       }
       const bare = BARE_URL.exec(text)?.[1]
-      const url = bare ? safeParse(bare) : null
+      const url = bare ? parseUrl(bare) : null
       return url && isVideoUrl(url) ? `![video](${url.href})` : line
     })
     .join('\n')
@@ -392,11 +384,11 @@ async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: st
 }
 
 function hostOf(url: string): string | undefined {
-  return safeParse(url)?.hostname.replace(/^www\./, '') || undefined
+  return parseUrl(url)?.hostname.replace(/^www\./, '') || undefined
 }
 
 export async function loadWeb(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
-  const address = safeParse(ref.address)
+  const address = parseUrl(ref.address)
   if (!address || (address.protocol !== 'http:' && address.protocol !== 'https:')) return { ok: false, failure: 'query-bug' }
   const isCli = await hasCurl(io)
   const page = isCli ? await curlPage(io, address.href) : await httpText(io, address.href)

@@ -1,3 +1,5 @@
+import { parseUrl } from './wire'
+
 export type GithubItemRef = { kind: 'gh-pr' | 'gh-issue'; address: string; owner: string; repo: string; number: number }
 // An unresolved `#123` or `owner/repo#123`: only parseRef returns it, and loading resolves it to a pull request or an issue.
 export type GithubNumberRef = { kind: 'gh-number'; address: string; owner: string; repo: string; number: number }
@@ -84,11 +86,8 @@ function fromUrl(url: URL): Ref | null {
 export function parseRef(input: string, context: RefContext = {}): Ref | null {
   const text = input.trim()
   if (/^https?:\/\//i.test(text)) {
-    try {
-      return fromUrl(new URL(text))
-    } catch {
-      return null
-    }
+    const url = parseUrl(text)
+    return url ? fromUrl(url) : null
   }
   const full = OWNER_REPO_NUMBER.exec(text)
   if (full?.[1] && full[2] && !GITHUB_RESERVED.has(full[1].toLowerCase())) return githubRef(full[1], full[2], 'gh-number', Number(full[3]))
