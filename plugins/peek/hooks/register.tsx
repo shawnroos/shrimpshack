@@ -22,7 +22,7 @@ import { groupsScreen } from './pane/screens/groups'
 import { recentScreen } from './pane/screens/recent'
 import { galleryScreen } from './pane/screens/gallery'
 import { viewScreen } from './pane/screens/view/index'
-import { bootLinear, clamp, nav, openFromPage, pressLink, refContext, repoContext, setMenu, show, switchMode } from './navigation'
+import { armEscape, bootLinear, clamp, nav, openFromPage, personClose, pressLink, refContext, repoContext, setMenu, show, switchMode } from './navigation'
 import type { NavIo } from './navigation'
 import { TOOLS } from './group-tools'
 import { createGroupStore } from './groups-store'
@@ -178,7 +178,12 @@ function navIoOf($: EngineInterface): NavIo {
     toast: text => $.ui.toast(text),
     fork: request => $.model.fork(request),
     scroll: options => $.ui.scroll({ in: PANE, ...options }),
-    open: options => $.ui.open({ id: PANE, ...options }),
+    open: options => {
+      if (options.title) nav.paneTitle = options.title
+      // Every open resets closeOnEscape, so one that does not name it keeps Esc armed while it is.
+      const keepsEscape = nav.isEscapeArmed && !('closeOnEscape' in options)
+      return $.ui.open({ id: PANE, ...options, ...(keepsEscape ? { closeOnEscape: true as const } : {}) })
+    },
     remoteIo: () => ports,
     liveIo: () => liveIoOf($, ports),
     groupsIo: () => groupsIoOf(ports),
@@ -297,10 +302,7 @@ export const register: Register = on => {
   })
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind === 'person' && (await read($, menuOpen).catch(() => false))) {
-      await setMenu(navIoOf($), false).catch(() => undefined)
-      return { value: undefined }
-    }
+    if (e.origin.kind === 'person' && (await personClose(navIoOf($), await read($, menuOpen).catch(() => false)))) return { value: undefined }
     await leaveLive()
     return next(e)
   })
@@ -524,6 +526,7 @@ export const register: Register = on => {
     const screen = await SCREENS[chosen](ctx, actions)
     // Only the group page that drew it keeps `group`; any other screen ends it.
     paneLayout = { ...paneLayout, ...screen.layout, group: screen.layout.group }
+    armEscape(navIoOf($), e.props.isFocused, isMenuOpen, screen.actions.find(one => one.id === 'back')?.run ?? null)
     return drawFrame(ctx, actions, lists, screen)
   })
 }

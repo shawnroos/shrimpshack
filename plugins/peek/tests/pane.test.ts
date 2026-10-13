@@ -621,6 +621,37 @@ test('the header trail is clickable: a click on the folder crumb opens that fold
   await ui.unmount()
 })
 
+test('while peek has the keyboard and a page to go back to, the pane arms Esc; unfocused, or with nothing to go back to, it does not', async ($, on) => {
+  FILES['/repo/notes/first.md'] = '# First\n\nOne.'
+  FILES['/repo/notes/second.md'] = '# Second\n\nTwo.'
+  const opens: { title?: string; closeOnEscape?: boolean }[] = []
+  on('ui.open', { id: 'peek' }, ($, e, next) => {
+    opens.push(e as { title?: string; closeOnEscape?: boolean })
+    return next(e)
+  })
+  fakeDisk(on)
+  const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
+  await $.command.run({ command: 'peek', args: '/repo/notes/first.md' } as never)
+  await ui.redraw()
+  expect(opens.at(-1)?.closeOnEscape).toBeUndefined()
+
+  await ui.post({ go: 'file:///repo/notes/second.md' } as never, { in: 'crumbs' } as never)
+  await ui.redraw()
+  expect(JSON.stringify(await ui.drawn())).toContain('SECOND')
+  expect(opens.at(-1)).toEqual({ id: 'peek', title: 'second.md', closeOnEscape: true })
+
+  await ui.redraw({ ...props, isFocused: false } as never)
+  expect(opens.at(-1)).toEqual({ id: 'peek', title: 'second.md' })
+
+  await ui.redraw(props as never)
+  expect(opens.at(-1)?.closeOnEscape).toBe(true)
+  await ui.press({ key: 'back' })
+  await ui.redraw()
+  expect(JSON.stringify(await ui.drawn())).toContain('FIRST')
+  expect(opens.at(-1)?.closeOnEscape).toBeUndefined()
+  await ui.unmount()
+})
+
 test('an html file reads as markdown, and a code file opened at a line starts ten lines above it', async ($, on) => {
   fakeDisk(on)
   FILES['/repo/site/page.html'] = '<html><body><h1>Hello page</h1><p>Some <b>bold</b> words</p></body></html>'

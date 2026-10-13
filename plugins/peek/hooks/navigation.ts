@@ -101,6 +101,10 @@ export const nav = {
   topBlockKey: 'block-0',
   backStack: [] as { view: View; key: string }[],
   groupBack: null as { id: string; title: string; depth: number } | null,
+  // What the pane last asked of Esc, and the Back the last draw offered while focused.
+  isEscapeArmed: false,
+  paneTitle: 'Peek',
+  escapeBack: null as (() => void) | null,
 }
 
 export async function repoContext(io: NavIo, cwd: string): Promise<string | undefined> {
@@ -354,5 +358,30 @@ export async function pressLink(io: NavIo, href: string) {
 export async function setMenu(io: NavIo, isOpen: boolean) {
   await io.menuFilter.update(() => '')
   await io.menuOpen.update(() => isOpen)
+  nav.isEscapeArmed = isOpen
   await io.open(isOpen ? { title: 'Peek', focus: true, closeOnEscape: true } : { title: 'Peek' })
+}
+
+// Esc reaches peek only as a close, and only while the pane is opened with
+// closeOnEscape; arming it just while focused keeps Esc at the prompt and the
+// close mark the engine's whenever peek does not hold the keyboard.
+export function armEscape(io: NavIo, isFocused: boolean, isMenuOpen: boolean, back: (() => void) | null) {
+  nav.escapeBack = isFocused && !isMenuOpen ? back : null
+  const want = isFocused && (isMenuOpen || back !== null)
+  if (want === nav.isEscapeArmed) return
+  nav.isEscapeArmed = want
+  void io.open(want ? { title: nav.paneTitle, closeOnEscape: true } : { title: nav.paneTitle }).catch(() => undefined)
+}
+
+// A person's close while Esc is armed is Esc from inside the pane: it closes the
+// menu, else goes Back. False leaves the close to the engine.
+export async function personClose(io: NavIo, isMenuOpen: boolean): Promise<boolean> {
+  if (isMenuOpen) {
+    await setMenu(io, false).catch(() => undefined)
+    return true
+  }
+  const back = nav.escapeBack
+  if (!nav.isEscapeArmed || !back) return false
+  back()
+  return true
 }
