@@ -5,11 +5,10 @@ import { readable } from './defuddle'
 import type { Ref } from './refs'
 import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
 import type { Failed, SourceIo } from './sources'
-import { decodeEntities, markedStderr, parseUrl } from './wire'
+import { decodeEntities, parseUrl } from './wire'
+import { DOWNLOAD_FORMAT, PAGE_FORMAT, downloadStatus, pageStatus } from './parsers/curl'
 
 const SCRATCH = '/tmp/claude-peek'
-// The engine cuts stdout at 4 MiB, so the status line rides on stderr where the cut cannot drop it.
-export const MARKER = '__peek_curl__ '
 const MAX_PAGE = 4_194_304
 // --globoff: curl otherwise expands {a,b} and [1-2] in a URL into hosts fetchable() never saw.
 const PROTO = ['--globoff', '--proto', '=http,https', '--proto-redir', '=http,https']
@@ -158,9 +157,6 @@ async function sha1(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-// The content type rides on stderr so the stdout fields every caller parses keep their order.
-export const TYPE_MARKER = '__peek_type__ '
-
 async function fetchToScratch(io: SourceIo, raw: string | undefined, ext: string, maxSeconds: number): Promise<{ file: string; type?: string } | undefined> {
   const first = fetchable(raw)
   if (!first) return undefined
@@ -172,19 +168,13 @@ async function fetchToScratch(io: SourceIo, raw: string | undefined, ext: string
   for (let hop = 0; url && hop <= MAX_IMAGE_HOPS; hop++) {
     const pin = await pinnedAddress(io, url)
     if (!pin) return undefined
-    const format = `%{http_code} %{size_download} %{redirect_url}%{stderr}${TYPE_MARKER}%{content_type}`
-    const argv = ['curl', '-sf', ...PROTO, ...pin, '--max-redirs', '0', '--max-time', String(maxSeconds), '--max-filesize', '10000000', '-o', file, '-w', format, url.href]
+    const argv = ['curl', '-sf', ...PROTO, ...pin, '--max-redirs', '0', '--max-time', String(maxSeconds), '--max-filesize', '10000000', '-o', file, '-w', DOWNLOAD_FORMAT, url.href]
     const ran = await io.run(argv, { timeoutMs: (maxSeconds + 5) * 1000 }).catch(() => null)
     if (!ran || ran.exitCode !== 0) return undefined
-    const [code = '', size = '', ...rest] = ran.stdout.trim().split(' ')
-    const status = Number.parseInt(code, 10)
-    if (status >= 200 && status < 300) {
-      const type = markedStderr(ran.stderr, TYPE_MARKER)?.trim() || undefined
-      return Number.parseInt(size, 10) > 0 ? { file, type } : undefined
-    }
+    const { status, size, redirect, type } = downloadStatus(ran.stdout, ran.stderr)
+    if (status >= 200 && status < 300) return size > 0 ? { file, type } : undefined
     if (status < 300 || status >= 400) return undefined
-    const next: string = rest.join(' ')
-    url = next ? fetchable(parseUrl(next, url.href)?.href) : null
+    url = redirect ? fetchable(parseUrl(redirect, url.href)?.href) : null
   }
   return undefined
 }
@@ -371,15 +361,15 @@ async function faviconFor(io: SourceIo, host: string, icons: readonly string[]):
 }
 
 async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: string; finalUrl: string } | Failed> {
-  const argv = ['curl', '-sL', ...PROTO, '--max-redirs', '10', '--max-time', '15', '-w', `%{stderr}${MARKER}%{http_code} %{url_effective}`, url]
+  const argv = ['curl', '-sL', ...PROTO, '--max-redirs', '10', '--max-time', '15', '-w', PAGE_FORMAT, url]
   const ran = await io.run(argv, { timeoutMs: 20_000 }).catch(() => null)
   if (!ran) return { ok: false, failure: 'offline' }
-  const marked = markedStderr(ran.stderr, MARKER)
-  const [code = '', ...rest] = marked !== null ? marked.trim().split(' ') : []
-  const status = Number.parseInt(code, 10)
+  const marked = pageStatus(ran.stderr)
+  const status = marked?.status ?? NaN
+  const finalUrl = marked?.finalUrl || url
   const isUsable = status >= 200 && status < 300 && (ran.exitCode === 0 || ran.stdout.length > 0)
-  if (!isUsable) return marked !== null && status > 0 ? { ok: false, failure: httpFailure(status), detail: httpDetail(status, rest.join(' ') || url) } : { ok: false, failure: 'offline' }
-  return { ok: true, text: ran.stdout, finalUrl: rest.join(' ') || url }
+  if (!isUsable) return marked !== null && status > 0 ? { ok: false, failure: httpFailure(status), detail: httpDetail(status, finalUrl) } : { ok: false, failure: 'offline' }
+  return { ok: true, text: ran.stdout, finalUrl }
 }
 
 function hostOf(url: string): string | undefined {

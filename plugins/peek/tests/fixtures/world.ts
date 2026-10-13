@@ -4,7 +4,7 @@ import { resetRefresh } from '../../hooks/refresh'
 
 // A PNG signature and an 800x600 IHDR chunk: the engine checks both before it draws.
 export const PNG_HEAD = 'iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAIAAAAVFBUn'
-export { MARKER as CURL_MARKER, TYPE_MARKER } from '../../hooks/web'
+export { MARKER as CURL_MARKER, TYPE_MARKER } from '../../hooks/parsers/curl'
 
 export const PANE_PROPS = {
   title: 'Peek',
