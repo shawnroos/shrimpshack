@@ -62,6 +62,8 @@ export const BLOCK_TYPES: readonly BlockType[] = ['markdown', 'media', 'table', 
 export const RECIPE_FAMILIES: readonly RecipeFamily[] = ['github', 'linear', 'slack']
 export const RECIPE_ID = /^[a-z0-9-]{1,40}$/
 
+export const idProblem = (id: string) => (RECIPE_ID.test(id) ? undefined : `${shown(id)} is not a recipe id; use 1 to 40 of a-z, 0-9 and -`)
+
 const BLOCK_KEYS: Record<BlockType, readonly string[]> = {
   markdown: ['type', 'text'],
   media: ['type', 'items'],
@@ -85,7 +87,7 @@ const MCP_TOOL = /^[A-Za-z0-9_.-]{1,64}$/
 
 type Sink = Problem[]
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 function kindOf(value: unknown): string {
   if (value === null) return 'null'
@@ -94,6 +96,14 @@ function kindOf(value: unknown): string {
 }
 
 const join = (path: string, key: string) => (path ? `${path}.${key}` : key)
+const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/
+const SHOWN_CAP = 80
+
+// JSON.stringify escapes C0 but leaves C1 and bidi controls raw, so the cleaning runs after it.
+function shown(value: unknown): string {
+  const quoted = cleanLine(JSON.stringify(value) ?? 'nothing')
+  return quoted.length > SHOWN_CAP ? `${quoted.slice(0, SHOWN_CAP - 1)}…` : quoted
+}
 const at = (path: string, index: number) => `${path}[${index}]`
 
 function report(sink: Sink, path: string, message: string): void {
@@ -106,7 +116,7 @@ function record(sink: Sink, raw: unknown, path: string, what: string, keys: read
     return undefined
   }
   const extra = Object.keys(raw).filter(key => !keys.includes(key))
-  for (const key of extra) report(sink, join(path, key), `"${key}" is not part of ${what}; it takes ${keys.join(', ')}`)
+  for (const key of extra) report(sink, join(path, KEY_NAME.test(key) ? key : '<key>'), `${shown(key)} is not part of ${what}; it takes ${keys.join(', ')}`)
   return extra.length > 0 ? undefined : raw
 }
 
@@ -158,8 +168,8 @@ function webProblem(href: string): string | null {
 function fileProblem(path: string): string | null {
   if (path.startsWith('//')) return 'is not an absolute file path'
   for (const segment of path.split('/')) {
-    if (segment.startsWith('.')) return `goes through "${segment}"; files inside dot-folders, and dotfiles, cannot be linked`
-    if (RUNS_CODE.test(segment)) return `points into "${segment}", which macOS would run`
+    if (segment.startsWith('.')) return `goes through ${shown(segment)}; files inside dot-folders, and dotfiles, cannot be linked`
+    if (RUNS_CODE.test(segment)) return `points into ${shown(segment)}, which macOS would run`
   }
   return null
 }
@@ -179,7 +189,7 @@ function href(sink: Sink, raw: unknown, path: string, rule: (value: string) => s
   if (value === undefined) return undefined
   const problem = rule(value)
   if (problem) {
-    report(sink, path, `"${value}" ${problem}`)
+    report(sink, path, `${shown(value)} ${problem}`)
     return undefined
   }
   return value
@@ -207,7 +217,7 @@ function markdown(sink: Sink, raw: unknown, path: string): string | undefined {
   if (value === undefined) return undefined
   const bad = markdownLinks(value).flatMap(link => {
     const problem = linkProblem(link)
-    return problem ? [`"${link}" ${problem}`] : []
+    return problem ? [`${shown(link)} ${problem}`] : []
   })
   if (bad.length > 0) {
     report(sink, path, `has a link outside the link rule: ${bad[0]}${bad.length > 1 ? ` (and ${bad.length - 1} more)` : ''}`)
@@ -234,7 +244,7 @@ function mediaItem(sink: Sink, raw: unknown, path: string): MediaItem | undefine
   const url = href(sink, one.url, join(path, 'url'), mediaProblem, true)
   const alt = text(sink, one.alt, join(path, 'alt'), PAGE_CAPS.text)
   const kind = one.kind
-  if (kind !== 'image' && kind !== 'video') report(sink, join(path, 'kind'), `must be image or video, got ${JSON.stringify(kind) ?? 'nothing'}`)
+  if (kind !== 'image' && kind !== 'video') report(sink, join(path, 'kind'), `must be image or video, got ${shown(kind)}`)
   if (url === undefined || (kind !== 'image' && kind !== 'video')) return undefined
   return { url, ...optional('alt', alt), kind }
 }
@@ -281,7 +291,7 @@ function block(sink: Sink, raw: unknown, path: string): Block | undefined {
   }
   const type = raw.type
   if (typeof type !== 'string' || !(BLOCK_TYPES as readonly string[]).includes(type)) {
-    const named = typeof type === 'string' ? `"${type}" is not a block type` : 'a block needs a type'
+    const named = typeof type === 'string' ? `${shown(type)} is not a block type` : 'a block needs a type'
     report(sink, join(path, 'type'), `${named}; use one of ${BLOCK_TYPES.join(', ')}`)
     return undefined
   }
@@ -361,7 +371,7 @@ export function validatePage(raw: unknown): PageCheck {
   return { ok: true, page: { title, ...optional('details', details), sections, ...optional('actions', actions) } }
 }
 
-function itemsOf(body: Block): number {
+export function itemsOf(body: Block): number {
   switch (body.type) {
     case 'markdown': {
       return body.text.trim() ? 1 : 0
@@ -407,7 +417,7 @@ function mutatingWord(tool: string): string | undefined {
 function integer(sink: Sink, raw: unknown, path: string, ok: (value: number) => boolean, rule: string): number | undefined {
   if (raw === undefined) return undefined
   if (typeof raw !== 'number' || !Number.isInteger(raw) || !ok(raw)) {
-    report(sink, path, `must be ${rule}, got ${JSON.stringify(raw)}`)
+    report(sink, path, `must be ${rule}, got ${shown(raw)}`)
     return undefined
   }
   return raw
@@ -418,11 +428,11 @@ function matchEntry(sink: Sink, raw: unknown, path: string): RecipeMatch | undef
   if (!one) return undefined
   const host = typeof one.host === 'string' ? one.host.toLowerCase() : undefined
   if (host === undefined || !HOST_PATTERN.test(host)) {
-    report(sink, join(path, 'host'), `${JSON.stringify(one.host) ?? 'nothing'} is not a host; use a name such as figma.com or *.figma.com`)
+    report(sink, join(path, 'host'), `${shown(one.host)} is not a host; use a name such as figma.com or *.figma.com`)
   }
   const glob = one.path
   if (glob !== undefined && (typeof glob !== 'string' || glob.length > RECIPE_CAPS.path || !PATH_GLOB.test(glob))) {
-    report(sink, join(path, 'path'), `${JSON.stringify(glob)} is not a path glob; start with / and use only * as a wildcard`)
+    report(sink, join(path, 'path'), `${shown(glob)} is not a path glob; start with / and use only * as a wildcard`)
   }
   if (host === undefined || !HOST_PATTERN.test(host) || (glob !== undefined && typeof glob !== 'string')) return undefined
   return { host, ...optional('path', glob as string | undefined) }
@@ -434,7 +444,7 @@ function scriptArg(sink: Sink, raw: unknown, path: string, first: boolean): stri
     return undefined
   }
   if (first && (!raw.startsWith('./') || raw.split('/').includes('..'))) {
-    report(sink, path, `"${raw}" must name a script inside the recipe folder, as ./name; run interpreters through the script's #! line`)
+    report(sink, path, `${shown(raw)} must name a script inside the recipe folder, as ./name; run interpreters through the script's #! line`)
     return undefined
   }
   return raw
@@ -454,7 +464,7 @@ function source(sink: Sink, raw: unknown, warnings: string[]): RecipeSource | un
       ? undefined
       : listOf(sink, one.env, 'source.env', RECIPE_CAPS.env, 'names', (name, path) => {
           if (typeof name === 'string' && ENV_NAME.test(name)) return name
-          report(sink, path, `${JSON.stringify(name)} is not an environment variable name`)
+          report(sink, path, `${shown(name)} is not an environment variable name`)
           return undefined
         })
   if ('run' in one) {
@@ -470,8 +480,8 @@ function source(sink: Sink, raw: unknown, warnings: string[]): RecipeSource | un
   if (!mcp) return undefined
   const server = mcp.server
   const tool = mcp.tool
-  if (typeof server !== 'string' || !MCP_SERVER.test(server)) report(sink, 'source.mcp.server', `${JSON.stringify(server) ?? 'nothing'} is not an MCP server name`)
-  if (typeof tool !== 'string' || !MCP_TOOL.test(tool)) report(sink, 'source.mcp.tool', `${JSON.stringify(tool) ?? 'nothing'} is not an MCP tool name`)
+  if (typeof server !== 'string' || !MCP_SERVER.test(server)) report(sink, 'source.mcp.server', `${shown(server)} is not an MCP server name`)
+  if (typeof tool !== 'string' || !MCP_TOOL.test(tool)) report(sink, 'source.mcp.tool', `${shown(tool)} is not an MCP tool name`)
   const args = mcp.args
   if (args !== undefined && (!isRecord(args) || JSON.stringify(args).length > RECIPE_CAPS.args)) {
     report(sink, 'source.mcp.args', `must be an object of at most ${RECIPE_CAPS.args} characters as JSON`)
@@ -486,7 +496,8 @@ function source(sink: Sink, raw: unknown, warnings: string[]): RecipeSource | un
 export function validateRecipe(id: string, raw: unknown): RecipeCheck {
   const sink: Sink = []
   const warnings: string[] = []
-  if (!RECIPE_ID.test(id)) report(sink, 'id', `"${id}" is not a recipe id; use 1 to 40 of a-z, 0-9 and -`)
+  const badId = idProblem(id)
+  if (badId) report(sink, 'id', badId)
   const one = record(sink, raw, '', 'a recipe', ['name', 'match', 'overrides', 'source', 'refreshMinutes'])
   if (!one) return { ok: false, problems: sink, warnings }
   const name = text(sink, one.name, 'name', RECIPE_CAPS.name, { required: true })
@@ -497,7 +508,7 @@ export function validateRecipe(id: string, raw: unknown): RecipeCheck {
       ? []
       : listOf(sink, one.overrides, 'overrides', RECIPE_FAMILIES.length, 'overrides', (family, path) => {
           if (typeof family === 'string' && (RECIPE_FAMILIES as readonly string[]).includes(family)) return family as RecipeFamily
-          report(sink, path, `${JSON.stringify(family)} is not a built-in page type; use one of ${RECIPE_FAMILIES.join(', ')}`)
+          report(sink, path, `${shown(family)} is not a built-in page type; use one of ${RECIPE_FAMILIES.join(', ')}`)
           return undefined
         })
   const body = source(sink, one.source, warnings)

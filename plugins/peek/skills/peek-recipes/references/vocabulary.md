@@ -199,4 +199,4 @@ When a source fails, peek shows an error page that names the recipe and the prob
 | `server-not-connected` | The MCP call was refused, usually because the server is not connected |
 | `tool-error` | The MCP tool returned an error |
 | `empty-result` | The MCP tool returned no text and no structured content, so the map did not run |
-| `invalid-page` | The JSON is outside this vocabulary. Each problem names its path, such as `sections[0].block.type`. For a map, `fetched.stdin` holds its input. |
+| `invalid-page` | The JSON is outside this vocabulary. `problems` names each path, such as `sections[0].block.type`; what each problem says quotes the page, so it is under `fetched.problems`. For a map, `fetched.stdin` holds its input. |

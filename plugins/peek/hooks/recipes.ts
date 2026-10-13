@@ -1,5 +1,5 @@
 import type { RecipeReview, ReviewFile } from '../types'
-import { RECIPE_CAPS, RECIPE_ID, cleanLine, cleanText, validateRecipe } from './page'
+import { RECIPE_CAPS, RECIPE_ID, cleanLine, cleanText, idProblem, isRecord, validateRecipe } from './page'
 import type { Problem, Recipe, RecipeFamily, RecipeMatch } from './page'
 import { familyOf } from './refs'
 import type { Ref } from './refs'
@@ -34,8 +34,6 @@ export const APPROVALS_KEY = 'recipeApprovals'
 export const recipesDir = (home: string) => `${home}/.local/share/claude-peek/recipes`
 
 const SHAPE_RULE = 'a recipe is recipe.json plus single scripts that use interpreters and libraries already on PATH, never npm install or a virtualenv inside the folder'
-
-const isRecord = (raw: unknown): raw is Record<string, unknown> => typeof raw === 'object' && raw !== null && !Array.isArray(raw)
 
 function decodeBase64(text: string): Uint8Array {
   const binary = atob(text)
@@ -89,7 +87,7 @@ async function walk(io: RecipesIo, dir: string): Promise<{ entries: Walked[]; pr
       } else {
         try {
           const bytes = decodeBase64((await io.read(`${dir}/${path}`)).base64)
-          entries.push({ path, kind: 'file', size: bytes.length, hash: await sha256(bytes), bytes })
+          entries.push({ path, kind: 'file', size: bytes.length, hash: await sha256(bytes), ...(path === 'recipe.json' ? { bytes } : {}) })
         } catch (error) {
           problems.push({ path, message: `could not be read: ${String(error)}` })
         }
@@ -110,7 +108,8 @@ function scriptPath(run: readonly string[]): string {
 }
 
 export async function loadRecipe(io: RecipesIo, root: string, id: string): Promise<LoadedRecipe> {
-  if (!RECIPE_ID.test(id)) return { ok: false, id, problems: [{ path: 'id', message: `"${id}" is not a recipe id; use 1 to 40 of a-z, 0-9 and -` }] }
+  const badId = idProblem(id)
+  if (badId) return { ok: false, id, problems: [{ path: 'id', message: badId }] }
   const dir = `${root}/${id}`
   const walked = await walk(io, dir)
   if (walked.problems.length > 0) return { ok: false, id, dir, problems: walked.problems }
@@ -180,7 +179,9 @@ function globsMeet(a: string, b: string): boolean {
 
 const ANY_PATH = '*'
 
-export function matches(recipe: Recipe, href: string): RecipeMatch | undefined {
+type MatchTarget = { host: string; pathname: string }
+
+function targetOf(href: string): MatchTarget | undefined {
   let url: URL
   try {
     url = new URL(href)
@@ -188,9 +189,13 @@ export function matches(recipe: Recipe, href: string): RecipeMatch | undefined {
     return undefined
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined
-  const host = url.hostname.toLowerCase().replace(/\.$/, '')
-  return recipe.match.find(one => globsMeet(one.host, host) && globsMeet(one.path ?? ANY_PATH, url.pathname))
+  return { host: url.hostname.toLowerCase().replace(/\.$/, ''), pathname: url.pathname }
 }
+
+const matchAt = (recipe: Recipe, at: MatchTarget | undefined): RecipeMatch | undefined =>
+  at && recipe.match.find(one => globsMeet(one.host, at.host) && globsMeet(one.path ?? ANY_PATH, at.pathname))
+
+export const matches = (recipe: Recipe, href: string): RecipeMatch | undefined => matchAt(recipe, targetOf(href))
 
 export function overlaps(a: Recipe, b: Recipe): [RecipeMatch, RecipeMatch] | undefined {
   for (const mine of a.match) {
@@ -203,6 +208,8 @@ export function overlaps(a: Recipe, b: Recipe): [RecipeMatch, RecipeMatch] | und
 
 const FAMILIES: Record<ReturnType<typeof familyOf>, RecipeFamily | 'web'> = { gh: 'github', linear: 'linear', slack: 'slack', web: 'web' }
 
+export const recipeFamilyOf = (kind: Ref['kind']) => FAMILIES[familyOf(kind)]
+
 export function routeOf(
   ref: Ref,
   href: string,
@@ -210,11 +217,11 @@ export function routeOf(
   approvals: RecipeApprovals,
   options: { allowDraft?: boolean } = {},
 ): RecipeRoute {
-  const family = FAMILIES[familyOf(ref.kind)]
-  const link = /^https?:\/\//i.test(href.trim()) ? href.trim() : ref.address
+  const family = recipeFamilyOf(ref.kind)
+  const at = targetOf(/^https?:\/\//i.test(href.trim()) ? href.trim() : ref.address)
   const claiming = recipes.filter(
     (one): one is Extract<LoadedRecipe, { ok: true }> =>
-      one.ok && (family === 'web' || one.recipe.overrides.includes(family)) && matches(one.recipe, link) !== undefined,
+      one.ok && (family === 'web' || one.recipe.overrides.includes(family)) && matchAt(one.recipe, at) !== undefined,
   )
   const approved = claiming.filter(one => isApproved(one, approvals))
   const eligible = options.allowDraft ? claiming : approved

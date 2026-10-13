@@ -123,8 +123,23 @@ export type Page = { title: string; details?: Detail[]; sections: Section[]; act
 
 export type Picture = { file: string; width: number; height: number }
 
-// A page a recipe drew. `page` holds the last good page; `failure` with no `page` is the error page, and
-// `refreshFailure` is a failed refresh drawn over the page it kept. `id` is empty when two recipes claimed the link.
+export type RecipeFailureKind =
+  | 'invalid-recipe'
+  | 'changed-during-run'
+  | 'needs-permission'
+  | 'started-failed'
+  | 'timeout'
+  | 'exit-nonzero'
+  | 'output-truncated'
+  | 'not-JSON'
+  | 'server-not-connected'
+  | 'tool-error'
+  | 'empty-result'
+  | 'invalid-page'
+  | 'conflict'
+  | 'route'
+
+// `id` is empty when two recipes claimed the link.
 export type RecipePage = {
   id: string
   name: string
@@ -137,14 +152,12 @@ export type RecipePage = {
   media?: Record<string, { file?: string; play?: string }>
   pictures?: Record<string, Picture>
   failure?: string
-  failureKind?: string
+  failureKind?: RecipeFailureKind
   isRefreshing?: boolean
   refreshFailure?: string
   review?: RecipeReview
 }
 
-// What the person sees before approving a draft preview. `files` holds every file new or changed since the last
-// approval (all of them on a first approval); `text` is absent for a file that is not text.
 export type ReviewFile = { path: string; change: 'new' | 'changed'; size: number; text?: string }
 export type ReviewRefusal = { kind: 'changed' } | { kind: 'overlap'; id: string } | { kind: 'failed'; message: string }
 export type RecipeReview = {

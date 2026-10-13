@@ -842,6 +842,8 @@ export function columnWidths(rows: readonly (readonly string[])[], width: number
   return widths
 }
 
+export const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+
 export function fitCell(text: string, width: number): string {
   const flat = text.replace(/\s+/g, ' ')
   if (flat.length <= width) return flat.padEnd(width)

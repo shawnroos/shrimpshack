@@ -41,7 +41,7 @@ const ENV_BIN = '/usr/bin/env'
 const REDACTED = '[redacted]'
 
 type Loaded = Extract<Awaited<ReturnType<typeof loadRecipe>>, { ok: true }>
-type Ran = { ok: true; text: string; secrets: readonly string[]; stdin?: string } | ({ ok: false } & RunFailure)
+type Ran = { ok: true; text: string; secrets: readonly string[]; rawStdin?: string } | ({ ok: false } & RunFailure)
 type Script = { field: 'run' | 'map'; argv: readonly string[]; env?: readonly string[] }
 type Resolved = { folder: string; argv: string[]; command: string }
 
@@ -102,30 +102,26 @@ async function timed<T>(io: RunIo, limitMs: number, call: () => Promise<T>): Pro
 }
 
 async function exec(io: RunIo, resolved: Resolved, script: Script, url: string, limit: { seconds: number; leftMs: number }, stdin?: string): Promise<Ran> {
-  const pairs: string[] = []
-  for (const name of SCRIPT_ENV) {
-    const value = await io.envGet(name)
-    if (value !== undefined) pairs.push(`${name}=${value}`)
-  }
+  const declared = (script.env ?? []).filter(name => !(SCRIPT_ENV as readonly string[]).includes(name) && name !== 'PEEK_URL')
+  const [fixed, values] = await Promise.all([Promise.all(SCRIPT_ENV.map(name => io.envGet(name))), Promise.all(declared.map(name => io.envGet(name)))])
+  const pairs = SCRIPT_ENV.flatMap((name, index) => (fixed[index] === undefined ? [] : [`${name}=${fixed[index]}`]))
   pairs.push(`PEEK_URL=${url}`)
   const secrets: string[] = []
-  for (const name of script.env ?? []) {
-    if ((SCRIPT_ENV as readonly string[]).includes(name) || name === 'PEEK_URL') continue
-    const value = await io.envGet(name)
+  for (const [index, name] of declared.entries()) {
+    const value = values[index]
     if (value === undefined) continue
     pairs.push(`${name}=${value}`)
     if (value) secrets.push(value)
   }
-  const echo = stdin === undefined ? {} : { stdin: stdinEcho(stdin, secrets) }
   const init: ProcessRunInit = { cwd: resolved.folder, timeoutMs: limit.leftMs, ...(stdin === undefined ? {} : { stdin }) }
   const ran = await timed(io, limit.leftMs, () => io.run([ENV_BIN, '-i', ...pairs, ...resolved.argv], init))
   if (!ran.ok) {
     return ran.isTimeout ? { ok: false, kind: 'timeout', limitSeconds: limit.seconds } : { ok: false, kind: 'started-failed', message: excerpt(String(ran.error), secrets) }
   }
   const result = ran.value
-  if (result.exitCode !== 0) return { ok: false, kind: 'exit-nonzero', exitCode: result.exitCode, stderr: excerpt(result.stderr, secrets), ...echo }
+  if (result.exitCode !== 0) return { ok: false, kind: 'exit-nonzero', exitCode: result.exitCode, stderr: excerpt(result.stderr, secrets), ...(stdin === undefined ? {} : { stdin: stdinEcho(stdin, secrets) }) }
   if (result.isStdoutTruncated) return { ok: false, kind: 'output-truncated' }
-  return { ok: true, text: result.stdout, secrets, ...echo }
+  return { ok: true, text: result.stdout, secrets, ...(stdin === undefined ? {} : { rawStdin: stdin }) }
 }
 
 async function runScript(io: RunIo, loaded: Loaded, source: { run: string[]; env?: string[] }, url: string, draft: boolean): Promise<Ran> {
@@ -183,17 +179,17 @@ export async function runRecipe(io: RunIo, target: RunTarget, url: string): Prom
   const after = await loadRecipe(io, target.root, target.id)
   if (!after.ok || after.digest !== target.digest) return { ok: false, ...named, kind: 'changed-during-run', phase: 'after' }
   if (!ran.ok) return { ...ran, ...named }
-  const echo = ran.stdin === undefined ? {} : { stdin: ran.stdin }
-  if (!ran.text.trim()) return { ok: false, ...named, kind: 'not-JSON', message: 'the source printed nothing; it must print one Page as JSON', ...echo }
+  const echo = () => (ran.rawStdin === undefined ? {} : { stdin: stdinEcho(ran.rawStdin, ran.secrets) })
+  if (!ran.text.trim()) return { ok: false, ...named, kind: 'not-JSON', message: 'the source printed nothing; it must print one Page as JSON', ...echo() }
   let raw: unknown
   try {
     raw = JSON.parse(ran.text)
   } catch (error) {
     // The parser's own message quotes the stdout it choked on, so it is redacted like the excerpt.
-    return { ok: false, ...named, kind: 'not-JSON', message: `${excerpt(String(error), ran.secrets)}; output began ${JSON.stringify(excerpt(ran.text.trim(), ran.secrets).slice(0, 80))}`, ...echo }
+    return { ok: false, ...named, kind: 'not-JSON', message: `${excerpt(String(error), ran.secrets)}; output began ${JSON.stringify(excerpt(ran.text.trim(), ran.secrets).slice(0, 80))}`, ...echo() }
   }
   const checked = validatePage(raw)
-  if (!checked.ok) return { ok: false, ...named, kind: 'invalid-page', problems: checked.problems, ...echo }
+  if (!checked.ok) return { ok: false, ...named, kind: 'invalid-page', problems: checked.problems, ...echo() }
   return { ok: true, kind: 'page', ...named, digest: target.digest, page: checked.page, ranAt }
 }
 
@@ -237,7 +233,7 @@ export function failureText(outcome: Extract<RunOutcome, { ok: false }>): string
       return `${who}: the MCP tool ${outcome.tool} on "${outcome.server}" returned nothing, no text and no structured content`
     }
     case 'invalid-page': {
-      return `${who} returned a page outside the vocabulary: ${outcome.problems.map(problem => `${problem.path} ${problem.message}`).join('; ')}`
+      return `${who} returned a page outside the vocabulary: ${outcome.problems.map(problem => (problem.message ? `${problem.path} ${problem.message}` : problem.path)).join('; ')}`
     }
   }
 }

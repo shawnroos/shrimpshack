@@ -1,9 +1,9 @@
 import type { BoxProps, ButtonProps, ClientProps, ElementConstructor, TextProps } from 'claude-code'
 
-import { columnWidths, fitCell } from './lib'
-import { PAGE_CAPS } from './page'
+import { clip, columnWidths, fitCell } from './lib'
+import { PAGE_CAPS, itemsOf } from './page'
 import type { RecipeReview, ReviewRefusal } from '../types'
-import type { Action, Block, CardItem, Detail, ListItem, Page, TableBlock } from './page'
+import type { Action, CardItem, Detail, ListItem, Page, TableBlock } from './page'
 import { ICON } from './theme'
 
 export const EMPTY_PAGE = 'This page has no sections.'
@@ -43,21 +43,6 @@ export type PageWriters = {
 }
 export type DrawnPage = { parts: unknown[]; rows: number[]; headings: string[]; nav: PageNavItem[]; keys: PageKey[] }
 
-const isEmpty = (block: Block) => {
-  switch (block.type) {
-    case 'markdown': {
-      return block.text.trim() === ''
-    }
-    case 'table':
-    case 'fields': {
-      return block.rows.length === 0
-    }
-    default: {
-      return block.items.length === 0
-    }
-  }
-}
-
 function placeOf(href: string | undefined): string {
   if (!href) return ''
   if (href.startsWith('/')) return href
@@ -69,7 +54,6 @@ function placeOf(href: string | undefined): string {
 }
 
 const iconOf = (href: string | undefined) => (!href ? ICON.text : href.startsWith('/') ? ICON.file : ICON.web)
-const shorten = (text: string) => (text.length > NOTICE_TEXT ? `${text.slice(0, NOTICE_TEXT - 1)}…` : text)
 
 export function drawPage(writers: PageWriters, page: Page, view: { width: number; selected: number }): DrawnPage {
   const { Box, Text, Button, Client } = writers.elements
@@ -186,7 +170,7 @@ export function drawPage(writers: PageWriters, page: Page, view: { width: number
   for (const [i, { heading = '', block }] of page.sections.entries()) {
     const key = `section-${i}`
     if (heading) blocks.sectionRule(`${key}-rule`, heading)
-    if (isEmpty(block)) {
+    if (itemsOf(block) === 0) {
       parts.push(
         <Text key={`${key}-empty`} color={C.overlay0}>
           {EMPTY_SECTION}
@@ -236,7 +220,7 @@ export function drawPage(writers: PageWriters, page: Page, view: { width: number
         return
       }
       writers.copy(action.copy)
-      writers.notice(`Copied ${shorten(action.copy)}`)
+      writers.notice(`Copied ${clip(action.copy, NOTICE_TEXT)}`)
     },
   }))
 
