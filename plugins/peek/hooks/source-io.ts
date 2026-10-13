@@ -4,20 +4,15 @@ import type { RemoteFailure } from '../types'
 import { fromHttpStatus, ghFailure } from './sources/classify'
 import { parseUrl, tryJson } from './wire'
 import { sessionMemo } from './cache'
+import { findKey, forgetKey } from './sources/linear-credentials'
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
-// Copied from herdr-board crates/board-daemon/src/linear/credential.rs: one Keychain item serves both tools.
-const KEYCHAIN_SERVICE = 'work-linear'
-const KEYCHAIN_ACCOUNT = 'linear-api-key'
-const SECURITY_BIN = '/usr/bin/security'
 const TOOLS_PROBE = 'for t in gh curl; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done'
 const PAGE_SIZE = 50
 const PAGE_CAP = 10
 const MAX_RETRY_WAIT_MS = 5000
 const DEFAULT_RETRY_WAIT_MS = 1000
 const GH_TIMEOUT_MS = 20_000
-// A locked Keychain holds `security` on an unlock prompt nobody can answer, so the read is bounded.
-const KEYCHAIN_TIMEOUT_MS = 3000
 
 // `$` cannot cross an import (claude plugin validate), so register.tsx builds this port from `$`.
 export type SourceIo = {
@@ -40,7 +35,6 @@ export type Failed = { ok: false; failure: RemoteFailure; detail?: string }
 
 // Only a working gh is kept: a later `gh auth login` or install must be noticed without restarting the session.
 const probes = sessionMemo<Probe>({ keep: found => found.gh === null })
-const keys = sessionMemo<string | null>()
 
 export async function probe(io: SourceIo): Promise<Probe> {
   return probes.get(await io.sessionId(), () => runProbe(io))
@@ -69,37 +63,6 @@ export async function runGh(io: SourceIo, args: readonly string[]): Promise<{ ok
   if (!ran) return { ok: false, failure: 'offline' }
   if (ran.exitCode !== 0) return { ok: false, failure: ghFailure(ran.stderr) }
   return { ok: true, stdout: ran.stdout }
-}
-
-function unquote(raw: string): string {
-  const text = raw.trim()
-  const first = text[0]
-  if (text.length >= 2 && (first === '"' || first === "'") && text.endsWith(first)) return text.slice(1, -1)
-  return text
-}
-
-async function findKey(io: SourceIo): Promise<string | null> {
-  return keys.get(await io.sessionId(), () => lookupKey(io))
-}
-
-async function forgetKey(io: SourceIo, failure: RemoteFailure): Promise<void> {
-  if (failure === 'key-refused' || failure === 'key-missing') keys.forget(await io.sessionId())
-}
-
-async function lookupKey(io: SourceIo): Promise<string | null> {
-  const keychain = await io
-    .run([SECURITY_BIN, 'find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', KEYCHAIN_SERVICE, '-w'], { timeoutMs: KEYCHAIN_TIMEOUT_MS })
-    .catch(() => null)
-  const fromKeychain = keychain && keychain.exitCode === 0 ? keychain.stdout.trim() : ''
-  if (fromKeychain) return fromKeychain
-  const fromEnv = ((await io.linearKeyEnv().catch(() => undefined)) ?? '').trim()
-  if (fromEnv) return fromEnv
-  const home = (await io.home().catch(() => undefined)) ?? ''
-  if (!home) return null
-  const secrets = await io.read(`${home}/.secrets`).catch(() => '')
-  const line = /^[ \t]*(?:export[ \t]+)?LINEAR_API_KEY[ \t]*=[ \t]*(.*?)[ \t]*$/m.exec(secrets)
-  const fromFile = line ? unquote(line[1] ?? '') : ''
-  return fromFile || null
 }
 
 function isPolicyRefusal(error: unknown): boolean {
