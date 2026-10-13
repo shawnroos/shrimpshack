@@ -1,0 +1,9 @@
+{
+  "name": "YouTube videos",
+  "match": [
+    { "host": "youtube.com", "path": "/watch" },
+    { "host": "www.youtube.com", "path": "/watch" },
+    { "host": "youtu.be" }
+  ],
+  "source": { "run": ["./page.py"], "timeoutSeconds": 10 }
+}

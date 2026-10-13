@@ -12,5 +12,6 @@
     "mod",
     "files"
   ],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "skills": "./skills"
 }
