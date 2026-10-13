@@ -11,8 +11,8 @@ import { bootstrapLinear } from './sources/linear'
 import type { LinearBootstrap } from './sources/linear'
 import { markdownPage, mermaidFences, mermaidPage, toggleTaskLine } from './markdown'
 import { kindOf, parseHref } from './paths'
-import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
-import type { CacheEntry, TitleEntry } from './refresh'
+import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, snapshotTitles, takeTitleChange, tick } from './refresh'
+import type { CacheEntry } from './refresh'
 import { itemKey, keyOf, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
@@ -107,7 +107,6 @@ export async function navigate(io: NavIo, writes: readonly NavWrite[]) {
 
 export const nav = {
   lastActivity: 0,
-  titles: {} as Record<string, TitleEntry>,
   topBlockKey: 'block-0',
   backStack: [] as { view: View; key: string }[],
   groupBack: null as { id: string; title: string; depth: number } | null,
@@ -187,16 +186,9 @@ export function remoteLoader(io: NavIo, canReplay: boolean) {
   }
 }
 
-export async function noteTitle(io: NavIo, entry: CacheEntry) {
-  if (!entry.record) return
-  const next = titleOf(entry.record)
-  const { updatedAt: _, ...known } = nav.titles[entry.record.address] ?? { updatedAt: 0 }
-  if (JSON.stringify(known) === JSON.stringify(next)) return
-  nav.titles = withTitle(nav.titles, entry.record.address, next, await io.now())
-  await io.storeSet('titles', nav.titles).catch(() => undefined)
+export async function saveTitles(io: NavIo) {
+  if (takeTitleChange()) await io.storeSet('titles', snapshotTitles()).catch(() => undefined)
 }
-
-export const titlesByKey = () => new Map(Object.entries(nav.titles).map(([address, entry]) => [itemKey(address), entry]))
 
 export function startTicking(io: NavIo) {
   if (isTicking) return
@@ -209,7 +201,7 @@ export async function loadRemote(io: NavIo, ref: Ref, canReplay = false): Promis
   const known = cached(ref.address)
   if (known?.state === 'frozen') return viewOf(io, ref, known)
   const entry = await refreshItem(ref.address, remoteLoader(io, canReplay), await io.now())
-  await noteTitle(io, entry)
+  await saveTitles(io)
   return viewOf(io, ref, entry)
 }
 
@@ -314,7 +306,7 @@ export async function refresh(io: NavIo, href: string) {
   const ref = remoteRef(href)
   if (ref) {
     const entry = await refreshItem(ref.address, remoteLoader(io, true), await io.now())
-    await noteTitle(io, entry)
+    await saveTitles(io)
     await redrawIfCurrent(io, entry.address)
     return
   }
@@ -350,11 +342,8 @@ async function tickRemote(io: NavIo) {
   const hrefs = [...(await io.mentions.read()).map(one => one.href), ...(await io.stars.read()), ...((await io.openGroup.read()) ? io.openGroupRemotes() : [])]
   const background = [...new Set(hrefs)].filter(href => remoteRef(href) && isTimed(href))
   const changed = await tick({ onScreen, background, now: await io.now(), lastActivity: nav.lastActivity, load: remoteLoader(io, true) })
-  for (const address of changed) {
-    const entry = cached(address)
-    if (entry) await noteTitle(io, entry)
-    await redrawIfCurrent(io, address)
-  }
+  await saveTitles(io)
+  for (const address of changed) await redrawIfCurrent(io, address)
 }
 
 export async function pressLink(io: NavIo, href: string) {

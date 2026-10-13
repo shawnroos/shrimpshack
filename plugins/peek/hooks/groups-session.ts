@@ -4,7 +4,7 @@ import { toggleStar } from './gallery'
 import { applyGroupOps, groupsDir, isScheme, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'
 import type { GroupPlace, GroupWrite } from './groups'
 import { remotePicture } from './images'
-import { nav, navigate, noteTitle, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
+import { nav, navigate, saveTitles, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
 import type { NavIo } from './navigation'
 import { type ItemLook, type ItemState, remoteNaming } from './pane/look'
 import type { Action } from './pane/types'
@@ -204,7 +204,7 @@ export function loadGroupRemote(io: NavIo, address: string) {
   void io
     .now()
     .then(now => refreshItem(address, remoteLoader(io, false), now))
-    .then(entry => noteTitle(io, entry))
+    .then(() => saveTitles(io))
     .then(() => io.invalidate())
     .catch(() => undefined)
 }

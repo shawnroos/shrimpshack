@@ -35,6 +35,9 @@ const entries = new Map<string, CacheEntry>()
 const inFlight = new Map<string, Promise<CacheEntry>>()
 const backoff = new Map<SourceId, { waitMs: number; until: number }>()
 let backgroundLoads: number[] = []
+// The persisted projection of the cache, keyed by item key, so a title survives a restart. Not cleared by resetRefresh.
+let titles: Record<string, TitleEntry> = {}
+let isTitleChanged = false
 
 export function resetRefresh(): void {
   entries.clear()
@@ -107,6 +110,7 @@ export function refreshItem(address: string, load: Load, now: number): Promise<C
     }
     const entry = settle(previous, address, result, now)
     entries.set(key, entry)
+    if (entry.record) noteTitle(entry.record, now)
     inFlight.delete(key)
     return entry
   })()
@@ -189,4 +193,35 @@ export function withTitle(
   const oldest = keys.sort((a, b) => (next[a]?.updatedAt ?? 0) - (next[b]?.updatedAt ?? 0)).slice(0, keys.length - cap)
   for (const key of oldest) delete next[key]
   return next
+}
+
+// Older versions keyed titles by raw address, so one pull request can sit under both spellings; the later one wins,
+// as it did when the raw map was read through itemKey.
+export function hydrateTitles(saved: Readonly<Record<string, TitleEntry>>): void {
+  const next: Record<string, TitleEntry> = {}
+  for (const [address, entry] of Object.entries(saved)) next[itemKey(address)] = entry
+  titles = next
+}
+
+export function titlesByKey(): ReadonlyMap<string, TitleEntry> {
+  return new Map(Object.entries(titles))
+}
+
+export function snapshotTitles(): Record<string, TitleEntry> {
+  return titles
+}
+
+export function takeTitleChange(): boolean {
+  const changed = isTitleChanged
+  isTitleChanged = false
+  return changed
+}
+
+function noteTitle(record: RemoteRecord, now: number): void {
+  const key = itemKey(record.address)
+  const next = titleOf(record)
+  const { updatedAt: _, ...known } = titles[key] ?? { updatedAt: 0 }
+  if (JSON.stringify(known) === JSON.stringify(next)) return
+  titles = withTitle(titles, key, next, now)
+  isTitleChanged = true
 }

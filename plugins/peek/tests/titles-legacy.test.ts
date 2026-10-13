@@ -2,6 +2,8 @@ import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { PANE_PROPS, call, create, fakeFs, jsonOf } from './fixtures/world'
+import { hydrateTitles, refreshItem, resetRefresh, snapshotTitles, takeTitleChange, titlesByKey } from '../hooks/refresh'
+import type { TitleEntry } from '../hooks/refresh'
 
 // Titles as older versions saved them: keyed by the raw address, one pull request under both of its spellings.
 const LEGACY = {
@@ -55,4 +57,23 @@ test('a store of raw-address titles names its items in a group, on the group pag
   for (const title of ['#1 Pull spelling', '#2 Only an issue', 'Release thread', 'WEB-12 Legacy Linear']) expect(recent).toContain(title)
   expect(recent).not.toContain('Issue spelling')
   await ui.unmount()
+})
+
+test('a refresh writes its title under the item key, and the saved map reads back the same', async () => {
+  resetRefresh()
+  hydrateTitles(LEGACY as unknown as Record<string, TitleEntry>)
+  takeTitleChange()
+  const address = 'https://github.com/o/r/pull/1'
+  const record = { address, kind: 'gh-pr' as const, title: '#1 Fresh', status: 'open', trail: [], meta: [], browserUrl: address }
+  await refreshItem(address, async () => ({ ok: true, record, tier: 'cli', fetchedAt: 9 }), 9)
+  expect(takeTitleChange()).toBe(true)
+  expect(takeTitleChange()).toBe(false)
+  const saved = snapshotTitles()
+  expect(saved['https://github.com/o/r#1']).toEqual({ title: '#1 Fresh', kind: 'gh-pr', status: 'open', updatedAt: 9 })
+  expect(Object.keys(saved).some(key => /\/(?:pull|issues)\//.test(key))).toBe(false)
+  hydrateTitles(saved)
+  expect(titlesByKey().get('https://github.com/o/r#1')?.title).toBe('#1 Fresh')
+  expect(titlesByKey().get('https://github.com/o/r#2')?.title).toBe('#2 Only an issue')
+  await refreshItem(address, async () => ({ ok: true, record, tier: 'cli', fetchedAt: 10 }), 10)
+  expect(takeTitleChange()).toBe(false)
 })

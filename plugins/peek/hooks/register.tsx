@@ -6,6 +6,7 @@ import { C as BASE, MUTED } from './theme'
 import type { RemoteIo } from './remote'
 import { wheelPoint } from './live'
 import type { LiveIo } from './live'
+import { hydrateTitles } from './refresh'
 import type { TitleEntry } from './refresh'
 import type { GroupsIo } from './groups'
 import { classifyBlocks } from './gallery'
@@ -251,7 +252,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     nav.lastActivity = await $.clock.now()
     const savedTitles = await $.store.get('titles').catch(() => undefined)
-    if (savedTitles && typeof savedTitles === 'object' && !Array.isArray(savedTitles)) nav.titles = savedTitles as Record<string, TitleEntry>
+    if (savedTitles && typeof savedTitles === 'object' && !Array.isArray(savedTitles)) hydrateTitles(savedTitles as Record<string, TitleEntry>)
     void bootLinear(navIoOf($)).catch(() => undefined)
     const saved = await $.store.get('stars').catch(() => undefined)
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
