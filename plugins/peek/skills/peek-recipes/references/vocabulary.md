@@ -173,7 +173,7 @@ parses its text, and the GitHub and Linear pages map the JSON their tools return
 **Writing the map: sample, map, test locally, check.**
 
 1. Call the MCP tool yourself, with the recipe's arguments and a real sample link.
-2. Save its result in the stdin shape as `$TMPDIR/sample.json`: the tool's text in `text`, its structured content (or `null`) in `structured`. For example, with the tool's text saved as `$TMPDIR/tool.txt`: `python3 -c 'import json,sys; print(json.dumps({"text": sys.stdin.read(), "structured": None}, separators=(",", ":")))' < $TMPDIR/tool.txt > $TMPDIR/sample.json`.
+2. Save its result in the stdin shape as `$TMPDIR/sample.json`: the tool's text in `text`, its structured content (or `null`) in `structured`. For example, with the tool's text saved as `$TMPDIR/tool.txt`: `python3 -c 'import json,sys; print(json.dumps({"text": sys.stdin.read().rstrip("\n"), "structured": None}, separators=(",", ":"), ensure_ascii=False))' < $TMPDIR/tool.txt > $TMPDIR/sample.json`.
 3. Write `map.py` with only the `python3` standard library. It reads stdin and prints one Page.
 4. From the recipe folder, run `python3 map.py < $TMPDIR/sample.json` until it prints a valid Page.
 5. Run `check_recipe`. When the map fails there, `fetched.stdin` holds the exact stdin peek gave it (declared env values redacted, cut at 8000 characters). If it differs from your sample, save it as the new sample and go back to step 4.

@@ -341,6 +341,21 @@ test('a map printing an unknown block fails the check with the page path and the
   expect(json.fetched.stdin).toBe('{"text":"raw","structured":null}\n')
 })
 
+test('an MCP recipe whose map turns the tool result into a page passes the check and draws that page in the pane', async (driver, on) => {
+  const pane = await paneWorld(on, { files: docsRecipe(), approve: ['figma-files'] })
+  on('mcp.call', () => ({ value: { content: [{ type: 'text', text: '{"doc":"not a page"}' }], isError: false } }))
+  const json = jsonOf(await call(driver, 'check_recipe', { recipe: 'figma-files', link: FIGMA }))
+  expect(json.pass).toBe(true)
+  expect(json.route).toEqual({ kind: 'recipe', id: 'figma-files' })
+  expect(json.fetched.outline.title).toBe('Design system')
+  expect(pane.w.calls.children[0]?.stdin).toBe('{"text":"{\\"doc\\":\\"not a page\\"}","structured":null}\n')
+  await peek(driver, FIGMA)
+  const ui = await mount(driver)
+  expect(await ui.find({ text: /Design system/ })).toBeDefined()
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA])
+  await ui.unmount()
+})
+
 test('a tool that returns nothing fails the check as empty-result, and the map never runs', async (driver, on) => {
   const pane = await paneWorld(on, { files: docsRecipe(), approve: ['figma-files'] })
   on('mcp.call', () => ({ value: { content: [], isError: false } }))
