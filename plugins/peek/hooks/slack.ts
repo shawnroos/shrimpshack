@@ -2,7 +2,7 @@ import type { CaptureIo } from './capture'
 import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
 import type { SourceIo } from './sources'
-import { asObj, asStr } from './wire'
+import { asObj, asStr, tryJson } from './wire'
 import type { Json } from './wire'
 import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
 
@@ -224,12 +224,10 @@ function blockText(content: unknown[]): string {
 
 // The server wraps its transcript in {"messages": "...", "pagination_info": "..."}; a bare transcript is read as-is.
 function unwrap(text: string): { messages: string; more: boolean } {
-  try {
-    const parsed = asObj(JSON.parse(text))
-    if (parsed && typeof parsed.messages === 'string') {
-      return { messages: parsed.messages, more: /there are more messages/i.test(String(parsed.pagination_info ?? '')) }
-    }
-  } catch {}
+  const parsed = asObj(tryJson(text))
+  if (parsed && typeof parsed.messages === 'string') {
+    return { messages: parsed.messages, more: /there are more messages/i.test(String(parsed.pagination_info ?? '')) }
+  }
   return { messages: text, more: false }
 }
 
@@ -296,11 +294,8 @@ async function searchedAvatar(io: SlackIo, server: string, one: SlackMessage): P
   const answer = await io.mcpCall(server, 'slack_search_users', args).catch(() => null)
   if (!answer || answer.isError) return undefined
   const raw = blockText(answer.content)
-  let results = raw
-  try {
-    const parsed = asObj(JSON.parse(raw))
-    if (parsed && typeof parsed.results === 'string') results = parsed.results
-  } catch {}
+  const parsed = asObj(tryJson(raw))
+  const results = parsed && typeof parsed.results === 'string' ? parsed.results : raw
   const mine = new RegExp(`^User ID: ${one.userId}\\s*$`, 'm')
   const block = results.replaceAll('\\/', '/').split(/^### Result /m).find(part => mine.test(part))
   return block ? /^Profile Pic: \[[^\]]*\]\((https:\/\/[^)\s]+)\)/m.exec(block)?.[1] : undefined
@@ -376,10 +371,7 @@ async function findCli(io: SlackIo): Promise<string | null> {
 async function cliApi(io: SlackIo, bin: string, args: readonly string[]): Promise<{ ok: true; body: Json } | { ok: false; failure: FailureKind | 'unavailable' }> {
   const ran = await io.run([bin, 'api', ...args], { timeoutMs: CLI_TIMEOUT_MS }).catch(() => null)
   if (!ran) return { ok: false, failure: 'offline' }
-  let body: Json | null = null
-  try {
-    body = asObj(JSON.parse(ran.stdout))
-  } catch {}
+  const body = asObj(tryJson(ran.stdout))
   if (!body) return { ok: false, failure: ran.exitCode === 0 ? 'query-bug' : 'unavailable' }
   if (body.ok !== true) return { ok: false, failure: slackFailure(asStr(body.error) ?? '') }
   return { ok: true, body }

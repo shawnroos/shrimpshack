@@ -1,6 +1,7 @@
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { FailureKind } from '../types'
+import { tryJson } from './wire'
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
 // Copied from herdr-board crates/board-daemon/src/linear/credential.rs: one Keychain item serves both tools.
@@ -202,10 +203,8 @@ async function postOnce(io: SourceIo, key: string, body: string): Promise<Attemp
   }
   const { status, headers, text } = response
   if (status === 429) return { ok: false, failure: 'rate-limited', waitMs: retryWait(headers) }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
+  const parsed = tryJson(text)
+  if (parsed === undefined) {
     if (status === 401) return { ok: false, failure: 'key-refused' }
     if (status === 403 || status === 404) return { ok: false, failure: 'not-found-or-no-access' }
     if (status === 400) return { ok: false, failure: 'query-bug' }

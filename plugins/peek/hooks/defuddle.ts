@@ -1,4 +1,5 @@
 import type { SourceIo } from './sources'
+import { asObj, tryJson } from './wire'
 
 // Pinned: npm runs with install scripts off, and a new version is a reviewed bump, never a silent upgrade.
 const VERSION = '0.19.4'
@@ -47,10 +48,6 @@ export async function readable(io: SourceIo, html: string, url: string): Promise
   if (!(await ensureInstalled(io, dir, cli))) return null
   const ran = await io.run(['node', cli, 'parse', '-', '--markdown', '--json'], { stdin: html, timeoutMs: PARSE_TIMEOUT_MS }).catch(() => null)
   if (ran?.exitCode !== 0) return null
-  try {
-    const content = (JSON.parse(ran.stdout) as { content?: unknown }).content
-    return typeof content === 'string' && content.trim() ? absoluteLinks(content.trim(), url) : null
-  } catch {
-    return null
-  }
+  const content = asObj(tryJson(ran.stdout))?.content
+  return typeof content === 'string' && content.trim() ? absoluteLinks(content.trim(), url) : null
 }

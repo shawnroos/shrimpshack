@@ -3,7 +3,7 @@ import { parseRef } from './refs'
 import type { LinearIssueRef, LinearProjectRef, Ref } from './refs'
 import { linearPaged, linearQuery } from './sources'
 import type { Connection, Failed, SourceIo } from './sources'
-import { asDay, asObj, asStr } from './wire'
+import { asDay, asObj, asStr, tryJson } from './wire'
 import type { Json } from './wire'
 import type { Loaded, RemoteComment, RemoteList, RemoteListItem, RemoteRecord } from '../types'
 
@@ -272,13 +272,7 @@ export async function bootstrapLinear(io: SourceIo, now: number): Promise<Linear
 }
 
 export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(captured.result)
-  } catch {
-    return null
-  }
-  const item = asObj(parsed)
+  const item = asObj(tryJson(captured.result))
   if (!item || (ref.kind !== 'linear-issue' && ref.kind !== 'linear-project')) return null
   const issues = item.issues !== undefined ? { nodes: nodes(item.issues), isPartial: false } : undefined
   const record = captured.kind === 'linear-project' || ref.kind === 'linear-project' ? projectRecord(item, ref, issues) : issueRecord(item, ref)

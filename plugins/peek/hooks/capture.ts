@@ -1,5 +1,6 @@
 import { itemKey, keyOf, LINEAR_KEY, parseRef } from './refs'
 import type { Ref, RefKind } from './refs'
+import { asObj, tryJson } from './wire'
 
 export type CaptureIo = {
   mcpCall: (server: string, tool: string, args: Record<string, unknown>) => Promise<{ content: unknown[]; isError: boolean }>
@@ -117,13 +118,8 @@ function remoteRefs(text: string): Ref[] {
 }
 
 function topLevelUrl(text: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(text)
-    const url = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as { url?: unknown }).url : undefined
-    return typeof url === 'string' ? url : null
-  } catch {
-    return null
-  }
+  const url = asObj(tryJson(text))?.url
+  return typeof url === 'string' ? url : null
 }
 
 function asNumber(value: unknown): number | null {
