@@ -308,6 +308,7 @@ final class Helper: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessag
     viewport = NSSize(width: width, height: height)
     let config = WKWebViewConfiguration()
     config.websiteDataStore = .nonPersistent()
+    config.mediaTypesRequiringUserActionForPlayback = []
     let rect = NSRect(origin: .zero, size: viewport)
     window = HiddenWindow(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false)
     web = WKWebView(frame: rect, configuration: config)

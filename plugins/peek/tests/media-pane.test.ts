@@ -42,7 +42,14 @@ function mediaWorld(on: On, options: { content?: string; pngBytes?: number } = {
 
 const props = { title: 'Peek', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
 
-test('a video in a reader page shows a play button that opens it in the browser', async ($, on) => {
+async function until(ui: { redraw: () => Promise<unknown> }, isDone: () => boolean, tries = 50) {
+  for (let i = 0; i < tries; i++) {
+    if (isDone()) return
+    await ui.redraw()
+  }
+}
+
+test('a video in a reader page shows a play button that plays it in the pane, not the browser', async ($, on) => {
   const w = mediaWorld(on)
   await $.command.run({ command: 'peek', args: PAGE } as never)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
@@ -52,7 +59,8 @@ test('a video in a reader page shows a play button that opens it in the browser'
   expect((await ui.find({ key: 'media-play-0' }))?.props.label).toBe('\u{f04b} Play video')
   expect(JSON.stringify(await ui.drawn())).not.toContain('\\\\u{')
   await ui.press({ key: 'media-play-0' })
-  expect(w.ran.at(-1)).toEqual(['open', VIDEO])
+  await until(ui, () => w.ran.some(argv => argv.join(' ').includes('command -v swiftc')))
+  expect(w.ran.some(argv => argv[0] === 'open')).toBe(false)
   await ui.unmount()
 })
 

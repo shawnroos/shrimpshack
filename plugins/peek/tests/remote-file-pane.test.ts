@@ -58,6 +58,13 @@ function fileWorld(on: On, served: Record<string, Served>) {
 
 const props = { title: 'Peek', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
 
+async function until(ui: { redraw: () => Promise<unknown> }, isDone: () => boolean, tries = 50) {
+  for (let i = 0; i < tries; i++) {
+    if (isDone()) return
+    await ui.redraw()
+  }
+}
+
 test('a markdown file URL downloads and draws like a local markdown file, and keeps the URL as its location', async ($, on) => {
   const url = 'https://files.test/docs/notes.md'
   const w = fileWorld(on, { [url]: { type: 'text/markdown', text: '# Remote notes\n\nHello from afar.\n' } })
@@ -90,14 +97,15 @@ test('an image URL downloads and draws as a picture instead of sending you to th
   await ui.unmount()
 })
 
-test('a video URL shows a play button that opens it in the browser, and downloads nothing', async ($, on) => {
+test('a video URL shows a play button that plays it in the pane, and downloads nothing', async ($, on) => {
   const url = 'https://files.test/clip.mp4'
   const w = fileWorld(on, {})
   await $.command.run({ command: 'peek', args: url } as never)
   const ui = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props, requestId: 'peek' })
   expect(await ui.find({ text: /^VIDEO$/ })).toBeDefined()
   await ui.press({ key: 'media-play-0' })
-  expect(w.ran.at(-1)).toEqual(['open', url])
+  await until(ui, () => w.ran.some(argv => argv.join(' ').includes('command -v swiftc')))
+  expect(w.ran.some(argv => argv[0] === 'open')).toBe(false)
   expect(w.downloads()).toEqual([])
   await ui.unmount()
 })

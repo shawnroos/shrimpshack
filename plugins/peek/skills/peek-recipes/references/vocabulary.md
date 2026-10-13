@@ -77,7 +77,7 @@ One rule applies to `href`, `Action.open` and every link found inside markdown.
 - Each Action gets the key `1` to `9` in order, and shows in the ⌃k menu with its label.
 - `copy` copies the whole text and shows a short notice.
 - Markdown draws like peek's remote pages: headings, code, mermaid fences, and `![alt](url)` pictures. Badges stay as text.
-- Pictures share the pane's image budget. Peek downloads at most 12 pictures per page. Pictures past the budget, and pictures that fail to download, show as links. A video shows a Play button that opens it in the browser.
+- Pictures share the pane's image budget. Peek downloads at most 12 pictures per page. Pictures past the budget, and pictures that fail to download, show as links. A video shows a Play button that plays its `url` in the pane through the live view, sound included, where the terminal draws images (kitty, Ghostty), and opens it in the browser elsewhere. `b` or `v` stops it and shows the page again. Give a page that plays the video, such as a YouTube watch page: YouTube's `/embed/` player refuses to play as a whole page.
 - An empty block shows "Nothing in this section." A page with no sections shows "This page has no sections."
 
 ## Recipe folder

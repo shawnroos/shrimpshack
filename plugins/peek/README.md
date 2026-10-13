@@ -19,7 +19,7 @@ transcript.
 | Linear issues and projects | Details, the description, comments with replies, and a project's open issues |
 | Slack threads | The channel and reply count, then the conversation: the first message full width, replies inset under it, each with the speaker's picture or coloured initials, a time that opens that message in Slack, and images inline |
 | A link to a file (`.md`, `.png`, `.json`, `.csv`, code, ...) | Downloaded and drawn like the local file; `o` and `c` still use the link |
-| A link to a video (`.mp4`, `.webm`, `.mov`) | A Play button that opens it in your browser |
+| A link to a video (`.mp4`, `.webm`, `.mov`) | A Play button that plays it in the pane (kitty, Ghostty), or opens your browser elsewhere |
 
 ## Remote pages
 
@@ -257,7 +257,7 @@ that applies to the current view, with its key.
 
 macOS: image conversion uses `sips` and `rsvg-convert`, and Open uses `open`.
 Live view needs the Xcode command-line tools (`swiftc`).
-Web reader pages are cleaned with [Defuddle](https://github.com/kepano/defuddle), which strips menus, footers and other page chrome. Up to 8 of the page's images show inline; a video shows its thumbnail and a Play button that opens it in your browser. Peek installs a pinned copy with npm on first use into `~/.cache/claude-peek/` (needs Node). Without it, peek falls back to its own simpler cleanup.
+Web reader pages are cleaned with [Defuddle](https://github.com/kepano/defuddle), which strips menus, footers and other page chrome. Up to 8 of the page's images show inline; a video shows its thumbnail and a Play button that plays it in the pane, or opens your browser where the terminal cannot draw images. Peek installs a pinned copy with npm on first use into `~/.cache/claude-peek/` (needs Node). Without it, peek falls back to its own simpler cleanup.
 
 ## Development
 

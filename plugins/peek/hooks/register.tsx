@@ -2117,6 +2117,8 @@ const LIVE_PX_PER_COLUMN = 8
 const CELL_ASPECT = 2.1
 let live: Live | null = null
 let liveHref: string | null = null
+// Set when a video's Play opened the live view inside a page: b then stops the video instead of leaving the page.
+let isLiveVideo = false
 let liveViewport: Viewport | null = null
 let isLiveFrameDrawn = false
 let liveNotice: { href: string; kind: LiveFailureKind } | null = null
@@ -2183,7 +2185,10 @@ function scrollLive(dy: number, at?: { x: number; y: number }) {
 }
 
 async function liveBack($: EngineInterface) {
-  if (live?.state().canBack) await live.command('back')
+  if (isLiveVideo) {
+    await leaveLive()
+    $.ui.invalidate('ui.render')
+  } else if (live?.state().canBack) await live.command('back')
   else {
     await leaveLive()
     await goBack($)
@@ -2254,22 +2259,25 @@ function liveBox(columns: number, rows: number): Viewport {
   return { width, height: Math.round((width * rows * CELL_ASPECT) / columns) }
 }
 
-async function toggleLive($: EngineInterface, current: View, viewport: Viewport) {
+async function toggleLive($: EngineInterface, current: View, viewport: Viewport, video?: string) {
   if (liveHref === current.href) {
     await leaveLive()
+    $.ui.invalidate('ui.render')
     return
   }
   liveNotice = null
   liveHref = current.href
   liveViewport = viewport
   isLiveFrameDrawn = false
-  const url = current.remote?.record?.address ?? current.location
+  isLiveVideo = video !== undefined
+  const url = video ?? current.remote?.record?.address ?? current.location
   if (!(await liveOf($).start(url, viewport))) liveHref = null
   $.ui.invalidate('ui.render')
 }
 
 async function leaveLive() {
   liveHref = null
+  isLiveVideo = false
   isLiveFrameDrawn = false
   isTyping = false
   await live?.leave().catch(() => undefined)
@@ -2670,6 +2678,7 @@ export const register: Register = on => {
     paneColumns = columns
     const isNarrow = e.props.bodyColumns < NARROW
     const textWidth = isNarrow ? columns : Math.min(MAX_CPL, Math.max(MIN_CPL, columns - 6))
+    const canDrawLive = e.surface === 'terminal' && Boolean(Image)
     const pageWidth = isNarrow ? columns : textWidth + 4
     const rows = Math.max(4, e.props.scroll.bodyRows - 4)
     const turn = (to: number) => void update($, page, () => Math.max(0, to))
@@ -3922,7 +3931,16 @@ export const register: Register = on => {
                 !one?.play && <Markdown dimColor={isMenuOpen} key={`${key}-link`} text={`[open image](${url})`} onLinkPress={link => void pressLink($, link.href)} />
               )}
               {one?.play && (
-                <Button key={`media-play-${index}`} label={'\u{f04b} Play video'} plain onPress={() => void (isWebUrl(url) && $.process.run(['open', url]).catch(() => undefined))} />
+                <Button
+                  key={`media-play-${index}`}
+                  label={'\u{f04b} Play video'}
+                  plain
+                  onPress={() => {
+                    if (!isWebUrl(url)) return
+                    if (canDrawLive) void toggleLive($, current, liveBox(textWidth, Math.max(4, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 2)), url)
+                    else void $.process.run(['open', url]).catch(() => undefined)
+                  }}
+                />
               )}
             </Box>
           )),
@@ -4582,7 +4600,7 @@ export const register: Register = on => {
       )
     }
     const liveState = live?.state()
-    const canLive = e.surface === 'terminal' && Boolean(Image) && current.remote !== undefined && parseRef(current.href)?.kind === 'web'
+    const canLive = canDrawLive && ((current.remote !== undefined && parseRef(current.href)?.kind === 'web') || (isLiveVideo && liveHref === current.href))
     const liveRows = Math.max(4, e.props.scroll.bodyRows - PAGE_TOP - FOOTER_ROWS - 2)
     const viewport = liveBox(textWidth, liveRows)
     const isLiveHere = canLive && liveHref === current.href && liveState !== undefined && liveState.phase !== 'off'
