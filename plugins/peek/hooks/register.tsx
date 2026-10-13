@@ -121,6 +121,16 @@ const roleFilter = atom({ plugin: 'peek', key: 'roleFilter' } as const, 'all')
 const stars = atom({ plugin: 'peek', key: 'stars' } as const, [])
 const cursorAtom = atom({ plugin: 'peek', key: 'cursor' } as const, 0)
 type NavItem = { href: string; key: string; line: number; col: number; group?: string }
+type BlockSink = {
+  drawnParts: unknown[]
+  note: (rows: number, heading?: string) => void
+  media: RemoteRecord['media']
+  pictures: Awaited<ReturnType<typeof mediaPictures>>
+  memoBase: string
+  refs: RefContext
+}
+type ItemLook = { href: string; isStarred: boolean; favicon: string | undefined; icon: string; name: string; folder: string; detail: string }
+type NavSink = { nav: NavItem[]; keys: string[]; starts: number[]; cursor: number; line: number; selected: number }
 let navOrder: NavItem[] = []
 
 type Direction = 'up' | 'down' | 'left' | 'right'
@@ -2918,6 +2928,142 @@ export const register: Register = on => {
       )
     }
 
+    const cardGridOf = <T,>(sink: NavSink, lookOf: (one: T) => ItemLook) => (list: readonly T[], prefix: string) => {
+      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
+      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
+      const looks = list.map(lookOf)
+      const rowsOfCards = Array.from({ length: Math.ceil(looks.length / perRow) }, (_, r) => looks.slice(r * perRow, r * perRow + perRow))
+      const firstNav = sink.nav.length
+      rowsOfCards.forEach((cards, r) => {
+        sink.keys.push(`${prefix}-${r}`)
+        sink.starts.push(sink.cursor + r * (CARD_ROWS + 1))
+        const line = sink.line++
+        cards.forEach((look, col) => sink.nav.push({ href: look.href, key: `${prefix}-${r}`, line, col }))
+      })
+      sink.cursor += rowsOfCards.length * (CARD_ROWS + 1)
+      return rowsOfCards.map((cards, r) => (
+        <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
+          {Client && (
+            <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
+              <Client
+                key={`hover-${prefix}-${r}`}
+                module="./hover-layer.tsx"
+                props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(look => ({ href: look.href, isStarred: look.isStarred })) }}
+                width={textWidth}
+                height={CARD_ROWS}
+              />
+            </Box>
+          )}
+          {cards.map((look, c) => {
+            const index = firstNav + r * perRow + c
+            const isSelected = index === sink.selected
+            const inner = Math.max(4, cardWidth - 7)
+            return (
+              <Box
+                key={`${prefix}-${r}-${c}`}
+                flexDirection="column"
+                width={cardWidth}
+                height={CARD_ROWS}
+                paddingX={2}
+                paddingY={1}
+                backgroundColor={isSelected ? C.surface0 : C.panelBg}
+                hover={{ backgroundColor: C.surface0 }}
+              >
+                <Box flexDirection="row">
+                  {look.favicon && !look.isStarred && Image && (
+                    <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
+                  )}
+                  <Button
+                    key={`item-${index}`}
+                    label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
+                    plain
+                    autoFocus={isSelected ? true : undefined}
+                    onPress={() => void selectAndOpen($, index)}
+                  />
+                  <Box key={`name-${index}`}>
+                    <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }}>{` ${look.name.slice(0, inner)}`}</Text>
+                  </Box>
+                </Box>
+                <Text color={C.overlay0} wrap="truncate-start">{look.folder || ' '}</Text>
+                <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{look.detail}</Text>
+              </Box>
+            )
+          })}
+        </Box>
+      ))
+    }
+    const rowListOf = <T,>(sink: NavSink, lookOf: (one: T) => ItemLook) => (items: readonly T[], prefix: string) => {
+      const looks = items.map(lookOf)
+      const chunks = Array.from({ length: Math.ceil(looks.length / LIST_CHUNK) }, (_, i) =>
+        looks.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
+      )
+      const firstNav = sink.nav.length
+      chunks.forEach((chunk, i) => {
+        sink.keys.push(`${prefix}-${i}`)
+        sink.starts.push(sink.cursor)
+        sink.cursor += chunk.length
+        for (const look of chunk) sink.nav.push({ href: look.href, key: `${prefix}-${i}`, line: sink.line++, col: 0 })
+      })
+      return chunks.map((chunk, i) => (
+        <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
+          {Client && (
+            <Box position="absolute" top={0} left={0} width={textWidth} height={chunk.length}>
+              <Client
+                key={`hover-${prefix}-${i}`}
+                module="./hover-layer.tsx"
+                props={{ kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(look => ({ href: look.href, isStarred: look.isStarred })) }}
+                width={textWidth}
+                height={chunk.length}
+              />
+            </Box>
+          )}
+          {chunk.map((look, j) => {
+            const index = firstNav + i * LIST_CHUNK + j
+            const isSelected = index === sink.selected
+            const leftWidth = Math.max(4, textWidth - look.detail.length - 1)
+            const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
+            return (
+              <Box
+                key={`${prefix}-${i}-${j}`}
+                height={1}
+                flexDirection="row"
+                justifyContent="space-between"
+                width={textWidth}
+                backgroundColor={isSelected ? C.surface0 : undefined}
+                hover={{ backgroundColor: C.surface0 }}
+              >
+                <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
+                  {look.favicon && !look.isStarred && Image && (
+                    <Box flexShrink={0}>
+                      <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
+                    </Box>
+                  )}
+                  <Box flexShrink={0}>
+                    <Button
+                      key={`item-${index}`}
+                      label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
+                      plain
+                      autoFocus={isSelected ? true : undefined}
+                      onPress={() => void selectAndOpen($, index)}
+                    />
+                  </Box>
+                  <Box key={`name-${index}`} flexShrink={0}>
+                    <Text color={isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, nameRoom)}`}</Text>
+                  </Box>
+                  <Box flexShrink={1} flexGrow={1} overflow="hidden">
+                    <Text color={C.overlay0} wrap="truncate-middle">{look.folder ? `  ${look.folder}` : ''}</Text>
+                  </Box>
+                </Box>
+                <Box flexShrink={0} height={1}>
+                  <Text color={C.overlay0}>{look.detail}</Text>
+                </Box>
+              </Box>
+            )
+          })}
+        </Box>
+      ))
+    }
+
     if (chosen !== 'view' || !current) {
       const scope = await read($, scopeAtom)
       const role = await read($, roleFilter)
@@ -2960,8 +3106,6 @@ export const register: Register = on => {
       const favMentions = starList.map(href => list.find(one => one.href === href) ?? { href, at: 0, count: 0 })
       const favourites = filterRole(withMentions(await sessionEntries($, favMentions), list), role)
       const rest = entries ? entries.filter(one => !starSet.has(one.href)) : null
-      const perRow = gridColumns(textWidth, CARD_MIN, CARD_GAP)
-      const cardWidth = Math.floor((textWidth - (perRow - 1) * CARD_GAP) / perRow)
       const section = (label: string, right: string) => (
         <Text wrap="truncate-end">
           <Text color={C.accent} bold>{`${label} `}</Text>
@@ -2969,81 +3113,19 @@ export const register: Register = on => {
           <Text color={C.overlay0}>{right ? ` ${right}` : ''}</Text>
         </Text>
       )
-      const keys: string[] = []
-      const starts: number[] = []
-      let cursor = 0
       const selected = await read($, cursorAtom)
-      const nav: NavItem[] = []
+      const sink: NavSink = { nav: [], keys: [], starts: [], cursor: 0, line: 0, selected }
+      const { nav, keys, starts } = sink
       navOrder = nav
-      let navLine = 0
-      const cardGrid = (list: readonly FileEntry[], prefix: string) => {
-        const rowsOfCards = Array.from({ length: Math.ceil(list.length / perRow) }, (_, r) => list.slice(r * perRow, r * perRow + perRow))
-        const firstNav = nav.length
-        rowsOfCards.forEach((cards, r) => {
-          keys.push(`${prefix}-${r}`)
-          starts.push(cursor + r * (CARD_ROWS + 1))
-          const line = navLine++
-          cards.forEach((one, col) => nav.push({ href: one.href, key: `${prefix}-${r}`, line, col }))
-        })
-        cursor += rowsOfCards.length * (CARD_ROWS + 1)
-        return rowsOfCards.map((cards, r) => (
-          <Box key={`${prefix}-${r}`} flexDirection="row" columnGap={CARD_GAP} marginBottom={1}>
-            {Client && (
-              <Box position="absolute" top={0} left={0} width={textWidth} height={CARD_ROWS}>
-                <Client
-                  key={`hover-${prefix}-${r}`}
-                  module="./hover-layer.tsx"
-                  props={{ kind: 'cards', width: textWidth, height: CARD_ROWS, cardWidth, cardHeight: CARD_ROWS, gap: CARD_GAP, starX: 2, starY: 1, items: cards.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
-                  width={textWidth}
-                  height={CARD_ROWS}
-                />
-              </Box>
-            )}
-            {cards.map((one, c) => {
-              const index = firstNav + r * perRow + c
-              const isSelected = index === selected
-              const look = looks(one)
-              const { where, age } = describe(one)
-              const inner = Math.max(4, cardWidth - 7)
-              return (
-                <Box
-                  key={`${prefix}-${r}-${c}`}
-                  flexDirection="column"
-                  width={cardWidth}
-                  height={CARD_ROWS}
-                  paddingX={2}
-                  paddingY={1}
-                  backgroundColor={isSelected ? C.surface0 : C.panelBg}
-                  hover={{ backgroundColor: C.surface0 }}
-                >
-                  <Box flexDirection="row">
-                    {look.favicon && !look.isStarred && Image && (
-                      <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
-                    )}
-                    <Button
-                      key={`item-${index}`}
-                      label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
-                      plain
-                      autoFocus={isSelected ? true : undefined}
-                      onPress={() => void selectAndOpen($, index)}
-                    />
-                    <Box key={`name-${index}`}>
-                      <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }}>{` ${look.name.slice(0, inner)}`}</Text>
-                    </Box>
-                  </Box>
-                  <Text color={C.overlay0} wrap="truncate-start">{look.folder || ' '}</Text>
-                  <Text color={isSelected ? C.overlay1 : C.overlay0} wrap="truncate-end">{`${where}${age} · ${one.status ?? describeSize(one.size)}`}</Text>
-                </Box>
-              )
-            })}
-          </Box>
-        ))
-      }
+      const cardGrid = cardGridOf(sink, (one: FileEntry) => {
+        const { where, age } = describe(one)
+        return { ...looks(one), detail: `${where}${age} · ${one.status ?? describeSize(one.size)}` }
+      })
       const favouritesBlock = (shownFavs: readonly FileEntry[]) => {
         if (!shownFavs.length) return null
-        cursor += 2
+        sink.cursor += 2
         const grid = cardGrid(shownFavs, 'favs')
-        cursor += 1
+        sink.cursor += 1
         return (
           <Box flexDirection="column" width={textWidth}>
             {section('FAVOURITES', `${shownFavs.length}`)}
@@ -3067,16 +3149,16 @@ export const register: Register = on => {
         const favs = selectEntries(favourites, type, query, sort)
         const picked = rest ? selectEntries(rest, type, query, sort).slice(0, 240) : []
         const Input = 'Input' in elements ? elements.Input : undefined
-        cursor = 2
+        sink.cursor = 2
         const favBlock = favouritesBlock(favs)
         const groups = groupsOf(picked).map(group => {
-          cursor += 2
+          sink.cursor += 2
           const grid = cardGrid(group.items, group.id)
-          cursor += 1
+          sink.cursor += 1
           return { ...group, grid }
         })
         blockStarts = starts
-        estimatedRows = Math.max(1, cursor)
+        estimatedRows = Math.max(1, sink.cursor)
         const jumps = keyJumps(keys)
         const content = (
           <Box flexDirection="column" width={textWidth}>
@@ -3126,7 +3208,7 @@ export const register: Register = on => {
 
       const favs = selectEntries(favourites, 'all', '', 'recent')
       const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
-      cursor = 0
+      sink.cursor = 0
       const starredGroups = await groupHome($)
         .then(found => (found ? shownGroups(groupsIoOf($), found.place) : []))
         .then(all => all.filter(one => one.starred))
@@ -3134,15 +3216,15 @@ export const register: Register = on => {
       const pinned = starredGroups.slice(0, PINNED_GROUPS)
       const pinnedBlock = await (async () => {
         if (!pinned.length) return null
-        cursor += 2
+        sink.cursor += 2
         const { cards: grid, heights } = await groupCards(pinned, 'starred', nav.length, selected)
         pinned.forEach((one, i) => {
           keys.push(`starred-${i}`)
-          starts.push(cursor)
-          cursor += heights[i] ?? 0
-          nav.push({ href: '', group: one.id, key: `starred-${i}`, line: navLine++, col: 0 })
+          starts.push(sink.cursor)
+          sink.cursor += heights[i] ?? 0
+          nav.push({ href: '', group: one.id, key: `starred-${i}`, line: sink.line++, col: 0 })
         })
-        cursor += 1
+        sink.cursor += 1
         const count = starredGroups.length > pinned.length ? `${pinned.length} of ${starredGroups.length} · e for all` : `${pinned.length}`
         return (
           <Box flexDirection="column" width={textWidth}>
@@ -3153,88 +3235,19 @@ export const register: Register = on => {
         )
       })()
       const favBlock = favouritesBlock(favs)
-      const rowList = (items: readonly FileEntry[], prefix: string) => {
-        const chunks = Array.from({ length: Math.ceil(items.length / LIST_CHUNK) }, (_, i) =>
-          items.slice(i * LIST_CHUNK, i * LIST_CHUNK + LIST_CHUNK),
-        )
-        const firstNav = nav.length
-        chunks.forEach((chunk, i) => {
-          keys.push(`${prefix}-${i}`)
-          starts.push(cursor)
-          cursor += chunk.length
-          for (const one of chunk) nav.push({ href: one.href, key: `${prefix}-${i}`, line: navLine++, col: 0 })
-        })
-        return chunks.map((chunk, i) => (
-          <Box key={`${prefix}-${i}`} flexDirection="column" width={textWidth}>
-            {Client && (
-              <Box position="absolute" top={0} left={0} width={textWidth} height={chunk.length}>
-                <Client
-                  key={`hover-${prefix}-${i}`}
-                  module="./hover-layer.tsx"
-                  props={{ kind: 'rows', width: textWidth, height: chunk.length, starX: 0, starY: 0, items: chunk.map(one => ({ href: one.href, isStarred: starSet.has(one.href) })) }}
-                  width={textWidth}
-                  height={chunk.length}
-                />
-              </Box>
-            )}
-            {chunk.map((one, j) => {
-              const index = firstNav + i * LIST_CHUNK + j
-              const isSelected = index === selected
-              const look = looks(one)
-              const { where, age } = describe(one)
-              const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
-              const meta = `${one.status ? `${one.status} · ` : ''}${where}${count}${age}`
-              const leftWidth = Math.max(4, textWidth - meta.length - 1)
-              const nameRoom = Math.max(8, Math.floor((leftWidth - 3) * 0.6))
-              return (
-                <Box
-                  key={`${prefix}-${i}-${j}`}
-                  height={1}
-                  flexDirection="row"
-                  justifyContent="space-between"
-                  width={textWidth}
-                  backgroundColor={isSelected ? C.surface0 : undefined}
-                  hover={{ backgroundColor: C.surface0 }}
-                >
-                  <Box flexDirection="row" width={leftWidth} height={1} overflow="hidden">
-                    {look.favicon && !look.isStarred && Image && (
-                      <Box flexShrink={0}>
-                        <Image key={`favicon-${index}`} source={{ png: look.favicon }} columns={2} rows={1} alt={look.icon} />
-                      </Box>
-                    )}
-                    <Box flexShrink={0}>
-                      <Button
-                        key={`item-${index}`}
-                        label={look.isStarred ? '\u{f51a}' : look.favicon ? ' ' : look.icon}
-                        plain
-                        autoFocus={isSelected ? true : undefined}
-                        onPress={() => void selectAndOpen($, index)}
-                      />
-                    </Box>
-                    <Box key={`name-${index}`} flexShrink={0}>
-                      <Text color={isSelected ? C.accent : C.text} bold={isSelected} hover={{ color: C.accent }} wrap="truncate-end">{`  ${fitName(look.name, nameRoom)}`}</Text>
-                    </Box>
-                    <Box flexShrink={1} flexGrow={1} overflow="hidden">
-                      <Text color={C.overlay0} wrap="truncate-middle">{look.folder ? `  ${look.folder}` : ''}</Text>
-                    </Box>
-                  </Box>
-                  <Box flexShrink={0} height={1}>
-                    <Text color={C.overlay0}>{meta}</Text>
-                  </Box>
-                </Box>
-              )
-            })}
-          </Box>
-        ))
-      }
+      const rowList = rowListOf(sink, (one: FileEntry) => {
+        const { where, age } = describe(one)
+        const count = one.mentions > 1 ? `${one.mentions}× · ` : ''
+        return { ...looks(one), detail: `${one.status ? `${one.status} · ` : ''}${where}${count}${age}` }
+      })
       const groups = groupsOf(recentList).map(group => {
-        cursor += 2
+        sink.cursor += 2
         const list = rowList(group.items, group.id)
-        cursor += 1
+        sink.cursor += 1
         return { ...group, list }
       })
       blockStarts = starts
-      estimatedRows = Math.max(1, cursor)
+      estimatedRows = Math.max(1, sink.cursor)
       const jumps = keyJumps(keys)
       const pinnedId = nav[clamp(selected, nav.length)]?.group
       const pinnedOn = pinned.find(one => one.id === pinnedId)
@@ -3359,13 +3372,7 @@ export const register: Register = on => {
       }
     }
 
-    let body: unknown = null
-    let position = ''
-    let jumps: { next: () => void; prev: () => void } = { next: () => {}, prev: () => {} }
-    if (current.remote) {
-      const remote = current.remote
-      const record = remote.record
-      const { drawnParts, partRows, partHeadings, note } = newBlocks()
+    const blockWriters = ({ drawnParts, note, media, pictures, memoBase, refs }: BlockSink) => {
       const sectionRule = (key: string, label: string, right = '') => {
         const head = `${label.toUpperCase()} `
         const tail = right ? ` ${right}` : ''
@@ -3378,20 +3385,16 @@ export const register: Register = on => {
         )
         note(1, label)
       }
-      const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
       let imageBytes = 0
       const fitsPane = (png: string) => {
         if (imageBytes + png.length > IMAGE_TREE_BUDGET) return false
         imageBytes += png.length
         return true
       }
-      const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
-      const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
-      const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
       const mediaBlock = (index: number, alt: string, url: string, heading: string) => {
         const key = `media-${index}`
-        const one = record?.media?.[url]
-        const picture = remote.pictures?.[url]
+        const one = media?.[url]
+        const picture = pictures?.[url]
         const loadedPng = picture && pixels.get(picture.file)
         const png = loadedPng && fitsPane(loadedPng) ? loadedPng : undefined
         const host = (() => {
@@ -3420,7 +3423,7 @@ export const register: Register = on => {
       let mediaCount = 0
       // Splits out picture lines and drawn diagrams; a fence's contents stay in the text around them.
       const markdownBlocks = (key: string, text: string, heading: string, indent = 0) => {
-        if (!record?.media && !text.includes('```peek-diagram')) return markdownChunks(key, text, heading, indent)
+        if (!media && !text.includes('```peek-diagram')) return markdownChunks(key, text, heading, indent)
         let pending = ''
         let segment = 0
         let fence = ''
@@ -3447,7 +3450,7 @@ export const register: Register = on => {
           }
           if (marker && (!fence || marker === fence)) fence = fence ? '' : marker
           const found = !fence && !marker && /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line.trim())
-          if (found && record?.media?.[found[2] ?? '']) {
+          if (found && media?.[found[2] ?? '']) {
             flush()
             mediaBlock(mediaCount++, found[1] ?? '', found[2] ?? '', heading)
           } else pending += `${line}\n`
@@ -3472,6 +3475,21 @@ export const register: Register = on => {
           note(rows, heading)
         }
       }
+      return { sectionRule, fitsPane, mediaBlock, markdownBlocks, markdownChunks }
+    }
+
+    let body: unknown = null
+    let position = ''
+    let jumps: { next: () => void; prev: () => void } = { next: () => {}, prev: () => {} }
+    if (current.remote) {
+      const remote = current.remote
+      const record = remote.record
+      const { drawnParts, partRows, partHeadings, note } = newBlocks()
+      const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
+      const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
+      const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
+      const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
+      const { sectionRule, fitsPane, markdownBlocks } = blockWriters({ drawnParts, note, media: record?.media, pictures: remote.pictures, memoBase, refs })
       if (!record) {
         const message = failureText(remote.failure ?? 'offline')
         drawnParts.push(
