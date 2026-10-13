@@ -1,6 +1,7 @@
 import { PATH_EXTS } from './paths'
 import { linkRefs, refHref } from './refs'
 import type { RefContext } from './refs'
+import { decodeEntities } from './wire'
 
 // The negative lookbehind keeps a path inside a URL or a word from matching.
 const BARE_PATH = new RegExp(
@@ -110,7 +111,7 @@ export function linkify(
 }
 
 export function htmlToMarkdown(html: string): string {
-  return html
+  const text = html
     .replace(/<(script|style|head|noscript)[\s\S]*?<\/\1>/gi, '')
     .replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, n: string, body: string) => `\n\n${'#'.repeat(Number(n))} ${body}\n\n`)
     .replace(/<a\s[^>]*href="(https?:[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
@@ -118,12 +119,7 @@ export function htmlToMarkdown(html: string): string {
     .replace(/<(br|\/p|\/div|\/tr|\/ul|\/ol|\/section|\/article)[^>]*>/gi, '\n')
     .replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, '\n```\n$1\n```\n')
     .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&')
+  return decodeEntities(text, ['nbsp', 'lt', 'gt', 'quot', '#39', 'amp'])
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()

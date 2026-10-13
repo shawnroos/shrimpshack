@@ -2,7 +2,7 @@ import type { CaptureIo } from './capture'
 import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
 import type { SourceIo } from './sources'
-import { asObj, asStr, tryJson } from './wire'
+import { asObj, asStr, decodeEntities, tryJson } from './wire'
 import type { Json } from './wire'
 import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
 
@@ -22,6 +22,7 @@ const CLI_TIMEOUT_MS = 20_000
 const CLI_FINGERPRINT = 'd41d8cd98f00b204e9800998ecf8427e'
 const CLI_PROBE = `if [ -x "$HOME/.slack/bin/slack" ]; then echo "$HOME/.slack/bin/slack"; elif command -v slack >/dev/null 2>&1 && [ "$(slack _fingerprint 2>/dev/null)" = ${CLI_FINGERPRINT} ]; then command -v slack; fi`
 const TITLE_CAP = 100
+const SLACK_ENTITIES = ['lt', 'gt', 'amp'] as const
 
 const PARENT_HEAD = '=== THREAD PARENT MESSAGE ==='
 const REPLIES_HEAD = /^=== THREAD REPLIES \(\d+ total\) ===$/m
@@ -54,7 +55,7 @@ function isUnavailable(result: Loaded | Unavailable): result is Unavailable {
 
 
 function inline(text: string): string {
-  return text
+  const converted = text
     .replace(/<@([UW][A-Z0-9]+)\|([^>]+)>/g, '**@$2**')
     .replace(/<@([UW][A-Z0-9]+)>/g, '**@$1**')
     .replace(/<#(C[A-Z0-9]+)\|([^>]+)>/g, '**#$2**')
@@ -67,9 +68,7 @@ function inline(text: string): string {
     .replace(/(^|[\s(])_(?=\S)([^_\n]+?)_(?=$|[\s).,!?:;])/gm, '$1*$2*')
     .replace(/(^|[\s(])~(?=\S)([^~\n]+?)~(?=$|[\s).,!?:;])/gm, '$1~~$2~~')
     .replace(/^([ \t]*)[•◦▪]\s?/gm, '$1- ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
+  return decodeEntities(converted, SLACK_ENTITIES)
 }
 
 export function mrkdwnToMarkdown(text: string): string {
@@ -81,15 +80,12 @@ export function mrkdwnToMarkdown(text: string): string {
 
 function plainLine(text: string): string {
   const first = text.split('\n').find(line => line.trim())?.trim() ?? ''
-  const plain = first
+  const stripped = first
     .replace(/<[@#!][^|>]*\|([^>]+)>/g, '$1')
     .replace(/<(?:https?|mailto):[^|>]+\|([^>]+)>/g, '$1')
     .replace(/<([^>]+)>/g, '$1')
     .replace(/^([*_~]+)(.+?)\1$/, '$2')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .trim()
+  const plain = decodeEntities(stripped, SLACK_ENTITIES).trim()
   return plain.length > TITLE_CAP ? `${plain.slice(0, TITLE_CAP - 1)}…` : plain
 }
 

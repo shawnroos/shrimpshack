@@ -5,6 +5,7 @@ import { readable } from './defuddle'
 import type { Ref } from './refs'
 import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
 import type { Failed, SourceIo } from './sources'
+import { decodeEntities } from './wire'
 
 const SCRATCH = '/tmp/claude-peek'
 // The engine cuts stdout at 4 MiB, so the status line rides on stderr where the cut cannot drop it.
@@ -22,19 +23,7 @@ type Head = { title?: string; description?: string; siteName?: string; image?: s
 const favicons = new Map<string, Promise<string | undefined>>()
 
 function decode(text: string): string {
-  return text
-    .replace(/&#x([0-9a-f]+);/gi, (whole, hex: string) => safeChar(Number.parseInt(hex, 16)) ?? whole)
-    .replace(/&#(\d+);/g, (whole, dec: string) => safeChar(Number.parseInt(dec, 10)) ?? whole)
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&amp;/g, '&')
-}
-
-function safeChar(code: number): string | undefined {
-  return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : undefined
+  return decodeEntities(text, ['nbsp', 'lt', 'gt', 'quot', '#39', 'apos', 'amp'], true)
 }
 
 function clean(text: string | undefined): string | undefined {
