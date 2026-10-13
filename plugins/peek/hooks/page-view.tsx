@@ -248,7 +248,7 @@ export function drawApproval(
   C: ReviewColors,
   review: RecipeReview,
   view: { width: number },
-  on: { approve: () => void; previewAgain: () => void },
+  on: { approve: () => void; previewAgain: () => void; toggleFiles: () => void },
 ): DrawnReview {
   const { Box, Text, Button } = elements
   const { width } = view
@@ -272,7 +272,7 @@ export function drawApproval(
   add(
     <Box key="review-facts" flexDirection="column" width={width}>
       <Text color={C.yellow} bold>Draft recipe: not approved</Text>
-      <Text color={C.subtext0}>Read what it runs. Approve sends it live for every link it matches; b leaves it a draft.</Text>
+      <Text color={C.subtext0}>Show files to read what it runs. Approve sends it live for every link it matches; b leaves it a draft.</Text>
       {factLines.map((line, i) => (
         <Text key={`review-fact-${i}`} color={C.text}>{line}</Text>
       ))}
@@ -298,9 +298,10 @@ export function drawApproval(
       2,
     )
   }
+  const hasText = review.files.some(file => file.text !== undefined)
   for (const [i, file] of review.files.entries()) {
     const label = file.text === undefined ? `Binary file: ${file.path} (${file.size} bytes)` : `${file.change === 'new' ? 'New' : 'Changed'} file: ${file.path} · ${file.size} bytes`
-    const lines = file.text === undefined ? [] : file.text.replace(/\n$/, '').split('\n')
+    const lines = file.text === undefined || !review.isShowingFiles ? [] : file.text.replace(/\n$/, '').split('\n')
     const chunks: string[][] = []
     for (let at = 0; at < lines.length; at += FILE_LINES_PER_TEXT) chunks.push(lines.slice(at, at + FILE_LINES_PER_TEXT))
     add(
@@ -314,6 +315,9 @@ export function drawApproval(
       </Box>,
       1 + rowsOf(lines, width - 2),
     )
+  }
+  if (hasText) {
+    add(<Button key="review-toggle-files" label={review.isShowingFiles ? 'Hide files' : 'Show files'} plain onPress={on.toggleFiles} />, 1)
   }
   if (review.removed.length) {
     add(

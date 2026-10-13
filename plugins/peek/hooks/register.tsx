@@ -861,6 +861,12 @@ function pageSourceLine(state: RecipePage, now: number): string {
   return [`recipe ${state.id}`, state.isDraft ? 'draft' : 'approved', fetchedAge(state.fetchedAt, now), marker].filter(Boolean).join(' · ')
 }
 
+function toggleReviewFiles($: EngineInterface, href: string) {
+  return update($, view, now =>
+    now?.href === href && now.page?.review ? { ...now, page: { ...now.page, review: { ...now.page.review, isShowingFiles: !now.page.review.isShowingFiles } } } : now,
+  )
+}
+
 async function approveRecipe($: EngineInterface, href: string) {
   const shown = (await read($, view))?.page
   if (!shown?.id || !shown.isDraft || !shown.review) return
@@ -3990,6 +3996,7 @@ export const register: Register = on => {
           ? drawApproval({ Box, Text, Button }, C, state.review, { width: textWidth }, {
               approve: () => void approveRecipe($, href),
               previewAgain: () => void show($, state.link, false, { allowDraft: true }),
+              toggleFiles: () => void toggleReviewFiles($, href),
             })
           : { parts: [], rows: [], headings: [] }
       if (shownPage) {

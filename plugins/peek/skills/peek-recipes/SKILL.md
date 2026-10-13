@@ -105,7 +105,8 @@ The builder replies with a `status:` block.
 - **`ready`**: the check passed and the draft preview is open in the pane.
   Tell the person to read the approval surface at the top of the pane. It shows
   what the recipe runs, the links it matches, its overrides, timer and
-  environment names, and the full text of every file. Then they press
+  environment names, and each file's name, with **Show files** to open the
+  full text of every file. Then they press
   **Approve** there. If `warnings` names an unplaced pane, ask them to open the
   pane first (`/peek`), then call `mcp__peek__open` with the link.
 - **`needs-permission`**: ask the person to allow the exact rule in `allow`,

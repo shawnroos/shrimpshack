@@ -174,7 +174,8 @@ stays on its built-in page unless the recipe says it overrides that page.
 it. The agent previews a draft in the pane, marked unapproved. Above the page,
 the approval surface shows what the recipe runs, the links it matches, the
 environment names it reads, warnings for MCP tools that look like they change
-something and for paths outside the folder, and the full text of every file.
+something and for paths outside the folder, and each file's name. **Show files**
+there opens the full text of every file.
 Press **Approve** there to make it live. Only that button approves a recipe: no
 agent tool, command or file write can. Any later change to a file in the folder
 turns the recipe back into a draft until you approve it again. While a recipe is

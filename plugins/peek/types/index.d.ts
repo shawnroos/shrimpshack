@@ -172,6 +172,7 @@ export type RecipeReview = {
   removed: string[]
   isStructureOnly: boolean
   refusal?: ReviewRefusal
+  isShowingFiles?: boolean
 }
 
 export type GroupActor = 'agent' | 'person'

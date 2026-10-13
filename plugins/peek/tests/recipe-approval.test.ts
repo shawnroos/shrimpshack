@@ -153,10 +153,34 @@ test('pressing Approve on an unchanged preview records the digest and files, the
   await ui.unmount()
 })
 
-test('the approval surface draws above the page with what will run, the script in full before Approve, and Approve holding the first focus', async (driver, on) => {
+async function showFiles(ui: Ui) {
+  await ui.press({ key: 'review-toggle-files' })
+  await until(ui, async () => (await ui.find({ key: 'review-toggle-files' }))?.props.label === 'Hide files')
+}
+
+test('Show files and Hide files toggle the file text without moving focus off Approve', async (driver, on) => {
+  await paneWorld(on, { files: figmaRecipe() })
+  await preview(driver, FIGMA)
+  const ui = await mount(driver)
+  expect((await ui.find({ key: 'review-toggle-files' }))?.props.label).toBe('Show files')
+  expect(await textOf(ui)).not.toContain('curl -s')
+  await showFiles(ui)
+  expect(await textOf(ui)).toContain('curl -s')
+  await ui.press({ key: 'review-toggle-files' })
+  await until(ui, async () => (await ui.find({ key: 'review-toggle-files' }))?.props.label === 'Show files')
+  expect(await textOf(ui)).not.toContain('curl -s')
+  expect((await ui.find({ key: 'approve' }))?.props.autoFocus).toBe(true)
+  await ui.unmount()
+})
+
+test('the approval surface draws above the page with what will run, the script in full behind Show files before Approve, and Approve holding the first focus', async (driver, on) => {
   await paneWorld(on, { files: figmaRecipe(), env: { FIGMA_TOKEN: 'tok_SECRET' } })
   await preview(driver, FIGMA)
   const ui = await mount(driver)
+  const hidden = await textOf(ui)
+  expect(hidden).toContain('New file: fetch.sh')
+  expect(hidden).not.toContain('curl -s')
+  await showFiles(ui)
   const tree = await textOf(ui)
   const at = (needle: string) => tree.indexOf(needle)
   expect(at('Draft recipe')).toBeGreaterThan(-1)
@@ -214,7 +238,8 @@ test('a file edited between preview and press says changed since preview and rec
   expect(pane.storeText()).toBe('null')
   expect(await ui.find({ key: 'preview-again' })).toBeDefined()
   await ui.press({ key: 'preview-again' })
-  await until(ui, async () => (await ui.find({ text: /echo extra/ })) !== undefined)
+  await until(ui, async () => (await ui.find({ text: /Changed since preview/ })) === undefined && (await ui.find({ key: 'review-toggle-files' })) !== undefined)
+  await showFiles(ui)
   expect(await ui.find({ text: /Changed since preview/ })).toBeUndefined()
   expect(await textOf(ui)).toContain('echo extra')
   await ui.press({ key: 'approve' })
@@ -310,6 +335,7 @@ test('on re-approval after an edit, only the changed file is shown as changed', 
   pane.w.write(`${ROOT}/figma-files/fetch.sh`, `${SCRIPT}echo second\n`)
   await preview(driver, FIGMA)
   const ui = await mount(driver)
+  await showFiles(ui)
   const tree = await textOf(ui)
   expect(tree).toContain('Changed file: fetch.sh')
   expect(tree).toContain('echo second')
@@ -382,6 +408,7 @@ test('an MCP recipe calling create_comment shows the server, tool, arguments and
   await preview(driver, FIGMA)
   const ui = await mount(driver)
   await until(ui, async () => (await ui.find({ text: /Recipe page failed/ })) !== undefined)
+  await showFiles(ui)
   const tree = await textOf(ui)
   expect(tree).toContain('MCP server \\"figma\\", tool \\"create_comment\\" (mcp__figma__create_comment)')
   expect(tree).toContain('fileKey')
