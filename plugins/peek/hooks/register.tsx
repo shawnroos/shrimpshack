@@ -16,7 +16,7 @@ import type { Direction, DrawContext, NavItem, PaneActions, Screen } from './pan
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP, frame as drawFrame, geometryOf } from './pane/chrome'
 import { parsePaneMessage } from './pane/messages'
 import { menuLists } from './pane/menu'
-import { EMPTY_LAYOUT } from './pane/layout'
+import { EMPTY_LAYOUT, groupRowAt } from './pane/layout'
 import type { Layout } from './pane/layout'
 import { groupsScreen } from './pane/screens/groups'
 import { recentScreen } from './pane/screens/recent'
@@ -106,6 +106,12 @@ async function moveSelection($: EngineInterface, direction: Direction) {
 async function selectAndOpen($: EngineInterface, index: number) {
   await select($, index)
   await openNav($, paneLayout.nav[index])
+}
+
+async function openedRow($: EngineInterface, href: string): Promise<number> {
+  const now = await read($, mode)
+  const opened = now === 'groups' ? await read($, openGroup) : null
+  return groupRowAt(paneLayout.nav, href, now, opened)
 }
 
 async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
@@ -440,7 +446,7 @@ export const register: Register = on => {
         await openCardItem(io, message.group, message.key, message.href).catch(() => undefined)
         return {}
       case 'open': {
-        const at = paneLayout.nav.findIndex(one => one.groupItem && one.href === message.href)
+        const at = await openedRow($, message.href).catch(() => -1)
         await (at >= 0 ? selectAndOpen($, at) : show(io, message.href)).catch(() => undefined)
         return {}
       }

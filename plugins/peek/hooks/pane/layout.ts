@@ -1,3 +1,4 @@
+import type { Mode } from '../../types'
 import type { NavItem } from './types'
 
 // What a screen drew, for the handlers that act on it: the keyboard order and each item's row, the reader's
@@ -113,4 +114,11 @@ export function rowCounter() {
       return rows
     },
   }
+}
+
+// The row an open message names on the group page still showing. A message from a page the person has since
+// left, for another mode or group, arrives before the next draw replaces `nav`, so it names no row.
+export function groupRowAt(nav: readonly NavItem[], href: string, mode: Mode, opened: { id: string } | null): number {
+  if (mode !== 'groups' || !opened) return -1
+  return nav.findIndex(one => one.groupItem?.group === opened.id && one.href === href)
 }
