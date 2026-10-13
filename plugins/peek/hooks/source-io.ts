@@ -3,6 +3,7 @@ import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'c
 import type { RemoteFailure } from '../types'
 import { fromHttpStatus, ghFailure } from './sources/classify'
 import { parseUrl, tryJson } from './wire'
+import { sessionMemo } from './cache'
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
 // Copied from herdr-board crates/board-daemon/src/linear/credential.rs: one Keychain item serves both tools.
@@ -37,21 +38,12 @@ export type Probe = {
 
 export type Failed = { ok: false; failure: RemoteFailure; detail?: string }
 
-const probes = new Map<string, Promise<Probe>>()
-const keys = new Map<string, Promise<string | null>>()
+// Only a working gh is kept: a later `gh auth login` or install must be noticed without restarting the session.
+const probes = sessionMemo<Probe>({ keep: found => found.gh === null })
+const keys = sessionMemo<string | null>()
 
 export async function probe(io: SourceIo): Promise<Probe> {
-  const session = await io.sessionId()
-  const known = probes.get(session)
-  if (known) return known
-  const pending = runProbe(io)
-  probes.set(session, pending)
-  // Only a working gh is kept: a later `gh auth login` or install must be noticed without restarting the session.
-  const drop = () => {
-    if (probes.get(session) === pending) probes.delete(session)
-  }
-  void pending.then(found => found.gh !== null && drop(), drop)
-  return pending
+  return probes.get(await io.sessionId(), () => runProbe(io))
 }
 
 async function runProbe(io: SourceIo): Promise<Probe> {
@@ -87,16 +79,11 @@ function unquote(raw: string): string {
 }
 
 async function findKey(io: SourceIo): Promise<string | null> {
-  const session = await io.sessionId()
-  const known = keys.get(session)
-  if (known) return known
-  const pending = lookupKey(io)
-  keys.set(session, pending)
-  return pending
+  return keys.get(await io.sessionId(), () => lookupKey(io))
 }
 
 async function forgetKey(io: SourceIo, failure: RemoteFailure): Promise<void> {
-  if (failure === 'key-refused' || failure === 'key-missing') keys.delete(await io.sessionId())
+  if (failure === 'key-refused' || failure === 'key-missing') keys.forget(await io.sessionId())
 }
 
 async function lookupKey(io: SourceIo): Promise<string | null> {

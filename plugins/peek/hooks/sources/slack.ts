@@ -1,6 +1,7 @@
 import type { CaptureIo } from '../capture'
 import type { Ref, SlackThreadRef } from '../refs'
 import { describeAge } from '../format'
+import { sessionMemo } from '../cache'
 import { slackFailure } from './classify'
 import { ok } from './result'
 import type { SourceIo } from '../source-io'
@@ -36,10 +37,11 @@ const AVATAR_PX = 72
 const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }
 
 const preferredServer = new Map<string, string>()
-const cliPaths = new Map<string, Promise<string | null>>()
+// Only a found CLI is kept, so an install later in the session is noticed.
+const cliPaths = sessionMemo<string | null>({ keep: found => found !== null })
 // Refresh reloads a thread every minute; files and faces are fetched, and refused, once per session.
-const filePictures = new Map<string, Promise<string | undefined>>()
-const avatarFiles = new Map<string, Promise<string | undefined>>()
+const filePictures = sessionMemo<string | undefined>()
+const avatarFiles = sessionMemo<string | undefined>()
 
 // The transport is absent or refused its token: the next transport may still serve the thread.
 type Skip = { skip: true }
@@ -229,14 +231,6 @@ async function avatarFile(io: SlackIo, server: string | undefined, one: SlackMes
   return io.downloadImage(url, ext)
 }
 
-function once(cache: Map<string, Promise<string | undefined>>, key: string, make: () => Promise<string | undefined>): Promise<string | undefined> {
-  const known = cache.get(key)
-  if (known) return known
-  const pending = make().catch(() => undefined)
-  cache.set(key, pending)
-  return pending
-}
-
 async function withPictures(io: SlackIo, record: RemoteRecord, messages: readonly SlackMessage[], server: string | undefined): Promise<RemoteRecord> {
   const session = await io.sessionId()
   const images = server
@@ -244,8 +238,8 @@ async function withPictures(io: SlackIo, record: RemoteRecord, messages: readonl
     : []
   const speakers = [...new Map(messages.filter(one => one.userId).map(one => [one.userId ?? '', one])).values()].slice(0, MAX_SPEAKERS)
   const [files, faces] = await Promise.all([
-    Promise.all(images.map(async file => [file.id, await once(filePictures, `${session} ${file.id}`, () => filePicture(io, server ?? '', file))] as const)),
-    Promise.all(speakers.map(async one => [one.userId ?? '', await once(avatarFiles, `${session} ${one.userId}`, () => avatarFile(io, server, one))] as const)),
+    Promise.all(images.map(async file => [file.id, await filePictures.get(`${session} ${file.id}`, () => filePicture(io, server ?? '', file).catch(() => undefined))] as const)),
+    Promise.all(speakers.map(async one => [one.userId ?? '', await avatarFiles.get(`${session} ${one.userId}`, () => avatarFile(io, server, one).catch(() => undefined))] as const)),
   ])
   const media = Object.fromEntries(files.flatMap(([id, file]) => (file ? [[`slack-file:${id}`, { file }]] : [])))
   const avatars = Object.fromEntries(faces.flatMap(([id, file]) => (file ? [[id, file]] : [])))
@@ -276,19 +270,12 @@ async function loadViaMcp(io: SlackIo, ref: SlackThreadRef, channel: string, ts:
 }
 
 async function findCli(io: SlackIo): Promise<string | null> {
-  const session = await io.sessionId()
-  const known = cliPaths.get(session)
-  if (known) return known
-  const pending = io
-    .run(['sh', '-c', CLI_PROBE], { timeoutMs: 5000 })
-    .then(ran => (ran.exitCode === 0 ? ran.stdout.trim().split('\n')[0]?.trim() || null : null))
-    .catch(() => null)
-  cliPaths.set(session, pending)
-  // Only a found CLI is kept, so an install later in the session is noticed.
-  void pending.then(found => {
-    if (!found && cliPaths.get(session) === pending) cliPaths.delete(session)
-  })
-  return pending
+  return cliPaths.get(await io.sessionId(), () =>
+    io
+      .run(['sh', '-c', CLI_PROBE], { timeoutMs: 5000 })
+      .then(ran => (ran.exitCode === 0 ? ran.stdout.trim().split('\n')[0]?.trim() || null : null))
+      .catch(() => null),
+  )
 }
 
 async function cliApi(io: SlackIo, bin: string, args: readonly string[]): Promise<{ ok: true; body: Json } | { ok: false; failure: RemoteFailure } | Skip> {

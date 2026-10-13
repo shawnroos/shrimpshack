@@ -8,6 +8,7 @@ import { fromHttpStatus } from './classify'
 import { ok } from './result'
 import type { Failed, SourceIo } from '../source-io'
 import { decodeEntities, parseUrl } from '../wire'
+import { sessionMemo } from '../cache'
 import { DOWNLOAD_FORMAT, PAGE_FORMAT, downloadStatus, pageStatus } from '../parsers/curl'
 
 const SCRATCH = '/tmp/claude-peek'
@@ -21,7 +22,7 @@ const IMAGE_EXT = /\.(png|ico|jpe?g|gif|webp|svg|bmp)$/i
 
 type Head = { title?: string; description?: string; siteName?: string; image?: string; icons: string[] }
 
-const favicons = new Map<string, Promise<string | undefined>>()
+const favicons = sessionMemo<string | undefined>()
 
 function decode(text: string): string {
   return decodeEntities(text, ['nbsp', 'lt', 'gt', 'quot', '#39', 'apos', 'amp'], true)
@@ -314,20 +315,11 @@ function withPictureLines(markdown: string): string {
     .join('\n')
 }
 
-const remoteFiles = new Map<string, Promise<string | undefined>>()
-const MAX_REMOTE_FILES = 200
-
 // An open issue reloads every minute; the pictures in it are fetched once a session.
+const remoteFiles = sessionMemo<string | undefined>({ max: 200 })
+
 function sessionFetch(io: SourceIo, session: string): Fetch {
-  return url => {
-    const key = `${session} ${url}`
-    const known = remoteFiles.get(key)
-    if (known) return known
-    if (remoteFiles.size > MAX_REMOTE_FILES) remoteFiles.clear()
-    const pending = download(io, url)
-    remoteFiles.set(key, pending)
-    return pending
-  }
+  return url => remoteFiles.get(`${session} ${url}`, () => download(io, url))
 }
 
 export async function withRemoteMedia(io: SourceIo, record: RemoteRecord): Promise<RemoteRecord> {
@@ -354,12 +346,7 @@ async function firstIcon(io: SourceIo, icons: readonly string[]): Promise<string
 }
 
 async function faviconFor(io: SourceIo, host: string, icons: readonly string[]): Promise<string | undefined> {
-  const key = `${await io.sessionId()} ${host}`
-  const known = favicons.get(key)
-  if (known) return known
-  const pending = firstIcon(io, icons)
-  favicons.set(key, pending)
-  return pending
+  return favicons.get(`${await io.sessionId()} ${host}`, () => firstIcon(io, icons))
 }
 
 async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: string; finalUrl: string } | Failed> {
