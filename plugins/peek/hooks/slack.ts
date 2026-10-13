@@ -1,6 +1,7 @@
 import type { CaptureIo } from './capture'
 import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
+import { slackFailure } from './sources/classify'
 import type { SourceIo } from './sources'
 import { asObj, asStr, decodeEntities, parseUrl, tryJson } from './wire'
 import { channelName, parseThreadText, profilePicture, unwrapTranscript } from './parsers/slack-transcript'
@@ -81,13 +82,8 @@ function plainLine(text: string): string {
   return plain.length > TITLE_CAP ? `${plain.slice(0, TITLE_CAP - 1)}…` : plain
 }
 
-function slackFailure(message: string): FailureKind | 'unavailable' {
-  const code = /execution_failed:\s*([a-z_]+)/.exec(message)?.[1] ?? /^\s*([a-z_]+)\s*$/.exec(message)?.[1] ?? ''
-  if (code === 'thread_not_found' || code === 'message_not_found') return 'gone'
-  if (['channel_not_found', 'not_in_channel', 'access_denied', 'missing_scope', 'no_permission'].includes(code)) return 'not-found-or-no-access'
-  if (code === 'ratelimited' || code === 'rate_limited') return 'rate-limited'
-  if (['invalid_auth', 'not_authed', 'token_revoked', 'token_expired', 'account_inactive'].includes(code)) return 'unavailable'
-  return 'query-bug'
+function slackOutcome(message: string): FailureKind | 'unavailable' {
+  return slackFailure(message) ?? 'unavailable'
 }
 
 function isoOf(ts: string): string {
@@ -271,7 +267,7 @@ async function loadViaMcp(io: SlackIo, ref: SlackThreadRef, channel: string, ts:
     mcpRead(io, 'slack_read_channel', { channel_id: channel, limit: 1 }),
   ])
   if (!thread) return { ok: false, failure: 'unavailable' }
-  if (thread.isError) return { ok: false, failure: slackFailure(thread.text) }
+  if (thread.isError) return { ok: false, failure: slackOutcome(thread.text) }
   const { messages, more } = unwrapTranscript(thread.text)
   const parsed = parseThreadText(messages)
   if (!parsed) return { ok: false, failure: 'query-bug' }
@@ -302,7 +298,7 @@ async function cliApi(io: SlackIo, bin: string, args: readonly string[]): Promis
   if (!ran) return { ok: false, failure: 'offline' }
   const body = asObj(tryJson(ran.stdout))
   if (!body) return { ok: false, failure: ran.exitCode === 0 ? 'query-bug' : 'unavailable' }
-  if (body.ok !== true) return { ok: false, failure: slackFailure(asStr(body.error) ?? '') }
+  if (body.ok !== true) return { ok: false, failure: slackOutcome(asStr(body.error) ?? '') }
   return { ok: true, body }
 }
 

@@ -1,6 +1,7 @@
 import type { HttpInit, HttpResponse, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
 import type { FailureKind } from '../types'
+import { fromHttpStatus, ghFailure } from './sources/classify'
 import { parseUrl, tryJson } from './wire'
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
@@ -104,17 +105,6 @@ export async function hasCurl(io: SourceIo): Promise<boolean> {
   return (await probe(io)).hasCurl
 }
 
-function ghFailure(stderr: string): FailureKind {
-  if (/rate limit|secondary rate|HTTP 429/i.test(stderr)) return 'rate-limited'
-  if (/gh auth login|not logged in|authentication|HTTP 401|bad credentials/i.test(stderr)) return 'cli-unauthed'
-  if (/HTTP 403|no access|permission/i.test(stderr)) return 'not-found-or-no-access'
-  if (/Could not resolve to a|HTTP 404|HTTP 410|Not Found/i.test(stderr)) return 'gone'
-  if (/dial tcp|could not connect|connection refused|timeout|timed out|no such host|network is unreachable|error connecting/i.test(stderr)) {
-    return 'offline'
-  }
-  return 'query-bug'
-}
-
 export async function runGh(io: SourceIo, args: readonly string[]): Promise<{ ok: true; stdout: string } | Failed> {
   const found = await probe(io)
   if (found.gh) return { ok: false, failure: found.gh }
@@ -177,11 +167,8 @@ function graphqlFailure(error: unknown, status: number): FailureKind | 'retry' {
   if (tags.includes('AUTHENTICATION_ERROR')) return 'key-refused'
   if (tags.includes('NOT_FOUND') || /entity not found/i.test(message)) return 'gone'
   if (tags.some(tag => ['FORBIDDEN', 'INPUT_ERROR', 'INVALID_INPUT'].includes(tag))) return 'not-found-or-no-access'
-  if (tags.some(tag => tag.startsWith('GRAPHQL_') || tag === 'BAD_USER_INPUT') || status === 400) return 'query-bug'
-  if (status === 401) return 'key-refused'
-  if (status === 403) return 'not-found-or-no-access'
-  if (status >= 500) return 'offline'
-  return 'query-bug'
+  if (tags.some(tag => tag.startsWith('GRAPHQL_') || tag === 'BAD_USER_INPUT')) return 'query-bug'
+  return fromHttpStatus(status, 'graphql-error')
 }
 
 function retryWait(headers: Record<string, string>): number {
@@ -204,20 +191,14 @@ async function postOnce(io: SourceIo, key: string, body: string): Promise<Attemp
   const { status, headers, text } = response
   if (status === 429) return { ok: false, failure: 'rate-limited', waitMs: retryWait(headers) }
   const parsed = tryJson(text)
-  if (parsed === undefined) {
-    if (status === 401) return { ok: false, failure: 'key-refused' }
-    if (status === 403 || status === 404) return { ok: false, failure: 'not-found-or-no-access' }
-    if (status === 400) return { ok: false, failure: 'query-bug' }
-    return { ok: false, failure: status >= 200 && status < 300 ? 'query-bug' : 'offline' }
-  }
+  if (parsed === undefined) return { ok: false, failure: fromHttpStatus(status, 'graphql-text') }
   const errors = (parsed as { errors?: unknown } | null)?.errors
   if (Array.isArray(errors) && errors.length > 0) {
     const failure = graphqlFailure(errors[0], status)
     if (failure === 'retry') return { ok: false, failure: 'rate-limited', waitMs: retryWait(headers) }
     return { ok: false, failure }
   }
-  if (status === 401) return { ok: false, failure: 'key-refused' }
-  if (status < 200 || status >= 300) return { ok: false, failure: status === 403 ? 'not-found-or-no-access' : 'offline' }
+  if (status < 200 || status >= 300) return { ok: false, failure: fromHttpStatus(status, 'graphql-data') }
   const data = (parsed as { data?: unknown } | null)?.data
   if (data === null || typeof data !== 'object') return { ok: false, failure: 'query-bug' }
   return { ok: true, data }
@@ -292,14 +273,6 @@ export function httpDetail(status: number, url: string): string {
   return [`HTTP ${status}`, STATUS_TEXT[status], host && `from ${host}`].filter(Boolean).join(' ')
 }
 
-export function httpFailure(status: number): FailureKind {
-  if (status === 429) return 'rate-limited'
-  if (status === 404 || status === 410) return 'gone'
-  if (status === 401 || status === 403) return 'not-found-or-no-access'
-  if (status === 400) return 'query-bug'
-  return 'offline'
-}
-
 export async function httpText(io: SourceIo, url: string): Promise<{ ok: true; text: string; finalUrl?: string } | Failed> {
   const parsed = parseUrl(url)
   if (!parsed) return { ok: false, failure: 'query-bug' }
@@ -311,6 +284,6 @@ export async function httpText(io: SourceIo, url: string): Promise<{ ok: true; t
   } catch (error) {
     return { ok: false, failure: isPolicyRefusal(error) ? 'fetch-blocked' : 'offline' }
   }
-  if (!response.ok) return { ok: false, failure: httpFailure(response.status), detail: httpDetail(response.status, target) }
+  if (!response.ok) return { ok: false, failure: fromHttpStatus(response.status, 'page'), detail: httpDetail(response.status, target) }
   return { ok: true, text: response.text }
 }

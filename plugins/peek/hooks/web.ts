@@ -3,7 +3,8 @@ import type { Captured } from './capture'
 import { htmlToMarkdown } from './markdown'
 import { readable } from './defuddle'
 import type { Ref } from './refs'
-import { hasCurl, httpDetail, httpFailure, httpText } from './sources'
+import { hasCurl, httpDetail, httpText } from './sources'
+import { fromHttpStatus } from './sources/classify'
 import type { Failed, SourceIo } from './sources'
 import { decodeEntities, parseUrl } from './wire'
 import { DOWNLOAD_FORMAT, PAGE_FORMAT, downloadStatus, pageStatus } from './parsers/curl'
@@ -368,7 +369,7 @@ async function curlPage(io: SourceIo, url: string): Promise<{ ok: true; text: st
   const status = marked?.status ?? NaN
   const finalUrl = marked?.finalUrl || url
   const isUsable = status >= 200 && status < 300 && (ran.exitCode === 0 || ran.stdout.length > 0)
-  if (!isUsable) return marked !== null && status > 0 ? { ok: false, failure: httpFailure(status), detail: httpDetail(status, finalUrl) } : { ok: false, failure: 'offline' }
+  if (!isUsable) return marked !== null && status > 0 ? { ok: false, failure: fromHttpStatus(status, 'page'), detail: httpDetail(status, finalUrl) } : { ok: false, failure: 'offline' }
   return { ok: true, text: ran.stdout, finalUrl }
 }
 
