@@ -98,20 +98,17 @@ function TabStrip(ctx: DrawContext, key: string, tabs: { id: Mode; label: string
 
 function Header(ctx: DrawContext, middle: RenderChildren, isTabCompact: boolean) {
   const { Box, C, chosen } = ctx
-  const label = (id: Mode) => chipOf(id, chosen, isTabCompact)
+  const strip = (isLeft: boolean) =>
+    MODES.filter(one => (one.id === 'view') === isLeft).map(one => ({ id: one.id, label: chipOf(one.id, chosen, isTabCompact), isOn: chosen === one.id }))
   return ctx.isNarrow ? (
     <Box flexDirection="row" justifyContent="center" width={ctx.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
       {middle}
     </Box>
   ) : (
     <Box flexDirection="row" justifyContent="space-between" width={ctx.bodyColumns} height={1} overflow="hidden" backgroundColor={C.frame}>
-      {TabStrip(ctx, 'tabs-left', [{ id: 'view', label: label('view'), isOn: chosen === 'view' }])}
+      {TabStrip(ctx, 'tabs-left', strip(true))}
       {middle}
-      {TabStrip(ctx, 'tabs-right', [
-        { id: 'recent', label: label('recent'), isOn: chosen === 'recent' },
-        { id: 'gallery', label: label('gallery'), isOn: chosen === 'gallery' },
-        { id: 'groups', label: label('groups'), isOn: chosen === 'groups' },
-      ])}
+      {TabStrip(ctx, 'tabs-right', strip(false))}
     </Box>
   )
 }
