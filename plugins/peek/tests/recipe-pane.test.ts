@@ -69,6 +69,7 @@ type PaneOptions = {
   pull?: () => Record<string, unknown>
   webTitle?: string
   isHomeBrokenOnce?: boolean
+  isToolAllowed?: boolean
 }
 
 type Pane = {
@@ -117,6 +118,7 @@ async function paneWorld(on: On, options: PaneOptions): Promise<Pane> {
     return { value: w.env[e.name as keyof typeof w.env] }
   })
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  if (options.isToolAllowed) on('tool.check', () => ({ decision: 'allow' as const }))
   on('ui.toast', (_$, e) => {
     toasts.push(e.text)
     return { value: undefined }
@@ -607,4 +609,96 @@ test('validatePage production callers: the open and refresh paths both refuse a 
   expect(await ui.find({ text: /Local service/ })).toBeUndefined()
   await ui.unmount()
   expect(runRecipe.toString()).toContain('validatePage(')
+})
+
+const stayActive = async (driver: Driver, pane: Pane, minutes: number) => {
+  for (let minute = 0; minute < minutes; minute++) {
+    await driver.session.append({ message: { type: 'user', content: [{ type: 'text', text: 'still here' }] } } as never).catch(() => undefined)
+    await pane.clock.advance(60_000)
+  }
+}
+
+const timedRecipe = () => figmaRecipe({ refreshMinutes: 5 })
+
+test('an opted-in recipe page re-runs after its minutes on screen, and the ticker starts though it is the first page of the session', async (driver, on) => {
+  const pane = await paneWorld(on, { files: timedRecipe(), approve: ['figma-files'] })
+  await peek(driver, FIGMA)
+  await stayActive(driver, pane, 4)
+  expect(pane.scripts()).toEqual([FIGMA])
+  await stayActive(driver, pane, 2)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA])
+  const ui = await mount(driver)
+  expect(await ui.find({ text: 'Design system' })).toBeDefined()
+  expect(await ui.find({ text: /recipe figma-files · approved/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an opted-in recipe page does not run on a timer while another page shows', async (driver, on) => {
+  const pane = await paneWorld(on, { files: { ...timedRecipe(), ...protoRecipe() }, approve: ['figma-files', 'figma-protos'] })
+  await peek(driver, FIGMA)
+  await peek(driver, PROTO)
+  await stayActive(driver, pane, 12)
+  expect(pane.scripts()).toEqual([FIGMA, PROTO])
+})
+
+test('an opted-in recipe page does not run on a timer while the pane shows the Recent list', async (driver, on) => {
+  const pane = await paneWorld(on, { files: timedRecipe(), approve: ['figma-files'] })
+  await peek(driver, FIGMA)
+  const ui = await mount(driver)
+  await ui.press({ key: 'mode-recent' })
+  await ui.unmount()
+  await stayActive(driver, pane, 12)
+  expect(pane.scripts()).toEqual([FIGMA])
+})
+
+test('a failing timed run keeps the last page with its failure marker and backs off before the next try', async (driver, on) => {
+  let isBroken = false
+  const pane = await paneWorld(on, { files: timedRecipe(), approve: ['figma-files'], pages: () => (isBroken ? { exitCode: 3, stderr: 'rate limited' } : answer(designPage())) })
+  await peek(driver, FIGMA)
+  isBroken = true
+  await stayActive(driver, pane, 6)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA])
+  const ui = await mount(driver)
+  expect(await ui.find({ text: 'Design system' })).toBeDefined()
+  expect(await ui.find({ text: /refresh failed/ })).toBeDefined()
+  expect(JSON.stringify(await ui.drawn())).toContain('rate limited')
+  await ui.unmount()
+  await stayActive(driver, pane, 6)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA])
+  isBroken = false
+  await stayActive(driver, pane, 5)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA, FIGMA])
+  const after = await mount(driver)
+  expect(await after.find({ text: /refresh failed/ })).toBeUndefined()
+  await after.unmount()
+})
+
+test('after ten idle minutes timed runs pause, and the next activity resumes them', async (driver, on) => {
+  const pane = await paneWorld(on, { files: timedRecipe(), approve: ['figma-files'] })
+  await peek(driver, FIGMA)
+  await stayActive(driver, pane, 1)
+  await pane.clock.advance(4 * 60_000 + 30_000)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA])
+  await pane.clock.advance(15 * 60_000)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA])
+  await stayActive(driver, pane, 1)
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA, FIGMA])
+})
+
+test('covers AE2: a recipe with no timer runs once in twelve active minutes on screen', async (driver, on) => {
+  const pane = await paneWorld(on, { files: figmaRecipe({ refreshMinutes: 0 }), approve: ['figma-files'] })
+  await peek(driver, FIGMA)
+  await stayActive(driver, pane, 12)
+  expect(pane.scripts()).toEqual([FIGMA])
+})
+
+test('a draft preview with a timer runs only when the agent opens it, never on a tick', async (driver, on) => {
+  const pane = await paneWorld(on, { files: timedRecipe(), isToolAllowed: true })
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc
+  await driver.tool.call({ tool: 'mcp__peek__open', tool_use_id: 'open-draft', link: FIGMA } as never)
+  const ui = await mount(driver)
+  expect(await ui.find({ text: /recipe figma-files · draft/ })).toBeDefined()
+  await ui.unmount()
+  await stayActive(driver, pane, 12)
+  expect(pane.scripts()).toEqual([FIGMA])
 })

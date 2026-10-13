@@ -23,7 +23,7 @@ import { failureText as recipeFailureText, runRecipe } from './recipe-run'
 import type { RunIo } from './recipe-run'
 import { createLive, isWebUrl, liveStatusText, pagePoint, typedInput, wheelPoint } from './live'
 import type { FrameGeometry, HelperInput, Live, LiveFailureKind, LiveIo, LiveState, TypedKey, Viewport } from './live'
-import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
+import { BACKOFF_MAX_MS, IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
 import {
   applyGroupOps,
@@ -760,6 +760,7 @@ async function pageMedia($: EngineInterface, page: Page): Promise<Pick<RecipePag
 type PageLoad = { kind: 'none' } | { kind: 'conflict'; ids: string[] } | { kind: 'ran'; state: RecipePage }
 
 const pageLoads = new Map<string, Promise<PageLoad>>()
+const pageBackoff = new Map<string, { waitMs: number; until: number }>()
 
 // One load per link at a time: a second u press or open while the source runs waits for the same answer.
 function loadPage($: EngineInterface, link: string, allowDraft: boolean, onRouted: (state: RecipePage) => Promise<void> = async () => undefined): Promise<PageLoad> {
@@ -802,6 +803,8 @@ async function recipeView($: EngineInterface, href: string, raw: string, allowDr
   if (!/^https?:\/\//i.test(link)) return null
   const loaded = await loadPage($, link, allowDraft, onRouted)
   if (loaded.kind === 'none') return null
+  startTicking($)
+  pageBackoff.delete(href)
   const state: RecipePage =
     loaded.kind === 'ran'
       ? loaded.state
@@ -810,10 +813,10 @@ async function recipeView($: EngineInterface, href: string, raw: string, allowDr
   return pageView(href, state)
 }
 
-async function refreshPage($: EngineInterface, href: string, was: RecipePage) {
+async function refreshPage($: EngineInterface, href: string, was: RecipePage): Promise<boolean> {
   if (!was.id) {
     await show($, was.link)
-    return
+    return true
   }
   const write = (state: RecipePage) => update($, view, now => (now?.href === href && now.page ? pageView(href, state) : now))
   const { isRefreshing: _, refreshFailure: __, ...kept } = was
@@ -821,9 +824,10 @@ async function refreshPage($: EngineInterface, href: string, was: RecipePage) {
   const loaded = await loadPage($, was.link, was.isDraft).catch((error: unknown) => ({ kind: 'error' as const, message: error instanceof Error ? error.message : String(error) }))
   const fresh = loaded.kind === 'ran' && loaded.state.id === was.id ? loaded.state : undefined
   if (fresh?.page) {
+    pageBackoff.delete(href)
     await notePageTitle($, href, fresh)
     await write(fresh)
-    return
+    return true
   }
   const reason =
     fresh?.failure ??
@@ -833,6 +837,7 @@ async function refreshPage($: EngineInterface, href: string, was: RecipePage) {
         ? conflictText(loaded.ids)
         : `Recipe "${was.name}" (${was.id}) no longer handles this link: it was edited, removed or replaced. Open the link again.`)
   await write(was.page ? { ...kept, refreshFailure: reason } : { ...kept, failure: reason, failureKind: fresh?.failureKind ?? 'route' })
+  return false
 }
 
 function fetchedAge(fetchedAt: number | undefined, now: number): string {
@@ -1832,8 +1837,22 @@ async function redrawIfCurrent($: EngineInterface, address: string) {
   if ((await read($, view))?.href === current.href) await update($, view, () => next)
 }
 
+// Only an approved page that opted in and shows a page re-runs: an error page waits for u, a draft runs only through the agent's open.
+async function tickPage($: EngineInterface) {
+  const shown = (await read($, mode)) === 'view' ? await read($, view) : null
+  const state = shown?.page
+  if (!shown || !state?.id || state.isDraft || !state.page || state.isRefreshing || !(state.refreshMinutes > 0)) return
+  const now = await $.clock.now()
+  const everyMs = state.refreshMinutes * 60_000
+  if (now < (state.fetchedAt ?? now) + everyMs || now < (pageBackoff.get(shown.href)?.until ?? 0)) return
+  if (await refreshPage($, shown.href, state)) return
+  const waitMs = Math.min((pageBackoff.get(shown.href)?.waitMs ?? everyMs) * 2, Math.max(BACKOFF_MAX_MS, everyMs))
+  pageBackoff.set(shown.href, { waitMs, until: now + waitMs })
+}
+
 async function tickRemote($: EngineInterface) {
   if ((await $.clock.now()) - lastActivity >= IDLE_MS) return
+  void tickPage($).catch(() => undefined)
   const current = await read($, view)
   const onScreen = current?.remote && (await read($, mode)) === 'view' ? current.href : undefined
   const hrefs = [...(await read($, mentions)).map(one => one.href), ...(await read($, stars)), ...((await read($, openGroup)) ? openGroupRemotes : [])]
