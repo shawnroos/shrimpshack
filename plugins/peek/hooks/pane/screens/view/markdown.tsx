@@ -127,8 +127,9 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
       continue
     }
     if (part.kind === 'table') {
-      drawnParts.push(TableBlock(ctx, `table-${index}`, part))
-      note(2 + part.rows.length)
+      const table = TableBlock(ctx, `table-${index}`, part)
+      drawnParts.push(table.node)
+      note(table.rows)
       continue
     }
     if (part.kind === 'quote') {

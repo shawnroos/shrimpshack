@@ -2,7 +2,7 @@ import type { RenderChildren } from 'claude-code'
 
 import type { TablePart } from '../../../markdown'
 import { IMAGE_ROWS, imageBox } from '../../../measure'
-import { columnWidths, fitCell } from '../../../tabular'
+import { columnWidths, fitCell, fitsWidth } from '../../../tabular'
 import { nav } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { ICON } from '../../../theme'
@@ -65,21 +65,50 @@ export function DiagramEmbed(ctx: DrawContext, key: string, info: string, text: 
   return Embed(ctx, key, ICON.mermaid, 'DIAGRAM', info, C.mauve, <Text color={C.subtext0}>{text}</Text>)
 }
 
-export function TableBlock(ctx: DrawContext, key: string, { header, align, rows }: TablePart, width = ctx.textWidth) {
+// A table whose columns cannot all show in full stacks each row as label/value
+// lines, so a narrow pane wraps cells instead of cutting them.
+export function TableBlock(ctx: DrawContext, key: string, { header, align, rows }: TablePart, width = ctx.textWidth): { node: RenderChildren; rows: number } {
   const { Box, Text, C, isMenuOpen } = ctx
+  const ink = isMenuOpen ? C.overlay1 : C.text
+  if (!fitsWidth([header, ...rows], width)) {
+    const labelWidth = Math.min(Math.max(...header.map(name => name.length)) + 2, Math.floor(width / 3))
+    const valueWidth = Math.max(1, width - labelWidth)
+    const node = (
+      <Box key={key} flexDirection="column" width={width}>
+        {rows.map((row, r) => (
+          <Box key={`${key}-card-${r}`} flexDirection="column">
+            {r > 0 && <Text color={C.surface1} wrap="truncate-end">{'─'.repeat(width)}</Text>}
+            {header.map((name, c) => (
+              <Box key={`${key}-card-${r}-${c}`} flexDirection="row">
+                <Box width={labelWidth} flexShrink={0}>
+                  <Text color={C.accent} bold wrap="truncate-end">{name}</Text>
+                </Box>
+                <Box width={valueWidth}>
+                  <Text color={ink}>{row[c] || ' '}</Text>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        ))}
+      </Box>
+    )
+    const lines = rows.reduce((sum, row) => sum + header.reduce((cells, _, c) => cells + Math.max(1, Math.ceil((row[c] ?? '').length / valueWidth)), 0), 0)
+    return { node, rows: lines + Math.max(0, rows.length - 1) }
+  }
   const widths = columnWidths([header, ...rows], width)
   const line = (row: readonly string[]) => widths.map((cell, c) => fitCell(row[c] ?? '', cell, align[c])).join('  ')
-  return (
+  const node = (
     <Box key={key} flexDirection="column" width={width}>
       <Text color={C.accent} bold wrap="truncate-end">{line(header)}</Text>
       <Text color={C.surface1} wrap="truncate-end">{widths.map(cell => '─'.repeat(cell)).join('  ')}</Text>
       {rows.map((row, r) => (
-        <Text key={`${key}-row-${r}`} color={isMenuOpen ? C.overlay1 : C.text} backgroundColor={r % 2 ? C.cardBg : undefined} wrap="truncate-end">
+        <Text key={`${key}-row-${r}`} color={ink} backgroundColor={r % 2 ? C.cardBg : undefined} wrap="truncate-end">
           {line(row)}
         </Text>
       ))}
     </Box>
   )
+  return { node, rows: 2 + rows.length }
 }
 
 export type Blocks = { drawnParts: RenderChildren[]; partRows: number[]; partHeadings: string[]; note: (rows: number, heading?: string) => void }

@@ -104,8 +104,9 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
     for (const [i, part] of splitTables(text).entries()) {
       if (part.kind === 'markdown') proseChunks(`${key}-t${i}`, part.text, heading, indent)
       else {
-        drawnParts.push(<Box key={`${key}-t${i}`} marginLeft={indent}>{TableBlock(ctx, `${key}-table-${i}`, part, textWidth - indent)}</Box>)
-        note(2 + part.rows.length, heading)
+        const table = TableBlock(ctx, `${key}-table-${i}`, part, textWidth - indent)
+        drawnParts.push(<Box key={`${key}-t${i}`} marginLeft={indent}>{table.node}</Box>)
+        note(table.rows, heading)
       }
     }
   }

@@ -557,6 +557,23 @@ test('a markdown table draws as aligned columns under an accent header', async (
   await ui.unmount()
 })
 
+test('a table too wide for the pane stacks each row as label and value lines; a wide pane keeps the grid', async ($, on) => {
+  fakeDisk(on)
+  FILES['/repo/notes/wide.md'] = ['| Step | Owner | Notes |', '|---|---|---|', '| Build | Ana | wire the parser into the remote view and the file view |', '| Ship | Bo | tag it |'].join('\n')
+  await $.command.run({ command: 'peek', args: '/repo/notes/wide.md' } as never)
+  const narrow = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...props, bodyColumns: 44 }, requestId: 'peek' })
+  const stacked = JSON.stringify(await narrow.drawn())
+  expect(stacked).not.toMatch(/Step +Owner +Notes/)
+  expect(stacked).toContain('["Notes"]')
+  expect(stacked).toContain('["wire the parser into the remote view and the file view"]')
+  expect(stacked).toContain('["Bo"]')
+  await narrow.unmount()
+
+  const wide = await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: { ...props, bodyColumns: 140 }, requestId: 'peek' })
+  expect(JSON.stringify(await wide.drawn())).toMatch(/\["Step +Owner +Notes +"\]/)
+  await wide.unmount()
+})
+
 test('an html file reads as markdown, and a code file opened at a line starts ten lines above it', async ($, on) => {
   fakeDisk(on)
   FILES['/repo/site/page.html'] = '<html><body><h1>Hello page</h1><p>Some <b>bold</b> words</p></body></html>'

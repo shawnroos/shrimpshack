@@ -36,11 +36,19 @@ export function parseDelimited(text: string, delimiter = ','): string[][] {
   return rows.filter(one => one.some(cell => cell !== ''))
 }
 
-export function columnWidths(rows: readonly (readonly string[])[], width: number, gap = 2): number[] {
+function naturalWidths(rows: readonly (readonly string[])[]): number[] {
   const count = Math.max(0, ...rows.map(row => row.length))
-  const natural = Array.from({ length: count }, (_, c) =>
-    Math.max(1, ...rows.slice(0, 200).map(row => (row[c] ?? '').length)),
-  )
+  return Array.from({ length: count }, (_, c) => Math.max(1, ...rows.slice(0, 200).map(row => (row[c] ?? '').length)))
+}
+
+export function fitsWidth(rows: readonly (readonly string[])[], width: number, gap = 2): boolean {
+  const natural = naturalWidths(rows)
+  return natural.reduce((a, b) => a + b, 0) + gap * Math.max(0, natural.length - 1) <= width
+}
+
+export function columnWidths(rows: readonly (readonly string[])[], width: number, gap = 2): number[] {
+  const natural = naturalWidths(rows)
+  const count = natural.length
   const room = Math.max(count, width - gap * Math.max(0, count - 1))
   if (natural.reduce((a, b) => a + b, 0) <= room) return natural
   const widths = natural.map(() => 0)
