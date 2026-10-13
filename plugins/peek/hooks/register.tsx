@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, Picture, RecipePage, RemoteComment, RemoteRecord, SectionLayout, View } from '../types'
+import type { Group, GroupItem, GroupOp, GroupOutcome, GroupResult, Loaded, Mention, Mode, Picture, RecipePage, RemoteComment, RemoteRecord, ReviewRefusal, SectionLayout, View } from '../types'
 import type { FileEntry, GallerySort, GalleryType, RoleFilter, Scope } from './lib'
 import { C as BASE, MUTED, ICON, META_ICON, colorFor, iconFor, mute, ruleParts, speakerColor } from './theme'
 import { capturedLinearContext, record } from './capture'
@@ -16,8 +16,8 @@ import { bootstrapLinear } from './linear'
 import type { LinearBootstrap } from './linear'
 import { failureText } from './sources'
 import type { Page } from './page'
-import { drawPage } from './page-view'
-import { loadRecipes, recipesDir, routeOf } from './recipes'
+import { drawApproval, drawPage } from './page-view'
+import { APPROVALS_KEY, isApproved, loadRecipe, loadRecipes, overlaps, recipesDir, reviewOf, routeOf } from './recipes'
 import type { RecipesIo } from './recipes'
 import { failureText as recipeFailureText, runRecipe } from './recipe-run'
 import type { RunIo } from './recipe-run'
@@ -169,7 +169,7 @@ async function moveSelection($: EngineInterface, direction: Direction) {
   }
   let landed = 0
   await update($, cursorAtom, at => {
-    landed = stepFrom(clamp(at, navOrder.length), direction)
+    landed = at < 0 ? 0 : stepFrom(clamp(at, navOrder.length), direction)
     return landed
   })
   const key = navOrder[landed]?.key
@@ -774,7 +774,9 @@ function loadPage($: EngineInterface, link: string, allowDraft: boolean, onRoute
     const route = routeOf(ref, link, recipes, approvals, { allowDraft })
     if (route.kind === 'conflict') return { kind: 'conflict', ids: route.ids }
     if (route.kind !== 'recipe') return { kind: 'none' }
-    const base: RecipePage = { id: route.id, name: route.recipe.name, link, isDraft: route.draft, digest: route.digest, refreshMinutes: route.recipe.refreshMinutes }
+    const drafted = route.draft ? recipes.find(one => one.ok && one.id === route.id) : undefined
+    const review = drafted?.ok ? await reviewOf(recipesIoOf($), drafted, recipes, approvals).catch(() => undefined) : undefined
+    const base: RecipePage = { id: route.id, name: route.recipe.name, link, isDraft: route.draft, digest: route.digest, refreshMinutes: route.recipe.refreshMinutes, ...(review ? { review } : {}) }
     await onRouted(base)
     try {
       const root = recipesDir((await $.env.get('HOME')) ?? '')
@@ -845,6 +847,33 @@ function pageSourceLine(state: RecipePage, now: number): string {
   return [`recipe ${state.id}`, state.isDraft ? 'draft' : 'approved', fetchedAge(state.fetchedAt, now), marker].filter(Boolean).join(' · ')
 }
 
+async function approveRecipe($: EngineInterface, href: string) {
+  const shown = (await read($, view))?.page
+  if (!shown?.id || !shown.isDraft || !shown.review) return
+  const { id, digest } = shown
+  const isShown = (now: View | null) => now?.href === href && now.page?.id === id && now.page.digest === digest
+  const refuse = (refusal: ReviewRefusal) =>
+    update($, view, now => (isShown(now) && now?.page?.review ? { ...now, page: { ...now.page, review: { ...now.page.review, refusal } } } : now))
+  if (shown.review.refusal?.kind === 'changed') return refuse({ kind: 'changed' })
+  try {
+    const io = recipesIoOf($)
+    const loaded = await loadRecipe(io, recipesDir((await $.env.get('HOME')) ?? ''), id)
+    if (!loaded.ok || loaded.digest !== digest) return refuse({ kind: 'changed' })
+    const { recipes, approvals } = await loadRecipes(io)
+    const other = recipes.find(one => one.ok && one.id !== id && isApproved(one, approvals) && overlaps(loaded.recipe, one.recipe) !== undefined)
+    if (other) return refuse({ kind: 'overlap', id: other.id })
+    await $.store.set(APPROVALS_KEY, { ...approvals, [id]: { digest: loaded.digest, files: loaded.files } })
+  } catch (error) {
+    return refuse({ kind: 'failed', message: error instanceof Error ? error.message : String(error) })
+  }
+  await update($, view, now => {
+    if (!isShown(now) || !now?.page) return now
+    const { review: _, ...approved } = now.page
+    return pageView(href, { ...approved, isDraft: false })
+  })
+  await update($, cursorAtom, () => 0)
+}
+
 const paneHref = (href: string) => (href.startsWith('/') ? fileHref(href) : href)
 
 async function isPageOnScreen($: EngineInterface): Promise<boolean> {
@@ -890,7 +919,7 @@ async function show($: EngineInterface, raw: string, isFromGroupChain = false, o
     next = { ...loading, title: 'Could not open', error: error instanceof Error ? error.message : String(error) }
   }
   if (generation !== showGeneration) return
-  if (next.page) await update($, cursorAtom, () => 0)
+  if (next.page) await update($, cursorAtom, () => (next.page?.isDraft && next.page.review ? -1 : 0))
   await update($, view, () => next)
   void $.ui.open({ id: PANE, title: next.title })
 }
@@ -1587,6 +1616,37 @@ async function saveGroup($: EngineInterface, input: SaveInput) {
 
 const TARGET_HELP = 'A file path (absolute, or relative to the session folder), a URL, a GitHub owner/repo#N, or a Linear key'
 
+const OPEN_TOOL = {
+  name: 'open',
+  description:
+    'Open an http(s) link in the peek side pane through normal routing, with draft recipes allowed, so the person can see a recipe page and approve it there. A draft page is marked unapproved; only the person can approve it, in the pane.',
+  inputSchema: { type: 'object', properties: { link: { type: 'string', description: 'The http(s) link to open' } }, required: ['link'] },
+  isDeferred: true,
+}
+
+async function openTool($: EngineInterface, link: unknown) {
+  if (typeof link !== 'string' || !/^https?:\/\//i.test(link.trim())) return { result: 'Give a link: an http(s) URL.' }
+  await show($, link.trim(), false, { allowDraft: true })
+  const shown = await read($, view)
+  const state = shown?.page
+  const marker = state ? (state.isDraft ? ' (draft, unapproved: the person approves it in the pane)' : ' (approved)') : ''
+  return { result: `Opened ${shown?.title ?? link} in peek${marker}.` }
+}
+
+// The store file's name carries an install hash peek cannot derive, so the guard matches the folder and the prefix.
+async function isPeekStore($: EngineInterface, path: string): Promise<boolean> {
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  const config = configured || `${(await $.env.get('HOME')) ?? ''}/.claude`
+  const folder = `${config.replace(/\/+$/, '')}/plugins/store`
+  const real = async (one: string) => (await $.fs.stat(one, { resolve: true }).catch(() => undefined))?.realPath
+  const storeReal = (await real(folder)) ?? folder
+  const cut = path.lastIndexOf('/')
+  const name = path.slice(cut + 1)
+  const dir = cut < 0 ? '.' : path.slice(0, cut) || '/'
+  const target = (await real(path)) ?? `${((await real(dir)) ?? dir).replace(/\/+$/, '')}/${name}`
+  return (target.startsWith(`${storeReal}/`) || target.startsWith(`${folder}/`)) && (target.split('/').pop() ?? '').startsWith('peek_')
+}
+
 const GROUP_TOOLS = [
   {
     name: 'list_groups',
@@ -2010,6 +2070,7 @@ export const register: Register = on => {
       })
       .catch(() => undefined)
     for (const spec of GROUP_TOOLS) await $.tool.register(spec).catch(() => undefined)
+    await $.tool.register(OPEN_TOOL).catch(() => undefined)
     void groupHome($).catch(() => undefined)
     await $.command.register({ name: 'peek-menu', description: 'Open the peek command menu (ctrl+k in the peek pane)' })
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
@@ -2270,6 +2331,17 @@ export const register: Register = on => {
     const input = e as unknown as { id?: unknown; force?: unknown }
     return deleteGroupTool($, input.id, input.force === true)
   })
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__open$/ }, async ($, e) => openTool($, (e as unknown as { link?: unknown }).link))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^(?:Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
+    const input = e as unknown as { file_path?: unknown; notebook_path?: unknown }
+    const path = typeof input.file_path === 'string' ? input.file_path : input.notebook_path
+    if (typeof path === 'string' && (await isPeekStore($, path))) return { deny: "That file is peek's approval store: only the person approves a recipe, from the peek pane." }
+    return next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: "peek could not check whether this file is peek's approval store, so it refused the write." }))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
   on('tool.call', { tool: /^(?:Bash$|WebFetch$|mcp__(?!peek__))/ }, async ($, e, next) => {
@@ -3685,6 +3757,14 @@ export const register: Register = on => {
     if (current.page) {
       const state = current.page
       const shownPage = state.page
+      const href = current.href
+      const review =
+        state.id && state.isDraft && state.review && (shownPage || state.failure)
+          ? drawApproval({ Box, Text, Button }, C, state.review, { width: textWidth }, {
+              approve: () => void approveRecipe($, href),
+              previewAgain: () => void show($, state.link, false, { allowDraft: true }),
+            })
+          : { parts: [], rows: [], headings: [] }
       if (shownPage) {
         const pictures = state.pictures
         const starKeys = new Set((await read($, stars)).map(one => itemKey(remoteRef(one)?.address ?? one)))
@@ -3712,10 +3792,13 @@ export const register: Register = on => {
         )
         navOrder = drawn.nav
         pageKeys = drawn.keys
-        ;({ body, jumps, position } = settleBlocks(drawn.parts, drawn.rows, drawn.headings))
+        ;({ body, jumps, position } = settleBlocks([...review.parts, ...drawn.parts], [...review.rows, ...drawn.rows], [...review.headings, ...drawn.headings]))
       } else {
         navOrder = []
         const { drawnParts, partRows, partHeadings, note } = newBlocks()
+        drawnParts.push(...review.parts)
+        partRows.push(...review.rows)
+        partHeadings.push(...review.headings)
         if (state.failure) {
           drawnParts.push(
             <Box key="page-failure" flexDirection="column">

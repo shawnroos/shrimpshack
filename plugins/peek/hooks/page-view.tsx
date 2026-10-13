@@ -2,6 +2,7 @@ import type { BoxProps, ButtonProps, ClientProps, ElementConstructor, TextProps 
 
 import { columnWidths, fitCell } from './lib'
 import { PAGE_CAPS } from './page'
+import type { RecipeReview, ReviewRefusal } from '../types'
 import type { Action, Block, CardItem, Detail, ListItem, Page, TableBlock } from './page'
 import { ICON } from './theme'
 
@@ -240,4 +241,117 @@ export function drawPage(writers: PageWriters, page: Page, view: { width: number
   }))
 
   return { parts, rows, headings, nav: sink.nav, keys }
+}
+
+export type ReviewColors = PageColors & { red: string; yellow: string }
+export type DrawnReview = { parts: unknown[]; rows: number[]; headings: string[] }
+
+const REVIEW_HEADING = 'Approve'
+const FILE_LINES_PER_TEXT = 200
+
+const rowsOf = (lines: readonly string[], width: number) => lines.reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / Math.max(1, width))), 0)
+
+function refusalText(refusal: ReviewRefusal): string {
+  if (refusal.kind === 'changed') return "Changed since preview: the recipe's files are not the ones this page shows. Preview again to read them."
+  if (refusal.kind === 'overlap') return `Not approved: its links overlap approved recipe "${refusal.id}". Change one recipe's match so only one claims a link.`
+  return `Not approved: ${refusal.message}`
+}
+
+// Approve has no hotkey and no keybinding action, and sits in no footer or menu: only a press on the Button itself,
+// which the plugin API cannot raise, records an approval.
+export function drawApproval(
+  elements: { Box: ElementConstructor<BoxProps>; Text: ElementConstructor<TextProps>; Button: ElementConstructor<ButtonProps> },
+  C: ReviewColors,
+  review: RecipeReview,
+  view: { width: number },
+  on: { approve: () => void; previewAgain: () => void },
+): DrawnReview {
+  const { Box, Text, Button } = elements
+  const { width } = view
+  const parts: unknown[] = []
+  const rows: number[] = []
+  const headings: string[] = []
+  const add = (part: unknown, count: number) => {
+    parts.push(part)
+    rows.push(count)
+    headings.push(REVIEW_HEADING)
+  }
+
+  const facts: Detail[] = [
+    { label: 'Runs', value: review.runs },
+    { label: 'Matches', value: review.match.join(', ') },
+    { label: 'Overrides', value: review.overrides.length ? review.overrides.join(', ') : 'none' },
+    { label: 'Refresh', value: review.refreshMinutes > 0 ? `every ${review.refreshMinutes} minutes while on screen` : 'only when opened or refreshed' },
+    { label: 'Env', value: review.env.length ? review.env.join(', ') : 'none' },
+  ]
+  const factLines = facts.map(one => `${one.label}: ${one.value}`)
+  add(
+    <Box key="review-facts" flexDirection="column" width={width}>
+      <Text color={C.yellow} bold>Draft recipe: not approved</Text>
+      <Text color={C.subtext0}>Read what it runs. Approve sends it live for every link it matches; b leaves it a draft.</Text>
+      {factLines.map((line, i) => (
+        <Text key={`review-fact-${i}`} color={C.text}>{line}</Text>
+      ))}
+    </Box>,
+    2 + rowsOf(factLines, width),
+  )
+
+  const alerts = [...(review.overlap ? [`Overlaps approved recipe "${review.overlap}": Approve will refuse until one match changes`] : []), ...review.warnings]
+  if (alerts.length) {
+    add(
+      <Box key="review-warnings" flexDirection="column" width={width}>
+        {alerts.map((line, i) => (
+          <Text key={`review-warning-${i}`} color={C.red}>{`⚠ ${line}`}</Text>
+        ))}
+      </Box>,
+      rowsOf(alerts, width - 2),
+    )
+  }
+
+  if (review.isStructureOnly) {
+    add(
+      <Text key="review-structure" color={C.yellow}>Folder structure changed: a folder was added or removed since the last approval, and no file's text changed.</Text>,
+      2,
+    )
+  }
+  for (const [i, file] of review.files.entries()) {
+    const label = file.text === undefined ? `Binary file: ${file.path} (${file.size} bytes)` : `${file.change === 'new' ? 'New' : 'Changed'} file: ${file.path} · ${file.size} bytes`
+    const lines = file.text === undefined ? [] : file.text.replace(/\n$/, '').split('\n')
+    const chunks: string[][] = []
+    for (let at = 0; at < lines.length; at += FILE_LINES_PER_TEXT) chunks.push(lines.slice(at, at + FILE_LINES_PER_TEXT))
+    add(
+      <Box key={`review-file-${i}`} flexDirection="column" width={width}>
+        <Text color={C.accent} bold>{label}</Text>
+        {chunks.map((chunk, c) => (
+          <Box key={`review-file-${i}-${c}`} marginLeft={2} width={Math.max(1, width - 2)}>
+            <Text color={C.text}>{chunk.join('\n')}</Text>
+          </Box>
+        ))}
+      </Box>,
+      1 + rowsOf(lines, width - 2),
+    )
+  }
+  if (review.removed.length) {
+    add(
+      <Box key="review-removed" flexDirection="column" width={width}>
+        {review.removed.map((path, i) => (
+          <Text key={`review-removed-${i}`} color={C.overlay1}>{`Removed file: ${path}`}</Text>
+        ))}
+      </Box>,
+      review.removed.length,
+    )
+  }
+
+  const isStale = review.refusal?.kind === 'changed'
+  add(
+    <Box key="review-press" flexDirection="column" width={width}>
+      {review.refusal && <Text color={C.red}>{refusalText(review.refusal)}</Text>}
+      <Box flexDirection="row" columnGap={2}>
+        {isStale && <Button key="preview-again" label="Preview again" autoFocus onPress={on.previewAgain} />}
+        <Button key="approve" label="Approve" autoFocus={isStale ? undefined : true} onPress={on.approve} />
+      </Box>
+    </Box>,
+    review.refusal ? 3 : 1,
+  )
+  return { parts, rows, headings }
 }

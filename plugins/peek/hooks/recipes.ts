@@ -1,4 +1,5 @@
-import { RECIPE_ID, validateRecipe } from './page'
+import type { RecipeReview, ReviewFile } from '../types'
+import { RECIPE_ID, cleanLine, cleanText, validateRecipe } from './page'
 import type { Problem, Recipe, RecipeFamily, RecipeMatch } from './page'
 import { familyOf } from './refs'
 import type { Ref } from './refs'
@@ -222,4 +223,69 @@ export function routeOf(
   const [winner] = eligible
   if (winner) return { kind: 'recipe', id: winner.id, recipe: winner.recipe, draft: !isApproved(winner, approvals), digest: winner.digest }
   return family === 'web' ? { kind: 'web' } : { kind: 'builtin' }
+}
+
+type ReadyRecipe = Extract<LoadedRecipe, { ok: true }>
+
+const OUTSIDE_SHOWN = 20
+const URLS = /\b[a-z][\w+.-]*:\/\/\S*/gi
+// An absolute path, a home path (`~`, `~/x`, `~user`) or a `..` step, each starting a word.
+const OUTSIDE_PATH = /(?:^|[\s"'`=(:;,|&<>])(?:\/(?=[\w.~-])|~(?=[\s/"'`;)]|$|[A-Za-z_])|\.\.(?![\w.]))/
+
+// The hooks runtime's TextDecoder takes no `fatal` option, so a round trip finds bytes that are not UTF-8.
+function textOf(bytes: Uint8Array): string | undefined {
+  if (bytes.includes(0)) return undefined
+  const text = new TextDecoder().decode(bytes)
+  const again = new TextEncoder().encode(text)
+  return again.length === bytes.length && again.every((byte, index) => byte === bytes[index]) ? text : undefined
+}
+
+const matchLine = (one: RecipeMatch) => `${one.host}${one.path ?? ' (any path)'}`
+
+function runsLine(recipe: Recipe): string {
+  const { source } = recipe
+  if ('run' in source) return `Runs ${source.run.join(' ')} <link> (timeout ${source.timeoutSeconds ?? 20}s)`
+  return `Calls MCP server "${source.mcp.server}", tool "${source.mcp.tool}", arguments ${JSON.stringify(source.mcp.args ?? {})}`
+}
+
+function outsideLines(path: string, text: string): string[] {
+  return text.split('\n').flatMap((line, index) => {
+    if (index === 0 && line.startsWith('#!')) return []
+    if (!OUTSIDE_PATH.test(line.replaceAll(URLS, ''))) return []
+    return [`${path} line ${index + 1} reaches outside the folder, which approval does not pin: ${cleanLine(line.trim()).slice(0, 80)}`]
+  })
+}
+
+// The files are read again after hashing, so each read is checked against the hash the digest covers: a file that
+// moved in between marks the review changed, and Approve then asks for a fresh preview.
+export async function reviewOf(io: RecipesIo, loaded: ReadyRecipe, recipes: readonly LoadedRecipe[], approvals: RecipeApprovals): Promise<RecipeReview> {
+  const { recipe } = loaded
+  const before = approvals[loaded.id]?.files ?? {}
+  const overlap = recipes.find((one): one is ReadyRecipe => one.ok && one.id !== loaded.id && isApproved(one, approvals) && overlaps(recipe, one.recipe) !== undefined)
+  const files: ReviewFile[] = []
+  const outside: string[] = []
+  let isTorn = false
+  for (const path of Object.keys(loaded.files).toSorted()) {
+    const bytes = decodeBase64((await io.read(`${loaded.dir}/${path}`)).base64)
+    if ((await sha256(bytes)) !== loaded.files[path]) isTorn = true
+    const text = textOf(bytes)
+    if (text !== undefined && path !== 'recipe.json') outside.push(...outsideLines(path, text))
+    if (before[path] === loaded.files[path]) continue
+    files.push({ path, change: path in before ? 'changed' : 'new', size: bytes.length, ...(text === undefined ? {} : { text: cleanText(text) }) })
+  }
+  const removed = Object.keys(before).filter(path => !(path in loaded.files)).toSorted()
+  const shown = outside.length > OUTSIDE_SHOWN ? [...outside.slice(0, OUTSIDE_SHOWN), `and ${outside.length - OUTSIDE_SHOWN} more lines that reach outside the folder`] : outside
+  return {
+    runs: runsLine(recipe),
+    match: recipe.match.map(matchLine),
+    overrides: [...recipe.overrides],
+    refreshMinutes: recipe.refreshMinutes,
+    env: 'run' in recipe.source ? [...(recipe.source.env ?? [])] : [],
+    ...(overlap ? { overlap: overlap.id } : {}),
+    warnings: [...loaded.warnings, ...shown],
+    files,
+    removed,
+    isStructureOnly: loaded.id in approvals && files.length === 0 && removed.length === 0,
+    ...(isTorn ? { refusal: { kind: 'changed' as const } } : {}),
+  }
 }

@@ -140,6 +140,25 @@ export type RecipePage = {
   failureKind?: string
   isRefreshing?: boolean
   refreshFailure?: string
+  review?: RecipeReview
+}
+
+// What the person sees before approving a draft preview. `files` holds every file new or changed since the last
+// approval (all of them on a first approval); `text` is absent for a file that is not text.
+export type ReviewFile = { path: string; change: 'new' | 'changed'; size: number; text?: string }
+export type ReviewRefusal = { kind: 'changed' } | { kind: 'overlap'; id: string } | { kind: 'failed'; message: string }
+export type RecipeReview = {
+  runs: string
+  match: string[]
+  overrides: string[]
+  refreshMinutes: number
+  env: string[]
+  overlap?: string
+  warnings: string[]
+  files: ReviewFile[]
+  removed: string[]
+  isStructureOnly: boolean
+  refusal?: ReviewRefusal
 }
 
 export type GroupActor = 'agent' | 'person'
