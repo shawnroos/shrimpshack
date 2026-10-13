@@ -329,6 +329,7 @@ flowchart LR
   U9 --> U6[U6 agent tools]
   U6 --> U7[U7 skill and docs]
   U7 --> U11[U11 MCP fetch then map]
+  U11 --> U12[U12 background builder on Haiku]
 ```
 
 - **Parallel:** U8 can run beside U1, U2 and U3. U8 edits only `register.tsx` and its existing tests; U1, U2 and U3 touch only new modules and their tests.
@@ -628,6 +629,24 @@ flowchart LR
   - Editing `map.py` drops approval.
   - The skill's MCP example map, run on its saved sample, reproduces its sample page.
 - **Verification:** All scenarios pass, each seen red first; the mirror check passes.
+
+### U12. Background recipe builder on Haiku
+
+- **Goal:** The build loop (sample, map, test, `check_recipe`, preview) runs in the background on Haiku 5.5, so the main session keeps working and the person only reviews and approves.
+- **Requirements:** R12, R13, R14, R20, R21; KTD8, KTD9.
+- **Dependencies:** U11.
+- **Files:** `plugins/peek/.claude-plugin/plugin.json` (agents key), `plugins/peek/agents/peek-recipe-builder.md` (new), `plugins/peek/skills/peek-recipes/SKILL.md`, `plugins/peek/README.md`, `plugins/peek/tests/skill-examples.test.ts` (shape checks).
+- **Approach:**
+  1. First prove a mod plugin's agent loads at runtime (manifest key, `/reload-plugins`, agent listed). If it does not, the skill dispatches a general background agent pinned to `haiku` with the same brief, and this file becomes that brief.
+  2. The agent definition: `model: haiku`; tools limited to ToolSearch, `mcp__peek__check_recipe`, `mcp__peek__open`, Read, Write, Edit, and Bash for `python3`, `chmod` and the local map test. Its body is the loop: sample the source, write `recipe.json` and the map or script, test locally, repeat `check_recipe` until it passes or after five failed attempts, then `open` the draft preview.
+  3. It never asks the person anything and cannot approve. It returns a short report: draft ready or stuck, the recipe folder, the link, what it maps, warnings, and on failure the last `check_recipe` result.
+  4. The skill becomes the front door: it gathers the type, a sample link and the source (MCP tool or CLI), dispatches the builder in the background, and on return asks the person to review the approval surface and press Approve; on a stuck return it retries once with a stronger model or brings the failure to the person.
+- **Patterns to follow:** plugin agents elsewhere in the repo, if any; the skill's existing loop text.
+- **Test scenarios:**
+  - The agent file declares `model: haiku` and no tool beyond the allowed list (no bare Bash, no approve path).
+  - The skill names the agent and the fallback brief.
+  - No command or skill shares the agent's name.
+- **Verification:** Shape tests pass; the live look confirms the agent loads and builds the fresh-agent eval recipe in the background.
 
 ### U6. Agent tools: `check_recipe` and `open`
 
