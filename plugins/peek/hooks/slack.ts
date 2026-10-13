@@ -1,5 +1,5 @@
 import type { CaptureIo } from './capture'
-import type { Ref } from './refs'
+import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
 import type { SourceIo } from './sources'
 import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
@@ -178,12 +178,12 @@ export function whenLabel(iso: string, now: number, timeZone?: string): string {
   return `${date}, ${time}`.replace(/\s/g, ' ')
 }
 
-function permalink(ref: Ref, ts: string, parentTs: string): string {
+function permalink(ref: SlackThreadRef, ts: string, parentTs: string): string {
   const base = `https://${ref.workspace}.slack.com/archives/${ref.channel}/p${ts.replace('.', '')}`
   return ts === parentTs ? base : `${base}?thread_ts=${parentTs}&cid=${ref.channel}`
 }
 
-function messageOf(ref: Ref, one: SlackMessage, parentTs: string): RemoteComment {
+function messageOf(ref: SlackThreadRef, one: SlackMessage, parentTs: string): RemoteComment {
   return {
     author: one.author,
     ...(one.userId ? { authorId: one.userId } : {}),
@@ -194,8 +194,8 @@ function messageOf(ref: Ref, one: SlackMessage, parentTs: string): RemoteComment
   }
 }
 
-export function threadRecord(ref: Ref, thread: SlackThread, channelName: string | undefined): RemoteRecord {
-  const channel = channelName ? `#${channelName}` : (ref.channel ?? '')
+export function threadRecord(ref: SlackThreadRef, thread: SlackThread, channelName: string | undefined): RemoteRecord {
+  const channel = channelName ? `#${channelName}` : ref.channel
   const count = thread.replies.length
   const last = thread.replies.at(-1)
   const meta: RemoteRecord['meta'] = [
@@ -210,7 +210,7 @@ export function threadRecord(ref: Ref, thread: SlackThread, channelName: string 
     address: ref.address,
     kind: 'slack-thread',
     title: plainLine(thread.parent.text) || `Thread in ${channel}`,
-    trail: [ref.workspace ?? 'slack', channel].filter(Boolean),
+    trail: [ref.workspace, channel].filter(Boolean),
     status: replyCount(count, thread.hasMore),
     meta,
     body: mrkdwnToMarkdown(thread.parent.text) || undefined,
@@ -347,7 +347,7 @@ async function withPictures(io: SlackIo, record: RemoteRecord, messages: readonl
   }
 }
 
-async function loadViaMcp(io: SlackIo, ref: Ref, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
+async function loadViaMcp(io: SlackIo, ref: SlackThreadRef, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
   const [thread, info] = await Promise.all([
     mcpRead(io, 'slack_read_thread', { channel_id: channel, message_ts: ts, limit: REPLY_LIMIT }),
     mcpRead(io, 'slack_read_channel', { channel_id: channel, limit: 1 }),
@@ -417,7 +417,7 @@ function cliMessage(one: Obj): SlackMessage {
   }
 }
 
-async function loadViaCli(io: SlackIo, ref: Ref, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
+async function loadViaCli(io: SlackIo, ref: SlackThreadRef, channel: string, ts: string, now: number): Promise<Loaded | Unavailable> {
   const bin = await findCli(io)
   if (!bin) return { ok: false, failure: 'unavailable' }
   const [replies, info] = await Promise.all([
@@ -439,8 +439,8 @@ async function loadViaCli(io: SlackIo, ref: Ref, channel: string, ts: string, no
 }
 
 export async function loadSlack(io: SlackIo, ref: Ref, now: number): Promise<Loaded> {
+  if (ref.kind !== 'slack-thread' || !ref.channel || !ref.ts) return { ok: false, failure: 'query-bug' }
   const { channel, ts } = ref
-  if (ref.kind !== 'slack-thread' || !channel || !ts) return { ok: false, failure: 'query-bug' }
   const viaMcp = await loadViaMcp(io, ref, channel, ts, now)
   if (!isUnavailable(viaMcp)) return viaMcp
   const viaCli = await loadViaCli(io, ref, channel, ts, now)

@@ -1,5 +1,6 @@
 import type { Captured } from './capture'
-import type { Ref } from './refs'
+import { githubRef } from './refs'
+import type { GithubItemRef, Ref } from './refs'
 import { runGh } from './sources'
 import type { Failed, SourceIo } from './sources'
 import type { CiTone, Loaded, RemoteComment, RemoteKind, RemoteList, RemoteListItem, RemoteRecord, Tier } from '../types'
@@ -14,7 +15,6 @@ const BUCKETS = ['passed', 'failed', 'pending', 'cancelled', 'skipped'] as const
 
 type Bucket = (typeof BUCKETS)[number]
 type Json = Record<string, unknown>
-type ItemRef = Ref & { kind: 'gh-pr' | 'gh-issue'; owner: string; repo: string; number: number }
 
 const resolved = new Map<string, boolean>()
 
@@ -56,17 +56,12 @@ function day(value: unknown): string {
   return str(value).slice(0, 10)
 }
 
-function itemRef(owner: string, repo: string, number: number, isPull: boolean): ItemRef {
-  return {
-    kind: isPull ? 'gh-pr' : 'gh-issue',
-    address: `https://github.com/${owner}/${repo}/${isPull ? 'pull' : 'issues'}/${number}`,
-    owner,
-    repo,
-    number,
-  }
+function itemRef(owner: string, repo: string, number: number, isPull: boolean): GithubItemRef {
+  return githubRef(owner, repo, isPull ? 'gh-pr' : 'gh-issue', number)
 }
 
-export async function resolveNumber(io: SourceIo, ref: Ref): Promise<{ ok: true; ref: ItemRef } | Failed> {
+export async function resolveNumber(io: SourceIo, ref: Ref): Promise<{ ok: true; ref: GithubItemRef } | Failed> {
+  if (ref.kind !== 'gh-pr' && ref.kind !== 'gh-issue' && ref.kind !== 'gh-number') return { ok: false, failure: 'query-bug' }
   const { owner, repo, number } = ref
   if (!owner || !repo || !number) return { ok: false, failure: 'query-bug' }
   if (ref.kind === 'gh-pr') return { ok: true, ref: itemRef(owner, repo, number, true) }
@@ -178,7 +173,7 @@ function conversation(comments: unknown, reviews: unknown, inline?: number): Rem
 
 type ItemShape = {
   view: Json
-  ref: ItemRef
+  ref: GithubItemRef
   inline?: number
 }
 
@@ -329,7 +324,7 @@ async function loadRepo(io: SourceIo, owner: string, repo: string, now: number):
   return loaded(repoRecord(json, owner, repo, body, lists), 'cli', now) ?? { ok: false, failure: 'query-bug' }
 }
 
-async function loadPull(io: SourceIo, ref: ItemRef, now: number): Promise<Loaded> {
+async function loadPull(io: SourceIo, ref: GithubItemRef, now: number): Promise<Loaded> {
   const slug = `${ref.owner}/${ref.repo}`
   const [view, inline] = await Promise.all([
     runGh(io, ['pr', 'view', String(ref.number), '--repo', slug, '--json', PR_FIELDS]),
@@ -341,7 +336,7 @@ async function loadPull(io: SourceIo, ref: ItemRef, now: number): Promise<Loaded
   return loaded(record, 'cli', now) ?? { ok: false, failure: 'query-bug' }
 }
 
-async function loadIssue(io: SourceIo, ref: ItemRef, now: number): Promise<Loaded> {
+async function loadIssue(io: SourceIo, ref: GithubItemRef, now: number): Promise<Loaded> {
   const view = await runGh(io, ['issue', 'view', String(ref.number), '--repo', `${ref.owner}/${ref.repo}`, '--json', ISSUE_FIELDS])
   if (!view.ok) return view
   return loaded(issueRecord({ view: obj(parse(view.stdout)), ref }), 'cli', now) ?? { ok: false, failure: 'query-bug' }
@@ -375,10 +370,11 @@ export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const view = obj(parsed)
   const kind = capturedKind(captured, ref, view)
+  if (!kind || (ref.kind !== 'gh-repo' && ref.kind !== 'gh-pr' && ref.kind !== 'gh-issue' && ref.kind !== 'gh-number')) return null
   const { owner, repo } = ref
-  if (!kind || !owner || !repo) return null
+  if (!owner || !repo) return null
   if (kind === 'gh-repo') return loaded(repoRecord(view, owner, repo, undefined), 'session', captured.at)
-  const number = ref.number ?? num(view.number)
+  const number = ref.kind === 'gh-repo' ? num(view.number) : ref.number
   if (!number) return null
   const target = itemRef(owner, repo, number, kind === 'gh-pr')
   return loaded(kind === 'gh-pr' ? pullRecord({ view, ref: target }) : issueRecord({ view, ref: target }), 'session', captured.at)

@@ -231,7 +231,7 @@ async function withRecordDiagrams(io: NavIo, record: RemoteRecord, fetchedAt = 0
 }
 
 async function viewOf(io: NavIo, ref: Ref, entry: CacheEntry): Promise<View> {
-  const base: View = { href: ref.address, title: ref.key ?? ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
+  const base: View = { href: ref.address, title: ref.kind === 'linear-issue' ? ref.key : ref.address.replace(/^https:\/\//, ''), location: ref.address, kind: ref.kind }
   const record = entry.record && (await withRecordDiagrams(io, entry.record, entry.fetchedAt))
   if (!record) return { ...base, remote: { failure: entry.failure ?? 'offline', failureDetail: entry.failureDetail } }
   return {

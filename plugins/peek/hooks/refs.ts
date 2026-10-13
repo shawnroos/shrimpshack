@@ -1,19 +1,20 @@
-import type { RemoteKind } from '../types'
+export type GithubItemRef = { kind: 'gh-pr' | 'gh-issue'; address: string; owner: string; repo: string; number: number }
+// An unresolved `#123` or `owner/repo#123`: only parseRef returns it, and loading resolves it to a pull request or an issue.
+export type GithubNumberRef = { kind: 'gh-number'; address: string; owner: string; repo: string; number: number }
+export type LinearIssueRef = { kind: 'linear-issue'; address: string; workspace: string; key: string }
+export type LinearProjectRef = { kind: 'linear-project'; address: string; workspace: string; slug: string }
+export type SlackThreadRef = { kind: 'slack-thread'; address: string; workspace: string; channel: string; ts: string }
 
-export type RefKind = RemoteKind | 'gh-number'
+export type Ref =
+  | { kind: 'gh-repo'; address: string; owner: string; repo: string }
+  | GithubItemRef
+  | GithubNumberRef
+  | LinearIssueRef
+  | LinearProjectRef
+  | SlackThreadRef
+  | { kind: 'web'; address: string }
 
-export type Ref = {
-  kind: RefKind
-  address: string
-  owner?: string
-  repo?: string
-  number?: number
-  workspace?: string
-  key?: string
-  slug?: string
-  channel?: string
-  ts?: string
-}
+export type RefKind = Ref['kind']
 
 export type RefContext = { teamKeys?: readonly string[]; workspace?: string; repo?: string }
 
@@ -28,9 +29,9 @@ const OWNER_REPO_NUMBER = /^([A-Za-z0-9][\w.-]*)\/([\w.-]+)#(\d+)$/
 const HASH_NUMBER = /^#(\d+)$/
 const LINEAR_ID = /^([A-Z][A-Z0-9]{0,9})-(\d+)$/i
 
-function github(owner: string, repo: string, kind: 'gh-issue' | 'gh-pr' | 'gh-number', number: number): Ref {
+export function githubRef<K extends 'gh-issue' | 'gh-pr' | 'gh-number'>(owner: string, repo: string, kind: K, number: number): Extract<Ref, { kind: K }> {
   const path = kind === 'gh-pr' ? 'pull' : 'issues'
-  return { kind, address: `https://github.com/${owner}/${repo}/${path}/${number}`, owner, repo, number }
+  return { kind, address: `https://github.com/${owner}/${repo}/${path}/${number}`, owner, repo, number } as Extract<Ref, { kind: K }>
 }
 
 const SLACK_HOST = /^([a-z0-9][a-z0-9-]*)\.slack\.com$/
@@ -39,7 +40,7 @@ const SLACK_P_TS = /^p(\d{10})(\d{6})$/
 const SLACK_TS = /^(\d{10})\.(\d{6})$/
 
 // A reply's link carries its parent in thread_ts; the thread is the item, so the address is always the parent's.
-function slackThread(host: string, parts: string[], threadTs: string | null): Ref | null {
+function slackThread(host: string, parts: string[], threadTs: string | null): SlackThreadRef | null {
   const workspace = SLACK_HOST.exec(host)?.[1]
   const [section, channel = '', message = ''] = parts
   if (!workspace || section !== 'archives' || parts.length !== 3 || !SLACK_CHANNEL.test(channel)) return null
@@ -60,7 +61,7 @@ function fromUrl(url: URL): Ref | null {
     if (owner && repo && NAME.test(owner) && NAME.test(repo) && !GITHUB_RESERVED.has(owner.toLowerCase())) {
       if (parts.length === 2) return { kind: 'gh-repo', address: `https://github.com/${owner}/${repo}`, owner, repo }
       if (number && /^\d+$/.test(number) && (section === 'pull' || section === 'issues')) {
-        return github(owner, repo, section === 'pull' ? 'gh-pr' : 'gh-issue', Number(number))
+        return githubRef(owner, repo, section === 'pull' ? 'gh-pr' : 'gh-issue', Number(number))
       }
     }
   }
@@ -90,10 +91,10 @@ export function parseRef(input: string, context: RefContext = {}): Ref | null {
     }
   }
   const full = OWNER_REPO_NUMBER.exec(text)
-  if (full?.[1] && full[2] && !GITHUB_RESERVED.has(full[1].toLowerCase())) return github(full[1], full[2], 'gh-number', Number(full[3]))
+  if (full?.[1] && full[2] && !GITHUB_RESERVED.has(full[1].toLowerCase())) return githubRef(full[1], full[2], 'gh-number', Number(full[3]))
   const bare = HASH_NUMBER.exec(text)
   const [owner, repo] = context.repo?.split('/') ?? []
-  if (bare && owner && repo) return github(owner, repo, 'gh-number', Number(bare[1]))
+  if (bare && owner && repo) return githubRef(owner, repo, 'gh-number', Number(bare[1]))
   const linear = LINEAR_ID.exec(text)
   const team = linear?.[1]?.toUpperCase()
   if (team && context.workspace && context.teamKeys?.includes(team)) {

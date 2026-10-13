@@ -10,6 +10,7 @@ import { PINNED } from './fixtures/pinned-records'
 import { MCP_ISSUE, MCP_PROJECT } from './fixtures/linear/mcp'
 import { FILES_TEXT, THREAD_TEXT } from './fixtures/slack/mcp'
 import { ref } from './fixtures/results'
+import type { SlackThreadRef } from '../hooks/refs'
 
 const PR = 'https://github.com/acme/widgets/pull/42'
 const THREAD = 'https://acme.slack.com/archives/C0123ABCD/p1791759796763609'
@@ -17,6 +18,12 @@ const ENTITIES = 'A &amp;lt; B &#39;q&#39; &#x41;&#65; &nbsp;x &quot;y&quot; &ap
 
 function ghCapture(view: unknown, over: Partial<Captured> = {}): Captured {
   return { address: PR, kind: 'gh-pr', source: 'bash', tool: 'Bash', args: {}, result: JSON.stringify(view), at: 5, ...over }
+}
+
+function slackRef(address: string): SlackThreadRef {
+  const found = ref(address)
+  if (found.kind !== 'slack-thread') throw new Error(`not a thread ${address}`)
+  return found
 }
 
 function linearCapture(address: string, kind: Captured['kind'], result: string): Captured {
@@ -99,8 +106,8 @@ describe('Linear and Slack records keep their exact shape', () => {
     const thread = parseThreadText(THREAD_TEXT)
     const files = parseThreadText(FILES_TEXT)
     if (!thread || !files) throw new Error('fixture did not parse')
-    expect(threadRecord(ref(THREAD), { ...thread, hasMore: false }, 'general')).toEqual(PINNED.slackThread)
-    expect(threadRecord(ref(THREAD), { ...files, hasMore: true }, undefined)).toEqual(PINNED.slackFiles)
+    expect(threadRecord(slackRef(THREAD), { ...thread, hasMore: false }, 'general')).toEqual(PINNED.slackThread)
+    expect(threadRecord(slackRef(THREAD), { ...files, hasMore: true }, undefined)).toEqual(PINNED.slackFiles)
   })
 })
 
@@ -108,7 +115,7 @@ describe('each entity decoder keeps its own entity set', () => {
   test('Slack decodes only &lt; &gt; &amp;', () => {
     expect(mrkdwnToMarkdown(ENTITIES)).toBe(PINNED.mrkdwn)
     const parent = { author: 'A', ts: '1791759796.763609', text: ENTITIES, files: [] }
-    expect(threadRecord(ref(THREAD), { parent, replies: [], hasMore: false }, 'g').title).toBe(PINNED.slackTitle)
+    expect(threadRecord(slackRef(THREAD), { parent, replies: [], hasMore: false }, 'g').title).toBe(PINNED.slackTitle)
   })
 
   test('a page head decodes numeric entities too', () => {

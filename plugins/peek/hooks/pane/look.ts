@@ -13,13 +13,17 @@ export function remoteNaming(
   title: TitleEntry | undefined,
   fallback: { label?: string; bare: string; namesThread: boolean; host: () => string },
 ): { name: string; where: string; kind: string } {
+  const issueKey = ref?.kind === 'linear-issue' ? ref.key : undefined
+  const number = ref && 'number' in ref ? ref.number : undefined
+  const channel = ref?.kind === 'slack-thread' ? ref.channel : undefined
+  const github = ref && 'owner' in ref ? ref : undefined
   return {
     name:
       title?.title ??
       fallback.label ??
-      ref?.key ??
-      (ref?.number ? `#${ref.number}` : fallback.namesThread && ref?.channel ? `Thread in ${ref.channel}` : fallback.bare.replace(/^https?:\/\/(www\.)?/, '')),
-    where: ref?.owner ? `${ref.owner}/${ref.repo}` : title?.trail?.join(' · ') || fallback.host(),
+      issueKey ??
+      (number ? `#${number}` : fallback.namesThread && channel ? `Thread in ${channel}` : fallback.bare.replace(/^https?:\/\/(www\.)?/, '')),
+    where: github?.owner ? `${github.owner}/${github.repo}` : title?.trail?.join(' · ') || fallback.host(),
     kind: title?.kind ?? ref?.kind ?? 'web',
   }
 }

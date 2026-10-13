@@ -96,7 +96,7 @@ describe('parseRef canonical addresses', () => {
     })
     const reply = parseRef('https://acme.slack.com/archives/C0123ABCD/p1791761128357239?thread_ts=1791759796.763609&cid=C0123ABCD')
     expect(reply?.address).toBe('https://acme.slack.com/archives/C0123ABCD/p1791759796763609')
-    expect(reply?.ts).toBe('1791759796.763609')
+    expect(reply?.kind === 'slack-thread' ? reply.ts : undefined).toBe('1791759796.763609')
   })
 
   test('a Slack channel link or a malformed message link stays a web page', () => {

@@ -33,7 +33,7 @@ export function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: N
   const kindColor = (kind: string) => (isMenuOpen ? mute(colorFor(kind)) : colorFor(kind))
   const budget: PictureBudget = { used: 0 }
   const ghRef = record?.kind.startsWith('gh-') ? parseRef(record.address) : null
-  const refs = refContext(ghRef?.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
+  const refs = refContext(ghRef && 'owner' in ghRef && ghRef.owner && ghRef.repo ? `${ghRef.owner}/${ghRef.repo}` : undefined)
   const memoBase = `${current.href}|${remote.fetchedAt}|${textWidth}|${refs.teamKeys?.length}|${refs.workspace}`
   const mediaBlock = (index: number, alt: string, url: string, heading: string) => {
     const key = `media-${index}`

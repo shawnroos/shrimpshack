@@ -1,6 +1,6 @@
 import type { Captured } from './capture'
 import { parseRef } from './refs'
-import type { Ref } from './refs'
+import type { LinearIssueRef, LinearProjectRef, Ref } from './refs'
 import { linearPaged, linearQuery } from './sources'
 import type { Connection, Failed, SourceIo } from './sources'
 import type { Loaded, RemoteComment, RemoteList, RemoteListItem, RemoteRecord } from '../types'
@@ -122,10 +122,11 @@ function threaded(raw: unknown[]): RemoteComment[] {
 }
 
 function workspaceOf(url: string | undefined): string | undefined {
-  return url ? parseRef(url)?.workspace : undefined
+  const ref = url ? parseRef(url) : null
+  return ref && 'workspace' in ref ? ref.workspace : undefined
 }
 
-function issueRecord(issue: Obj, ref: Ref, commentTotal?: number): RemoteRecord | null {
+function issueRecord(issue: Obj, ref: LinearIssueRef, commentTotal?: number): RemoteRecord | null {
   const title = str(issue.title)
   if (!title) return null
   const idField = str(issue.id)
@@ -179,7 +180,7 @@ function percent(value: unknown): string | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value * 100)}%` : undefined
 }
 
-function projectRecord(project: Obj, ref: Ref, issues?: { nodes: unknown[]; isPartial: boolean }): RemoteRecord | null {
+function projectRecord(project: Obj, ref: LinearIssueRef | LinearProjectRef, issues?: { nodes: unknown[]; isPartial: boolean }): RemoteRecord | null {
   const title = str(project.name)
   if (!title) return null
   const state = stateOf(project)
@@ -209,7 +210,7 @@ function projectRecord(project: Obj, ref: Ref, issues?: { nodes: unknown[]; isPa
   return record
 }
 
-function issueItem(node: unknown, ref: Ref): RemoteListItem | null {
+function issueItem(node: unknown, ref: LinearIssueRef | LinearProjectRef): RemoteListItem | null {
   const issue = obj(node)
   const identifier = str(issue?.identifier)
   if (!issue || !identifier) return null
@@ -224,8 +225,8 @@ function issueItem(node: unknown, ref: Ref): RemoteListItem | null {
   return item
 }
 
-function projectId(ref: Ref): string {
-  const slug = ref.slug ?? ref.address.split('/').pop() ?? ''
+function projectId(ref: LinearProjectRef): string {
+  const slug = ref.slug
   const tail = slug.split('-').pop() ?? ''
   return /^[0-9a-f]{8,}$/i.test(tail) ? tail : slug
 }
@@ -235,7 +236,7 @@ async function countComments(io: SourceIo, id: string): Promise<number | undefin
   return counted.ok ? counted.nodes.length : undefined
 }
 
-async function loadIssue(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
+async function loadIssue(io: SourceIo, ref: LinearIssueRef, now: number): Promise<Loaded> {
   if (!ref.key) return { ok: false, failure: 'query-bug' }
   const answered = await linearQuery(io, ISSUE_QUERY, { id: ref.key })
   if (!answered.ok) return answered
@@ -249,7 +250,7 @@ async function loadIssue(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
   return record ? { ok: true, record, tier: 'api', fetchedAt: now } : { ok: false, failure: 'query-bug' }
 }
 
-async function loadProject(io: SourceIo, ref: Ref, now: number): Promise<Loaded> {
+async function loadProject(io: SourceIo, ref: LinearProjectRef, now: number): Promise<Loaded> {
   const id = projectId(ref)
   if (!id) return { ok: false, failure: 'query-bug' }
   const answered = await linearQuery(io, PROJECT_QUERY, { id })
@@ -289,9 +290,8 @@ export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
     return null
   }
   const item = obj(parsed)
-  if (!item) return null
-  const kind = captured.kind === 'linear-project' || ref.kind === 'linear-project' ? 'linear-project' : 'linear-issue'
-  const issues = kind === 'linear-project' && item.issues !== undefined ? { nodes: nodes(item.issues), isPartial: false } : undefined
-  const record = kind === 'linear-project' ? projectRecord(item, ref, issues) : issueRecord(item, ref)
+  if (!item || (ref.kind !== 'linear-issue' && ref.kind !== 'linear-project')) return null
+  const issues = item.issues !== undefined ? { nodes: nodes(item.issues), isPartial: false } : undefined
+  const record = captured.kind === 'linear-project' || ref.kind === 'linear-project' ? projectRecord(item, ref, issues) : issueRecord(item, ref)
   return record ? { ok: true, record, tier: 'session', fetchedAt: captured.at } : null
 }
