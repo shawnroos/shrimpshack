@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { ProcessRunResult } from 'claude-code'
 
-import { initials, loadSlack, mrkdwnToMarkdown, parseThreadText, whenLabel } from '../hooks/slack'
+import { initials, loadSlack, mrkdwnToMarkdown, whenLabel } from '../hooks/slack'
+import { parseThreadText } from '../hooks/parsers/slack-transcript'
 import { speakerColor } from '../hooks/theme'
 import type { SlackIo } from '../hooks/slack'
-import { ADA_PIC, CHANNEL_RESULT, CLI_CHANNEL, CLI_REPLIES, FILES_RESULT, FILES_TEXT, LONE_MESSAGE, THREAD_MORE, THREAD_RESULT, THREAD_TEXT, fileResult, usersResult } from './fixtures/slack/mcp'
+import { ADA_PIC, CHANNEL_RESULT, CLI_CHANNEL, CLI_REPLIES, FILES_RESULT, FILES_TEXT, LONE_MESSAGE, THREAD_MORE, THREAD_RESULT, fileResult, usersResult } from './fixtures/slack/mcp'
 import { exited, meta, record, ref } from './fixtures/results'
 
 const NOW = 1_792_000_000_000
@@ -61,23 +62,6 @@ describe('Slack mrkdwn', () => {
 
   test('code spans keep their mrkdwn characters', () => {
     expect(mrkdwnToMarkdown('`*not bold*` *bold*')).toBe('`*not bold*` **bold**')
-  })
-})
-
-describe('parseThreadText', () => {
-  test('reads the parent and every reply with author, ts and text', () => {
-    const thread = parseThreadText(THREAD_TEXT)
-    expect(thread?.parent).toMatchObject({ author: 'Ada Lovelace', ts: '1791759796.763609' })
-    expect(thread?.parent.text).toContain('_Widgets 0.82 published_')
-    expect(thread?.replies.map(one => [one.author, one.ts])).toEqual([
-      ['Grace Hopper', '1791761128.357239'],
-      ['Ada Lovelace', '1791763200.000100'],
-    ])
-    expect(thread?.replies[1]?.text).toBe('Thanks, see <https://example.com/doc>.\nReactions: +1 (1)')
-  })
-
-  test('text that is not a thread transcript is not a thread', () => {
-    expect(parseThreadText('hello')).toBeNull()
   })
 })
 

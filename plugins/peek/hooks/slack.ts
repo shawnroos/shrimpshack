@@ -3,15 +3,13 @@ import type { Ref, SlackThreadRef } from './refs'
 import { describeAge } from './format'
 import type { SourceIo } from './sources'
 import { asObj, asStr, decodeEntities, parseUrl, tryJson } from './wire'
+import { channelName, parseThreadText, profilePicture, unwrapTranscript } from './parsers/slack-transcript'
+import type { SlackMessage, SlackThread } from './parsers/slack-transcript'
 import type { Json } from './wire'
 import type { FailureKind, Loaded, RemoteComment, RemoteFile, RemoteRecord } from '../types'
 
 export type SlackIo = Pick<SourceIo, 'sessionId' | 'run'> &
   Pick<CaptureIo, 'mcpCall'> & { downloadImage?: (url: string, ext: string) => Promise<string | undefined> }
-
-export type SlackMessage = { author: string; ts: string; text: string; userId?: string; files: RemoteFile[]; avatarUrl?: string }
-
-export type SlackThread = { parent: SlackMessage; replies: SlackMessage[]; hasMore: boolean }
 
 // `$.mcp.call` accepts the tool-name spelling of a server: the Slack plugin's tools are mcp__plugin_slack_slack__*,
 // the claude.ai connector's mcp__claude_ai_Slack__*. `plugin:slack:slack` is the /mcp spelling, in case only that one resolves.
@@ -24,12 +22,6 @@ const CLI_PROBE = `if [ -x "$HOME/.slack/bin/slack" ]; then echo "$HOME/.slack/b
 const TITLE_CAP = 100
 const SLACK_ENTITIES = ['lt', 'gt', 'amp'] as const
 
-const PARENT_HEAD = '=== THREAD PARENT MESSAGE ==='
-const REPLIES_HEAD = /^=== THREAD REPLIES \(\d+ total\) ===$/m
-const REPLY_HEAD = /^--- Reply \d+ of \d+ ---$/m
-
-const FILES_LINE = /^Files: (.*)$/
-const FILE_ENTRY = /(?:^|, )(.+?) \(ID: (F[A-Z0-9]+), ([^,()]+), ([^()]+?)\)/g
 const USER_ID = /^[UWB][A-Z0-9]+$/
 const SCRATCH = '/tmp/claude-peek'
 // Each read is a file download and, the first time, a permission prompt; past these the rest show as file rows.
@@ -87,47 +79,6 @@ function plainLine(text: string): string {
     .replace(/^([*_~]+)(.+?)\1$/, '$2')
   const plain = decodeEntities(stripped, SLACK_ENTITIES).trim()
   return plain.length > TITLE_CAP ? `${plain.slice(0, TITLE_CAP - 1)}…` : plain
-}
-
-function parseFiles(line: string): RemoteFile[] {
-  return [...line.matchAll(FILE_ENTRY)].map(found => ({ id: found[2] ?? '', name: (found[1] ?? '').trim(), type: (found[3] ?? '').trim(), size: (found[4] ?? '').trim() }))
-}
-
-function parseMessage(block: string): SlackMessage | null {
-  const lines = block.replace(/^\n+/, '').split('\n')
-  let author = ''
-  let ts = ''
-  let userId: string | undefined
-  while (lines.length) {
-    const head = /^(From|Time|Message TS): ?(.*)$/.exec(lines[0] ?? '')
-    if (!head) break
-    lines.shift()
-    if (head[1] === 'From') {
-      const from = head[2] ?? ''
-      userId = /\(([UWB][A-Z0-9]+)\)\s*$/.exec(from)?.[1]
-      // The email in "Name <email> (U123)" is dropped on purpose: the page never shows it.
-      author = from.replace(/\s*<[^>]*>.*$/, '').replace(/\s*\([UWB][A-Z0-9]+\)\s*$/, '').trim()
-    }
-    if (head[1] === 'Message TS') ts = (head[2] ?? '').trim()
-  }
-  if (!/^\d+\.\d+$/.test(ts)) return null
-  const files = lines.flatMap(line => parseFiles(FILES_LINE.exec(line)?.[1] ?? ''))
-  const text = lines.filter(line => !FILES_LINE.test(line)).join('\n').trim()
-  return { author: author || 'Unknown', ts, text, ...(userId ? { userId } : {}), files }
-}
-
-export function parseThreadText(text: string): Omit<SlackThread, 'hasMore'> | null {
-  const start = text.indexOf(PARENT_HEAD)
-  if (start < 0) return null
-  const [parentPart = '', repliesPart = ''] = text.slice(start + PARENT_HEAD.length).split(REPLIES_HEAD)
-  const parent = parseMessage(parentPart.replace(/\n*No thread messs?ages\s*$/, ''))
-  if (!parent) return null
-  const replies = repliesPart
-    .split(REPLY_HEAD)
-    .slice(1)
-    .map(block => parseMessage(block))
-    .filter((one): one is SlackMessage => one !== null)
-  return { parent, replies }
 }
 
 function slackFailure(message: string): FailureKind | 'unavailable' {
@@ -218,15 +169,6 @@ function blockText(content: unknown[]): string {
     .join('\n')
 }
 
-// The server wraps its transcript in {"messages": "...", "pagination_info": "..."}; a bare transcript is read as-is.
-function unwrap(text: string): { messages: string; more: boolean } {
-  const parsed = asObj(tryJson(text))
-  if (parsed && typeof parsed.messages === 'string') {
-    return { messages: parsed.messages, more: /there are more messages/i.test(String(parsed.pagination_info ?? '')) }
-  }
-  return { messages: text, more: false }
-}
-
 async function mcpRead(io: SlackIo, tool: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; server: string } | null> {
   const session = await io.sessionId()
   const known = preferredServer.get(session)
@@ -285,12 +227,7 @@ async function searchedAvatar(io: SlackIo, server: string, one: SlackMessage): P
   const args = { keywords, natural_language_query: one.author, limit: 5, response_format: 'detailed' }
   const answer = await io.mcpCall(server, 'slack_search_users', args).catch(() => null)
   if (!answer || answer.isError) return undefined
-  const raw = blockText(answer.content)
-  const parsed = asObj(tryJson(raw))
-  const results = parsed && typeof parsed.results === 'string' ? parsed.results : raw
-  const mine = new RegExp(`^User ID: ${one.userId}\\s*$`, 'm')
-  const block = results.replaceAll('\\/', '/').split(/^### Result /m).find(part => mine.test(part))
-  return block ? /^Profile Pic: \[[^\]]*\]\((https:\/\/[^)\s]+)\)/m.exec(block)?.[1] : undefined
+  return profilePicture(blockText(answer.content), one.userId)
 }
 
 async function avatarFile(io: SlackIo, server: string | undefined, one: SlackMessage): Promise<string | undefined> {
@@ -335,10 +272,10 @@ async function loadViaMcp(io: SlackIo, ref: SlackThreadRef, channel: string, ts:
   ])
   if (!thread) return { ok: false, failure: 'unavailable' }
   if (thread.isError) return { ok: false, failure: slackFailure(thread.text) }
-  const { messages, more } = unwrap(thread.text)
+  const { messages, more } = unwrapTranscript(thread.text)
   const parsed = parseThreadText(messages)
   if (!parsed) return { ok: false, failure: 'query-bug' }
-  const name = info && !info.isError ? /^Channel: #(\S+)/m.exec(unwrap(info.text).messages)?.[1] : undefined
+  const name = info && !info.isError ? channelName(info.text) : undefined
   const base = threadRecord(ref, { ...parsed, hasMore: more }, name)
   const record = await withPictures(io, base, [parsed.parent, ...parsed.replies], thread.server)
   return { ok: true, record, tier: 'mcp', fetchedAt: now }
