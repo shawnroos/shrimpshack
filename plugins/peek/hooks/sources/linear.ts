@@ -1,5 +1,6 @@
 import type { Captured } from '../capture'
-import { parseRef } from '../refs'
+import { LINEAR_KEY, parseRef } from '../refs'
+import { capturedLinearContext } from './linear-identity'
 import type { LinearIssueRef, LinearProjectRef, Ref } from '../refs'
 import { linearPaged, linearQuery } from '../source-io'
 import { ok } from './result'
@@ -278,4 +279,23 @@ export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   const issues = item.issues !== undefined ? { nodes: nodes(item.issues), isPartial: false } : undefined
   const record = captured.kind === 'linear-project' || ref.kind === 'linear-project' ? projectRecord(item, ref, issues) : issueRecord(item, ref)
   return record ? ok(record, 'session', captured.at) : null
+}
+
+function topLevelUrl(text: string): string | null {
+  const url = asObj(tryJson(text))?.url
+  return typeof url === 'string' ? url : null
+}
+
+export function capturedLinearRef(args: Record<string, unknown>, text: string): Ref | null {
+  const id = [args.id, args.issueId, args.identifier, args.query].find((one): one is string => typeof one === 'string')
+  const fromResult = topLevelUrl(text)
+  const resultRef = fromResult ? parseRef(fromResult) : null
+  const isKey = id !== undefined && LINEAR_KEY.test(id)
+  if (resultRef?.kind === 'linear-issue') return !isKey || resultRef.key === id.toUpperCase() ? resultRef : null
+  if (resultRef?.kind === 'linear-project') return resultRef
+  if (isKey) {
+    const ref = parseRef(id.toUpperCase(), capturedLinearContext())
+    return ref?.kind === 'linear-issue' ? ref : null
+  }
+  return null
 }

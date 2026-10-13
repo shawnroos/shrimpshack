@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { capturedLinearContext, isReadCall, lookup, record, replay } from '../hooks/capture'
+import { isReadCall, lookup, record, replay } from '../hooks/capture'
+import { capturedLinearContext } from '../hooks/sources/linear-identity'
 
 const ISSUE_JSON = JSON.stringify({ id: 'uuid-1', identifier: 'WEB-2757', title: 'Remove Logo', url: 'https://linear.app/acme/issue/WEB-2757/remove-logo' })
 
@@ -98,7 +99,7 @@ describe('the capture store', () => {
     const input = { tool: 'mcp__claude_ai_Linear__get_issue', tool_use_id: 'toolu_1', agentId: 'a1', consent: 'yes', id: 'WEB-2757' }
     const noted = record(input, reply(ISSUE_JSON), at)
     expect(noted.addresses).toEqual(['https://linear.app/acme/issue/WEB-2757'])
-    expect(noted.grewLinear).toBe(true)
+    expect(noted.learned).toBe(true)
 
     const hit = lookup('https://linear.app/acme/issue/WEB-2757')
     expect(hit?.tool).toBe('get_issue')
@@ -111,7 +112,7 @@ describe('the capture store', () => {
     const context = capturedLinearContext()
     expect(context.workspace).toBe('acme')
     expect(context.teamKeys).toContain('WEB')
-    expect(record(input, reply(ISSUE_JSON), at).grewLinear).toBe(false)
+    expect(record(input, reply(ISSUE_JSON), at).learned).toBe(false)
 
     const replayed: unknown[] = []
     const fresher = ISSUE_JSON.replace('Remove Logo', 'Remove the logo')
@@ -165,7 +166,7 @@ describe('the capture store', () => {
   })
 
   test('an errored call, a write tool and a write or chained gh command store nothing', async () => {
-    const none = { addresses: [], grewLinear: false }
+    const none = { addresses: [], learned: false }
     expect(record({ tool: 'mcp__claude_ai_Github__pull_request_read', method: 'get', owner: 'o', repo: 'r', pullNumber: 7 }, { isError: true, text: 'boom' }, at)).toEqual(none)
     expect(lookup('https://github.com/o/r/pull/7')).toBeNull()
     expect(record({ tool: 'mcp__claude_ai_Linear__save_comment', issueId: 'WEB-2758', body: 'hi' }, reply(ISSUE_JSON), at)).toEqual(none)

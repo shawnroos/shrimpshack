@@ -1,6 +1,6 @@
-import { githubAddressRef, itemKey, keyOf, LINEAR_KEY, parseRef } from './refs'
+import { itemKey, keyOf, parseRef } from './refs'
 import type { Ref, RefKind } from './refs'
-import { asObj, asPositiveInt, tryJson } from './wire'
+import { captureReaderOf } from './sources/adapter'
 import { ghRead, ghSource } from './parsers/gh-argv'
 import type { Ports } from './ports'
 
@@ -29,8 +29,6 @@ const REMOTE_URL = /https:\/\/(?:www\.)?(?:github\.com|linear\.app|[a-z0-9-]+\.s
 
 const store = new Map<string, Captured>()
 let textSize = 0
-let linearWorkspace: string | undefined
-const linearTeamKeys = new Set<string>()
 
 function splitMcp(tool: string): { server: string; name: string } | null {
   if (!tool.startsWith('mcp__')) return null
@@ -44,7 +42,7 @@ export function isReadCall(tool: string, input: Record<string, unknown>): boolea
   if (tool === 'WebFetch') return typeof input.url === 'string'
   if (tool === 'Bash') return ghRead(input.command) !== null
   const mcp = splitMcp(tool)
-  if (!mcp || !/linear|github|slack/i.test(mcp.server)) return false
+  if (!mcp || !captureReaderOf(mcp.server)) return false
   return READ_PREFIX.test(mcp.name) || READ_EXACT.has(mcp.name) || SLACK_READ.test(mcp.name)
 }
 
@@ -87,33 +85,6 @@ function remoteRefs(text: string): Ref[] {
   return [...seen.values()]
 }
 
-function topLevelUrl(text: string): string | null {
-  const url = asObj(tryJson(text))?.url
-  return typeof url === 'string' ? url : null
-}
-
-function linearSource(args: Record<string, unknown>, text: string): Ref | null {
-  const id = [args.id, args.issueId, args.identifier, args.query].find((one): one is string => typeof one === 'string')
-  const fromResult = topLevelUrl(text)
-  const resultRef = fromResult ? parseRef(fromResult) : null
-  const isKey = id !== undefined && LINEAR_KEY.test(id)
-  if (resultRef?.kind === 'linear-issue') return !isKey || resultRef.key === id.toUpperCase() ? resultRef : null
-  if (resultRef?.kind === 'linear-project') return resultRef
-  if (isKey) {
-    const ref = parseRef(id.toUpperCase(), { workspace: linearWorkspace, teamKeys: [...linearTeamKeys] })
-    return ref?.kind === 'linear-issue' ? ref : null
-  }
-  return null
-}
-
-function githubMcpSource(name: string, args: Record<string, unknown>): Ref | null {
-  const pull = asPositiveInt(args.pullNumber ?? args.pull_number)
-  const issue = asPositiveInt(args.issue_number ?? args.issueNumber)
-  if (pull !== null) return githubAddressRef(args.owner, args.repo, pull, true)
-  if (issue !== null) return githubAddressRef(args.owner, args.repo, issue, name.includes('pull'))
-  return null
-}
-
 function captureSourceOf(tool: string, args: Record<string, unknown>, text: string): { ref: Ref; source: CaptureSource; server?: string; name: string } | null {
   if (tool === 'WebFetch') {
     const ref = typeof args.url === 'string' ? parseRef(args.url) : null
@@ -125,9 +96,9 @@ function captureSourceOf(tool: string, args: Record<string, unknown>, text: stri
     return ref ? { ref, source: 'bash', name: tool } : null
   }
   const mcp = splitMcp(tool)
-  if (!mcp) return null
-  const ref = /linear/i.test(mcp.server) ? linearSource(args, text) : githubMcpSource(mcp.name, args)
-  return ref ? { ref, source: 'mcp', server: mcp.server, name: mcp.name } : null
+  const reader = mcp ? captureReaderOf(mcp.server) : undefined
+  const ref = mcp && reader ? reader.refOf(mcp.name, args, text) : null
+  return mcp && ref ? { ref, source: 'mcp', server: mcp.server, name: mcp.name } : null
 }
 
 function forget(key: string) {
@@ -148,26 +119,8 @@ function keep(entry: Captured) {
   }
 }
 
-function learnLinear(refs: readonly Ref[]): boolean {
-  let grew = false
-  for (const ref of refs) {
-    if (ref.kind !== 'linear-issue' || !ref.workspace || !ref.key) continue
-    if (!linearWorkspace) {
-      linearWorkspace = ref.workspace
-      grew = true
-    }
-    if (ref.workspace !== linearWorkspace) continue
-    const team = ref.key.split('-')[0] ?? ''
-    if (team && !linearTeamKeys.has(team)) {
-      linearTeamKeys.add(team)
-      grew = true
-    }
-  }
-  return grew
-}
-
-export function record(input: Record<string, unknown>, answer: unknown, at: number): { addresses: string[]; grewLinear: boolean } {
-  const none = { addresses: [], grewLinear: false }
+export function record(input: Record<string, unknown>, answer: unknown, at: number): { addresses: string[]; learned: boolean } {
+  const none = { addresses: [], learned: false }
   const tool = typeof input.tool === 'string' ? input.tool : ''
   const reply = answer as { isError?: unknown; deny?: unknown } | null
   if (!reply || reply.isError || reply.deny !== undefined) return none
@@ -176,7 +129,8 @@ export function record(input: Record<string, unknown>, answer: unknown, at: numb
   if (text === null) return none
   const args = Object.fromEntries(Object.entries(input).filter(([key]) => !RESERVED.has(key)))
   const found = remoteRefs(text)
-  const grewLinear = /linear/i.test(splitMcp(tool)?.server ?? '') ? learnLinear(found) : false
+  const server = splitMcp(tool)?.server
+  const learned = server ? (captureReaderOf(server)?.learn?.(found) ?? false) : false
   const addresses = new Set<string>()
   if (isSingleItem(tool, input) && text.length <= MAX_TEXT) {
     const source = captureSourceOf(tool, args, text)
@@ -186,17 +140,13 @@ export function record(input: Record<string, unknown>, answer: unknown, at: numb
     }
   }
   for (const ref of found) addresses.add(ref.address)
-  return { addresses: [...addresses], grewLinear }
+  return { addresses: [...addresses], learned }
 }
 
 export function lookup(address: string): Captured | null {
   const ref = parseRef(address)
   const entry = store.get(ref ? keyOf(ref) : itemKey(address))
   return entry ? { ...entry, args: { ...entry.args } } : null
-}
-
-export function capturedLinearContext(): { workspace?: string; teamKeys: string[] } {
-  return { workspace: linearWorkspace, teamKeys: [...linearTeamKeys] }
 }
 
 export async function replay(io: CaptureIo, address: string): Promise<Captured | null> {

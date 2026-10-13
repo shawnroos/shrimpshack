@@ -67,9 +67,9 @@ export async function remember(
 export async function noteCapture(io: NavIo, input: Record<string, unknown>, answer: unknown) {
   const at = await io.now()
   nav.lastActivity = at
-  const { addresses, grewLinear } = record(input, answer, at)
+  const { addresses, learned } = record(input, answer, at)
   if (addresses.length) await io.mentions.update(list => noteMentions(list, addresses, at, 200, true))
-  if (grewLinear) io.invalidate()
+  if (learned) io.invalidate()
 }
 
 export async function toHref(io: NavIo, raw: string): Promise<string | null> {

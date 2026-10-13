@@ -1,7 +1,7 @@
 import type { EngineInterface, PluginState } from 'claude-code'
 
 import type { Group, GroupResult, Loaded, Mode, RemoteRecord, View } from '../types'
-import { capturedLinearContext } from './capture'
+import { bootLinearIdentity, linearContext } from './sources/linear-identity'
 import { describeAge } from './format'
 import { noteMentions } from './gallery'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
@@ -70,7 +70,6 @@ const drawnRecords = new Map<string, RemoteRecord>()
 const MAX_DRAWN_RECORDS = 50
 const repoContexts = new Map<string, string | null>()
 let isTicking = false
-let linearBoot: Omit<LinearBootstrap, 'ok'> | null = null
 let showGeneration = 0
 
 export const clamp = (at: number, length: number) => Math.max(0, Math.min(length - 1, at))
@@ -118,12 +117,7 @@ export async function repoContext(io: NavIo, cwd: string): Promise<string | unde
 }
 
 export function refContext(repo?: string): RefContext {
-  const captured = capturedLinearContext()
-  return {
-    teamKeys: [...new Set([...(linearBoot?.teamKeys ?? []), ...captured.teamKeys])],
-    workspace: linearBoot?.workspace ?? captured.workspace,
-    repo,
-  }
+  return { ...linearContext(), repo }
 }
 
 export async function sessionRefContext(io: NavIo): Promise<RefContext> {
@@ -132,15 +126,16 @@ export async function sessionRefContext(io: NavIo): Promise<RefContext> {
 
 export async function bootLinear(io: NavIo) {
   const now = await io.now()
-  const saved = (await io.storeGet('linear').catch(() => undefined)) as typeof linearBoot | undefined
+  const saved = (await io.storeGet('linear').catch(() => undefined)) as Omit<LinearBootstrap, 'ok'> | null | undefined
   if (saved && typeof saved.workspace === 'string' && Array.isArray(saved.teamKeys) && now - saved.fetchedAt < LINEAR_BOOT_TTL_MS) {
-    linearBoot = saved
+    bootLinearIdentity(saved)
     return
   }
   const boot = await bootstrapLinear(io.remoteIo(), now)
   if (!boot.ok) return
-  linearBoot = { workspace: boot.workspace, teamKeys: boot.teamKeys, fetchedAt: boot.fetchedAt }
-  await io.storeSet('linear', linearBoot).catch(() => undefined)
+  const known = { workspace: boot.workspace, teamKeys: boot.teamKeys, fetchedAt: boot.fetchedAt }
+  bootLinearIdentity(known)
+  await io.storeSet('linear', known).catch(() => undefined)
   io.invalidate()
 }
 

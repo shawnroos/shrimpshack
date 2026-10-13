@@ -1,10 +1,10 @@
 import type { Captured } from '../capture'
-import { githubRef } from '../refs'
+import { githubAddressRef, githubRef } from '../refs'
 import type { GithubItemRef, Ref } from '../refs'
 import { runGh } from '../source-io'
 import { ok } from './result'
 import type { Failed, SourceIo } from '../source-io'
-import { asArr, asNum, asObj, tryJson } from '../wire'
+import { asArr, asNum, asObj, asPositiveInt, tryJson } from '../wire'
 import type { Json } from '../wire'
 import type { CiTone, Loaded, RemoteComment, RemoteKind, RemoteList, RemoteListItem, RemoteRecord, Tier } from '../../types'
 
@@ -370,4 +370,12 @@ export function fromCapture(captured: Captured, ref: Ref): Loaded | null {
   if (!number) return null
   const target = itemRef(owner, repo, number, kind === 'gh-pr')
   return loaded(kind === 'gh-pr' ? pullRecord({ view, ref: target }) : issueRecord({ view, ref: target }), 'session', captured.at)
+}
+
+export function capturedGithubRef(name: string, args: Record<string, unknown>): Ref | null {
+  const pull = asPositiveInt(args.pullNumber ?? args.pull_number)
+  const issue = asPositiveInt(args.issue_number ?? args.issueNumber)
+  if (pull !== null) return githubAddressRef(args.owner, args.repo, pull, true)
+  if (issue !== null) return githubAddressRef(args.owner, args.repo, issue, name.includes('pull'))
+  return null
 }

@@ -5,7 +5,7 @@ export const RECORDED = {
       "addresses": [
         "https://linear.app/acme/issue/WEB-2757"
       ],
-      "grewLinear": true
+      "learned": true
     },
     "stored": {
       "https://linear.app/acme/issue/WEB-2757": {
@@ -27,7 +27,7 @@ export const RECORDED = {
       "addresses": [
         "https://linear.app/acme/project/brand-refresh-1a2b3c4d5e6f"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://linear.app/acme/project/brand-refresh-1a2b3c4d5e6f": {
@@ -49,7 +49,7 @@ export const RECORDED = {
       "addresses": [
         "https://linear.app/acme/issue/WEB-12"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://linear.app/acme/issue/WEB-12": {
@@ -71,7 +71,7 @@ export const RECORDED = {
       "addresses": [
         "https://linear.app/acme/issue/WEB-2757"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://linear.app/acme/issue/WEB-2757": {
@@ -94,7 +94,7 @@ export const RECORDED = {
       "addresses": [
         "https://linear.app/acme/issue/WEB-14"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://linear.app/acme/issue/WEB-14": {
@@ -116,7 +116,7 @@ export const RECORDED = {
       "addresses": [
         "https://linear.app/acme/issue/WEB-15"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://linear.app/acme/issue/WEB-15": null
@@ -127,7 +127,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/pull/42"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/pull/42": {
@@ -152,7 +152,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/issues/7"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/issues/7": {
@@ -177,7 +177,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/pull/43"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/pull/43": {
@@ -201,7 +201,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/pull/44"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/pull/44": {
@@ -225,7 +225,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/pull/45"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/pull/45": null
@@ -234,7 +234,7 @@ export const RECORDED = {
   "GitHub server slack_read_ tool": {
     "noted": {
       "addresses": [],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {}
   },
@@ -243,7 +243,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/pull/47"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/pull/47": {
@@ -265,14 +265,14 @@ export const RECORDED = {
   "Slack read_thread": {
     "noted": {
       "addresses": [],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {}
   },
   "unknown server get_ tool": {
     "noted": {
       "addresses": [],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {}
   },
@@ -281,7 +281,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/pull/49"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/pull/49": {
@@ -302,7 +302,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/issues/50"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/issues/50": {
@@ -323,7 +323,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/issues/51"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/issues/51": {
@@ -344,7 +344,7 @@ export const RECORDED = {
       "addresses": [
         "https://github.com/acme/widgets/pull/52"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://github.com/acme/widgets/pull/52": null
@@ -355,7 +355,7 @@ export const RECORDED = {
       "addresses": [
         "https://example.com/page"
       ],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {
       "https://example.com/page": {
@@ -375,14 +375,14 @@ export const RECORDED = {
   "an errored read": {
     "noted": {
       "addresses": [],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {}
   },
   "a denied read": {
     "noted": {
       "addresses": [],
-      "grewLinear": false
+      "learned": false
     },
     "stored": {}
   }

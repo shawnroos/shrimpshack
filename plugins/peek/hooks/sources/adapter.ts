@@ -1,7 +1,8 @@
 import type { Loaded, RemoteFailure, Tier } from '../../types'
 import type { Captured, CaptureIo } from '../capture'
-import { fromCapture as githubFromCapture, loadGithub } from './github'
-import { fromCapture as linearFromCapture, loadLinear } from './linear'
+import { capturedGithubRef, fromCapture as githubFromCapture, loadGithub } from './github'
+import { capturedLinearRef, fromCapture as linearFromCapture, loadLinear } from './linear'
+import { learnLinear } from './linear-identity'
 import type { Ref } from '../refs'
 import { loadSlack } from './slack'
 import type { SourceIo } from '../source-io'
@@ -15,6 +16,13 @@ export type SourceId = 'github' | 'linear' | 'slack' | 'web'
 
 export type FailureText = { title: string; hint: string }
 
+// How a source reads a captured MCP call: which servers it claims, the item a call names, and what it learns.
+export type CaptureReader = {
+  servers: RegExp
+  refOf: (name: string, args: Record<string, unknown>, text: string) => Ref | null
+  learn?: (found: readonly Ref[]) => boolean
+}
+
 export type SourceAdapter = {
   id: SourceId
   // Takes any kind string, so a kind no table lists yet still finds its source by prefix.
@@ -27,6 +35,7 @@ export type SourceAdapter = {
   trailIcon: (index: number, count: number) => string
   load: (io: RemoteIo, ref: Ref, now: number) => Promise<Loaded>
   fromCapture?: (captured: Captured, ref: Ref) => Loaded | null
+  capture?: CaptureReader
   failureText: (kind: RemoteFailure) => FailureText
 }
 
@@ -72,6 +81,8 @@ const GITHUB: SourceAdapter = {
   trailIcon: (index, count) => (index === 0 && count > 1 ? '\u{f09b}' : ICON['gh-repo']),
   load: loadGithub,
   fromCapture: githubFromCapture,
+  // Slack's own tools name no item; a GitHub-shaped read on a Slack server has always been read as GitHub.
+  capture: { servers: /github|slack/i, refOf: capturedGithubRef },
   failureText,
 }
 
@@ -84,6 +95,7 @@ const LINEAR: SourceAdapter = {
   trailIcon: index => (index === 0 ? '\u{f0c0}' : ICON['linear-project']),
   load: loadLinear,
   fromCapture: linearFromCapture,
+  capture: { servers: /linear/i, refOf: (_name, args, text) => capturedLinearRef(args, text), learn: learnLinear },
   failureText,
 }
 
@@ -123,4 +135,11 @@ export function adapterFor(ref: Ref): SourceAdapter {
 export function adapterOfAddress(address: string): SourceAdapter {
   const host = parseUrl(address)?.hostname.toLowerCase().replace(/^www\./, '')
   return (host !== undefined && ADAPTERS.find(adapter => adapter.ownsHost(host))) || WEB
+}
+
+// Linear first: a server named for both is read as Linear, as before.
+const CAPTURE_READERS = [LINEAR, GITHUB].flatMap(adapter => (adapter.capture ? [adapter.capture] : []))
+
+export function captureReaderOf(server: string): CaptureReader | undefined {
+  return CAPTURE_READERS.find(reader => reader.servers.test(server))
 }
