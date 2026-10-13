@@ -8,7 +8,7 @@ import { nav, remoteRef, sessionRefContext, titlesByKey } from './navigation'
 import type { NavIo } from './navigation'
 import { remoteNaming } from './pane/look'
 import { fileHref, kindOf, parseHref, resolvePath } from './paths'
-import { itemKey, parseRef } from './refs'
+import { keyOf, parseRef } from './refs'
 
 const roots = new Map<string, { root: string; isWorktree: boolean } | null>()
 const exists = new Map<string, boolean>()
@@ -147,7 +147,7 @@ export async function sessionEntries(io: NavIo, list: readonly Mention[]): Promi
     const stat = file ? await io.stat(path).catch(() => null) : null
     if (file && !stat) continue
     const ref = file ? null : remoteRef(one.href)
-    const label = ref ? remoteTitles.get(itemKey(ref.address)) : undefined
+    const label = ref ? remoteTitles.get(keyOf(ref)) : undefined
     if (ref) {
       const naming = remoteNaming(ref, label, { bare: path, namesThread: true, host: () => new URL(ref.address).hostname })
       out.push({

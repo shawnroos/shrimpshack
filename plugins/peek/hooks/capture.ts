@@ -1,4 +1,4 @@
-import { itemKey, parseRef } from './refs'
+import { itemKey, keyOf, parseRef } from './refs'
 import type { Ref, RefKind } from './refs'
 
 export type CaptureIo = {
@@ -268,7 +268,7 @@ export function record(input: Record<string, unknown>, answer: unknown, at: numb
 
 export function lookup(address: string): Captured | null {
   const ref = parseRef(address)
-  const entry = store.get(itemKey(ref?.address ?? address))
+  const entry = store.get(ref ? keyOf(ref) : itemKey(address))
   return entry ? { ...entry, args: { ...entry.args } } : null
 }
 

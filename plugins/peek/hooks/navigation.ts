@@ -13,7 +13,7 @@ import { markdownPage, mermaidFences, mermaidPage, toggleTaskLine } from './mark
 import { kindOf, parseHref } from './paths'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, tick, titleOf, withTitle } from './refresh'
 import type { CacheEntry, TitleEntry } from './refresh'
-import { familyOf, itemKey, parseRef } from './refs'
+import { familyOf, itemKey, keyOf, parseRef } from './refs'
 import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
 import type { RemoteIo } from './remote'
@@ -259,7 +259,10 @@ export function remoteRef(href: string, context: RefContext = {}): Ref | null {
   return ref.kind === 'web' && remoteFileOf(ref.address) ? null : ref
 }
 
-export const starKeyOf = (raw: string) => itemKey(remoteRef(raw)?.address ?? raw)
+export function starKeyOf(raw: string): string {
+  const ref = remoteRef(raw)
+  return ref ? keyOf(ref) : itemKey(raw)
+}
 
 export async function show(io: NavIo, raw: string, isFromGroupChain = false) {
   if (!isFromGroupChain) nav.groupBack = null
