@@ -178,13 +178,67 @@ Typing reaches the page only while a click has put focus on an editable field; a
 navigation or leaving live view returns the keys to peek.
 
 ### Group
-A titled, described set of files and links, optionally split into sections, that the
-agent makes for the person and that lasts across sessions of one project. The agent
-creates and edits it; the person stars it and adds or removes items. An item the person
-removed stays removed until the agent forces it back.
+A titled, described set of items of any type (files, links, tasks), optionally split
+into sections, that the agent makes for the person and that lasts across sessions of one
+project. The agent creates and edits it; the person stars it and adds or removes items.
+An item the person removed stays removed until the agent forces it back, whatever the
+group's rule says.
+
+A group may carry a **rule**: props every member must equal, joined by "and". Rule
+members are worked out from the current tasks each time the group is read and are never
+stored, so the group fills and empties as props change. A group may also carry a
+**split**: one prop whose values divide its members into sections. Status sections are
+the split by status.
 
 ### Frame budget
 The cap on how many bytes of pictures live view sends into the pane each second. The pane
 path stalls above a measured rate without telling the sender, so the cap is fixed ahead of
 time and enforced where frames are made: unchanged pages send nothing, and a busy page gives
 up frame rate first and picture size second to stay under it.
+
+### View definition
+One markdown file that defines how one kind of item is drawn: its frontmatter declares
+the type's name, which items it matches, and their props and required-prop rules; its
+body is the page's template of markdown, placeholders and blocks. It holds no loops,
+expressions or code, so it runs nothing. Peek's own definitions ship with the plugin; the
+person's and agents' live in one user-level folder. Two definitions with the same type
+name are both refused rather than one overriding the other.
+
+### Layout block
+A fenced block in markdown whose language starts with `peek-`. A collection block
+selects items by their props and draws them as cards, a list, a tree, sections, a board
+or focus; a record block draws one part of a remote page's record. Collection blocks
+draw on markdown file pages, in group descriptions and on the Tasks page; record blocks
+draw only on remote pages. The person can switch a collection block's layout in place,
+and peek remembers it for that block.
+
+### Task
+A markdown doc with a status that the person or an agent tracks in peek: a captured
+to-do, a deliverable, a mirrored agent item, or a takeover doc. The person's own tasks
+live in one tasks folder per repo, in the main checkout, shared by every worktree, or in
+one user-level folder outside any repo. Its creator is recorded by peek, never taken
+from the agent.
+
+### Deliverable
+A doc anywhere in a repo that is a task because its frontmatter says `isTask: true`. It
+stays where it is, is read only from the session's own worktree, and must carry every
+task prop; a missing one flags it rather than hiding it.
+
+### Status
+A task's state: `todo`, `doing`, `done` or `cancelled`. Every change, from the pane, a
+tool, mirroring or a hand edit, goes through one path that writes the doc and one
+change-log entry outside the repo, and does nothing when the status already matches.
+Status is never inferred from code, branches or pull requests.
+
+### Agent list (mirrored)
+One agent session's own task list, as Claude Code keeps it, followed by peek and copied
+into peek-owned records the first time each item is seen. The records outlive Claude
+Code's files, belong to the repo the session ran in, and form one rule group per list.
+A list counts as over when every item is closed, its session ended or it was cleared;
+an over list leaves Recent, and its group is removed some hours later.
+
+### Takeover
+The task doc peek writes in the list's repo when the person or an agent changes a
+mirrored item, or the person adopts one. It keeps the agent session as creator and
+points back to the item, so the agent's later updates still reach it; the latest change
+wins. Peek never writes Claude Code's own task files.

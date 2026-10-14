@@ -43,9 +43,12 @@ creator; peek ignores it.
 
 For work with more than one step, keep your plan in your session's task list
 (TaskCreate and TaskUpdate). Peek mirrors that list into a group for the
-person, folds it when every item is done, and archives it later. Keep each
-item's status current as you work. To split your list into sections, give your
-items a prop and group by it (`save_group` with `split`).
+person, already split into sections by status, and removes the group some
+hours after every item is done. Keep each item's status current as you work.
+You cannot add props to mirrored items. To section work another way, save it
+with `save_task { on_behalf: "self" }`, give the tasks a shared `parent`, and
+use `save_group` with `rule` (such as `parent=<id>`) and `split` (such as
+`status` or `due`).
 
 If a piece of your work should outlive this session, save it with
 `save_task { on_behalf: "self" }` instead.
