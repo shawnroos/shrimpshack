@@ -449,6 +449,21 @@ export const register: Register = on => {
   on('tool.call', { tool: /^mcp__peek__delete_group$/ }, async ($, e) => TOOLS.delete_group.run(navIoOf($), e))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__list_tasks$/ }, async ($, e) => TOOLS.list_tasks.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__read_task$/ }, async ($, e) => TOOLS.read_task.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__save_task$/ }, async ($, e) => TOOLS.save_task.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__move_tasks$/ }, async ($, e) => TOOLS.move_tasks.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__check_view$/ }, async ($, e) => TOOLS.check_view.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
   on('tool.call', { tool: /^(?:Bash$|WebFetch$|mcp__(?!peek__))/ }, async ($, e, next) => {
     const answer = await next(e)
     await noteCapture(navIoOf($), e as unknown as Record<string, unknown>, answer).catch(() => undefined)

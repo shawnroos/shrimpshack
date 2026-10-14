@@ -371,3 +371,72 @@ test('a tool write in this session redraws the pane', async ($, on) => {
   await create($, [{ target: PAGE }])
   expect(w.invalidated).toBeGreaterThan(before)
 })
+
+const RULE_TASKS = '/repo/.peek/tasks'
+const ruleDoc = (id: string, creator: string, status: string) => `---\nname: "Task ${id}"\nid: ${id}\nstatus: ${status}\ncreator: ${creator}\n---\n`
+const RULE_FILES = {
+  [`${RULE_TASKS}/a.md`]: ruleDoc('a', 'shawn', 'todo'),
+  [`${RULE_TASKS}/b.md`]: ruleDoc('b', 'session-7', 'done'),
+  [`${RULE_TASKS}/c.md`]: ruleDoc('c', 'shawn', 'done'),
+}
+type ReadGroup = { rule?: unknown; split?: unknown; items: { ref: string; addedBy: string }[]; splitSections?: { key: string; items: string[] }[] }
+
+test('save_group with a text rule creates a group that fills itself; read_group returns the rule and the computed members', async ($, on) => {
+  const w = fakeFs(on, RULE_FILES)
+  const text = await call($, 'save_group', { title: 'Mine', rule: 'creator=shawn' })
+  expect(text.split('\n')[0]).toMatch(/^Created group "Mine" \([0-9a-z]{8}\): 1 applied/)
+  const id = String(jsonOf(text).id)
+  const read = async () => jsonOf(await call($, 'read_group', { id })) as ReadGroup
+  expect((await read()).rule).toEqual({ creator: 'shawn' })
+  expect((await read()).items.map(one => [one.ref, one.addedBy])).toEqual([
+    ['.peek/tasks/a.md', 'rule'],
+    ['.peek/tasks/c.md', 'rule'],
+  ])
+  w.files[`${RULE_TASKS}/d.md`] = ruleDoc('d', 'shawn', 'doing')
+  w.touch(`${RULE_TASKS}/d.md`)
+  expect((await read()).items.map(one => one.ref)).toEqual(['.peek/tasks/a.md', '.peek/tasks/c.md', '.peek/tasks/d.md'])
+  expect((await call($, 'read_group', { id })).split('\n')[0]).toBe('Group "Mine" (' + id + '): 3 items in 0 sections.')
+  expect(savedGroup(w, id)?.items).toEqual([])
+})
+
+test('save_group with an object rule and a split sections the members by that prop', async ($, on) => {
+  fakeFs(on, RULE_FILES)
+  const id = String(jsonOf(await call($, 'save_group', { title: 'By status', rule: { creator: 'shawn' }, split: 'status' })).id)
+  const read = jsonOf(await call($, 'read_group', { id })) as ReadGroup
+  expect([read.rule, read.split]).toEqual([{ creator: 'shawn' }, 'status'])
+  expect(read.splitSections).toEqual([
+    { key: 'todo', items: ['.peek/tasks/a.md'] },
+    { key: 'done', items: ['.peek/tasks/c.md'] },
+  ])
+  const cleared = await call($, 'save_group', { id, rule: null, split: '' })
+  expect(cleared.split('\n')[0]).toMatch(/2 applied/)
+  const after = jsonOf(await call($, 'read_group', { id })) as ReadGroup
+  expect(['rule' in after, 'split' in after, 'splitSections' in after, after.items]).toEqual([false, false, false, []])
+})
+
+test('list_groups counts a rule group\'s computed members', async ($, on) => {
+  fakeFs(on, RULE_FILES)
+  await call($, 'save_group', { title: 'Mine', rule: 'creator=shawn' })
+  const listed = jsonOf(await call($, 'list_groups', {})) as unknown as { title: string; items: number }[]
+  expect(listed.map(one => [one.title, one.items])).toEqual([['Mine', 2]])
+})
+
+test('an agent remove of an item the rule matched is told it is in the group by its rule', async ($, on) => {
+  const w = fakeFs(on, RULE_FILES)
+  const id = String(jsonOf(await call($, 'save_group', { title: 'Mine', rule: 'creator=shawn' })).id)
+  const text = await call($, 'save_group', { id, remove: [{ target: '.peek/tasks/a.md' }] })
+  const outcomes = jsonOf(text).outcomes as { status: string; reason: string }[]
+  expect(outcomes.map(one => [one.status, one.reason])).toEqual([['unchanged', '.peek/tasks/a.md is in this group by its rule; change the rule to drop it']])
+  expect(savedGroup(w, id)?.items).toEqual([])
+})
+
+test('save_group refuses an unreadable rule or split with its reason and writes no group file', async ($, on) => {
+  const w = fakeFs(on, RULE_FILES)
+  const cases: [Record<string, unknown>, string][] = [
+    [{ title: 'Mine', rule: 42 }, 'rule is text like "creator=shawn and status=todo", or an object of prop values.'],
+    [{ title: 'Mine', rule: 'nothing here' }, 'rule is text like "creator=shawn and status=todo", or an object of prop values.'],
+    [{ title: 'Mine', split: 7 }, 'split is a prop name.'],
+  ]
+  for (const [input, message] of cases) expect([input, await call($, 'save_group', input)]).toEqual([input, message])
+  expect(Object.keys(w.files).filter(one => one.startsWith(`${dirOf('/repo/.git')}/`))).toEqual([])
+})

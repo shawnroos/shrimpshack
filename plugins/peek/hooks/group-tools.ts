@@ -1,21 +1,32 @@
-import type { Group, GroupOp, GroupOutcome, SectionLayout } from '../types/groups'
+import type { Group, GroupOp, GroupOutcome, GroupRule, SectionLayout } from '../types/groups'
 import { toHref } from './entries'
 import { plural } from './format'
-import { createGroup, deleteGroup, isGroupId, layoutOf, listGroups, readGroup, refused, shortId, applyGroupOps } from './groups'
+import { createGroup, deleteGroup, isGroupId, layoutOf, listGroups, membersOf, readGroup, refused, shortId, splitMembers, applyGroupOps } from './groups'
 import type { GroupWrite } from './groups'
-import { type GroupTarget, groupHome, groupTarget, itemState, setStar } from './groups-session'
+import { type GroupTarget, groupHome, groupTarget, itemState, ruleCandidates, setStar } from './groups-session'
 import { titlesByKey } from './refresh'
 import type { NavIo } from './navigation'
 import { parseHref } from './paths'
 import { itemKey } from './refs'
+import { TASK_TOOLS } from './task-tools'
+import type { TaskToolName } from './task-tools'
+import { parseRule } from './views/select'
 
-type ToolName = 'star' | 'list_groups' | 'read_group' | 'save_group' | 'delete_group'
+type ToolName = 'star' | 'list_groups' | 'read_group' | 'save_group' | 'delete_group' | TaskToolName
 type PeekTool = { spec: { name: ToolName; description: string; inputSchema: Record<string, unknown> }; run: (io: NavIo, input: unknown) => Promise<{ result: string }> }
+
+// A rule group's members are computed on every read, so the item list, its count and the split all come from here.
+async function withMembers(io: NavIo, group: Group, worktreeRoot?: string) {
+  const candidates = await ruleCandidates(io, [group], worktreeRoot)
+  const members = membersOf(group, candidates, worktreeRoot)
+  return { members, splitSections: splitMembers(group, members, candidates, worktreeRoot) }
+}
 
 async function groupJson(io: NavIo, group: Group, worktreeRoot?: string) {
   const known = titlesByKey()
+  const { members, splitSections } = await withMembers(io, group, worktreeRoot)
   const items = await Promise.all(
-    group.items.map(async one => ({
+    members.map(async one => ({
       ref: one.ref,
       title: known.get(itemKey(one.ref))?.title ?? null,
       label: one.label ?? null,
@@ -24,7 +35,18 @@ async function groupJson(io: NavIo, group: Group, worktreeRoot?: string) {
       state: await itemState(io, one.ref, worktreeRoot),
     })),
   )
-  return { id: group.id, title: group.title, description: group.description, starred: group.starred, sections: group.sections.map(one => ({ ...one, layout: layoutOf(one) })), items, removed: group.removed }
+  return {
+    id: group.id,
+    title: group.title,
+    description: group.description,
+    starred: group.starred,
+    ...(group.rule ? { rule: group.rule } : {}),
+    ...(group.split ? { split: group.split } : {}),
+    sections: group.sections.map(one => ({ ...one, layout: layoutOf(one) })),
+    items,
+    ...(splitSections ? { splitSections: splitSections.map(one => ({ key: one.key, items: one.items.map(item => item.ref) })) } : {}),
+    removed: group.removed,
+  }
 }
 
 function tally(outcomes: readonly GroupOutcome[]): string {
@@ -43,6 +65,8 @@ type SaveInput = {
   add?: unknown
   move?: unknown
   remove?: unknown
+  rule?: unknown
+  split?: unknown
 }
 
 const isText = (value: unknown): value is string => typeof value === 'string'
@@ -71,6 +95,26 @@ function sectionOps(value: unknown): GroupOp[] | string {
   return ops
 }
 
+const RULE_HELP = 'rule is text like "creator=shawn and status=todo", or an object of prop values.'
+
+// undefined leaves the rule alone; null, empty text or an empty object clears it.
+function ruleOp(value: unknown): GroupOp[] | string {
+  if (value === undefined) return []
+  if (value === null || value === '') return [{ op: 'setRule', rule: null }]
+  if (isText(value)) {
+    const rule = parseRule(value)
+    return Object.keys(rule).length ? [{ op: 'setRule', rule }] : RULE_HELP
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) return [{ op: 'setRule', rule: value as GroupRule }]
+  return RULE_HELP
+}
+
+function splitOp(value: unknown): GroupOp[] | string {
+  if (value === undefined) return []
+  if (value === null || isText(value)) return [{ op: 'setSplit', split: value || null }]
+  return 'split is a prop name.'
+}
+
 async function saveGroup(io: NavIo, input: SaveInput) {
   const home = await groupHome(io)
   if (!home) return { result: 'Could not save the group: HOME is not set.' }
@@ -82,6 +126,10 @@ async function saveGroup(io: NavIo, input: SaveInput) {
   if (id === undefined && !isText(input.title)) return { result: 'Give a title to create a group, or an id to change one.' }
   const sections = sectionOps(input.sections)
   if (typeof sections === 'string') return { result: sections }
+  const rule = ruleOp(input.rule)
+  if (typeof rule === 'string') return { result: rule }
+  const split = splitOp(input.split)
+  if (typeof split === 'string') return { result: split }
   const order = input.order
   if (order !== undefined && !(Array.isArray(order) && order.every(isText))) return { result: 'order must be a list of section ids or titles.' }
   const adds = listOf(input.add)
@@ -101,6 +149,8 @@ async function saveGroup(io: NavIo, input: SaveInput) {
       return exact ? exact.ref : target.ref
     }
     return [
+      ...rule,
+      ...split,
       ...sections,
       ...(order ? [{ op: 'reorderSections' as const, order: order as string[] }] : []),
       ...added.flatMap((one, i) =>
@@ -115,6 +165,10 @@ async function saveGroup(io: NavIo, input: SaveInput) {
 
   const isCreate = id === undefined
   const others = isCreate || isText(input.title) ? await listGroups(io.groupsIo(), place) : []
+  const existing = !isCreate && removes.length ? await readGroup(io.groupsIo(), place, id) : null
+  const candidates = existing ? await ruleCandidates(io, [existing], worktreeRoot) : []
+  // Read before the write, as the person's remove does, so removing a rule member tells the agent to change the rule.
+  const ruleMembers = (current: Group) => membersOf(current, candidates, worktreeRoot).flatMap(one => (one.addedBy === 'rule' ? [one.ref] : []))
   const ctx = { now: await io.now(), newId: () => shortId(Math.random), actor: 'agent' as const }
   const target = isCreate ? freshId(others) : id
   const write = await io.writeGroup(place, target, current => {
@@ -131,7 +185,7 @@ async function saveGroup(io: NavIo, input: SaveInput) {
       ...(isText(input.title) ? [{ op: 'setTitle' as const, title: input.title }] : []),
       ...(isText(input.description) ? [{ op: 'setDescription' as const, description: input.description }] : []),
     ]
-    return applyGroupOps(current, [...head, ...opsFor(current)], { ...ctx, others: others.filter(one => one.id !== target) })
+    return applyGroupOps(current, [...head, ...opsFor(current)], { ...ctx, others: others.filter(one => one.id !== target), ruleMembers: ruleMembers(current) })
   })
   if (!write.ok) return failedWrite(isCreate ? 'create the group' : 'save the group', write)
   if (write.isChanged) io.invalidate()
@@ -166,7 +220,7 @@ export const TOOLS: Record<ToolName, PeekTool> = {
     spec: {
       name: 'list_groups',
       description:
-        'List the peek groups in this project: titled bundles of related files and links (a collection) shown in the peek side pane. Returns each group id, title, description, star and counts. Call before save_group to reuse a group rather than make a near-duplicate.',
+        'List the peek groups in this project: titled bundles of related files and links (a collection) shown in the peek side pane. Returns each group id, title, description, star, rule, split and counts; a rule group counts the items its rule matches now. Call before save_group to reuse a group rather than make a near-duplicate.',
       inputSchema: { type: 'object', properties: {} },
     },
     run: io => listGroupsTool(io),
@@ -175,7 +229,7 @@ export const TOOLS: Record<ToolName, PeekTool> = {
     spec: {
       name: 'read_group',
       description:
-        'Read one peek group (a collection or bundle of files and links) in full: title, description, sections, and every item (file or link) with its title (null until peek has fetched it), label, section id, who added it (agent or person) and state (ok, missing, unavailable). Read before you change a group: the person may have added or removed items.',
+        'Read one peek group (a collection or bundle of files and links) in full: title, description, rule, split, sections, and every item (file or link) with its title (null until peek has fetched it), label, section id, who added it (agent, person, or rule for an item the rule matched) and state (ok, missing, unavailable). With a split, splitSections lists the items under each value of that prop. Read before you change a group: the person may have added or removed items.',
       inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'The group id from list_groups' } }, required: ['id'] },
     },
     run: (io, input) => readGroupTool(io, (input as { id?: unknown }).id),
@@ -184,7 +238,7 @@ export const TOOLS: Record<ToolName, PeekTool> = {
     spec: {
       name: 'save_group',
       description:
-        'Create or change a peek group: a titled, described bundle of files and links with sections, kept per project in the peek side pane so the person can come back to it. Without id it creates a group (title required); with id it applies the given changes. Changes are edits, never a replace: items the person added stay unless you remove one by name with force, and an item the person removed is only re-added with force. Sections are named by id or title, so one call can add a section and fill it. A section shows its items as cards (the default) or as a list of lines; set it with layout on add, or with the layout action.',
+        'Create or change a peek group: a titled, described bundle of files and links with sections, kept per project in the peek side pane so the person can come back to it. Without id it creates a group (title required); with id it applies the given changes. Changes are edits, never a replace: items the person added stay unless you remove one by name with force, and an item the person removed is only re-added with force. Sections are named by id or title, so one call can add a section and fill it. A section shows its items as cards (the default) or as a list of lines; set it with layout on add, or with the layout action. A rule makes the group fill and empty itself: every task whose props match it is a member, read fresh each time (for example creator=shawn, or list=<session>#1). A split sections the members by one prop, such as status.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -205,6 +259,10 @@ export const TOOLS: Record<ToolName, PeekTool> = {
               required: ['action'],
             },
           },
+          rule: {
+            description: 'Props every member matches, as text like "creator=shawn and status=todo" or an object { prop: value }; null or empty text clears it',
+          },
+          split: { type: 'string', description: 'A prop name to section the members by, such as status; empty text clears it' },
           order: { type: 'array', items: { type: 'string' }, description: 'Every section, by id or title, in the new order' },
           add: {
             type: 'array',
@@ -256,6 +314,7 @@ export const TOOLS: Record<ToolName, PeekTool> = {
       return deleteGroupTool(io, one.id, one.force === true)
     },
   },
+  ...TASK_TOOLS,
 }
 
 async function starTool(io: NavIo, e: unknown) {
@@ -273,13 +332,16 @@ async function listGroupsTool(io: NavIo) {
   const home = await groupHome(io)
   if (!home) return { result: 'Could not list groups: HOME is not set.' }
   const groups = await listGroups(io.groupsIo(), home.place)
+  const candidates = await ruleCandidates(io, groups, home.worktreeRoot)
   const summaries = groups.map(one => ({
     id: one.id,
     title: one.title,
     description: one.description,
     starred: one.starred,
     sections: one.sections.length,
-    items: one.items.length,
+    items: membersOf(one, candidates, home.worktreeRoot).length,
+    ...(one.rule ? { rule: one.rule } : {}),
+    ...(one.split ? { split: one.split } : {}),
     updatedAt: one.updatedAt,
   }))
   const line = groups.length ? `${plural(groups.length, 'group')} in this project.` : 'No groups in this project yet.'
@@ -292,8 +354,9 @@ async function readGroupTool(io: NavIo, id: unknown) {
   if (!home) return { result: 'Could not read the group: HOME is not set.' }
   const group = await readGroup(io.groupsIo(), home.place, id)
   if (!group) return { result: `No group ${id} in this project.` }
-  const line = `Group "${group.title}" (${group.id}): ${plural(group.items.length, 'item')} in ${plural(group.sections.length, 'section')}.`
-  return { result: `${line}\n${JSON.stringify(await groupJson(io, group, home.worktreeRoot))}` }
+  const json = await groupJson(io, group, home.worktreeRoot)
+  const line = `Group "${group.title}" (${group.id}): ${plural(json.items.length, 'item')} in ${plural(group.sections.length, 'section')}.`
+  return { result: `${line}\n${JSON.stringify(json)}` }
 }
 
 async function deleteGroupTool(io: NavIo, id: unknown, force: boolean) {

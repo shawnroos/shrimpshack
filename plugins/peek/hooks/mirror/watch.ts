@@ -32,7 +32,8 @@ export type Mirror = {
   noteStart: () => Promise<void>
   noteEnd: (session: string, reason: string) => Promise<void>
   setStatus: (record: string, status: string, how: { by: string; source: StatusSource }) => Promise<MirrorWrite>
-  adopt: (record: string, by: string) => Promise<MirrorWrite>
+  adopt: (record: string, by: string, into?: TaskPlace) => Promise<MirrorWrite>
+  moveList: (session: string, root: string) => Promise<void>
 }
 
 export const ARCHIVE_MS = 12 * 3600_000
@@ -102,7 +103,10 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       return userPlace(io)
     }
     // Only a found placement is kept: a session placed later must not stay pinned to the user log in this process.
-    const place = await capturePlace(io, folder)
+    // A list moved to the user-level list records that folder as its root; it is never asked of git, since a home
+    // folder can itself be a repo.
+    const user = await userPlace(io)
+    const place = folder === user.folder ? user : await capturePlace(io, folder)
     if (places.size >= MIRROR_CAPS.sessions) places.clear()
     places.set(session, place)
     return place
@@ -290,7 +294,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     }
   }
 
-  const takeOver = async (record: string, extra: Record<string, PropValue>): Promise<MirrorWrite & { place?: TaskPlace }> => {
+  const takeOver = async (record: string, extra: Record<string, PropValue>, into?: TaskPlace): Promise<MirrorWrite & { place?: TaskPlace }> => {
     const text = await io.read(record).catch(() => null)
     const props = text === null ? {} : propsOf(text)
     const session = typeof props.session === 'string' ? props.session : ''
@@ -298,7 +302,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     const name = typeof props.name === 'string' ? props.name : ''
     if (!session || !list || !name) return { status: 'refused', reason: `${record} is not a mirrored task` }
     const root = await mirrorRoot(io)
-    const place = await placeOf(root, session)
+    const place = into ?? (await placeOf(root, session))
     const prior = typeof props.takeover === 'string' ? props.takeover : ''
     if (prior && (await io.stat(prior))) {
       for (const [key, value] of Object.entries(extra)) await edit(prior, one => withProp(one, key, value))
@@ -343,9 +347,35 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       const outcome: StatusOutcome = await setStatus(io, taken.place, { doc: taken.doc, status, source: how.source, by: how.by, writer: self.id })
       return { status: outcome.status, reason: outcome.reason, doc: taken.doc }
     },
-    adopt: async (record, by) => {
-      const taken = await takeOver(record, { adopted_by: by })
+    adopt: async (record, by, into) => {
+      const taken = await takeOver(record, { adopted_by: by }, into)
       return { status: taken.status, reason: taken.reason, ...(taken.doc ? { doc: taken.doc } : {}) }
+    },
+    // A session's lists share one recorded repo, so moving one list moves them all, each with its group. A group's id
+    // comes from its list, so the new one keeps the id every other session already holds.
+    moveList: async (session, to) => {
+      const root = await mirrorRoot(io)
+      const f = await follow(root, session)
+      const state = f.state
+      const old = await placeOf(root, session)
+      const open = Object.entries(state?.lists ?? {}).filter(([, entry]) => entry.phase !== 'archived')
+      for (const [, entry] of open) {
+        if (entry.groupId) await archiveGroup(old, entry.groupId)
+        delete entry.groupId
+      }
+      // As in settle, only a list with an item not yet taken over has a group; the poll makes the rest when one comes.
+      const keys = open.flatMap(([key]) => ([...f.records.values()].some(rec => keyOf(rec.list) === key && !rec.takeover) ? [key] : []))
+      await writeNote(io, root, session, { ...(await readNote(io, root, session)), root: to })
+      places.delete(session)
+      unplaced.delete(session)
+      const next = await placeOf(root, session)
+      for (const key of keys) {
+        const entry = state?.lists[key]
+        if (!entry) continue
+        const groupId = await ensureGroup(next, session, key)
+        if (groupId) entry.groupId = groupId
+      }
+      if (state && open.length) await writeListState(io, root, session, state)
     },
   }
 }

@@ -80,7 +80,7 @@ export async function listFolderTasks(io: TasksIo, place: TaskPlace): Promise<Ta
   return docs.filter((one): one is TaskDoc => one !== null)
 }
 
-async function ensureExcluded(io: TasksIo, file: string): Promise<void> {
+export async function ensureExcluded(io: TasksIo, file: string): Promise<void> {
   const isPresent = (await io.stat(file)) !== null
   const text = isPresent ? await io.read(file).catch(() => null) : ''
   // An exclude file that exists but cannot be read is left alone, never overwritten with one line.
