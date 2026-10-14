@@ -13,7 +13,15 @@ export function describeAge(thenMs: number, nowMs: number): string {
   return `${Math.round(hours / 24)}d ago`
 }
 
+export function fetchedAge(fetchedAt: number | undefined, now: number): string {
+  if (fetchedAt === undefined) return ''
+  const seconds = Math.max(0, Math.round((now - fetchedAt) / 1000))
+  return seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
+}
+
 export const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
+
+export const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 
 export function initials(name: string): string {
   const words = name.split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean)
