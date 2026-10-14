@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { C } from '../hooks/theme'
+import { C, META_ICON } from '../hooks/theme'
 import { GH_PR_DEFINITION } from './fixtures/github/gh-pr-definition'
 import { issueView, pullView } from './fixtures/github/items'
 import { PR_BASELINE } from './fixtures/github/pr-baseline'
@@ -12,7 +12,7 @@ const NOW = 10 * 3600_000
 const FENCE = '```'
 const USER_VIEWS = '/home/.local/share/claude-peek/views'
 
-type PageWorld = { pull?: Record<string, unknown>; definition?: string; userDefinition?: string }
+type PageWorld = { pull?: Record<string, unknown>; definition?: string; userDefinition?: string; files?: Record<string, string> }
 
 function pageWorld(on: On, options: PageWorld = {}) {
   on('session.id', () => ({ value: 'pr-definition' }))
@@ -21,16 +21,19 @@ function pageWorld(on: On, options: PageWorld = {}) {
   on('clock.now', () => ({ value: NOW }))
   const files = new Map<string, string>()
   const fileAt = (path: string) => {
+    if (options.files?.[path] !== undefined) return options.files[path]
     if (path === `${USER_VIEWS}/gh-pr.md`) return options.userDefinition
     return path.endsWith('/views/gh-pr.md') ? options.definition : undefined
   }
+  const extraIn = (dir: string) => Object.keys(options.files ?? {}).filter(path => path.startsWith(`${dir}/`) && !path.slice(dir.length + 1).includes('/'))
   on('fs.stat', (_$, e) => {
     const text = fileAt(e.path)
     if (text !== undefined) return { value: { kind: 'file' as const, size: text.length, mtimeMs: text.length, isLink: false } }
     throw new Error(`ENOENT ${e.path}`)
   })
   on('fs.list', (_$, e) => {
-    if (fileAt(`${e.path}/gh-pr.md`) !== undefined) return { value: [{ name: 'gh-pr.md', kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false }] }
+    const names = [...new Set([...extraIn(e.path), ...(fileAt(`${e.path}/gh-pr.md`) !== undefined ? [`${e.path}/gh-pr.md`] : [])])].map(path => path.slice(e.path.length + 1))
+    if (names.length) return { value: names.map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1, isLink: false })) }
     throw new Error(`ENOENT ${e.path}`)
   })
   on('fs.read', (_$, e) => {
@@ -101,7 +104,7 @@ function bodyOf(node: unknown): unknown {
 
 const bodyTreeOf = async (ui: { drawn: () => Promise<unknown> }) => JSON.stringify(bodyOf(await ui.drawn()) ?? null).replace(/"handle":\d+/g, '"handle":0')
 
-type Mounted = { drawn: () => Promise<unknown>; find: (q: { text?: RegExp | string; key?: string }) => Promise<{ props: Record<string, unknown> } | undefined>; unmount: () => Promise<void> }
+type Mounted = { drawn: () => Promise<unknown>; find: (q: { type?: string; text?: RegExp | string; key?: string }) => Promise<{ props: Record<string, unknown> } | undefined>; unmount: () => Promise<void> }
 type Run = { command: { run: (input: never) => Promise<unknown> }; ui: { mount: (input: never) => Promise<unknown> } }
 
 async function openPage($: Run, href: string, width = 100): Promise<Mounted> {
@@ -188,5 +191,66 @@ test('a user definition that clashes with gh-pr names both files on the page, wh
   expect(await ui.find({ text: /\/views\/gh-pr\.md: type "gh-pr" is also defined by \/home\/\.local\/share\/claude-peek\/views\/gh-pr\.md; neither loads$/ })).toBeDefined()
   expect(await ui.find({ text: /^DETAILS$/ })).toBeDefined()
   expect(await ui.find({ text: /^COMMENTS $/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const USER_TASKS = '/home/.local/share/claude-peek/tasks'
+const TASK_DOC = ['---', 'name: "Write the release notes"', 'id: t1', 'status: todo', 'creator: shawn', '---', ''].join('\n')
+
+test('covers AE6 on a record page: a broken definition whose match names this record kind shows its problem naming the file', async ($, on) => {
+  const broken = ['---', 'type: my-pr', 'match: { record: gh-pr }', '---', `${FENCE}peek-list count(x)`, FENCE].join('\n')
+  const elsewhere = ['---', 'type: my-issue', 'match: { record: gh-issue }', '---', `${FENCE}peek-list count(y)`, FENCE].join('\n')
+  pageWorld(on, { definition: GH_PR_DEFINITION, files: { [`${USER_VIEWS}/my-pr.md`]: broken, [`${USER_VIEWS}/my-issue.md`]: elsewhere } })
+  const ui = await openPage($, PULL)
+  expect(await ui.find({ text: /^\/home\/\.local\/share\/claude-peek\/views\/my-pr\.md: block 1 \(peek-list, line 5\) "count\(x\)"/ })).toBeDefined()
+  expect(await ui.find({ text: /my-issue\.md/ })).toBeUndefined()
+  expect(await ui.find({ text: /^DETAILS$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a collection block in a pull request body draws the task items, not "no items"', async ($, on) => {
+  pageWorld(on, { definition: GH_PR_DEFINITION, files: { [`${USER_TASKS}/t1.md`]: TASK_DOC }, pull: { body: `Plan:\n\n${FENCE}peek-list status=todo\n${FENCE}\n` } })
+  const ui = await openPage($, PULL)
+  expect(await ui.find({ text: /^Write the release notes/ })).toBeDefined()
+  expect(await ui.find({ text: /^no items/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a collection block in a pull request body draws its items on the page with no definition too', async ($, on) => {
+  pageWorld(on, { files: { [`${USER_TASKS}/t1.md`]: TASK_DOC }, pull: { body: `${FENCE}peek-list status=todo\n${FENCE}\n` } })
+  const ui = await openPage($, PULL)
+  expect(await ui.find({ text: /^Write the release notes/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('placeholders in a record template are filled from the record, and a body placeholder draws as markdown', async ($, on) => {
+  const filled = GH_PR_DEFINITION.replace('```peek-media from=body title=Description', 'Opened as {{title}} in {{kind}}, state {{state}}.\n\n{{body}}\n\n```peek-media from=body title=Description')
+  pageWorld(on, { definition: filled, pull: { body: 'The **body** text.' } })
+  const ui = await openPage($, PULL)
+  const tree = await treeOf(ui)
+  expect(tree).not.toContain('{{')
+  expect(tree).toContain('Teach the parser trailing commas in gh-pr, state Open.')
+  expect(tree).toContain('The **body** text.')
+  await ui.unmount()
+})
+
+test('a definition that declares some icons keeps the built-in icon for every other label', async ($, on) => {
+  const onlyAuthor = GH_PR_DEFINITION.replace(/\nicons:\n(?: {2}[^\n]+\n)+/, '\nicons:\n  author: A\n')
+  pageWorld(on, { definition: onlyAuthor })
+  const ui = await openPage($, PULL)
+  expect(await ui.find({ text: /^A +$/ })).toBeDefined()
+  expect(await ui.find({ text: META_ICON.Branch })).toBeDefined()
+  expect(await ui.find({ text: /^Branch\s*$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('colors apply to a details value and to the header title, keyed by the prop the label or block names', async ($, on) => {
+  const colored = GH_PR_DEFINITION.replace('props:\n', 'props:\n  state:  { kind: text }\n')
+    .replace('colors:\n', 'colors:\n  state: { Open: blue }\n  status: { open: peach }\n')
+    .replace('peek-header from=title', 'peek-header from=status')
+  pageWorld(on, { definition: colored })
+  const ui = await openPage($, PULL)
+  expect((await ui.find({ text: /^Open$/ }))?.props.color).toBe(C.blue)
+  expect((await ui.find({ type: 'Text', text: /^open$/ }))?.props.color).toBe(C.peach)
   await ui.unmount()
 })

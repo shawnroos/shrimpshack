@@ -1,7 +1,7 @@
 import type { RemoteRecord } from '../../../types'
 import { describeAge } from '../../format'
 import { drawProse } from '../screens/view/prose'
-import { fieldOf, sectionRule } from './header'
+import { collectionsOf, fieldOf, sectionRule } from './header'
 import type { RecordEnv } from './header'
 
 type Thread = NonNullable<RemoteRecord['comments']>
@@ -31,6 +31,6 @@ export async function drawComments(env: RecordEnv, options: Record<string, strin
       </Box>,
     )
     blocks.note(1, title)
-    await drawProse(ctx, io, blocks, `comment-${i}-body`, env.linked(one.body || '*(empty)*'), { picture: env.picture, heading: title, indent, navStart: env.navBase + blocks.nav.length })
+    await drawProse(ctx, io, blocks, `comment-${i}-body`, env.linked(one.body || '*(empty)*'), { ...collectionsOf(env), picture: env.picture, heading: title, indent, navStart: env.navBase + blocks.nav.length })
   }
 }

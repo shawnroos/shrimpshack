@@ -1,5 +1,5 @@
-import { matches, readDefinition } from './definition'
-import type { Definition, DefinitionCheck, DefinitionProblem, MatchDoc } from './definition'
+import { matches, matchesRule, readDefinition } from './definition'
+import type { Definition, DefinitionCheck, DefinitionProblem, MatchDoc, MatchRule } from './definition'
 
 export type ViewsIo = {
   list: (dir: string) => Promise<readonly { name: string; kind: string }[]>
@@ -7,7 +7,8 @@ export type ViewsIo = {
   stat: (path: string) => Promise<{ mtimeMs: number } | null>
 }
 export type ViewFolders = { builtIn: string; user: string }
-export type ViewsLoad = { definitions: Definition[]; problems: DefinitionProblem[] }
+export type ProblemSource = { file: string; match?: MatchRule; problems: DefinitionProblem[] }
+export type ViewsLoad = { definitions: Definition[]; problems: DefinitionProblem[]; sources: ProblemSource[] }
 export type ViewRegistry = {
   load: (io: ViewsIo, folders: ViewFolders) => Promise<ViewsLoad>
   definitionFor: (io: ViewsIo, folders: ViewFolders, doc: MatchDoc) => Promise<Definition | null>
@@ -31,18 +32,18 @@ function withoutConflicts(checks: { file: string; check: DefinitionCheck }[]): V
     if (check.ok) filesByType.set(check.definition.type, [...(filesByType.get(check.definition.type) ?? []), file])
   }
   const definitions: Definition[] = []
-  const problems: DefinitionProblem[] = []
+  const sources: ProblemSource[] = []
   for (const { file, check } of checks) {
     if (!check.ok) {
-      problems.push(...check.problems)
+      sources.push({ file, ...(check.match ? { match: check.match } : {}), problems: check.problems })
       continue
     }
     const others = (filesByType.get(check.definition.type) ?? []).filter(one => one !== file)
-    if (others.length) problems.push({ file, path: 'type', message: `"${check.definition.type}" is also defined by ${others.join(', ')}; neither loads` })
+    if (others.length) sources.push({ file, match: check.definition.match, problems: [{ file, path: 'type', message: `"${check.definition.type}" is also defined by ${others.join(', ')}; neither loads` }] })
     else definitions.push(check.definition)
   }
   definitions.sort((a, b) => a.type.localeCompare(b.type))
-  return { definitions, problems }
+  return { definitions, sources, problems: sources.flatMap(one => one.problems) }
 }
 
 export function createViewRegistry(): ViewRegistry {
@@ -76,7 +77,8 @@ export function createViewRegistry(): ViewRegistry {
       if (check) checks.push({ file, check })
     }
     const loaded = withoutConflicts(checks)
-    return { definitions: loaded.definitions, problems: [...listed.flatMap(one => one.problems), ...loaded.problems] }
+    const sources = [...listed.flatMap(one => one.problems.map(problem => ({ file: problem.file, problems: [problem] }))), ...loaded.sources]
+    return { definitions: loaded.definitions, problems: sources.flatMap(one => one.problems), sources }
   }
 
   return {
@@ -86,4 +88,11 @@ export function createViewRegistry(): ViewRegistry {
       return definitions.find(one => matches(one, doc)) ?? null
     },
   }
+}
+
+const typeNameOf = (file: string) => (file.split('/').pop() ?? '').replace(/\.md$/, '')
+
+// A definition too broken to name its own match is shown only on the record page its file is named after.
+export function problemsFor(load: ViewsLoad, doc: MatchDoc): DefinitionProblem[] {
+  return load.sources.filter(one => (one.match ? matchesRule(one.match, doc) : typeNameOf(one.file) === doc.recordKind)).flatMap(one => one.problems)
 }

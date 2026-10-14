@@ -5,6 +5,7 @@ import { fitRow } from '../hooks/measure'
 import { newBlocks, settleBlocks } from '../hooks/pane/screens/view/blocks'
 import { drawProse, proseParts } from '../hooks/pane/screens/view/prose'
 import type { ProseOptions } from '../hooks/pane/screens/view/prose'
+import { readDefinition } from '../hooks/views/definition'
 import type { Item } from '../hooks/views/items'
 import type { Rule } from '../hooks/views/select'
 
@@ -394,4 +395,21 @@ test('a fixed record block draws one line, not a code block', async () => {
   const { part } = await drawOne(fence('peek-header'), options(ITEMS), 80, 'file:///repo/header.md')
   expect(part.rows).toBe(1)
   expect(linesOf(part.node).join('')).not.toContain('CODE')
+})
+
+test('a row status glyph takes the color its definition maps the status to, and keeps the built-in one otherwise', async () => {
+  const check = readDefinition('task.md', ['---', 'type: task', 'match: { folder: tasks }', 'props:', '  status: { kind: choice, values: [todo, doing] }', 'colors:', '  status: { todo: red }', '---'].join('\n'))
+  if (!check.ok) throw new Error('the probe definition must load')
+  const ctx = { ...(fakeCtx(80, 'file:///repo/colors.md') as object), C: new Proxy({}, { get: (_t, key) => `#${String(key)}` }) }
+  const glyphColors = async (opts: ProseOptions) => {
+    const parts = await proseParts(ctx as never, fakeIo() as never, 'body', fence('peek-list'), opts)
+    const colors: string[] = []
+    walk(parts[0]?.node, one => {
+      if (one.type === 'Text' && /^[○◐●⊘·] $/.test(flat(one.children))) colors.push(`${flat(one.children).trim()} ${String(one.props.color)}`)
+    })
+    return colors
+  }
+  const items = [task('t', 'Todo one'), task('d', 'Doing one', { status: 'doing' })]
+  expect(await glyphColors(options(items, { definitions: () => [check.definition] }))).toEqual(['◐ #yellow', '○ #red'])
+  expect(await glyphColors(options(items))).toEqual(['◐ #yellow', '○ #overlay1'])
 })

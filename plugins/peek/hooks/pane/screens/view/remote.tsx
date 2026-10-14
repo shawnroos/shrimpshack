@@ -1,4 +1,4 @@
-import type { View } from '../../../../types'
+import type { PropValue, RemoteRecord, View } from '../../../../types'
 import { linkify } from '../../../markdown'
 import { fitName } from '../../../measure'
 import { openFromPage, refContext } from '../../../navigation'
@@ -7,16 +7,18 @@ import { parseRef } from '../../../refs'
 import { adapterOfKind, failureText } from '../../../sources/adapter'
 import { matches, problemLine } from '../../../views/definition'
 import type { Definition, DefinitionProblem } from '../../../views/definition'
-import { createViewRegistry } from '../../../views/registry'
+import { fillTemplate } from '../../../views/fill'
+import { createViewRegistry, problemsFor } from '../../../views/registry'
 import type { ViewsIo } from '../../../views/registry'
 import { drawComments } from '../../blocks/comments'
-import { drawFields } from '../../blocks/fields'
+import { drawFields, propKey } from '../../blocks/fields'
 import { drawHeader, sectionRule } from '../../blocks/header'
 import type { RecordEnv } from '../../blocks/header'
 import { drawMedia, recordPictures } from '../../blocks/media'
 import type { DrawContext, PictureBudget } from '../../types'
 import { newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
+import { itemsOnce } from './markdown'
 import { drawProse } from './prose'
 import type { ProsePart, RecordBlock } from './prose'
 import { slackThread } from './slack'
@@ -36,13 +38,26 @@ const RECORD_DRAWERS: Record<RecordBlock, (env: RecordEnv, options: Record<strin
 }
 
 // A record kind with a loaded view definition draws from its template; the rest keep the drawing below.
-async function viewOf(ctx: DrawContext, io: NavIo, kind: string): Promise<{ definition: Definition | null; problems: DefinitionProblem[] }> {
+async function viewOf(ctx: DrawContext, io: NavIo, kind: string): Promise<{ definition: Definition | null; definitions: Definition[]; problems: DefinitionProblem[] }> {
   const viewsIo: ViewsIo = { list: dir => io.list(dir), read: io.readFile, stat: io.stat }
   const folders = { builtIn: `${io.liveIo().root}/views`, user: `${ctx.home}/.local/share/claude-peek/views` }
-  const { definitions, problems } = await views.load(viewsIo, folders)
+  const load = await views.load(viewsIo, folders)
   return {
-    definition: definitions.find(one => matches(one, { recordKind: kind })) ?? null,
-    problems: problems.filter(one => one.file.endsWith(`/${kind}.md`)),
+    definition: load.definitions.find(one => matches(one, { recordKind: kind })) ?? null,
+    definitions: load.definitions,
+    problems: problemsFor(load, { recordKind: kind }),
+  }
+}
+
+function recordValues(record: RemoteRecord): Record<string, PropValue> {
+  return {
+    ...Object.fromEntries(record.meta.map(one => [propKey(one.label), one.value])),
+    ...(record.stats ?? {}),
+    title: record.title,
+    kind: record.kind,
+    address: record.address,
+    url: record.browserUrl,
+    ...(record.status ? { status: record.status } : {}),
   }
 }
 
@@ -85,7 +100,7 @@ export async function remoteBody(ctx: DrawContext, io: NavIo, current: View, rem
     note(remote.failureDetail ? 4 : 3)
     return settleBlocks(ctx, io, blocks)
   }
-  const { definition, problems } = await viewOf(ctx, io, record.kind)
+  const { definition, definitions, problems } = await viewOf(ctx, io, record.kind)
   if (problems.length) {
     drawnParts.push(
       <Box key="view-problems" flexDirection="column" width={textWidth}>
@@ -96,9 +111,19 @@ export async function remoteBody(ctx: DrawContext, io: NavIo, current: View, rem
     )
     note(problems.length)
   }
-  const env: RecordEnv = { ctx, io, blocks, remote, record, budget, linked, picture, navBase: 0, icons: definition?.icons ?? {}, colors: definition?.colors ?? {} }
+  const items = itemsOnce(io)
+  const env: RecordEnv = { ctx, io, blocks, remote, record, budget, linked, picture, navBase: 0, icons: definition?.icons ?? {}, colors: definition?.colors ?? {}, items, definitions: () => definitions }
   if (definition) {
-    await drawProse(ctx, io, blocks, 'view', definition.template, { picture, record: (lang, options, navStart) => recordParts(env, lang, options, navStart) })
+    const body = record.body ?? ''
+    for (const [index, part] of fillTemplate(definition.template, recordValues(record), { description: body, body }).entries()) {
+      // The first part keeps the key 'view' so a template with no placeholders draws the pinned PR baseline unchanged.
+      await drawProse(ctx, io, blocks, index ? `view-part-${index}` : 'view', part.kind === 'value' ? linked(part.text) : part.text, {
+        picture,
+        items,
+        definitions: () => definitions,
+        record: (lang, options, navStart) => recordParts(env, lang, options, navStart),
+      })
+    }
     return settleBlocks(ctx, io, blocks)
   }
   drawHeader(env, {})

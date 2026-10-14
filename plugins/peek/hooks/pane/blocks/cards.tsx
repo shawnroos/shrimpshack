@@ -15,7 +15,7 @@ export function drawCards(env: BlockEnv, items: readonly Item[]): BlockDraw {
   const room = cardWidth - 2
   const card = (item: Item): RenderChildren => {
     const row = claimRow(env, item, false)
-    const { glyph, color } = glyphOf(env.ctx, item)
+    const { glyph, color } = glyphOf(env, item)
     const parts = rightParts(item)
     const meta = parts.filter(one => !one.keep).map(one => one.text).join(' · ')
     const flag = parts.some(one => one.keep) ? '⚑ missing props' : ' '

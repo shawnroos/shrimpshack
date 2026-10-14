@@ -2,8 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { matches, problemLine, readDefinition, requiredPropsFor } from '../hooks/views/definition'
 import type { Definition, DefinitionCheck } from '../hooks/views/definition'
-import { createViewRegistry } from '../hooks/views/registry'
+import { createViewRegistry, problemsFor } from '../hooks/views/registry'
 import type { ViewsIo } from '../hooks/views/registry'
+import { PANE_PROPS, fakeFs } from './fixtures/world'
 
 const FENCE = '```'
 
@@ -36,7 +37,7 @@ const PR = [
   '  state: { kind: choice, values: [open, merged, closed] }',
   '  body:  { kind: text }',
   'colors:',
-  '  state: { open: green, merged: purple, closed: red }',
+  '  state: { open: green, merged: mauve, closed: red }',
   '---',
   `${FENCE}peek-header title={{title}} status=state`,
   FENCE,
@@ -73,7 +74,7 @@ describe('readDefinition: blocks (AE6)', () => {
     const definition = loaded(readDefinition('gh-pr.md', PR))
     expect(definition.type).toBe('gh-pr')
     expect(definition.match).toEqual({ record: 'gh-pr' })
-    expect(definition.colors).toEqual({ state: { open: 'green', merged: 'purple', closed: 'red' } })
+    expect(definition.colors).toEqual({ state: { open: 'green', merged: 'mauve', closed: 'red' } })
     expect(definition.blocks.map(block => [block.language, block.line, block.options])).toEqual([
       ['peek-header', 10, { title: '{{title}}', status: 'state' }],
       ['peek-fields', 15, { hide_empty: 'true', color: 'state' }],
@@ -202,6 +203,13 @@ describe('readDefinition: frontmatter', () => {
     expect(lines(['icons: author'])).toEqual(['icons.md: icons must map a field label to an icon, got text'])
   })
 
+  test('a color name peek cannot draw is refused at load, listing the names it can', () => {
+    const check = readDefinition('c.md', ['---', 'type: c', 'match: { record: c }', 'props:', '  state: { kind: text }', 'colors:', '  state: { open: purple, done: green }', '---'].join('\n'))
+    expect(problemsOf(check)).toEqual([
+      'c.md: colors.state.open "purple" is not a color peek draws; use red, yellow, green, teal, blue, mauve, peach, accent, text, subtext, gray, muted',
+    ])
+  })
+
   test('requires_when must name declared props', () => {
     const check = readDefinition(
       'when.md',
@@ -321,5 +329,64 @@ describe('view registry', () => {
     expect((await registry.definitionFor(io, FOLDERS, { path: '/repo/docs/plan.md', props: { isTask: true } }))?.type).toBe('task')
     expect((await registry.definitionFor(io, FOLDERS, { recordKind: 'gh-pr' }))?.type).toBe('gh-pr')
     expect(await registry.definitionFor(io, FOLDERS, { path: '/repo/docs/readme.md', props: {} })).toBe(null)
+  })
+})
+
+describe('problems for a page', () => {
+  const BROKEN_BLOCK = [`${FENCE}peek-list count(x)`, FENCE]
+  const meeting = ['---', 'type: meeting', 'match: { folder: meetings }', '---', ...BROKEN_BLOCK].join('\n')
+
+  test('covers AE6: a broken definition shows on the pages its match would apply to, and nowhere else', async () => {
+    const { io } = fakeIo({ [`${BUILT_IN}/task.md`]: TASK, [`${USER}/meeting.md`]: meeting })
+    const load = await createViewRegistry().load(io, FOLDERS)
+    expect(problemsFor(load, { path: '/repo/meetings/standup.md', props: {} }).map(problemLine)).toEqual([
+      `${USER}/meeting.md: block 1 (peek-list, line 5) "count(x)" is not a key=value option or a {{name}} placeholder; blocks hold no loops, expressions or code`,
+    ])
+    expect(problemsFor(load, { path: '/repo/docs/plan.md', props: {} })).toEqual([])
+    expect(problemsFor(load, { recordKind: 'gh-pr' })).toEqual([])
+  })
+
+  test('a definition whose match cannot be read shows on the record page named like the file', async () => {
+    const { io } = fakeIo({ [`${USER}/gh-pr.md`]: '# no frontmatter' })
+    const load = await createViewRegistry().load(io, FOLDERS)
+    expect(problemsFor(load, { recordKind: 'gh-pr' }).map(problemLine)).toEqual([`${USER}/gh-pr.md: $ has no frontmatter; a definition starts with ---`])
+    expect(problemsFor(load, { recordKind: 'gh-issue' })).toEqual([])
+    expect(problemsFor(load, { path: '/repo/gh-pr.md', props: {} })).toEqual([])
+  })
+
+  test('a type clash shows on a page either file would match, and each line names both files', async () => {
+    const { io } = fakeIo({ [`${BUILT_IN}/task.md`]: TASK, [`${USER}/my-task.md`]: TASK.replace('match: { folder: .peek/tasks, prop: isTask, equals: true }', 'match: { folder: chores }') })
+    const load = await createViewRegistry().load(io, FOLDERS)
+    expect(problemsFor(load, { path: '/repo/chores/a.md', props: {} }).map(problemLine)).toEqual([
+      `${USER}/my-task.md: type "task" is also defined by ${BUILT_IN}/task.md; neither loads`,
+    ])
+    expect(problemsFor(load, { path: '/repo/.peek/tasks/a.md', props: {} }).map(problemLine)).toEqual([
+      `${BUILT_IN}/task.md: type "task" is also defined by ${USER}/my-task.md; neither loads`,
+    ])
+    expect(problemsFor(load, { path: '/repo/docs/plan.md', props: {} })).toEqual([])
+  })
+})
+
+describe('problems on a file page', () => {
+  type Pane = { redraw: () => Promise<unknown>; find: (q: { text: RegExp }) => Promise<unknown>; unmount: () => Promise<void> }
+  const settle = async () => {
+    for (let i = 0; i < 50; i++) await Promise.resolve()
+  }
+  const meeting = ['---', 'type: meeting', 'match: { folder: meetings }', '---', `${FENCE}peek-list count(x)`, FENCE].join('\n')
+
+  test('covers AE6 on a file page: a broken definition whose match takes this page shows a line naming the file; another page shows none', async ($, on) => {
+    fakeFs(on, { [`${USER}/meeting.md`]: meeting, '/repo/meetings/standup.md': '# Standup\n\nNotes.\n' })
+    const ui = (await $.ui.mount({ plugin: 'peek', surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: 'peek' } as never)) as Pane
+    const line = /^\/home\/\.local\/share\/claude-peek\/views\/meeting\.md: block 1 \(peek-list, line 5\) "count\(x\)"/
+    await $.command.run({ command: 'peek', args: '/repo/meetings/standup.md' } as never)
+    await settle()
+    await ui.redraw()
+    expect(await ui.find({ text: line })).toBeDefined()
+    expect(await ui.find({ text: /^STANDUP$/ })).toBeDefined()
+    await $.command.run({ command: 'peek', args: '/repo/docs/plan.md' } as never)
+    await settle()
+    await ui.redraw()
+    expect(await ui.find({ text: line })).toBeUndefined()
+    await ui.unmount()
   })
 })

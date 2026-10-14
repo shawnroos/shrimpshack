@@ -7,6 +7,8 @@ import { pressLink } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { fileHref } from '../../../paths'
 import { ICON } from '../../../theme'
+import { matches } from '../../../views/definition'
+import type { Definition } from '../../../views/definition'
 import type { Item } from '../../../views/items'
 import { select } from '../../../views/select'
 import type { Rule } from '../../../views/select'
@@ -34,6 +36,8 @@ export type ProseOptions = {
   indent?: number
   // What a collection block draws from; a page without one draws each block's empty row.
   items?: (rule: Rule, options: Record<string, string>) => readonly Item[] | Promise<readonly Item[]>
+  // The loaded definitions, so a row takes the colors its own type declares.
+  definitions?: () => readonly Definition[] | Promise<readonly Definition[]>
   // The page's keyboard row the first block row takes, when earlier prose on the page already claimed rows.
   navStart?: number
   // A record page draws the record blocks (header, fields, media, comments) from its record; elsewhere each is a note.
@@ -77,6 +81,7 @@ export async function proseParts(ctx: DrawContext, io: NavIo, key: string, text:
   const add = (node: RenderChildren, rows: number, heading?: string, nav?: BlockNav[]) =>
     out.push({ node: indent ? <Box key={`${key}-in-${out.length}`} marginLeft={indent}>{node}</Box> : node, rows, heading, ...(nav?.length ? { nav } : {}) })
   let cursor: number | undefined
+  let definitions: readonly Definition[] | undefined
   let navCount = options.navStart ?? 0
   let chunkIndex = 0
   for (const [index, part] of partsOf(text).entries()) {
@@ -97,6 +102,8 @@ export async function proseParts(ctx: DrawContext, io: NavIo, key: string, text:
       add(DimLine(inner, `${at}-record`, `${part.lang} · drawn on a record page`, width), 1)
     } else if (spec) {
       cursor ??= await io.cursor.read()
+      definitions ??= (await options.definitions?.()) ?? []
+      const known = definitions
       const nav: BlockNav[] = []
       const env: BlockEnv = {
         ctx: inner,
@@ -110,6 +117,7 @@ export async function proseParts(ctx: DrawContext, io: NavIo, key: string, text:
         navStart: navCount,
         nav,
         open: href => void pressLink(io, href.startsWith('/') ? fileHref(href) : href),
+        colorsOf: item => known.find(one => matches(one, { path: item.href, props: item.props }))?.colors,
       }
       const items = select((await options.items?.(spec.rule, spec.options)) ?? [], { rule: spec.rule, ...(spec.cap === undefined ? {} : { cap: spec.cap }) })
       const drawn = collection(env, spec, items)

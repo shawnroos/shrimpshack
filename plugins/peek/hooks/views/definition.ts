@@ -9,6 +9,8 @@ export const LAYOUTS = ['cards', 'list', 'tree', 'sections', 'board', 'focus'] a
 export type Layout = (typeof LAYOUTS)[number]
 export const LAYOUT_PLACES = ['page', 'group', 'recent', 'gallery'] as const
 export type LayoutPlace = (typeof LAYOUT_PLACES)[number]
+export const COLOR_NAMES = ['red', 'yellow', 'green', 'teal', 'blue', 'mauve', 'peach', 'accent', 'text', 'subtext', 'gray', 'muted'] as const
+export type ColorName = (typeof COLOR_NAMES)[number]
 
 export type PropDecl = { kind: PropKind; isRequired: boolean; values?: string[] }
 export type MatchRule = { folder?: string; prop?: { name: string; equals: PropScalar }; record?: string; recipe?: string }
@@ -22,14 +24,15 @@ export type Definition = {
   props: Record<string, PropDecl>
   requiresWhen?: RequiresWhen
   layoutDefault: { [P in LayoutPlace]?: Layout }
-  colors: Record<string, Record<string, string>>
+  colors: Record<string, Record<string, ColorName>>
   icons: Record<string, string>
   template: string
   templateStartLine: number
   blocks: Block[]
 }
 export type DefinitionProblem = { file: string; path: string; message: string }
-export type DefinitionCheck = { ok: true; definition: Definition } | { ok: false; problems: DefinitionProblem[] }
+// A failed check keeps its match rule when that part read cleanly, so its problems can show on the pages it would take.
+export type DefinitionCheck = { ok: true; definition: Definition } | { ok: false; problems: DefinitionProblem[]; match?: MatchRule }
 export type MatchDoc = { path?: string; props?: Record<string, PropValue>; recordKind?: string }
 
 export const DEFINITION_CAPS = { problems: 50, props: 40, values: 40, blocks: 40 }
@@ -40,7 +43,6 @@ const PROP_KEYS = ['kind', 'required', 'values'] as const
 const TYPE_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/
 const FOLDER_SEGMENT = /^[\w.-]+$/
-const COLOR = /^[a-z][a-z-]{0,23}$/
 const LABEL_KEY = /^[a-z][a-z0-9_-]{0,39}$/
 const ICON = /^[^\s\u0000-\u001F\u007F-\u009F]{1,4}$/u
 const PLACEHOLDER = /^\{\{[A-Za-z_][\w-]{0,31}\}\}$/
@@ -233,8 +235,8 @@ function layoutsOf(report: Report, raw: unknown): { [P in LayoutPlace]?: Layout 
   return layouts
 }
 
-function colorsOf(report: Report, raw: unknown, props: Record<string, PropDecl>): Record<string, Record<string, string>> {
-  const colors: Record<string, Record<string, string>> = {}
+function colorsOf(report: Report, raw: unknown, props: Record<string, PropDecl>): Record<string, Record<string, ColorName>> {
+  const colors: Record<string, Record<string, ColorName>> = {}
   if (raw === undefined || raw === null) return colors
   if (!isRecord(raw)) {
     report('colors', `must map a prop to { value: color }, got ${kindOf(raw)}`)
@@ -250,9 +252,9 @@ function colorsOf(report: Report, raw: unknown, props: Record<string, PropDecl>)
       report(path, `must map a value to a color, got ${kindOf(map)}`)
       continue
     }
-    const each: Record<string, string> = {}
+    const each: Record<string, ColorName> = {}
     for (const [value, color] of Object.entries(map)) {
-      const name = word(report, color, join(path, value), COLOR, 'a color name')
+      const name = oneOf(report, color, join(path, value), COLOR_NAMES, 'a color peek draws')
       if (name) each[value] = name
     }
     colors[prop] = each
@@ -367,7 +369,7 @@ export function readDefinition(file: string, text: string): DefinitionCheck {
   const colors = colorsOf(report, top.colors, props)
   const icons = iconsOf(report, top.icons)
   const blocks = templateBlocks(report, front.body, front.bodyStartLine)
-  if (sink.length || type === undefined || match === undefined) return { ok: false, problems: sink }
+  if (sink.length || type === undefined || match === undefined) return { ok: false, problems: sink, ...optional('match', match) }
   return {
     ok: true,
     definition: {
@@ -397,8 +399,9 @@ function isInFolder(path: string, folder: string): boolean {
   return false
 }
 
-export function matches(definition: Definition, doc: MatchDoc): boolean {
-  const { match } = definition
+export const matches = (definition: Definition, doc: MatchDoc): boolean => matchesRule(definition.match, doc)
+
+export function matchesRule(match: MatchRule, doc: MatchDoc): boolean {
   if (match.recipe !== undefined) return false
   if (match.record !== undefined) return doc.recordKind === match.record
   if (doc.path === undefined) return false

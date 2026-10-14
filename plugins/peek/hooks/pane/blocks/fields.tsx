@@ -5,7 +5,7 @@ import { estimateRows } from '../../measure'
 import { ICON, META_ICON } from '../../theme'
 import { Embed, fullWidthOf } from '../screens/view/blocks'
 import { fitPicture } from '../widgets'
-import { colorNamed, fieldOf, kindColor } from './header'
+import { colorNamed, colorOf, fieldOf, kindColor } from './header'
 import type { RecordEnv } from './header'
 
 type Row = { label: string; value: string }
@@ -18,11 +18,10 @@ const isChanges = (value: unknown): value is Changes =>
   typeof value === 'object' && value !== null && ['additions', 'deletions', 'changedFiles'].every(key => typeof (value as Record<string, unknown>)[key] === 'number')
 
 export const iconKey = (label: string) => label.trim().toLowerCase().replace(/\s+/g, '-')
+// Prop names cannot hold "-", so a colors key spells a label's spaces as "_" where its icons key uses "-".
+export const propKey = (label: string) => label.trim().toLowerCase().replace(/\W+/g, '_')
 
-// A definition that declares no icons keeps the shared label icons, so pages without one still draw them.
-function labelIcon(env: RecordEnv, label: string): string | undefined {
-  return Object.keys(env.icons).length ? env.icons[iconKey(label)] : META_ICON[label]
-}
+const labelIcon = (env: RecordEnv, label: string): string | undefined => env.icons[iconKey(label)] ?? META_ICON[label]
 
 function boxIcon(env: RecordEnv, name: string | undefined): string {
   if (!name || name === 'kind') return iconFor(env.record.kind)
@@ -67,7 +66,7 @@ function labelRows(env: RecordEnv, from: string, title: string, rows: Row[], opt
         {rows.map((one, i) => (
           <Text key={`meta-${i}`} wrap="truncate-end">
             <Text color={C.overlay0}>{(labelIcon(env, one.label) ?? one.label).padEnd(labelWidth)}</Text>
-            <Text color={C.text}>{one.value}</Text>
+            <Text color={colorOf(C, env.colors, propKey(one.label), one.value) ?? C.text}>{one.value}</Text>
           </Text>
         ))}
       </Box>
@@ -80,7 +79,7 @@ function changeRows(env: RecordEnv, from: string, title: string, changes: Change
   const { ctx, blocks } = env
   const { Box, Text, C } = ctx
   const tone: Record<CiTone, string> = { bad: C.red, wait: C.yellow, ok: C.green, none: C.overlay1 }
-  const ciColor = colorNamed(C, env.colors.ciTone?.[changes.ciTone] ?? '') ?? tone[changes.ciTone]
+  const ciColor = colorOf(C, env.colors, 'ciTone', changes.ciTone) ?? tone[changes.ciTone]
   blocks.drawnParts.push(
     Embed(ctx, `remote-${from}`, boxIcon(env, options.icon), title.toUpperCase(), `${changes.changedFiles} files`, boxColor(env, options.color), (
       <Box flexDirection="column">

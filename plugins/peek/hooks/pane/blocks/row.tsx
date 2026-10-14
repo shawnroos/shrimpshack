@@ -7,6 +7,8 @@ import type { Item } from '../../views/items'
 import type { TreeNode } from '../../views/select'
 import type { DrawContext } from '../types'
 import { noteRow } from './common'
+import { colorOf } from './header'
+import type { PropColors } from './header'
 
 // The prop the agent-list mirror sets on an open task whose session ended without anyone adopting it.
 export const SESSION_ENDED_PROP = 'session_ended'
@@ -25,6 +27,7 @@ export type BlockEnv = {
   navStart: number
   nav: BlockNav[]
   open: (href: string) => void
+  colorsOf?: (item: Item) => PropColors | undefined
 }
 
 export type BlockDraw = { node: RenderChildren; rows: number }
@@ -43,11 +46,11 @@ export const statusOf = (item: Item) => textProp(item, 'status')
 
 export const isEnded = (item: Item) => item.props[SESSION_ENDED_PROP] === true
 
-export function glyphOf(ctx: DrawContext, item: Item): { glyph: string; color: string } {
-  const { C } = ctx
+export function glyphOf(env: BlockEnv, item: Item): { glyph: string; color: string } {
+  const { C } = env.ctx
   const status = statusOf(item)
-  const color = status === 'doing' ? C.yellow : status === 'done' ? C.green : status === 'cancelled' ? C.overlay0 : C.overlay1
-  return { glyph: STATUS_GLYPH[status] ?? '·', color }
+  const builtIn = status === 'doing' ? C.yellow : status === 'done' ? C.green : status === 'cancelled' ? C.overlay0 : C.overlay1
+  return { glyph: STATUS_GLYPH[status] ?? '·', color: colorOf(C, env.colorsOf?.(item), 'status', status) ?? builtIn }
 }
 
 // In drop order: the due date gives way first, then the creator, then "session ended"; the flag never does.
@@ -70,7 +73,7 @@ export function claimRow(env: BlockEnv, item: Item, hasChildren: boolean) {
 export function ItemLine(env: BlockEnv, item: Item, shape: RowShape, width = env.width): RenderChildren {
   const { Box, Text, Button, C } = env.ctx
   const row = claimRow(env, item, shape.fold !== '')
-  const { glyph, color } = glyphOf(env.ctx, item)
+  const { glyph, color } = glyphOf(env, item)
   const parent = shape.parentName ? `${shape.parentName.length > PARENT_ROOM ? `${shape.parentName.slice(0, PARENT_ROOM - 1)}…` : shape.parentName} › ` : ''
   const count = shape.count ? ` (${shape.count})` : ''
   const lead = shape.branch.length + shape.fold.length + glyph.length + 1 + parent.length + count.length

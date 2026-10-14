@@ -3,6 +3,7 @@ import { pixels } from '../../images'
 import { colorFor, iconFor } from '../../kinds'
 import type { NavIo } from '../../navigation'
 import { mute } from '../../theme'
+import type { ColorName } from '../../views/definition'
 import type { Blocks } from '../screens/view/blocks'
 import type { ProseOptions } from '../screens/view/prose'
 import type { DrawContext, PictureBudget } from '../types'
@@ -20,12 +21,14 @@ export type RecordEnv = {
   // The page's keyboard rows already taken when this block draws into blocks of its own.
   navBase: number
   icons: Readonly<Record<string, string>>
-  colors: Readonly<Record<string, Readonly<Record<string, string>>>>
+  colors: PropColors
+  items?: ProseOptions['items']
+  definitions?: ProseOptions['definitions']
 }
 
 // Color names a definition may use, read from the draw's colors so a page dims with the menu open.
 export function colorNamed(C: DrawContext['C'], name: string): string | undefined {
-  const palette: Record<string, string> = {
+  const palette: Record<ColorName, string> = {
     red: C.red,
     yellow: C.yellow,
     green: C.green,
@@ -39,8 +42,18 @@ export function colorNamed(C: DrawContext['C'], name: string): string | undefine
     gray: C.overlay1,
     muted: C.overlay0,
   }
-  return Object.hasOwn(palette, name) ? palette[name] : undefined
+  return Object.hasOwn(palette, name) ? palette[name as ColorName] : undefined
 }
+
+export type PropColors = Readonly<Record<string, Readonly<Record<string, string>>>>
+
+export const colorOf = (C: DrawContext['C'], colors: PropColors | undefined, prop: string, value: string): string | undefined =>
+  colorNamed(C, colors?.[prop]?.[value] ?? '')
+
+export const collectionsOf = (env: RecordEnv): Pick<ProseOptions, 'items' | 'definitions'> => ({
+  ...(env.items ? { items: env.items } : {}),
+  ...(env.definitions ? { definitions: env.definitions } : {}),
+})
 
 export const fieldOf = (record: RemoteRecord, name: string | undefined): unknown => (name ? (record as unknown as Record<string, unknown>)[name] : undefined)
 
@@ -54,7 +67,8 @@ export function sectionRule(env: Pick<RecordEnv, 'ctx' | 'blocks'>, key: string,
 export function drawHeader(env: RecordEnv, options: Record<string, string>) {
   const { ctx, remote, record, budget, blocks } = env
   const { Box, Text, Image, C, textWidth } = ctx
-  const named = fieldOf(record, options.from)
+  const from = options.from ?? 'title'
+  const named = fieldOf(record, from)
   const title = typeof named === 'string' && named ? named : record.title
   const favicon = fitPicture(budget, remote.favicon && pixels.get(remote.favicon.file))
   blocks.drawnParts.push(
@@ -67,7 +81,7 @@ export function drawHeader(env: RecordEnv, options: Record<string, string>) {
         <Text color={kindColor(ctx, record.kind)}>{`${iconFor(record.kind)} `}</Text>
       )}
       <Box flexShrink={1}>
-        <Text color={C.text} bold>{title}</Text>
+        <Text color={colorOf(C, env.colors, from, title) ?? C.text} bold>{title}</Text>
       </Box>
     </Box>,
   )

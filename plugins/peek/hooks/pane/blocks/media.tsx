@@ -9,7 +9,7 @@ import { drawProse } from '../screens/view/prose'
 import type { ProseOptions } from '../screens/view/prose'
 import type { DrawContext, PictureBudget } from '../types'
 import { fitPicture } from '../widgets'
-import { fieldOf, sectionRule } from './header'
+import { collectionsOf, fieldOf, sectionRule } from './header'
 import type { RecordEnv } from './header'
 
 // One per page draw: the media keys count up across the body and every comment.
@@ -50,5 +50,5 @@ export async function drawMedia(env: RecordEnv, options: Record<string, string>)
   if (typeof text !== 'string' || !text.trim()) return
   const title = options.title ?? from
   sectionRule(env, `${from}-head`, title)
-  await drawProse(env.ctx, env.io, env.blocks, from, env.linked(text), { picture: env.picture, heading: title, navStart: env.navBase + env.blocks.nav.length })
+  await drawProse(env.ctx, env.io, env.blocks, from, env.linked(text), { ...collectionsOf(env), picture: env.picture, heading: title, navStart: env.navBase + env.blocks.nav.length })
 }
