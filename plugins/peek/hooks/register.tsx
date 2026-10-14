@@ -141,6 +141,15 @@ function portsOf($: EngineInterface): Ports {
     cwd: () => $.session.cwd(),
     home: () => $.env.get('HOME'),
     linearKeyEnv: () => $.env.get('LINEAR_API_KEY'),
+    envGet: async name => {
+      if (name === 'HOME') return $.env.get('HOME')
+      if (name === 'PATH') return $.env.get('PATH')
+      if (name === 'LANG') return $.env.get('LANG')
+      if (name === 'TMPDIR') return $.env.get('TMPDIR')
+      // $.env.get takes only a literal name, so a name a recipe declares is read the way its script would see it.
+      const ran = await $.process.run(['/usr/bin/printenv', name]).catch(() => null)
+      return ran?.exitCode === 0 ? ran.stdout.replace(/\n$/, '') : undefined
+    },
     run: (argv, init) => $.process.run(argv, init),
     spawn: argv => $.process.spawn({ argv }),
     fetch: (url, init) => $.http.fetch(url, init),
@@ -149,12 +158,17 @@ function portsOf($: EngineInterface): Ports {
     write: (path, text) => $.fs.write(path, text),
     list: path => $.fs.list(path),
     stat: path => $.fs.stat(path),
+    // The recipe runner refuses a script it cannot follow to a real path, so without resolve every script recipe fails.
+    statResolved: path => $.fs.stat(path, { resolve: true }),
     exists: path => $.fs.exists(path),
     now: () => $.clock.now(),
     sleep: ms => $.clock.sleep(ms),
     every: (ms, fn) => $.clock.every(ms, fn),
     after: (ms, fn) => $.clock.after(ms, fn),
     mcpCall: (server, tool, args) => $.mcp.call(server, tool, args),
+    toolCheck: check => $.tool.check(check),
+    storeGet: key => $.store.get(key),
+    pluginRoot: $.plugin.root,
   }
 }
 
@@ -173,7 +187,6 @@ function navIoOf($: EngineInterface): NavIo {
     menuFilter: { read: () => read($, menuFilter), update: change => update($, menuFilter, change) },
     readFile: ports.read,
     writeFile: ports.write,
-    storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),
     invalidate: () => $.ui.invalidate('ui.render'),
     blit: options => $.ui.blit({ requestId: PANE, ...options }),
@@ -191,6 +204,8 @@ function navIoOf($: EngineInterface): NavIo {
     remoteIo: () => ports,
     liveIo: () => liveIoOf($, ports),
     groupsIo: () => groupsIoOf(ports),
+    recipesIo: () => ports,
+    runIo: () => ports,
     columns: () => paneColumns,
     selectedNav: () => selectedNav($),
     shownGroups: place => groupStore.shown(groupsIoOf(ports), place),

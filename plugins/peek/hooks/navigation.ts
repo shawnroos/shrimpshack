@@ -20,6 +20,8 @@ import type { Ref, RefContext } from './refs'
 import { loadItem } from './remote'
 import type { RemoteIo } from './remote'
 import type { Ports } from './ports'
+import type { RecipesIo } from './recipes/recipes'
+import type { RunIo } from './recipes/run'
 import { adapterOfKind } from './sources/adapter'
 import { remoteFileOf } from './sources/web'
 
@@ -30,7 +32,7 @@ type Without<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
 export type Cell<T> = { read: () => Promise<T>; update: (change: (value: T) => T) => Promise<T> }
 
-export type NavIo = Pick<Ports, 'now' | 'every' | 'cwd' | 'home' | 'sessionId' | 'sessionRoot' | 'stat' | 'exists' | 'run' | 'fetch' | 'readBytes' | 'list'> & {
+export type NavIo = Pick<Ports, 'now' | 'every' | 'cwd' | 'home' | 'sessionId' | 'sessionRoot' | 'stat' | 'exists' | 'run' | 'fetch' | 'readBytes' | 'list' | 'storeGet' | 'pluginRoot'> & {
   view: Cell<PaneState['view']>
   mode: Cell<PaneState['mode']>
   page: Cell<PaneState['page']>
@@ -42,7 +44,6 @@ export type NavIo = Pick<Ports, 'now' | 'every' | 'cwd' | 'home' | 'sessionId' |
   menuFilter: Cell<PaneState['menuFilter']>
   readFile: Ports['read']
   writeFile: Ports['write']
-  storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<unknown>
   invalidate: () => void
   blit: (options: Without<Parameters<Ui['blit']>[0], 'requestId'>) => ReturnType<Ui['blit']>
@@ -55,6 +56,8 @@ export type NavIo = Pick<Ports, 'now' | 'every' | 'cwd' | 'home' | 'sessionId' |
   remoteIo: () => RemoteIo
   liveIo: () => LiveIo
   groupsIo: () => GroupsIo
+  recipesIo: () => RecipesIo
+  runIo: () => RunIo
   columns: () => number
   selectedNav: () => Promise<{ href: string } | undefined>
   shownGroups: (place: GroupPlace) => Promise<readonly Group[]>

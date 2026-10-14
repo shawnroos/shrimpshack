@@ -1,18 +1,12 @@
-import type { McpToolResult, ProcessRunInit, ProcessRunResult } from 'claude-code'
+import type { McpToolResult, ProcessRunInit } from 'claude-code'
 
 import { cleanText, RECIPE_CAPS, UNSAFE, validatePage } from './page'
 import type { McpSource, Page, Problem, Recipe } from './page'
 import { loadRecipe, mcpToolName } from './recipes'
 import type { RecipesIo } from './recipes'
+import type { Ports } from '../ports'
 
-export type RunIo = RecipesIo & {
-  envGet: (name: string) => Promise<string | undefined>
-  run: (argv: readonly string[], init?: ProcessRunInit) => Promise<ProcessRunResult>
-  mcpCall: (server: string, tool: string, args: Record<string, unknown>) => Promise<McpToolResult>
-  toolCheck: (check: { tool: string; input: unknown }) => Promise<{ decision: 'allow' | 'ask' | 'deny'; reason?: string }>
-  now: () => Promise<number>
-  sleep: (ms: number) => Promise<void>
-}
+export type RunIo = RecipesIo & Pick<Ports, 'envGet' | 'run' | 'mcpCall' | 'toolCheck' | 'now' | 'sleep'>
 
 export type RunTarget = { root: string; id: string; digest: string; draft: boolean }
 

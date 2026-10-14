@@ -1,6 +1,7 @@
 import type { RecipeReview, ReviewFile } from '../../types/recipes'
 import { RECIPE_CAPS, RECIPE_ID, cleanLine, cleanText, idProblem, isRecord, validateRecipe } from './page'
 import type { Problem, Recipe, RecipeMatch } from './page'
+import type { Ports } from '../ports'
 import type { Ref } from '../refs'
 import { adapterOfKind } from '../sources/adapter'
 
@@ -8,12 +9,11 @@ export const RECIPE_SHAPE = { files: 50, folders: 50, fileBytes: 4 * 1024 * 1024
 
 type EntryKind = 'file' | 'dir' | 'other'
 
-export type RecipesIo = {
-  home: () => Promise<string | undefined>
+// list and statResolved name only the fields recipes read, so a fake without mtimeMs still serves; Ports' engine
+// answers carry more and still fit.
+export type RecipesIo = Pick<Ports, 'home' | 'readBytes' | 'storeGet'> & {
   list: (dir: string) => Promise<readonly { name: string; kind: EntryKind; size: number; isLink: boolean }[]>
-  readBytes: (path: string) => Promise<{ base64: string }>
   statResolved: (path: string) => Promise<{ kind: EntryKind; size: number; isLink: boolean; realPath?: string }>
-  storeGet: (key: string) => Promise<unknown>
 }
 
 export type RecipeApproval = { digest: string; files: Record<string, string> }
