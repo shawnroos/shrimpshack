@@ -7,6 +7,7 @@ import { parseHref } from '../paths'
 import type { Ports } from '../ports'
 import { parseRef } from '../refs'
 import type { Ref } from '../refs'
+import { cacheRecipeRun } from '../views/recipe-source'
 import { PAGE_CAPS, focusItemsOf, outlineOf as pageOutlineOf } from './page'
 import type { Page } from './page'
 import { isApproved, loadRecipe, loadRecipes, matches, overlaps, recipeFamilyOf, recipesDir, routeOf } from './recipes'
@@ -157,6 +158,7 @@ export async function checkRecipeTool(io: NavIo, input: { recipe?: unknown; link
       ...(split.text ? { fetched: { note: FETCHED_NOTE, ...split.text } } : {}),
     })
   }
+  await cacheRecipeRun(io, id, link, outcome)
   const counts = countsOf(outcome.page)
   const body = { ...head, outcome: { kind: 'page' }, problems: [], counts, fetched: { note: FETCHED_NOTE, outline: fetchedOutline(outcome.page) } }
   if (reasons.length > 0) return failed(`recipe "${name}" (${id}) returned a drawable page, but ${reasons.join('; ')}.`, body)

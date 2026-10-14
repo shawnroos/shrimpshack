@@ -4,7 +4,7 @@ import { parseRule } from '../../views/select'
 import type { Rule } from '../../views/select'
 
 export const RECORD_BLOCKS = ['peek-header', 'peek-fields', 'peek-media', 'peek-comments'] as const
-const LAYOUT_KEYS: ReadonlySet<string> = new Set(['layout', 'split', 'cap', 'values', 'nest'])
+const LAYOUT_KEYS: ReadonlySet<string> = new Set(['layout', 'split', 'cap', 'values', 'nest', 'recipe', 'url'])
 
 export type BlockSpec = { layout: Layout; rule: Rule; options: Record<string, string>; cap?: number; selects: string }
 

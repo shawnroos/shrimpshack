@@ -7,6 +7,7 @@ import type { NavIo } from '../navigation'
 import { downloadFile } from '../net'
 import { parseRef } from '../refs'
 import { BACKOFF_MAX_MS, notePageTitle, snapshotTitles, takeTitleChange } from '../refresh'
+import { cacheRecipeRun } from '../views/recipe-source'
 import type { Page } from './page'
 import { APPROVALS_KEY, isApproved, loadRecipe, loadRecipes, overlaps, recipesDir, reviewOf, routeOf } from './recipes'
 import { recipeFailureText, runRecipe } from './run'
@@ -59,6 +60,7 @@ export function loadPage(io: NavIo, link: string, allowDraft: boolean, onRouted:
       const root = recipesDir((await io.home()) ?? '')
       const outcome = await runRecipe(io.runIo(), { root, id: route.id, digest: route.digest, draft: route.draft }, link)
       if (!outcome.ok) return { kind: 'ran', state: { ...base, phase: 'failed', failure: recipeFailureText(outcome), failureKind: outcome.kind } }
+      await cacheRecipeRun(io, route.id, link, outcome)
       return { kind: 'ran', state: { ...base, phase: 'ready', fetchedAt: outcome.ranAt, page: outcome.page, ...(await recipeMedia(io, outcome.page)) } }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -10,6 +10,8 @@ import type { TaskPlace, TasksIo } from '../tasks/store'
 import { matches, requiredPropsFor } from '../views/definition'
 import type { Definition, MatchDoc } from '../views/definition'
 import type { Item } from '../views/items'
+import { recipeBlock } from '../views/recipe-source'
+import type { RecipeBlock } from '../views/recipe-source'
 import { createViewRegistry } from '../views/registry'
 import type { ViewsIo, ViewsLoad } from '../views/registry'
 
@@ -83,15 +85,22 @@ export async function taskItems(io: NavIo, options: { isEverywhere?: boolean } =
   return withDerived(items, load.definitions)
 }
 
-export type DrawData = { views: () => Promise<ViewsLoad>; items: () => Promise<Item[]> }
+export type DrawData = { views: () => Promise<ViewsLoad>; items: () => Promise<Item[]>; recipe: (id: string, url: string | undefined) => Promise<RecipeBlock> }
 
 // Shared by everything one draw reads, and made fresh for each draw so an edited definition or task shows on the next.
 export function drawData(io: NavIo): DrawData {
   let views: Promise<ViewsLoad> | null = null
   let items: Promise<Item[]> | null = null
+  const recipes = new Map<string, Promise<RecipeBlock>>()
   const data: DrawData = {
     views: () => (views ??= viewsLoad(io)),
     items: () => (items ??= taskItems(io, {}, data.views)),
+    recipe: (id, url) => {
+      const key = `${id}\n${url ?? ''}`
+      const known = recipes.get(key) ?? recipeBlock(io, id, url)
+      recipes.set(key, known)
+      return known
+    },
   }
   return data
 }

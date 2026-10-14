@@ -1,5 +1,6 @@
 import type { RenderChildren } from 'claude-code'
 
+import { fetchedAge } from '../../../format'
 import { diagramType, plainInline, segmentsOf } from '../../../markdown'
 import type { DocPart } from '../../../markdown'
 import { chunkMarkdown, estimateRows, taskRows } from '../../../measure'
@@ -10,6 +11,8 @@ import { ICON } from '../../../theme'
 import { matches } from '../../../views/definition'
 import type { Definition } from '../../../views/definition'
 import type { Item } from '../../../views/items'
+import { recipeBlock } from '../../../views/recipe-source'
+import type { RecipeBlock } from '../../../views/recipe-source'
 import { select } from '../../../views/select'
 import type { Rule } from '../../../views/select'
 import { drawBoard } from '../../blocks/board'
@@ -18,7 +21,7 @@ import { RECORD_BLOCKS, blockSpec, getPlace, placeKey } from '../../blocks/commo
 import type { BlockSpec } from '../../blocks/common'
 import { drawFocus } from '../../blocks/focus'
 import { drawList } from '../../blocks/list'
-import { DimLine } from '../../blocks/row'
+import { DimLine, ItemLine } from '../../blocks/row'
 import type { BlockDraw, BlockEnv, BlockNav } from '../../blocks/row'
 import { drawSections } from '../../blocks/sections'
 import { drawTree } from '../../blocks/tree'
@@ -36,6 +39,8 @@ export type ProseOptions = {
   indent?: number
   // What a collection block draws from; a page without one draws each block's empty row.
   items?: (rule: Rule, options: Record<string, string>) => readonly Item[] | Promise<readonly Item[]>
+  // Shares one cache read per draw; it must only read, since a block never runs its recipe.
+  recipe?: (id: string, url: string | undefined) => Promise<RecipeBlock>
   // The loaded definitions, so a row takes the colors its own type declares.
   definitions?: () => readonly Definition[] | Promise<readonly Definition[]>
   // The page's keyboard row the first block row takes, when earlier prose on the page already claimed rows.
@@ -119,8 +124,13 @@ export async function proseParts(ctx: DrawContext, io: NavIo, key: string, text:
         open: href => void pressLink(io, href.startsWith('/') ? fileHref(href) : href),
         colorsOf: item => known.find(one => matches(one, { path: item.href, props: item.props }))?.colors,
       }
-      const items = select((await options.items?.(spec.rule, spec.options)) ?? [], { rule: spec.rule, ...(spec.cap === undefined ? {} : { cap: spec.cap }) })
-      const drawn = collection(env, spec, items)
+      const how = { rule: spec.rule, ...(spec.cap === undefined ? {} : { cap: spec.cap }) }
+      const recipe = spec.options.recipe
+      // A recipe fence never falls through to the page's items: its rule is empty, so it would select every task.
+      const drawn =
+        recipe === undefined
+          ? collection(env, spec, select((await options.items?.(spec.rule, spec.options)) ?? [], how))
+          : recipeCollection(env, spec, recipe, await (options.recipe ?? ((id, url) => recipeBlock(io, id, url)))(recipe, spec.options.url), how, await io.now())
       navCount += nav.length
       add(drawn.node, drawn.rows, undefined, nav)
     } else if (part.kind === 'code') {
@@ -205,6 +215,25 @@ function collection(base: BlockEnv, spec: BlockSpec, items: readonly Item[]): Bl
   if (env.layout === 'board') return drawBoard(env, items, spec.options)
   if (env.layout === 'focus') return drawFocus(env, items)
   return drawList(env, items)
+}
+
+function recipeCollection(env: BlockEnv, spec: BlockSpec, recipe: string, block: RecipeBlock, how: Parameters<typeof select>[1], now: number): BlockDraw {
+  const { Box, Text, C } = env.ctx
+  if (block.kind === 'error') return { node: <Text key={env.key} color={C.red} wrap="truncate-end">{block.text}</Text>, rows: 1 }
+  if (block.kind === 'load') {
+    const row: Item = { id: `${recipe}#load`, href: block.link, type: 'recipe', name: 'Open to load', props: {}, source: 'record' }
+    return { node: <Box key={env.key} flexDirection="column" width={env.width}>{ItemLine(env, row, { branch: '', fold: '', count: 0 })}</Box>, rows: 1 }
+  }
+  const drawn = collection(env, spec, select(block.items, how))
+  return {
+    node: (
+      <Box key={env.key} flexDirection="column" width={env.width}>
+        {drawn.node}
+        {DimLine(env.ctx, `${env.key}-fetched`, `recipe ${recipe} · fetched ${fetchedAge(block.fetchedAt, now)}`, env.width)}
+      </Box>
+    ),
+    rows: drawn.rows + 1,
+  }
 }
 
 function Heading(ctx: DrawContext, key: string, level: number, text: string) {

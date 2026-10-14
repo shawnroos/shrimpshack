@@ -35,6 +35,7 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
   const options: ProseOptions = {
     canTickTasks: true,
     items: draw.items,
+    recipe: draw.recipe,
     definitions: definitionsOnce(draw),
     picture: async (alt, src, key, width) => {
       const picture = await docImage(io, src, path)
