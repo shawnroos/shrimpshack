@@ -1,5 +1,6 @@
 import type { On, ProcessRunResult } from 'claude-code'
 import { groupsDir } from '../../hooks/groups'
+import type { TasksIo } from '../../hooks/tasks/store'
 import { resetRefresh } from '../../hooks/refresh'
 
 // A PNG signature and an 800x600 IHDR chunk: the engine checks both before it draws.
@@ -60,6 +61,7 @@ export type World = {
   invalidated: number
   toasts: string[]
   isMvBroken: boolean
+  tracked?: Record<string, string[]>
   onLockBusy?: (lock: string) => void
   onWrite?: (path: string) => void
   onRun?: (argv: string[]) => Promise<RunAnswer | undefined> | RunAnswer | undefined
@@ -174,6 +176,10 @@ export function fakeFs(on: On, files: Record<string, string> = {}, options: { is
       w.touch(rest[1] ?? '')
       return done(0)
     }
+    if (bin === 'git' && argv.includes('ls-files') && w.tracked) {
+      const listed = w.tracked[rest[rest.indexOf('-C') + 1] ?? '']
+      return listed ? done(0, listed.map(one => `${one}\0`).join('')) : done(128)
+    }
     return done(1)
   })
   on('fs.read', (_$, e) => {
@@ -253,4 +259,59 @@ export function editGroup(w: World, id: string, change: (group: Record<string, u
   change(group)
   w.files[file] = JSON.stringify(group)
   w.touch(file)
+}
+
+// The task modules take io ports, not `$`, so their tests call the fake world's own handlers directly.
+export function tasksWorld(on: On, files: Record<string, string> = {}): { w: World; io: TasksIo } {
+  const handlers = new Map<string, (...args: unknown[]) => unknown>()
+  const spy = ((name: string, ...rest: unknown[]) => {
+    const fn = rest.at(-1)
+    if (typeof fn === 'function') handlers.set(name, fn as (...args: unknown[]) => unknown)
+    return (on as unknown as (...args: unknown[]) => unknown)(name, ...rest)
+  }) as unknown as On
+  const w = fakeFs(spy, files)
+  const call = async <T>(name: string, e: Record<string, unknown>): Promise<T> => {
+    const handler = handlers.get(name)
+    if (!handler) throw new Error(`the fake world does not answer ${name}`)
+    return ((await handler(undefined, e)) as { value: T }).value
+  }
+  const io: TasksIo = {
+    read: path => call<string>('fs.read', { path }),
+    write: async (path, text) => {
+      await call('fs.write', { path, text })
+    },
+    list: path => call<{ name: string; kind: string }[]>('fs.list', { path }),
+    stat: path => call<{ mtimeMs: number }>('fs.stat', { path }).catch(() => null),
+    run: argv => call<{ exitCode: number; stdout: string; stderr: string }>('process.run', { argv }),
+    now: () => call<number>('clock.now', {}),
+    sleep: async ms => {
+      await call('clock.sleep', { ms })
+    },
+    home: () => call<string | undefined>('env.get', { name: 'HOME' }),
+  }
+  return { w, io }
+}
+
+export type Timers = { every: (ms: number, fn: () => void) => void; advance: (ms: number) => void }
+
+// Fires `every` callbacks as the test moves time. Each callback starts its work without waiting, as
+// $.clock.every does, so a test waits on the poll's own completion signal rather than on this.
+export function fakeTimers(w: World): Timers {
+  const timers: { ms: number; due: number; fn: () => void }[] = []
+  return {
+    every: (ms, fn) => {
+      timers.push({ ms, due: w.now + ms, fn })
+    },
+    advance: ms => {
+      const end = w.now + ms
+      for (;;) {
+        const next = timers.filter(one => one.due <= end).sort((a, b) => a.due - b.due)[0]
+        if (!next) break
+        w.now = next.due
+        next.due += next.ms
+        next.fn()
+      }
+      w.now = end
+    },
+  }
 }

@@ -6,9 +6,11 @@ import { C as BASE, MUTED } from './theme'
 import type { Ports } from './ports'
 import { wheelPoint } from './live'
 import type { LiveIo } from './live'
-import { hydrateTitles } from './refresh'
+import { IDLE_MS, hydrateTitles } from './refresh'
 import type { TitleEntry } from './refresh'
 import type { GroupsIo } from './groups'
+import { startTaskPoll } from './tasks/poll'
+import type { TaskSessionIo } from './tasks/poll'
 import { classifyBlocks } from './gallery'
 import { linkify, pathCandidates } from './markdown'
 import { fileHref, parseHref, resolvePath } from './paths'
@@ -215,6 +217,17 @@ function groupsIoOf(ports: Ports): GroupsIo {
 
 const groupStore = createGroupStore()
 
+function taskIoOf(ports: Ports): TaskSessionIo {
+  return {
+    ...groupsIoOf(ports),
+    home: ports.home,
+    every: ports.every,
+    isActive: async () => (await ports.now()) - nav.lastActivity < IDLE_MS,
+  }
+}
+
+let isTaskPollStarted = false
+
 // The Peek tab with nothing open shows Recent.
 const SCREENS: Record<Mode, (ctx: DrawContext, actions: PaneActions) => Promise<Screen>> = {
   view: (ctx, actions) => (ctx.current ? viewScreen(ctx, actions, ctx.current) : recentScreen(ctx, actions)),
@@ -271,6 +284,13 @@ export const register: Register = on => {
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
     for (const tool of Object.values(TOOLS)) await $.tool.register(tool.spec).catch(() => undefined)
     void groupHome(navIoOf($)).catch(() => undefined)
+    if (!isTaskPollStarted) {
+      isTaskPollStarted = true
+      const ports = portsOf($)
+      void (async () => startTaskPoll(taskIoOf(ports), { id: await ports.sessionId(), root: await ports.sessionRoot() }))().catch(() => {
+        isTaskPollStarted = false
+      })
+    }
     await $.command.register({ name: 'peek-menu', description: 'Open the peek command menu (ctrl+k in the peek pane)' })
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
     await $.command.register({ name: 'peek', description: 'Peek at a file, folder or URL in the side pane: a path, a description ("the export diagram"), or nothing for the last one' })
