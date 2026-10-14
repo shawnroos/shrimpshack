@@ -1,5 +1,5 @@
 import type { Group } from '../../types/groups'
-import { groupHome, ruleCandidates } from '../groups-session'
+import { groupHome, ruleCandidates, taskPlaceOf } from '../groups-session'
 import type { NavIo } from '../navigation'
 import { mirrorDocs, mirrorRoot, newestDirs, readListState, MIRROR_CAPS, SESSION_ENDED_PROP } from '../mirror/records'
 import { capturePlace, userPlace } from '../tasks/store'
@@ -97,7 +97,7 @@ export async function isTasksFolder(io: NavIo, path: string): Promise<boolean> {
 export async function ownPlace(io: NavIo): Promise<TaskPlace> {
   const tio = tasksIoOf(io)
   const root = (await groupHome(io).catch(() => null))?.worktreeRoot
-  return root ? capturePlace(tio, root) : userPlace(tio)
+  return taskPlaceOf(tio, root)
 }
 
 // A doc in a tasks folder belongs to that folder's repo; any other doc is a deliverable of its own worktree.
@@ -168,7 +168,7 @@ export async function recentPins(io: NavIo): Promise<RecentPins | null> {
   const lists = [...counts]
     .map(([list, open]) => ({ list, open, lastAt: lastAt.get(list) ?? 0 }))
     .sort((a, b) => b.lastAt - a.lastAt || a.list.localeCompare(b.list))
-  const place = root ? await capturePlace(tio, root) : await userPlace(tio)
+  const place = await taskPlaceOf(tio, root)
   return {
     tasks: own.slice(0, PIN_CAPS.tasks),
     moreTasks: Math.max(0, own.length - PIN_CAPS.tasks),

@@ -16,6 +16,7 @@ import { itemKey } from './refs'
 import { capturePlace, createIndex, folderDocPaths, readDoc, TASK_CAPS, userPlace } from './tasks/store'
 import type { TaskDoc, TaskIndex, TaskPlace, TasksIo } from './tasks/store'
 import { mirrorDocs } from './mirror/records'
+import { taskSession } from './tasks/poll'
 import { ICON } from './theme'
 import { itemFromDoc } from './views/items'
 import type { Item } from './views/items'
@@ -301,15 +302,29 @@ async function folderTaskDocs(io: TasksIo, place: TaskPlace): Promise<TaskDoc[]>
   return docs.filter((one): one is TaskDoc => one !== null)
 }
 
+// The session's task poll already holds this worktree's places and keeps its index fresh, so draws reuse them
+// instead of running git each time.
+const liveSession = (worktreeRoot?: string) => {
+  const live = taskSession()
+  return live && worktreeRoot && live.root === worktreeRoot ? live : null
+}
+
+export async function taskPlaceOf(io: TasksIo, worktreeRoot?: string): Promise<TaskPlace> {
+  const live = liveSession(worktreeRoot)?.places[0]
+  if (live) return live
+  return worktreeRoot ? capturePlace(io, worktreeRoot) : userPlace(io)
+}
+
 export async function ruleCandidates(io: NavIo, groups: readonly Group[], worktreeRoot?: string): Promise<Item[]> {
   if (!groups.some(one => one.rule || one.split)) return []
   const tio = tasksIoOf(io)
+  const live = liveSession(worktreeRoot)
   const user = await userPlace(tio).catch(() => null)
-  const repo = worktreeRoot ? await capturePlace(tio, worktreeRoot).catch(() => null) : null
+  const repo = worktreeRoot ? await taskPlaceOf(tio, worktreeRoot).catch(() => null) : null
   const places = [repo, user].filter((one, at, all): one is TaskPlace => one !== null && all.findIndex(other => other?.folder === one.folder) === at)
   const folders = (await Promise.all(places.map(place => folderTaskDocs(tio, place).catch(() => [])))).flat()
-  const index = worktreeRoot && repo && !repo.isUser ? indexOf(worktreeRoot) : null
-  if (index) await index.refresh(tio).catch(() => undefined)
+  const index = worktreeRoot && repo && !repo.isUser ? (live?.index ?? indexOf(worktreeRoot)) : null
+  if (index && !live) await index.refresh(tio).catch(() => undefined)
   const seen = new Set<string>()
   const items: Item[] = []
   const mirrored = await mirrorDocs(tio).catch(() => [])

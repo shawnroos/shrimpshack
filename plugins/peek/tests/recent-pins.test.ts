@@ -151,4 +151,27 @@ describe('open work pinned at the top of Recent (R31)', () => {
     expect(before).not.toContain('OPEN WORK')
     await ui.unmount()
   })
+
+  // Kept last: the session's task poll stays running for the rest of this file.
+  test('once the session has started, redrawing Recent runs no git and still shows open work', async ($, on) => {
+    const w = fakeFs(on)
+    task(w, 'a')
+    // A refused period ends the interval, so the poll's own refreshes stay out of the count.
+    on('clock.every', () => {
+      throw new Error('no timers here')
+    })
+    on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }) as never)
+    await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
+    await settle()
+    const ui = await recent($)
+    await drawnText(ui)
+    const gitRuns = () => w.log.filter(one => one[0] === 'run' && one[1] === 'git').length
+    const before = gitRuns()
+    task(w, 'b')
+    const text = await drawnText(ui)
+    await drawnText(ui)
+    expect(gitRuns()).toBe(before)
+    expect(text).toContain('Task b')
+    await ui.unmount()
+  })
 })
