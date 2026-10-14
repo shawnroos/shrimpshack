@@ -534,6 +534,7 @@ export const register: Register = on => {
         await openCardItem(io, message.group, message.key, message.href).catch(() => undefined)
         return {}
       case 'open': {
+        if (!message.href) return {}
         const at = await openedRow($, message.href).catch(() => -1)
         await (at >= 0 ? selectAndOpen($, at) : openLink(io, message.href)).catch(() => undefined)
         return {}
@@ -549,7 +550,8 @@ export const register: Register = on => {
         return {}
       }
     }
-    const isList = (await read($, mode).catch(() => 'view')) !== 'view' || !(await read($, view).catch(() => null))
+    const shown = await read($, view).catch(() => null)
+    const isList = (await read($, mode).catch(() => 'view')) !== 'view' || !shown || (shown.page?.phase === 'ready' && paneLayout.nav.length > 0)
     if (isList && !e.pointer && e.origin.kind === 'person' && Math.abs(e.by) === 1 && !(await read($, menuOpen).catch(() => false))) {
       await moveSelection($, e.by > 0 ? 'down' : 'up').catch(() => undefined)
       return {}

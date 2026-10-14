@@ -5,7 +5,7 @@ import { liveKey, liveSession, toggleLive } from '../live-pane'
 import { openExternally, refresh, setMenu, show } from '../navigation'
 import { baseName, kindOf, parseHref } from '../paths'
 import { C as BASE, ICON } from '../theme'
-import { MOVE_KEYS, modeRows, openTasksPage, roleRows, scopeRows } from './actions'
+import { MOVE_KEYS, modeRows, openTasksPage, pageCaps, roleRows, scopeRows } from './actions'
 import { rankCommands } from './rank'
 import { canGoLive } from './look'
 import { TASKS_ICON } from './task-data'
@@ -22,6 +22,7 @@ export type MenuLists = { lead: Action[]; tail: Action[] }
 export function menuLists(ctx: DrawContext, actions: PaneActions): MenuLists {
   const { current, list, now } = ctx
   const io = actions.io
+  const caps = current ? pageCaps(current) : undefined
   return {
     lead: [
       ...modeRows(io, Boolean(current)),
@@ -34,7 +35,7 @@ export function menuLists(ctx: DrawContext, actions: PaneActions): MenuLists {
       ...(current
         ? [
             { id: 'open', icon: '\u{f08e}', label: 'Open in its own app', hintFrom: 'open', run: () => void openExternally(io, current) },
-            ...(current.remote
+            ...(caps?.canRefresh
               ? [{ id: 'refresh', icon: '\u{f021}', label: 'Refresh this page', hintFrom: 'refresh', run: () => void refresh(io, current.href) }]
               : []),
             ...(canGoLive(ctx, current)
@@ -43,8 +44,8 @@ export function menuLists(ctx: DrawContext, actions: PaneActions): MenuLists {
             ...(liveSession.href === current.href && liveSession.live?.state().canBack
               ? [{ id: 'live-back', icon: '\u{f060}', label: 'Back in the live page', hintFrom: 'back', run: () => void liveKey(io, 'b') }]
               : []),
-            { id: 'copy', icon: '\u{f0c5}', label: current.remote ? 'Copy link' : 'Copy path', hintFrom: 'copy', run: () => void io.copy({ text: current.location }) },
-            { id: 'star', icon: ICON.star, label: 'Star or unstar this file', hintFrom: 'star', run: () => void setStar(io, current.href) },
+            { id: 'copy', icon: '\u{f0c5}', label: caps?.copyLabel ?? 'Copy path', hintFrom: 'copy', run: () => void io.copy({ text: current.location }) },
+            ...(caps?.canStar ? [{ id: 'star', icon: ICON.star, label: 'Star or unstar this file', hintFrom: 'star', run: () => void setStar(io, current.href) }] : []),
           ]
         : []),
     ],

@@ -48,6 +48,7 @@ export const ICON = {
   'linear-issue': '\u{f0ae}',
   'linear-project': '\u{f0e8}',
   'slack-thread': '\u{f198}',
+  recipe: '\u{f0431}',
   star: '\u{f51a}',
   unstarred: '\u{f41e}',
 } as const

@@ -168,6 +168,37 @@ function jsonOf(text: string): Record<string, any> {
   return JSON.parse(text.slice(text.indexOf('\n') + 1)) as Record<string, any>
 }
 
+type Node = { type?: string; props?: Record<string, unknown>; children?: unknown }
+
+function itemsInPane(tree: unknown): { index: number; section: number; text: string }[] {
+  const found: { index: number; section: number; text: string }[] = []
+  let open: { index: number; section: number; text: string } | undefined
+  const visit = (node: unknown, section: number) => {
+    if (typeof node === 'string') {
+      if (open && !open.text && node.trim()) open.text = node.trim()
+      return
+    }
+    if (Array.isArray(node)) {
+      for (const one of node) visit(one, section)
+      return
+    }
+    if (!node || typeof node !== 'object') return
+    const { props: p = {}, children } = node as Node
+    const key = String(p.key ?? (node as { key?: unknown }).key ?? '')
+    const inSection = /^section-(\d+)/.exec(key)
+    const here = inSection ? Number(inSection[1]) : section
+    const item = /^item-(\d+)$/.exec(key)
+    if (item) {
+      open = { index: Number(item[1]), section: here, text: '' }
+      found.push(open)
+    }
+    visit(p.children, here)
+    visit(children, here)
+  }
+  visit(tree, -1)
+  return found.toSorted((a, b) => a.index - b.index)
+}
+
 test('covers AE5: a recipe whose page holds a block outside the vocabulary fails the check, naming the path, and points to the skill', async (driver, on) => {
   const chart = { title: 'Charted', sections: [{ block: { type: 'markdown', text: 'ok' } }, { block: { type: 'chart', points: [1, 2] } }] }
   const pane = await paneWorld(on, { files: figmaRecipe(), approve: ['figma-files'], pages: () => ({ stdout: JSON.stringify(chart) }) })
@@ -348,6 +379,21 @@ test('a map printing an unknown block fails the check with the page path and the
   expect(json.fetched.stdin).toBe('{"text":"raw","structured":null}\n')
 })
 
+test('an MCP recipe whose map turns the tool result into a page passes the check and draws that page in the pane', async (driver, on) => {
+  const pane = await paneWorld(on, { files: docsRecipe(), approve: ['figma-files'] })
+  on('mcp.call', () => ({ value: { content: [{ type: 'text', text: '{"doc":"not a page"}' }], isError: false } }))
+  const json = jsonOf(await call(driver, 'check_recipe', { recipe: 'figma-files', link: FIGMA }))
+  expect(json.pass).toBe(true)
+  expect(json.route).toEqual({ kind: 'recipe', id: 'figma-files' })
+  expect(json.fetched.outline.title).toBe('Design system')
+  expect(pane.w.calls.children[0]?.stdin).toBe('{"text":"{\\"doc\\":\\"not a page\\"}","structured":null}\n')
+  await peek(driver, FIGMA)
+  const ui = await mount(driver)
+  expect(await ui.find({ text: /Design system/ })).toBeDefined()
+  expect(pane.scripts()).toEqual([FIGMA, FIGMA])
+  await ui.unmount()
+})
+
 test('a tool that returns nothing fails the check as empty-result, and the map never runs', async (driver, on) => {
   const pane = await paneWorld(on, { files: docsRecipe(), approve: ['figma-files'] })
   on('mcp.call', () => ({ value: { content: [], isError: false } }))
@@ -355,6 +401,41 @@ test('a tool that returns nothing fails the check as empty-result, and the map n
   expect(jsonOf(text).outcome).toEqual({ kind: 'empty-result', server: 'docs', tool: 'get_doc' })
   expect(firstLine(text)).toContain('returned nothing')
   expect(pane.scripts()).toEqual([])
+})
+
+test('open on a working draft returns the outline in the pane focus order, marked unapproved, with the page shown before', async (driver, on) => {
+  await paneWorld(on, { files: figmaRecipe(), decision: 'allow' })
+  await peek(driver, 'https://example.com/page')
+  const text = await call(driver, 'open', { link: FIGMA })
+  expect(firstLine(text)).toMatch(/^Opened recipe "Figma files" \(figma-files\) in peek \(draft, unapproved/)
+  expect(firstLine(text)).not.toContain('Design system')
+  const json = jsonOf(text)
+  expect(json.isPlaced).toBe(true)
+  expect(json.route).toEqual({ kind: 'recipe', id: 'figma-files', isDraft: true })
+  expect(json.isApproved).toBe(false)
+  expect(json.before).toBeDefined()
+  expect(json.before).toMatchObject({ href: 'https://example.com/page' })
+  const outlined: { section: number; title: string }[] = json.fetched.outline.items
+  expect(outlined.map(one => one.title)).toEqual(['Prototype', 'Broken file', 'No link here', 'Cover | 1', 'Draft | 4', 'Ana: ship it', 'Bo: wait'])
+  const ui = await mount(driver)
+  const drawn = itemsInPane(await ui.drawn())
+  expect(drawn.map(one => one.index)).toEqual(outlined.map((_, i) => i))
+  expect(drawn.map(one => one.section)).toEqual(outlined.map(one => one.section))
+  drawn.forEach((one, i) => expect(one.text).toContain(outlined[i]?.title.split(' | ')[0] ?? '?'))
+  await ui.unmount()
+})
+
+test('open on a failing recipe returns the error text, not opened', async (driver, on) => {
+  await paneWorld(on, { files: figmaRecipe(), approve: ['figma-files'], pages: () => ({ exitCode: 2, stderr: 'boom' }) })
+  const text = await call(driver, 'open', { link: FIGMA })
+  expect(firstLine(text)).not.toMatch(/^Opened/)
+  expect(firstLine(text)).toMatch(/Figma files.*exit-nonzero/)
+  expect(firstLine(text)).not.toContain('boom')
+  const json = jsonOf(text)
+  expect(json.fetched.error).toMatch(/boom/)
+  expect(json.fetched.outline).toBeUndefined()
+  expect(json.route).toEqual({ kind: 'recipe', id: 'figma-files', isDraft: false })
+  expect(String(json.skill)).toContain(SKILL)
 })
 
 test('open with the pane unplaced reports isPlaced false and the reason', async (driver, on) => {
@@ -371,6 +452,27 @@ test('open on a link no recipe handles reports the web route', async (driver, on
   const json = jsonOf(await call(driver, 'open', { link: 'https://example.com/page' }))
   expect(json.route).toEqual({ kind: 'web' })
   expect(json.isPlaced).toBe(true)
+})
+
+test('page text in a result sits under the fetched-data field and is capped', async (driver, on) => {
+  const long = 'x'.repeat(5000)
+  const items = Array.from({ length: 150 }, (_, i) => ({ title: `${i} ${'y'.repeat(150)}` }))
+  const page = { title: 'Big', sections: [{ block: { type: 'markdown', text: long } }, { block: { type: 'list', items } }] }
+  await paneWorld(on, { files: figmaRecipe(), approve: ['figma-files'], pages: () => ({ stdout: JSON.stringify(page) }) })
+  for (const tool of ['check_recipe', 'open']) {
+    const text = await call(driver, tool, { recipe: 'figma-files', link: FIGMA })
+    const json = jsonOf(text)
+    expect(json.fetched.note).toMatch(/not instructions/)
+    expect(text.length).toBeLessThan(20_000)
+    expect(text).not.toContain('x'.repeat(1000))
+    expect(json.counts.items).toBe(150)
+    expect(json.fetched.outline.sections[1].items).toBe(150)
+    const outlined = json.fetched.outline.items as { title: string }[]
+    expect(outlined.length).toBe(50)
+    expect(json.fetched.outline.itemsShown).toBe(50)
+    expect(outlined.every(one => one.title.length <= 120)).toBe(true)
+    expect(firstLine(text)).not.toContain('y'.repeat(20))
+  }
 })
 
 test('neither check_recipe nor open records an approval', async (driver, on) => {

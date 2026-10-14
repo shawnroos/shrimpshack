@@ -5,13 +5,14 @@ import { iconFor } from '../../../kinds'
 import { liveFailureText, liveStatusText } from '../../../live'
 import { LIVE_FRAME, liveActions, liveBox, liveSession, toggleLive } from '../../../live-pane'
 import { goBack, nav, openExternally, refresh, sourceLine, starKeyOf } from '../../../navigation'
+import { pageSourceLine } from '../../../recipes/state'
 import type { NavIo } from '../../../navigation'
 import { fileHref, parseHref, shortPath } from '../../../paths'
 import { itemKey } from '../../../refs'
 import { adapterOfKind } from '../../../sources/adapter'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
-import { archivedRows, canAdopt, claimCursor, closeAction, creatorRows, cursorOnPage, modeActions, taskActions } from '../../actions'
+import { archivedRows, canAdopt, claimCursor, closeAction, creatorRows, cursorOnPage, modeActions, pageCaps, startsWithNoRow, taskActions } from '../../actions'
 import { TASKS_ICON, archivedLists, creatorOf, definitionIn, drawData, isMirrored, isTasksFolder, taskFilter } from '../../task-data'
 import { canGoLive } from '../../look'
 import type { PaneWire } from '../../messages'
@@ -22,39 +23,53 @@ import { codeBody } from './code'
 import { dirBody } from './dir'
 import { imageBody } from './image'
 import { markdownBody, tasksPageBody } from './markdown'
+import { pageCrumbs, pageNotice, recipePageBody } from './recipe'
 import { remoteBody } from './remote'
 import { tableBody } from './table'
 
-// A page with block rows moves j and k row by row and keeps the block jumps on n and m.
-function moveActions(actions: PaneActions, current: View, jumps: Jumps, hasRows: boolean): Action[] {
-  if (!hasRows) {
+// A page with block rows moves j and k row by row and keeps the block jumps on n and m; a recipe page's cards also
+// move with h and l. On a page that starts with no row, the first move lands on the first row.
+function moveActions(actions: PaneActions, current: View, jumps: Jumps, rows: readonly { key: string }[]): Action[] {
+  if (!rows.length) {
     return [
       { id: 'next', label: 'Down', hotkey: 'j', run: jumps.next },
       { id: 'prev', label: 'Up', hotkey: 'k', run: jumps.prev },
     ]
   }
-  const move = (direction: 'down' | 'up') => async () => {
-    await claimCursor(actions.io, current.href)
+  const io = actions.io
+  const move = (direction: 'down' | 'up' | 'left' | 'right') => async () => {
+    if ((await claimCursor(io, current.href)) && startsWithNoRow(current.page)) {
+      const first = rows[0]?.key
+      if (first) await io.scroll({ to: { key: first }, block: 'center' }).catch(() => undefined)
+      await io.focus('item-0').catch(() => undefined)
+      return
+    }
     await actions.moveSelection(direction)
   }
   return [
     { id: 'next', label: 'Down', hotkey: 'j', run: move('down') },
     { id: 'prev', label: 'Up', hotkey: 'k', run: move('up') },
+    ...(current.page
+      ? [
+          { id: 'left', label: 'Left', hotkey: 'h', run: move('left') },
+          { id: 'right', label: 'Right', hotkey: 'l', run: move('right') },
+        ]
+      : []),
     { id: 'next-block', label: 'Next block', hotkey: 'n', menu: 'Jump to the next block', run: jumps.next },
     { id: 'prev-block', label: 'Previous block', hotkey: 'm', menu: 'Jump to the previous block', run: jumps.prev },
   ]
 }
 
 function readerActions(io: NavIo, current: View, isStarred: boolean): Action[] {
-  const remote = current.remote
+  const caps = pageCaps(current)
   return [
-    { id: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', run: () => void setStar(io, current.href) },
-    { id: 'open', label: remote ? 'Open in browser' : 'Open', hotkey: 'o', run: () => void openExternally(io, current) },
-    ...(remote ? [{ id: 'refresh', label: 'Refresh', hotkey: 'u', run: () => void refresh(io, current.href) }] : []),
+    ...(caps.canStar ? [{ id: 'star', label: isStarred ? 'Unstar' : 'Star', hotkey: 'f', run: () => void setStar(io, current.href) }] : []),
+    { id: 'open', label: caps.openLabel, hotkey: 'o', run: () => void openExternally(io, current) },
+    ...(caps.canRefresh ? [{ id: 'refresh', label: caps.refreshLabel, hotkey: 'u', run: () => void refresh(io, current.href) }] : []),
     ...(nav.backStack.length || nav.groupBack
       ? [{ id: 'back', label: 'Back', hotkey: 'b', menu: nav.groupBack && nav.backStack.length <= nav.groupBack.depth ? `Back to ${nav.groupBack.title}` : 'Back to the previous page', run: () => void goBack(io) }]
       : []),
-    { id: 'copy', label: remote ? 'Copy link' : 'Copy path', hotkey: 'c', run: () => void io.copy({ text: current.location }) },
+    { id: 'copy', label: caps.copyLabel, hotkey: 'c', run: () => void io.copy({ text: current.location }) },
   ]
 }
 
@@ -88,13 +103,16 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     ? folderPath.slice(current.root.length + 1)
     : shortPath(folderPath, cwd, home)
 
-  const pageIo: NavIo = { ...io, cursor: { read: () => cursorOnPage(io, current.href), update: io.cursor.update } }
+  const start = startsWithNoRow(current.page) ? -1 : 0
+  const pageIo: NavIo = { ...io, cursor: { read: () => cursorOnPage(io, current.href, start), update: io.cursor.update } }
   const draw = drawData(io)
-  const isTasks = !current.remote && (await isTasksFolder(io, path))
+  const isTasks = !current.remote && !current.page && (await isTasksFolder(io, path))
   const allTasks = isTasks ? await draw.items() : []
   const shownTasks = allTasks.filter(one => taskFilter.creator === null || creatorOf(one) === taskFilter.creator)
   let { body, jumps, position, layout }: ViewBody = { body: null, jumps: noJumps(), position: '', layout: {} }
-  if (isTasks) ({ body, jumps, position, layout } = await tasksPageBody(ctx, pageIo, allTasks, shownTasks, draw))
+  let pageKeys: Action[] = []
+  if (current.page) ({ body, jumps, position, layout, keys: pageKeys } = await recipePageBody(ctx, { ...actions, io: pageIo }, current, current.page, await pageIo.cursor.read()))
+  else if (isTasks) ({ body, jumps, position, layout } = await tasksPageBody(ctx, pageIo, allTasks, shownTasks, draw))
   else if (current.remote) ({ body, jumps, position, layout } = await remoteBody(ctx, pageIo, current, current.remote, draw))
   else if (current.markdown !== undefined) ({ body, jumps, position, layout } = await markdownBody(ctx, pageIo, current, current.markdown, path, draw))
   else if (current.table) ({ body, jumps, position, layout } = tableBody(ctx, io, current.table))
@@ -137,7 +155,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
   const starTarget = (liveFrame && liveState?.url) || current.href
   const isStarred = (await io.stars.read()).some(one => starKeyOf(one) === itemKey(starTarget))
   const remote = current.remote
-  const source = remote?.record ? sourceLine(remote, now) : ''
+  const source = remote?.record ? sourceLine(remote, now) : current.page ? pageSourceLine(current.page, now) : ''
   const info = liveFrame
     ? [isStarred ? `${ICON.star} starred` : '', liveStatus].filter(Boolean).join(' · ')
     : [liveStatus, isStarred ? `${ICON.star} starred` : '', source, position, current.summary, current.tasks].filter(Boolean).join(' · ')
@@ -152,18 +170,21 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
         })),
         { label: `${iconFor(current.kind)} ${liveFrame && liveState?.title ? liveState.title : current.title}`, fg: C.appBg, bg: C.accent, bold: true },
       ]
-    : null
+    : current.page
+      ? pageCrumbs(ctx, current, current.page)
+      : null
 
   const rows = layout.nav ?? []
   const definition = current.markdown !== undefined && current.props ? definitionIn(await draw.views(), { path, props: current.props }) : null
   const hasOwnStatus = definition?.props.status !== undefined
-  const cursor = rows.length ? Math.max(0, Math.min(rows.length - 1, await cursorOnPage(io, current.href))) : -1
+  const at = await cursorOnPage(io, current.href, start)
+  const cursor = rows.length && !(start < 0 && at < 0) ? Math.max(0, Math.min(rows.length - 1, at)) : -1
   const selectedHref = rows[cursor]?.href
   // Only a mirrored task can be adopted, and its href is under the mirror folder, so any other row skips the task scan.
-  const selectedItem = selectedHref && (isTasks || (await isMirrored(io, selectedHref))) ? (isTasks ? allTasks : await draw.items()).find(one => one.href === selectedHref) : undefined
+  const selectedItem = selectedHref && !current.page && (isTasks || (await isMirrored(io, selectedHref))) ? (isTasks ? allTasks : await draw.items()).find(one => one.href === selectedHref) : undefined
   const statusTarget = async () => (hasOwnStatus ? path : ((await actions.selectedNav())?.href ?? null))
   const tasks: Action[] =
-    hasOwnStatus || rows.length
+    !current.page && (hasOwnStatus || rows.length)
       ? taskActions(actions, { href: current.href, hasRows: rows.length > 0, statusOf: statusTarget, adoptable: selectedItem && canAdopt(selectedItem) ? selectedItem : null })
       : []
   const tasksRows: Action[] = isTasks ? [...creatorRows(io, allTasks.map(creatorOf).filter(Boolean), taskFilter), ...archivedRows(io, await archivedLists(io))] : []
@@ -180,7 +201,7 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
         ...liveActions(io, isStarred).filter(one => one.hotkey),
         closeAction(actions),
       ]
-    : [...modeActions(actions), ...liveToggle, ...moveActions(actions, current, jumps, rows.length > 0), ...tasks, ...tasksRows, ...readerActions(io, current, isStarred), closeAction(actions)]
+    : [...modeActions(actions), ...liveToggle, ...moveActions(actions, current, jumps, rows), ...tasks, ...tasksRows, ...readerActions(io, current, isStarred), closeAction(actions), ...pageKeys]
 
   return {
     crumbs: remoteCrumbs ?? [
@@ -206,12 +227,13 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
             <Text color={C.subtext0}>{notice.hint}</Text>
           </Box>
         )}
+        {current.page && pageNotice(ctx, current.page)}
         {body}
       </Box>
     ),
     info,
     actions: liveSession.isTyping ? shown.map(endTypingFirst) : shown,
-    menuOn: { target: current.error || isTasks || (remote?.failure && !remote.record) || isLiveHere ? undefined : current.href },
+    menuOn: { target: current.error || isTasks || (remote?.failure && !remote.record) || !pageCaps(current).hasMenuTarget || isLiveHere ? undefined : current.href },
     layout: { nav: [], ...layout },
   }
 }

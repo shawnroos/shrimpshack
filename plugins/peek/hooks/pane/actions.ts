@@ -1,4 +1,5 @@
-import type { Mode } from '../../types'
+import type { Mode, View } from '../../types'
+import type { RecipePage } from '../../types/recipes'
 import { nextOf } from '../gallery'
 import type { RoleFilter, Scope } from '../gallery'
 import { setStar, toggleExpanded, toggleGroupStar } from '../groups-session'
@@ -124,21 +125,42 @@ export const expandAction = (actions: PaneActions, chosen: Mode): Action => ({
     }),
 })
 
-// The cursor is one atom shared by every list, so a page opened after another list starts on its first row; it
-// follows the atom again once a person moves it on this page.
+// The cursor is one atom shared by every list, so a page opened after another list starts on `start` (its first row,
+// or -1 for none); it follows the atom again once a person moves it on this page.
 const pageCursor = { href: '', atOpen: 0, isOwned: false }
 
-export async function cursorOnPage(io: Pick<NavIo, 'cursor'>, href: string): Promise<number> {
+export async function cursorOnPage(io: Pick<NavIo, 'cursor'>, href: string, start = 0): Promise<number> {
   const raw = await io.cursor.read()
   if (pageCursor.href !== href) Object.assign(pageCursor, { href, atOpen: raw, isOwned: false })
   else if (!pageCursor.isOwned && raw !== pageCursor.atOpen) pageCursor.isOwned = true
-  return pageCursor.isOwned ? raw : 0
+  return pageCursor.isOwned ? raw : start
 }
 
-export async function claimCursor(io: Pick<NavIo, 'cursor'>, href: string) {
-  if (pageCursor.href === href && pageCursor.isOwned) return
+// True when this call took the cursor for the page, setting it to the first row.
+export async function claimCursor(io: Pick<NavIo, 'cursor'>, href: string): Promise<boolean> {
+  if (pageCursor.href === href && pageCursor.isOwned) return false
   await io.cursor.update(() => 0)
   Object.assign(pageCursor, { href, atOpen: 0, isOwned: true })
+  return true
+}
+
+const isPageError = (page: RecipePage | undefined) => page?.phase === 'failed' || page?.phase === 'conflict'
+
+// A draft's review holds the first focus, so its page starts with no row selected.
+export const startsWithNoRow = (page: RecipePage | undefined) => Boolean(page && page.phase !== 'conflict' && page.isDraft && page.review)
+
+// The footer, the menu and the menu target read what a link page can do from here.
+export function pageCaps(current: View) {
+  const isLink = Boolean(current.remote || current.page)
+  const isError = isPageError(current.page)
+  return {
+    canRefresh: isLink,
+    canStar: !isError,
+    hasMenuTarget: !isError,
+    openLabel: isLink ? 'Open in browser' : 'Open',
+    copyLabel: isLink ? 'Copy link' : 'Copy path',
+    refreshLabel: isError ? 'Retry' : 'Refresh',
+  }
 }
 
 const STATUS_CYCLE = ['todo', 'doing', 'done'] as const
