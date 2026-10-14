@@ -23,14 +23,14 @@ const ERROR_TEXT = 2000
 
 export const openToolSpec = (pluginRoot: string) => ({
   name: 'open' as const,
-  description: `Open an http(s) link in the peek side pane through normal routing, with draft recipes allowed, so the person can see a recipe page and approve it there. Returns whether the pane is shown, the route, the page outline in the pane's arrow order, or the error. A draft page is marked unapproved; only the person can approve it, in the pane. How to write a recipe: ${skillPathOf(pluginRoot)}`,
+  description: `Open an http(s) link in the peek side pane through normal routing, with draft recipes allowed, so the person can see a recipe page and approve it there. Returns whether the pane is shown, the route, the page outline in the pane's arrow order, or the error. A draft page is marked unapproved; only the person can approve it, in the pane. When an approved recipe's run passes, it also saves the rows that recipe blocks (a \`peek-<layout> recipe=<id> url=<link>\` fence) draw for that link. How to write a recipe: ${skillPathOf(pluginRoot)}`,
   inputSchema: { type: 'object', properties: { link: { type: 'string', description: 'The http(s) link to open' } }, required: ['link'] },
   isDeferred: true,
 })
 
 export const checkToolSpec = (pluginRoot: string) => ({
   name: 'check_recipe' as const,
-  description: `Check a peek recipe (a folder under ~/.local/share/claude-peek/recipes/) against a real sample link: validates recipe.json, reports which route wins for the link and every recipe whose links overlap, runs the source once (a draft runs only what this session's permissions already allow) and checks the page it returns against the vocabulary. Never approves the recipe. How to write a recipe: ${skillPathOf(pluginRoot)}`,
+  description: `Check a peek recipe (a folder under ~/.local/share/claude-peek/recipes/) against a real sample link: validates recipe.json, reports which route wins for the link and every recipe whose links overlap, runs the source once (a draft runs only what this session's permissions already allow) and checks the page it returns against the vocabulary. Never approves the recipe. A passing run of an approved recipe also saves the rows that recipe blocks (a \`peek-<layout> recipe=<id> url=<link>\` fence) draw for that link. How to write a recipe: ${skillPathOf(pluginRoot)}`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -158,7 +158,7 @@ export async function checkRecipeTool(io: NavIo, input: { recipe?: unknown; link
       ...(split.text ? { fetched: { note: FETCHED_NOTE, ...split.text } } : {}),
     })
   }
-  await cacheRecipeRun(io, id, link, outcome)
+  if (isOk) await cacheRecipeRun(io, id, link, outcome)
   const counts = countsOf(outcome.page)
   const body = { ...head, outcome: { kind: 'page' }, problems: [], counts, fetched: { note: FETCHED_NOTE, outline: fetchedOutline(outcome.page) } }
   if (reasons.length > 0) return failed(`recipe "${name}" (${id}) returned a drawable page, but ${reasons.join('; ')}.`, body)

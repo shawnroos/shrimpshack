@@ -2,7 +2,7 @@ import type { McpToolResult, ProcessRunInit } from 'claude-code'
 
 import { cleanText, RECIPE_CAPS, UNSAFE, validatePage } from './page'
 import type { McpSource, Page, Problem, Recipe } from './page'
-import { loadRecipe, mcpToolName } from './recipes'
+import { loadRecipe, loadRecipeAt, mcpToolName } from './recipes'
 import type { RecipesIo } from './recipes'
 import type { Ports } from '../ports'
 
@@ -43,6 +43,9 @@ export const STDIN_ECHO_CHARS = 8000
 export const SCRIPT_ENV = ['HOME', 'PATH', 'LANG', 'TMPDIR'] as const
 const ENV_BIN = '/usr/bin/env'
 const REDACTED = '[redacted]'
+const DIGEST = /^[0-9a-f]{64}$/
+
+export const recipeRunsDir = (home: string) => `${home}/.local/share/claude-peek/recipe-runs`
 
 type Loaded = Extract<Awaited<ReturnType<typeof loadRecipe>>, { ok: true }>
 type Ran = { ok: true; text: string; secrets: readonly string[]; rawStdin?: string } | ({ ok: false } & RunFailure)
@@ -128,29 +131,70 @@ async function exec(io: RunIo, resolved: Resolved, script: Script, url: string, 
   return { ok: true, text: result.stdout, secrets, ...(stdin === undefined ? {} : { rawStdin: stdin }) }
 }
 
-async function runScript(io: RunIo, loaded: Loaded, source: { run: string[]; env?: string[] }, url: string, draft: boolean): Promise<Ran> {
+const quietly = (io: RunIo, argv: readonly string[]) => io.run(argv).catch((error: unknown) => ({ exitCode: -1, stderr: String(error) }))
+
+// The live folder can change between hashing and exec, so the script runs from a copy named by the digest it was
+// approved under, hashed again before it is trusted. Only a copy that already hashed to the digest is moved to that
+// name, so a run reading it, even while another run replaces it, reads approved bytes or finds nothing.
+async function staged(io: RunIo, live: Loaded, liveFolder: string, digest: string): Promise<{ ok: true; loaded: Loaded } | ({ ok: false } & RunFailure)> {
+  const home = await io.home()
+  if (!home || !DIGEST.test(digest)) return { ok: false, kind: 'started-failed', message: 'there is no folder to copy the recipe into before it runs' }
+  const root = recipeRunsDir(home)
+  const shared = `${root}/${digest}`
+  const kept = await loadRecipeAt(io, shared, live.id)
+  if (kept.ok && kept.digest === digest) return { ok: true, loaded: kept }
+  const fresh = `${shared}.${Math.random().toString(36).slice(2)}`
+  for (const argv of [['/bin/mkdir', '-p', root], ['/bin/cp', '-R', liveFolder, fresh]]) {
+    const done = await quietly(io, argv)
+    if (done.exitCode !== 0) return { ok: false, kind: 'started-failed', message: `could not copy the recipe to ${fresh} to run it: ${excerpt(done.stderr)}` }
+  }
+  const copy = await loadRecipeAt(io, fresh, live.id)
+  if (!copy.ok || copy.digest !== digest) {
+    await quietly(io, ['/bin/rm', '-rf', fresh])
+    return { ok: false, kind: 'changed-during-run', phase: 'before' }
+  }
+  await quietly(io, ['/bin/rm', '-rf', shared])
+  if ((await quietly(io, ['/bin/mv', fresh, shared])).exitCode !== 0) return { ok: true, loaded: copy }
+  const placed = await loadRecipeAt(io, shared, live.id)
+  if (placed.ok && placed.digest === digest) return { ok: true, loaded: placed }
+  return { ok: false, kind: 'started-failed', message: `another run was placing its copy of this recipe at ${shared}; open it again` }
+}
+
+// The live path is what a draft's permission check names; the copy is what runs.
+async function inCopy(io: RunIo, live: Loaded, found: Resolved, script: Script, url: string, digest: string): Promise<{ ok: true; resolved: Resolved } | ({ ok: false } & RunFailure)> {
+  const copy = await staged(io, live, found.folder, digest)
+  if (!copy.ok) return copy
+  const there = await resolveScript(io, copy.loaded, script, url)
+  return there.ok ? there : { ok: false, kind: 'invalid-recipe', problems: there.problems }
+}
+
+async function runScript(io: RunIo, loaded: Loaded, source: { run: string[]; env?: string[] }, url: string, target: RunTarget): Promise<Ran> {
   const script: Script = { field: 'run', argv: source.run, ...(source.env ? { env: source.env } : {}) }
   const found = await resolveScript(io, loaded, script, url)
   if (!found.ok) return { ok: false, kind: 'invalid-recipe', problems: found.problems }
-  const refused = draft ? await refusedBash(io, found.resolved) : undefined
+  const refused = target.draft ? await refusedBash(io, found.resolved) : undefined
   if (refused) return refused
+  const copy = await inCopy(io, loaded, found.resolved, script, url, target.digest)
+  if (!copy.ok) return copy
   const seconds = timeoutOf(loaded.recipe)
-  return exec(io, found.resolved, script, url, { seconds, leftMs: seconds * 1000 })
+  return exec(io, copy.resolved, script, url, { seconds, leftMs: seconds * 1000 })
 }
 
-async function runMcp(io: RunIo, loaded: Loaded, source: McpSource, url: string, draft: boolean): Promise<Ran> {
+async function runMcp(io: RunIo, loaded: Loaded, source: McpSource, url: string, target: RunTarget): Promise<Ran> {
   const { server, tool } = source.mcp
   const args = substitute(source.mcp.args ?? {}, url) as Record<string, unknown>
   const script: Script = { field: 'map', argv: source.map, ...(source.env ? { env: source.env } : {}) }
   const found = await resolveScript(io, loaded, script, url)
   if (!found.ok) return { ok: false, kind: 'invalid-recipe', problems: found.problems }
-  if (draft) {
+  if (target.draft) {
     const name = mcpToolName(server, tool)
     const check = await io.toolCheck({ tool: name, input: args })
     if (check.decision !== 'allow') return { ok: false, kind: 'needs-permission', tool: name, decision: check.decision, ...(check.reason ? { reason: check.reason } : {}) }
     const refused = await refusedBash(io, found.resolved)
     if (refused) return refused
   }
+  const copy = await inCopy(io, loaded, found.resolved, script, url, target.digest)
+  if (!copy.ok) return copy
   const seconds = timeoutOf(loaded.recipe)
   const limitMs = seconds * 1000
   const startedAt = await io.now()
@@ -168,7 +212,7 @@ async function runMcp(io: RunIo, loaded: Loaded, source: McpSource, url: string,
   if (!text.trim() && (result.structuredContent ?? null) === null) return { ok: false, kind: 'empty-result', server, tool }
   const leftMs = limitMs - ((await io.now()) - startedAt)
   if (leftMs <= 0) return { ok: false, kind: 'timeout', limitSeconds: seconds }
-  return exec(io, found.resolved, script, url, { seconds, leftMs }, mapStdin(text, result.structuredContent))
+  return exec(io, copy.resolved, script, url, { seconds, leftMs }, mapStdin(text, result.structuredContent))
 }
 
 export async function runRecipe(io: RunIo, target: RunTarget, url: string): Promise<RunOutcome> {
@@ -177,9 +221,9 @@ export async function runRecipe(io: RunIo, target: RunTarget, url: string): Prom
   const named = { id: target.id, name: before.recipe.name }
   if (before.digest !== target.digest) return { ok: false, ...named, kind: 'changed-during-run', phase: 'before' }
   const { source } = before.recipe
-  const ran = 'run' in source ? await runScript(io, before, source, url, target.draft) : await runMcp(io, before, source, url, target.draft)
+  const ran = 'run' in source ? await runScript(io, before, source, url, target) : await runMcp(io, before, source, url, target)
   const ranAt = await io.now()
-  if (!ran.ok && (ran.kind === 'invalid-recipe' || ran.kind === 'needs-permission')) return { ...ran, ...named }
+  if (!ran.ok && (ran.kind === 'invalid-recipe' || ran.kind === 'needs-permission' || (ran.kind === 'changed-during-run' && ran.phase === 'before'))) return { ...ran, ...named }
   const after = await loadRecipe(io, target.root, target.id)
   if (!after.ok || after.digest !== target.digest) return { ok: false, ...named, kind: 'changed-during-run', phase: 'after' }
   if (!ran.ok) return { ...ran, ...named }

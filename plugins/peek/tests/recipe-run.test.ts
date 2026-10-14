@@ -8,6 +8,7 @@ import type { RunOutcome } from '../hooks/recipes/run'
 import { PAGE_RESULT, PAGE_RESULT_PAGE, structuredResult, TOOL_ERROR, textResult } from './fixtures/mcp'
 import { HOME, mcpFolder, PAGE, ROOT, scriptFolder, world } from './fixtures/recipes/world'
 import type { Child, ScriptAnswer, World } from './fixtures/recipes/world'
+import { gate, until } from './fixtures/recipes/nav'
 
 const LINK = 'https://figma.com/file/abc/Design'
 const DIR = `${ROOT}/figma-files`
@@ -18,6 +19,12 @@ async function run(w: World, options: { draft?: boolean; id?: string; digest?: s
   const loaded = await loadRecipe(w.io, ROOT, id)
   if (!loaded.ok) throw new Error(`${id} did not load: ${JSON.stringify(loaded.problems)}`)
   return runRecipe(w.io, { root: ROOT, id, digest: options.digest ?? loaded.digest, draft: options.draft ?? false }, options.link ?? LINK)
+}
+
+async function copyOf(w: World, home = HOME): Promise<string> {
+  const loaded = await loadRecipe(w.io, ROOT, 'figma-files')
+  if (!loaded.ok) throw new Error('did not load')
+  return `${home}/.local/share/claude-peek/recipe-runs/${loaded.digest}`
 }
 
 function failed<K extends Exclude<RunOutcome, { ok: true }>['kind']>(outcome: RunOutcome, kind: K): Extract<RunOutcome, { kind: K }> {
@@ -35,15 +42,16 @@ describe('runRecipe: script source', () => {
     expect(w.calls.run).toHaveLength(1)
   })
 
-  test('runs through env -i in the recipe folder with the link last and in PEEK_URL', async () => {
+  test('runs through env -i in the copy of the recipe folder with the link last and in PEEK_URL', async () => {
     const w = world({ files: scriptFolder('figma-files', { run: ['./fetch.sh', '--mode', 'full'] }) })
+    const copy = await copyOf(w)
     await run(w)
     const [call] = w.calls.run
     expect(call?.argv.slice(0, 2)).toEqual(['/usr/bin/env', '-i'])
-    expect(call?.init?.cwd).toBe(DIR)
+    expect(call?.init?.cwd).toBe(copy)
     expect(call?.init?.timeoutMs).toBe(20_000)
     const [child] = w.calls.children
-    expect(child?.argv).toEqual([SCRIPT, '--mode', 'full', LINK])
+    expect(child?.argv).toEqual([`${copy}/fetch.sh`, '--mode', 'full', LINK])
     expect(child?.env).toEqual({ HOME, PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', TMPDIR: '/tmp/u/', PEEK_URL: LINK })
   })
 
@@ -233,10 +241,167 @@ describe('runRecipe: the folder is what runs', () => {
         '/home': { link: '/data' },
       },
     })
+    const copy = await copyOf(w, '/data/u')
     const outcome = await run(w)
     expect(outcome.ok).toBe(true)
-    expect(w.calls.children[0]?.argv[0]).toBe('/data/u/.local/share/claude-peek/recipes/figma-files/fetch.sh')
-    expect(w.calls.run[0]?.init?.cwd).toBe('/data/u/.local/share/claude-peek/recipes/figma-files')
+    expect(w.calls.children[0]?.argv[0]).toBe(`${copy}/fetch.sh`)
+    expect(w.calls.run[0]?.init?.cwd).toBe(copy)
+  })
+})
+
+describe('runRecipe: what runs is a copy of the bytes that were hashed', () => {
+  const ORIGINAL = '#!/bin/sh\necho page\n'
+  const SWAPPED = '#!/bin/sh\necho swapped\n'
+  const snapOf = (digest: string) => `${HOME}/.local/share/claude-peek/recipe-runs/${digest}`
+  const digestOf = async (w: World) => {
+    const loaded = await loadRecipe(w.io, ROOT, 'figma-files')
+    if (!loaded.ok) throw new Error('did not load')
+    return loaded.digest
+  }
+  const copies = (w: World) => w.calls.fs.filter(argv => argv[0] === '/bin/cp')
+
+  test('a script swapped after the digest check, before it opens, runs the hashed bytes and the run is discarded', async () => {
+    const opened: (string | undefined)[] = []
+    const w = world({
+      files: scriptFolder('figma-files'),
+      script: (child, self) => {
+        self.write(SCRIPT, SWAPPED)
+        opened.push(self.text(child.argv[0] ?? ''))
+        return { stdout: JSON.stringify(PAGE) }
+      },
+    })
+    const outcome = failed(await run(w), 'changed-during-run')
+    expect(opened).toEqual([ORIGINAL])
+    expect(outcome.phase).toBe('after')
+  })
+
+  test('a script swapped while the run checks its path never runs: the copy no longer matches the approval', async () => {
+    const w = world({ files: scriptFolder('figma-files') })
+    const stat = w.io.statResolved
+    w.io.statResolved = async path => {
+      if (path === SCRIPT) w.write(SCRIPT, SWAPPED)
+      return stat(path)
+    }
+    const outcome = failed(await run(w), 'changed-during-run')
+    expect(outcome.phase).toBe('before')
+    expect(w.calls.run).toHaveLength(0)
+    expect(recipeFailureText(outcome)).toContain('changed since it was loaded')
+  })
+
+  test('the script runs from the copy, in the copy', async () => {
+    const w = world({ files: scriptFolder('figma-files') })
+    const snap = snapOf(await digestOf(w))
+    expect((await run(w)).ok).toBe(true)
+    expect(w.calls.children[0]?.argv[0]).toBe(`${snap}/fetch.sh`)
+    expect(w.calls.run[0]?.init?.cwd).toBe(snap)
+    expect(w.text(`${snap}/fetch.sh`)).toBe(ORIGINAL)
+  })
+
+  test('an intact copy is reused, and a tampered one is rebuilt before it runs', async () => {
+    const w = world({ files: scriptFolder('figma-files') })
+    const snap = snapOf(await digestOf(w))
+    await run(w)
+    expect(copies(w)).toHaveLength(1)
+    await run(w)
+    expect(copies(w)).toHaveLength(1)
+    w.write(`${snap}/fetch.sh`, SWAPPED)
+    const opened: (string | undefined)[] = []
+    w.io.run = (original => async (argv, init) => {
+      if (argv[0] === '/usr/bin/env') opened.push(w.text(argv.find(word => word.endsWith('/fetch.sh')) ?? ''))
+      return original(argv, init)
+    })(w.io.run)
+    expect((await run(w)).ok).toBe(true)
+    expect(copies(w)).toHaveLength(2)
+    expect(w.calls.fs.some(argv => argv[0] === '/bin/rm' && argv.includes(snap))).toBe(true)
+    expect(opened).toEqual([ORIGINAL])
+  })
+
+  test('a copy that holds something more than the recipe is rebuilt, not trusted', async () => {
+    const w = world({ files: scriptFolder('figma-files') })
+    const snap = snapOf(await digestOf(w))
+    await run(w)
+    w.write(`${snap}/extra.sh`, SWAPPED)
+    expect((await run(w)).ok).toBe(true)
+    expect(copies(w)).toHaveLength(2)
+    expect(w.text(`${snap}/extra.sh`)).toBeUndefined()
+  })
+
+  test('a second run that first copies the same version while the folder changes never puts unhashed bytes where the first run reads', async () => {
+    const opened: (string | undefined)[] = []
+    const w = world({ files: scriptFolder('figma-files'), script: (child, self) => (opened.push(self.text(child.argv[0] ?? '')), { stdout: JSON.stringify(PAGE) }) })
+    const target = { root: ROOT, id: 'figma-files', digest: await digestOf(w), draft: false }
+    const first = gate()
+    const second = gate()
+    let isFirstHeld = false
+    let isSecondHeld = false
+    const firstIo = { ...w.io, run: async (argv: readonly string[], init?: Parameters<World['io']['run']>[1]) => {
+      if (argv[0] === '/usr/bin/env') {
+        isFirstHeld = true
+        await first.held
+      }
+      return w.io.run(argv, init)
+    } }
+    let isSecondStarted = false
+    const secondIo = { ...w.io, run: async (argv: readonly string[], init?: Parameters<World['io']['run']>[1]) => {
+      if (!isSecondStarted) {
+        isSecondStarted = true
+        isSecondHeld = true
+        await second.held
+      }
+      if (argv[0] === '/bin/cp') w.write(SCRIPT, SWAPPED)
+      return w.io.run(argv, init)
+    } }
+    const later = runRecipe(secondIo, target, LINK)
+    await until(() => isSecondHeld)
+    const earlier = runRecipe(firstIo, target, LINK)
+    await until(() => isFirstHeld)
+    second.release()
+    failed(await later, 'changed-during-run')
+    first.release()
+    await earlier
+    expect(opened).toEqual([ORIGINAL])
+  })
+
+  test('a copy moved where another folder already stands is hashed again, and the run is refused rather than run from it', async () => {
+    const opened: (string | undefined)[] = []
+    const w = world({
+      files: scriptFolder('figma-files'),
+      script: (child, self) => (opened.push(self.text(child.argv[0] ?? '')), { stdout: JSON.stringify(PAGE) }),
+      onFs: argv => (argv[0] === '/bin/rm' ? {} : undefined),
+    })
+    const snap = snapOf(await digestOf(w))
+    w.write(`${snap}/recipe.json`, w.text(`${DIR}/recipe.json`) ?? '')
+    w.write(`${snap}/fetch.sh`, SWAPPED)
+    const outcome = failed(await run(w), 'started-failed')
+    expect(outcome.message).toContain('another run')
+    expect(opened).toEqual([])
+  })
+
+  test('a copy that cannot be made is started-failed and nothing runs', async () => {
+    const w = world({ files: scriptFolder('figma-files'), onFs: argv => (argv[0] === '/bin/cp' ? { exitCode: 1, stderr: 'cp: disk full' } : undefined) })
+    const outcome = failed(await run(w), 'started-failed')
+    expect(outcome.message).toContain('disk full')
+    expect(w.calls.run).toHaveLength(0)
+  })
+
+  test('a draft runs from a copy keyed by its own digest, and a refused draft leaves no copy', async () => {
+    const allowed = world({ files: scriptFolder('figma-files'), decision: 'allow' })
+    const snap = snapOf(await digestOf(allowed))
+    expect((await run(allowed, { draft: true })).ok).toBe(true)
+    expect(allowed.calls.children[0]?.argv[0]).toBe(`${snap}/fetch.sh`)
+    const refused = world({ files: scriptFolder('figma-files'), decision: 'ask' })
+    failed(await run(refused, { draft: true }), 'needs-permission')
+    expect(refused.calls.fs).toHaveLength(0)
+  })
+
+  test('an MCP source copies before the tool is called, and its map runs from the copy', async () => {
+    const w = world({ files: mcpFolder('figma-files', { server: 'linear', tool: 'get_issue' }), mcp: () => PAGE_RESULT })
+    const snap = snapOf(await digestOf(w))
+    expect((await run(w)).ok).toBe(true)
+    expect(w.calls.children[0]?.argv[0]).toBe(`${snap}/map.py`)
+    const broken = world({ files: mcpFolder('figma-files', { server: 'linear', tool: 'get_issue' }), onFs: argv => (argv[0] === '/bin/cp' ? { exitCode: 1, stderr: 'cp: no' } : undefined) })
+    failed(await run(broken), 'started-failed')
+    expect(broken.calls.mcp).toHaveLength(0)
   })
 })
 
@@ -346,13 +511,14 @@ describe('runRecipe: an MCP source fetches, then maps through a script', () => {
 
   test('the map script turns a tool result that is not a page into the page', async () => {
     const w = world({ files: issueFolder(), mcp: () => textResult(JSON.stringify(ISSUE)), script: mapIssue })
+    const copy = await copyOf(w)
     const outcome = await run(w)
     if (!outcome.ok) throw new Error(JSON.stringify(outcome))
     expect(outcome.page).toEqual(toPage(ISSUE))
     expect(w.calls.mcp).toEqual([{ server: 'docs', tool: 'get_doc', args: { id: LINK } }])
     const [child] = w.calls.children
-    expect(child?.argv).toEqual([MAP, LINK])
-    expect(child?.cwd).toBe(DIR)
+    expect(child?.argv).toEqual([`${copy}/map.py`, LINK])
+    expect(child?.cwd).toBe(copy)
     expect(child?.env).toEqual({ HOME, PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', TMPDIR: '/tmp/u/', PEEK_URL: LINK })
     expect(w.calls.run[0]?.argv.slice(0, 2)).toEqual(['/usr/bin/env', '-i'])
   })

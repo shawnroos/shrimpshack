@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { nav, openExternally, pressLink, refresh, show } from '../hooks/navigation'
+import { goBack, nav, openExternally, openFromPage, pressLink, refresh, show } from '../hooks/navigation'
 import { APPROVALS_KEY } from '../hooks/recipes/recipes'
 import { approveRecipe, tickPage, toggleReviewFiles } from '../hooks/recipes/session'
 import { openTool } from '../hooks/recipes/tools'
@@ -353,6 +353,56 @@ describe('the timers and a recipe page', () => {
   })
 })
 
+describe('a recipe page kept for b', () => {
+  test('a page left while its refresh runs comes back with its timer working', async () => {
+    let run: ReturnType<typeof gate> | undefined
+    const { w, scripts } = await session({ files: timedRecipe(), approved: ['figma-files'], hold: () => run?.held })
+    await show(io, FIGMA)
+    run = gate()
+    const refreshing = refresh(io, FIGMA)
+    await until(() => scripts().length > 1)
+    await openFromPage(io, '/repo/notes.md')
+    run.release()
+    await refreshing
+    await goBack(io)
+    const back = await pageOf()
+    expect(back.phase).toBe('ready')
+    expect(back.phase !== 'conflict' && back.isRefreshing).toBeUndefined()
+    await stayActive(w, 6)
+    expect(scripts()).toEqual([FIGMA, FIGMA, FIGMA])
+    nav.backStack.length = 0
+  })
+
+  test('a page whose last refresh failed keeps saying so when b brings it back', async () => {
+    let isBroken = false
+    await session({ files: figmaRecipe(), approved: ['figma-files'], pages: () => (isBroken ? { exitCode: 3, stderr: 'rate limited' } : answer(designPage)) })
+    await show(io, FIGMA)
+    isBroken = true
+    await refresh(io, FIGMA)
+    await openFromPage(io, '/repo/notes.md')
+    await goBack(io)
+    const back = await pageOf()
+    expect(back.phase === 'ready' && back.refreshFailure).toContain('rate limited')
+    nav.backStack.length = 0
+  })
+
+  test('a page left while it was still loading opens again on b instead of loading for ever', async () => {
+    let run: ReturnType<typeof gate> | undefined = gate()
+    const { scripts } = await session({ files: figmaRecipe(), approved: ['figma-files'], hold: () => run?.held })
+    const opening = show(io, FIGMA)
+    await until(async () => (await io.view.read())?.page?.phase === 'loading')
+    await openFromPage(io, '/repo/notes.md')
+    run.release()
+    run = undefined
+    await opening
+    await goBack(io)
+    const back = await pageOf()
+    expect(back.phase).toBe('ready')
+    expect(scripts()).toEqual([FIGMA, FIGMA])
+    nav.backStack.length = 0
+  })
+})
+
 describe('approving a draft from its page', () => {
   test('Approve on an unchanged preview records the digest and files, and the page turns approved', async () => {
     const { w } = await session({ files: figmaRecipe() })
@@ -377,6 +427,21 @@ describe('approving a draft from its page', () => {
     const page = await pageOf()
     expect(page.isDraft).toBe(true)
     expect(page.phase !== 'conflict' && page.review?.refusal).toEqual({ kind: 'changed' })
+  })
+
+  test('Approve whose read of the saved approvals fails writes nothing, says so, and leaves the page as it was', async () => {
+    const other = folder('figma-protos', { name: 'Figma prototypes', match: [{ host: 'figma.com', path: '/proto/*' }], source: { run: ['./proto.sh'] } }, { 'proto.sh': '#!/bin/sh\n' })
+    const { w, active } = await session({ files: { ...figmaRecipe(), ...other }, approved: ['figma-protos'] })
+    await show(io, FIGMA, false, { allowDraft: true })
+    const before = await pageOf()
+    const kept = JSON.stringify(w.store[APPROVALS_KEY])
+    w.io.storeGet = async () => {
+      throw new Error('store busy')
+    }
+    await approveRecipe(io, FIGMA)
+    expect(JSON.stringify(w.store[APPROVALS_KEY])).toBe(kept)
+    expect(await pageOf()).toEqual(before)
+    expect(active.toasts.join('\n')).toContain('store busy')
   })
 
   test('Show files toggles the file text on the page on screen', async () => {

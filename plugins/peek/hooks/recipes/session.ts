@@ -9,7 +9,7 @@ import { parseRef } from '../refs'
 import { BACKOFF_MAX_MS, notePageTitle, snapshotTitles, takeTitleChange } from '../refresh'
 import { cacheRecipeRun } from '../views/recipe-source'
 import type { Page } from './page'
-import { APPROVALS_KEY, isApproved, loadRecipe, loadRecipes, overlaps, recipesDir, reviewOf, routeOf } from './recipes'
+import { APPROVALS_KEY, approvalsOf, isApproved, loadRecipe, loadRecipes, overlaps, recipesDir, reviewOf, routeOf } from './recipes'
 import { recipeFailureText, runRecipe } from './run'
 import { PAGE_PICTURES, conflictText, imageExt, mediaOf, pageView, refreshed, settled } from './state'
 import type { PageLoad } from './state'
@@ -60,7 +60,7 @@ export function loadPage(io: NavIo, link: string, allowDraft: boolean, onRouted:
       const root = recipesDir((await io.home()) ?? '')
       const outcome = await runRecipe(io.runIo(), { root, id: route.id, digest: route.digest, draft: route.draft }, link)
       if (!outcome.ok) return { kind: 'ran', state: { ...base, phase: 'failed', failure: recipeFailureText(outcome), failureKind: outcome.kind } }
-      await cacheRecipeRun(io, route.id, link, outcome)
+      if (!route.draft) await cacheRecipeRun(io, route.id, link, outcome)
       return { kind: 'ran', state: { ...base, phase: 'ready', fetchedAt: outcome.ranAt, page: outcome.page, ...(await recipeMedia(io, outcome.page)) } }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -130,7 +130,17 @@ export async function approveRecipe(io: NavIo, href: string) {
     const recipesIo = io.recipesIo()
     const loaded = await loadRecipe(recipesIo, recipesDir((await io.home()) ?? ''), id)
     if (!loaded.ok || loaded.digest !== digest) return refuse({ kind: 'changed' })
-    const { recipes, approvals } = await loadRecipes(recipesIo)
+    const stored = await recipesIo.storeGet(APPROVALS_KEY).then(
+      value => ({ isRead: true as const, value }),
+      (error: unknown) => ({ isRead: false as const, error }),
+    )
+    // Approve rewrites every approval at once, so a write after a failed read would drop all the others.
+    if (!stored.isRead) {
+      io.toast(`Nothing was approved: the saved approvals could not be read (${stored.error instanceof Error ? stored.error.message : String(stored.error)}). Try Approve again.`)
+      return
+    }
+    const approvals = approvalsOf(stored.value)
+    const { recipes } = await loadRecipes(recipesIo)
     const other = recipes.find(one => one.ok && one.id !== id && isApproved(one, approvals) && overlaps(loaded.recipe, one.recipe) !== undefined)
     if (other) return refuse({ kind: 'overlap', id: other.id })
     await io.storeSet(APPROVALS_KEY, { ...approvals, [id]: { digest: loaded.digest, files: loaded.files } })

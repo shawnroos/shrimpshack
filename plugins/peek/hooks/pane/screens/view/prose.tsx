@@ -4,9 +4,8 @@ import { fetchedAge } from '../../../format'
 import { diagramType, plainInline, segmentsOf } from '../../../markdown'
 import type { DocPart } from '../../../markdown'
 import { chunkMarkdown, estimateRows, taskRows } from '../../../measure'
-import { pressLink } from '../../../navigation'
+import { paneHref, pressLink } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
-import { fileHref } from '../../../paths'
 import { ICON } from '../../../theme'
 import { matches } from '../../../views/definition'
 import type { Definition } from '../../../views/definition'
@@ -121,7 +120,7 @@ export async function proseParts(ctx: DrawContext, io: NavIo, key: string, text:
         cursor,
         navStart: navCount,
         nav,
-        open: href => void pressLink(io, href.startsWith('/') ? fileHref(href) : href),
+        open: href => void pressLink(io, paneHref(href)),
         colorsOf: item => known.find(one => matches(one, { path: item.href, props: item.props }))?.colors,
       }
       const how = { rule: spec.rule, ...(spec.cap === undefined ? {} : { cap: spec.cap }) }

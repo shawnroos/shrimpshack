@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import { APPROVALS_KEY, loadRecipe } from '../hooks/recipes/recipes'
 import { resetRefresh } from '../hooks/refresh'
-import { HOME, ROOT, folder, world } from './fixtures/recipes/world'
+import { FS_BINS, HOME, ROOT, folder, world } from './fixtures/recipes/world'
 import type { ScriptAnswer, World } from './fixtures/recipes/world'
 
 const NOW = 10 * 3600_000
@@ -87,7 +87,7 @@ async function paneWorld(on: On, options: { files: Record<string, string | Uint8
   on('process.run', async (_$, e) => {
     const argv = [...e.argv]
     const [bin = ''] = argv
-    if (bin === '/usr/bin/env') return { value: await w.io.run(argv, e.init) }
+    if (bin === '/usr/bin/env' || FS_BINS.includes(bin)) return { value: await w.io.run(argv, e.init) }
     if (bin === '/usr/bin/printenv') {
       const value = w.env[(argv[1] ?? '') as keyof typeof w.env]
       return value === undefined ? done(1) : done(0, `${value}\n`)

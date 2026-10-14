@@ -1,6 +1,7 @@
 import type { View } from '../../types'
 import type { RecipePage, RecipeRouted } from '../../types/recipes'
 import { fetchedAge } from '../format'
+import { PICTURE_LINE } from '../sources/web'
 import type { Page } from './page'
 
 export type RecipeRan = Extract<RecipePage, { phase: 'ready' | 'failed' }>
@@ -9,8 +10,6 @@ type Unconflicted = Exclude<RecipePage, { phase: 'conflict' }>
 type Media = Record<string, { file?: string; play?: string }>
 
 export const PAGE_PICTURES = 12
-// The pane draws a whole trimmed line of this shape as a picture, so the page downloads exactly those.
-export const PICTURE_LINE = /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/
 
 export const conflictText = (ids: readonly string[]) =>
   `Recipes ${ids.map(id => `"${id}"`).join(' and ')} both handle this link, so peek ran neither. Change one recipe's match so only one claims it.`

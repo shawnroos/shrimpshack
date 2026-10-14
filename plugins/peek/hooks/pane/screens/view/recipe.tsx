@@ -7,9 +7,8 @@ import { pixels } from '../../../images'
 import { isWebUrl } from '../../../live'
 import { linkify } from '../../../markdown'
 import { estimateRows, imageBox } from '../../../measure'
-import { openFromPage, refContext, show, starKeyOf } from '../../../navigation'
+import { openFromPage, paneHref, refContext, show, starKeyOf } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
-import { fileHref } from '../../../paths'
 import { PAGE_CAPS, itemsOf } from '../../../recipes/page'
 import type { Page } from '../../../recipes/page'
 import { approveRecipe, toggleReviewFiles } from '../../../recipes/session'
@@ -38,8 +37,6 @@ const FILE_LINES_PER_TEXT = 200
 type Ready = Extract<RecipePage, { phase: 'ready' }>
 type Media = NonNullable<Ready['media']>
 type Pictures = NonNullable<Ready['pictures']>
-
-const paneHref = (href: string) => (href.startsWith('/') ? fileHref(href) : href)
 
 export function pageCrumbs(ctx: DrawContext, current: View, page: RecipePage): Crumb[] {
   const { C } = ctx

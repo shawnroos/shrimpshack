@@ -92,3 +92,6 @@ last check: <the last check_recipe JSON, only for stuck or needs-permission>
 
 `ready` means the check passed and the draft preview is open. It never means
 done: the person still has to press Approve in the pane.
+Once approved, a page can draw the recipe's rows with a
+`peek-<layout> recipe=<id> url=<link>` fence; your check ran a draft, so it
+filled nothing.

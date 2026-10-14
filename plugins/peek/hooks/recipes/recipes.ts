@@ -12,7 +12,7 @@ type EntryKind = 'file' | 'dir' | 'other'
 // list and statResolved name only the fields recipes read, so a fake without mtimeMs still serves; Ports' engine
 // answers carry more and still fit.
 export type RecipesIo = Pick<Ports, 'home' | 'readBytes' | 'storeGet'> & {
-  list: (dir: string) => Promise<readonly { name: string; kind: EntryKind; size: number; isLink: boolean }[]>
+  list: (dir: string) => Promise<readonly { name: string; kind: EntryKind; size: number; isLink: boolean; mtimeMs?: number }[]>
   statResolved: (path: string) => Promise<{ kind: EntryKind; size: number; isLink: boolean; realPath?: string }>
 }
 
@@ -110,7 +110,10 @@ function scriptPath(run: readonly string[]): string {
 export async function loadRecipe(io: RecipesIo, root: string, id: string): Promise<LoadedRecipe> {
   const badId = idProblem(id)
   if (badId) return { ok: false, id, problems: [{ path: 'id', message: badId }] }
-  const dir = `${root}/${id}`
+  return loadRecipeAt(io, `${root}/${id}`, id)
+}
+
+export async function loadRecipeAt(io: RecipesIo, dir: string, id: string): Promise<LoadedRecipe> {
   const walked = await walk(io, dir)
   if (walked.problems.length > 0) return { ok: false, id, dir, problems: walked.problems }
   const entries = walked.entries.toSorted(byPath)
@@ -136,7 +139,7 @@ export async function loadRecipe(io: RecipesIo, root: string, id: string): Promi
   return { ok: true, id, dir, recipe, warnings, digest, files }
 }
 
-export async function loadRecipes(io: RecipesIo): Promise<{ recipes: LoadedRecipe[]; approvals: RecipeApprovals }> {
+export async function loadRecipes(io: RecipesIo, load: (io: RecipesIo, root: string, id: string) => Promise<LoadedRecipe> = loadRecipe): Promise<{ recipes: LoadedRecipe[]; approvals: RecipeApprovals }> {
   const home = await io.home()
   if (!home) return { recipes: [], approvals: {} }
   const root = recipesDir(home)
@@ -146,7 +149,7 @@ export async function loadRecipes(io: RecipesIo): Promise<{ recipes: LoadedRecip
       .filter(one => one.kind !== 'file')
       .map(async (one): Promise<LoadedRecipe> =>
         one.kind === 'dir' && !one.isLink
-          ? loadRecipe(io, root, one.name)
+          ? load(io, root, one.name)
           : { ok: false, id: one.name, problems: [{ path: 'id', message: `${one.name} is a symbolic link or special file, not a recipe folder` }] },
       ),
   )

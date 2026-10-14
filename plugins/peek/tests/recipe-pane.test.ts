@@ -6,7 +6,7 @@ import { runRecipe } from '../hooks/recipes/run'
 import { loadRecipe } from '../hooks/recipes/recipes'
 import { BACKGROUND_MS, resetRefresh } from '../hooks/refresh'
 import { pullView } from './fixtures/github/items'
-import { HOME, ROOT, folder, world } from './fixtures/recipes/world'
+import { FS_BINS, HOME, ROOT, folder, world } from './fixtures/recipes/world'
 import type { ScriptAnswer, World } from './fixtures/recipes/world'
 
 const NOW = 10 * 3600_000
@@ -186,6 +186,7 @@ async function paneWorld(on: On, options: PaneOptions): Promise<Pane> {
       await options.hold?.(url)
       return { value: await w.io.run(argv, e.init) }
     }
+    if (FS_BINS.includes(bin)) return { value: await w.io.run(argv, e.init) }
     const line = argv.join(' ')
     if (bin === '/usr/bin/printenv') {
       const value = w.env[(argv[1] ?? '') as keyof typeof w.env]

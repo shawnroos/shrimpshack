@@ -91,7 +91,7 @@ export function remoteFileOf(address: string): { kind: 'file'; fetchUrl: string;
 }
 
 const MAX_MEDIA = 8
-const PICTURE_LINE = /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/
+export const PICTURE_LINE = /^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/
 const VIDEO_TAG = /<video\b[^>]*>/gi
 
 function attribute(tag: string, name: string): string | undefined {

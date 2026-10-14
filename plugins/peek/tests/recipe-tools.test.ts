@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import { APPROVALS_KEY, loadRecipe } from '../hooks/recipes/recipes'
 import { resetRefresh } from '../hooks/refresh'
-import { HOME, ROOT, folder, world } from './fixtures/recipes/world'
+import { FS_BINS, HOME, ROOT, folder, world } from './fixtures/recipes/world'
 import type { ScriptAnswer, World } from './fixtures/recipes/world'
 
 const NOW = 10 * 3600_000
@@ -137,6 +137,7 @@ async function paneWorld(on: On, options: Options): Promise<Pane> {
         throw error
       }
     }
+    if (FS_BINS.includes(bin)) return { value: await w.io.run(argv, e.init) }
     if (bin === '/usr/bin/printenv') return done(1)
     if (bin === 'sh') return done(0, 'gh\ncurl\n')
     if (bin === 'curl') return { value: { ...done(0, '<html><head><title>Figma web page</title></head><body><p>Web</p></body></html>').value, stderr: `__peek_curl__ 200 ${argv.at(-1) ?? ''}` } }
@@ -502,6 +503,7 @@ test('both tools are registered deferred, and their descriptions name the skill 
   for (const name of ['check_recipe', 'open']) {
     expect(byName[name]?.isDeferred).toBe(true)
     expect(String(byName[name]?.description)).toContain(SKILL)
+    expect(String(byName[name]?.description)).toContain('recipe=<id> url=<link>')
   }
 })
 

@@ -536,8 +536,10 @@ Before the recipe has run for that link, the block draws one "Open to load"
 row; Enter opens the link as the recipe page, which runs it once. After that
 run, the block draws the rows peek saved, with a dim "fetched … ago" line. Only
 opening the page, `u` on it, its opted-in timer and `check_recipe` refresh
-them. When the recipe changes, the block shows "Open to load" again. A draft or
-missing recipe draws one red line naming it.
+them, and only for an approved recipe: a draft run saves nothing. When the
+recipe changes, the block shows "Open to load" again. A draft or missing recipe,
+or a link the recipe does not handle (another page or recipe wins it), draws one
+red line naming the recipe.
 
 On a page with blocks, `j`/`k` move between rows, Enter or a click opens the
 selected item, and `n`/`m` jump between blocks. `y` switches the selected
@@ -737,6 +739,22 @@ agent tool, command or file write can. Any later change to a file in the folder
 turns the recipe back into a draft until you approve it again. While a recipe is
 a draft, it runs only what the session's permissions already allow.
 
+**What runs.** A run copies the recipe folder into
+`~/.local/share/claude-peek/recipe-runs/`, checks that the copy matches the
+approved hash, moves it to `<digest>/` (named by that hash), and runs the script
+from there. Later runs of the same version reuse that copy after hashing it
+again. A file changed after the recipe was hashed never runs under the old
+approval. When two runs make the first copy of a version at the same moment,
+one of them can fail and asks you to open the page again. Peek keeps one copy
+for each version it has run, drafts included, and never deletes them. Remove
+that folder to reclaim the space.
+
+**What the guard covers.** Peek blocks the agent's Write, Edit, MultiEdit and
+NotebookEdit calls on its saved approvals (peek's plugin store). It does not
+block shell commands or other MCP tools that write files, so an agent that may
+run Bash could still change the approvals or a recipe. The session's own Bash
+permissions are the boundary.
+
 The agent uses two tools, `check_recipe` and `open` (see Agent tools). Both are
 deferred, so the agent loads them with ToolSearch first.
 
@@ -777,7 +795,7 @@ use `check_recipe` and `open`.
 | `save_group` | `id` (leave out to create); `title`; `description`; `sections`; `rule` (text or object; `null` or empty text clears it); `split` (a prop name; empty text clears it); `order`; `add`; `move`; `remove` | Creates or edits a group |
 | `delete_group` | `id`; `force` | Deletes a group |
 | `star` | `target`; `starred` | Stars or unstars a file or link |
-| `check_recipe` | `recipe` (the folder name); `link` | Runs a recipe once against a real link. Reports whether it matched, which page wins the link, any recipe whose links overlap, and whether the page fits the vocabulary. It never approves, and it saves the rows for recipe blocks |
+| `check_recipe` | `recipe` (the folder name); `link` | Runs a recipe once against a real link. Reports whether it matched, which page wins the link, any recipe whose links overlap, and whether the page fits the vocabulary. It never approves. A passing run of an approved recipe saves the rows for recipe blocks |
 | `open` | `link` | Opens a link in the pane through normal routing, drafts included. Returns the page outline or the error |
 
 ## Commands

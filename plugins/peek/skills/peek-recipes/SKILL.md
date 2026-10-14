@@ -128,3 +128,24 @@ After the person says they approved it, call `check_recipe` with
 `{ "recipe": "<id>", "link": "<link>" }`. Report the type as done only when the
 check passes and `recipe.isApproved` is `true`. Until then, say what is still
 waiting, for example "the page is ready for your approval in the pane".
+
+## Using a recipe in a page
+
+A markdown page or a group description can draw an approved recipe's rows. Put
+`recipe=<id> url=<link>` on a collection fence, `peek-<layout>` with a layout
+such as `list` or `cards`:
+
+````
+```peek-list recipe=figma-files url=https://figma.com/file/abc/Design
+```
+````
+
+- `url` is required: a recipe always runs against one link.
+- Before the recipe has run for that link, the block draws one "Open to load"
+  row. After a run, it draws the rows with a link from the page's cards, list
+  and table blocks, and how long ago they were fetched.
+- The block never runs the recipe. Opening the link in peek, or a passing
+  `check_recipe` on the approved recipe, runs it and fills the block. A draft
+  run fills nothing.
+- A draft, a missing recipe, or a link the recipe does not handle draws one red
+  line naming the recipe.

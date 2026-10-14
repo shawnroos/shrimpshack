@@ -154,10 +154,19 @@ export async function bootLinear(io: NavIo) {
   io.invalidate()
 }
 
+// A refresh in flight writes only to the page on screen, never to this copy, and tickPage skips a page marked
+// refreshing, so a copy that kept the marker would never refresh again.
+function keptForBack(view: View): View {
+  const page = view.page
+  if (!page || page.phase === 'conflict' || !page.isRefreshing) return view
+  const { isRefreshing: _, ...rest } = page
+  return { ...view, page: rest }
+}
+
 export async function openFromPage(io: NavIo, href: string) {
   const current = await io.view.read()
   if (current && (await io.mode.read()) === 'view') {
-    nav.backStack.push({ view: current, key: nav.topBlockKey })
+    nav.backStack.push({ view: keptForBack(current), key: nav.topBlockKey })
     if (nav.backStack.length > MAX_BACK_STACK) nav.backStack.shift()
   }
   await show(io, href, true)
@@ -173,6 +182,12 @@ export async function goBack(io: NavIo) {
   }
   const last = nav.backStack.pop()
   if (!last) return
+  const page = last.view.page
+  // The run behind a page left while loading answered to a screen that had moved on, so its page went nowhere.
+  if (page?.phase === 'loading') {
+    await show(io, page.link, true, { allowDraft: page.isDraft })
+    return
+  }
   await navigate(io, [{ to: 'view', view: last.view }, { to: 'mode', mode: 'view' }])
   void io.scroll({ to: { key: last.key }, block: 'start' }).catch(() => undefined)
 }
@@ -255,7 +270,7 @@ export function starKeyOf(raw: string): string {
   return ref ? keyOf(ref) : itemKey(raw)
 }
 
-const paneHref = (href: string) => (href.startsWith('/') ? fileHref(href) : href)
+export const paneHref = (href: string) => (href.startsWith('/') ? fileHref(href) : href)
 
 async function isPageOnScreen(io: NavIo): Promise<boolean> {
   return (await io.mode.read()) === 'view' && Boolean((await io.view.read())?.page)

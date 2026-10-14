@@ -23,6 +23,7 @@ type Active = {
   started: string[]
   loadedUrls: string[]
   ran: string[][]
+  toasts: string[]
   hold?: (url: string) => Promise<void> | undefined
   holdList?: () => Promise<void> | undefined
   refuseView?: (view: View | null) => boolean
@@ -81,6 +82,7 @@ export const recipeNav = {
     scroll: async () => undefined as never,
     open: async () => ({ isPlaced: true }),
     invalidate: () => undefined,
+    toast: text => void now().toasts.push(text),
     pluginRoot: '/plugins/peek',
     openGroupRemotes: () => [],
     loadUrl: async href => {
@@ -112,7 +114,7 @@ export const recipeNav = {
     }
   },
   use(w: World, options: Pick<Active, 'hold' | 'holdList' | 'refuseView'> = {}) {
-    active = { w, cells: {}, started: [], loadedUrls: [], ran: [], ...options }
+    active = { w, cells: {}, started: [], loadedUrls: [], ran: [], toasts: [], ...options }
     return active
   },
   tick() {

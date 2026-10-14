@@ -68,9 +68,11 @@ describe('recipe io built from the full Ports record', () => {
         '/home': { link: '/data' },
       },
     })
+    const [loaded] = (await loadRecipes(portsOver(w))).recipes
+    if (!loaded?.ok) throw new Error('figma-files did not load')
     const outcome = await ran(w)
     expect(outcome.ok).toBe(true)
-    expect(w.calls.run[0]?.init?.cwd).toBe(real)
+    expect(w.calls.run[0]?.init?.cwd).toBe(`/data/u/.local/share/claude-peek/recipe-runs/${loaded.digest}`)
   })
 
   test('a script whose statResolved answer has no real path is refused before running', async () => {

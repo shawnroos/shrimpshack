@@ -1,18 +1,19 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { nav, pressLink, show } from '../hooks/navigation'
+import type { NavIo } from '../hooks/navigation'
 import { proseParts } from '../hooks/pane/screens/view/prose'
 import type { ProsePart } from '../hooks/pane/screens/view/prose'
 import { loadRecipe } from '../hooks/recipes/recipes'
 import { tickPage } from '../hooks/recipes/session'
 import { checkRecipeTool } from '../hooks/recipes/tools'
 import { resetRefresh } from '../hooks/refresh'
-import { RECIPE_RECORDS, readRecipeCache, recordsOfPage, writeRecipeCache } from '../hooks/views/recipe-source'
+import { RECIPE_RECORDS, readRecipeCache, recipeCacheFile, recordsOfPage, writeRecipeCache } from '../hooks/views/recipe-source'
 import type { Item } from '../hooks/views/items'
 import type { Page } from '../hooks/recipes/page'
-import { cacheNav, written } from './fixtures/recipes/cache-nav'
+import { cacheFaults, cacheNav, written } from './fixtures/recipes/cache-nav'
 import { approve, gate, recipeNav, until } from './fixtures/recipes/nav'
-import { ROOT, folder, world } from './fixtures/recipes/world'
+import { HOME, ROOT, folder, world } from './fixtures/recipes/world'
 
 const FIGMA = 'https://figma.com/file/abc/Design'
 const io = cacheNav
@@ -30,9 +31,11 @@ const LINKED: Page = {
 const figmaRecipe = (recipe: Record<string, unknown> = {}) =>
   folder('figma-files', { source: { run: ['./fetch.sh'] }, ...recipe }, { 'fetch.sh': '#!/bin/sh\necho page\n' })
 
-async function session(options: { files: ReturnType<typeof figmaRecipe>; approved?: string[]; hold?: (url: string) => Promise<void> | undefined }) {
+async function session(options: { files: Parameters<typeof world>[0]['files']; approved?: string[]; hold?: (url: string) => Promise<void> | undefined }) {
   resetRefresh()
   written.clear()
+  cacheFaults.isMoveFailing = false
+  cacheFaults.isWriteFailing = false
   const w = world({ files: options.files, script: () => ({ stdout: JSON.stringify(LINKED) }) })
   for (const id of options.approved ?? []) await approve(w, id)
   const active = recipeNav.use(w, { hold: options.hold })
@@ -72,12 +75,39 @@ const TASK: Item = { id: 't1', href: '/repo/.peek/tasks/t1.md', type: 'task', na
 
 const fence = (info: string) => `Launch notes\n\n\`\`\`peek-list ${info}\n\`\`\`\n`
 
-async function drawBlock(info = `recipe=figma-files url=${FIGMA}`): Promise<{ text: string; parts: ProsePart[] }> {
-  const parts = await proseParts(ctx, { ...io, cursor: { read: async () => -1, update: io.cursor.update } }, 'group-description', fence(info), {
+async function drawBlock(info = `recipe=figma-files url=${FIGMA}`, through: NavIo = io): Promise<{ text: string; parts: ProsePart[] }> {
+  const parts = await proseParts(ctx, { ...through, cursor: { read: async () => -1, update: io.cursor.update } }, 'group-description', fence(info), {
     picture: () => null,
     items: () => [TASK],
   })
   return { text: parts.map(part => textOf(part.node)).join('\n'), parts }
+}
+
+// Every path a draw reads, lists, stats, writes or hands to a command.
+function watched(): { io: NavIo; paths: string[]; reads: string[] } {
+  const paths: string[] = []
+  const reads: string[] = []
+  const recipesIo = () => {
+    const inner = recipeNav.runIo()
+    return {
+      ...inner,
+      list: async (dir: string) => (paths.push(dir), inner.list(dir)),
+      readBytes: async (path: string) => (paths.push(path), reads.push(path), inner.readBytes(path)),
+      statResolved: async (path: string) => (paths.push(path), inner.statResolved(path)),
+    }
+  }
+  return {
+    paths,
+    reads,
+    io: {
+      ...io,
+      recipesIo,
+      runIo: recipesIo,
+      readFile: async path => (paths.push(path), io.readFile(path)),
+      writeFile: async (path, text) => (paths.push(path), io.writeFile(path, text)),
+      run: async (argv, init) => (paths.push(...argv), io.run(argv, init)),
+    },
+  }
 }
 
 const cacheFiles = () => [...written.keys()].filter(path => path.includes('/recipe-cache/') && path.endsWith('.json'))
@@ -192,7 +222,108 @@ describe('a recipe-backed block', () => {
   })
 })
 
+describe('a recipe block and the link it names', () => {
+  const ghPages = () => folder('gh-pages', { name: 'GitHub pages', match: [{ host: 'github.com' }], source: { run: ['./fetch.sh'] } }, { 'fetch.sh': '#!/bin/sh\n' })
+  const figmaAll = () => folder('figma-all', { name: 'All of Figma', match: [{ host: 'figma.com' }], source: { run: ['./all.sh'] } }, { 'all.sh': '#!/bin/sh\n' })
+
+  test('a link the recipe does not match draws one error row naming the recipe, not Open to load', async () => {
+    await session({ files: figmaRecipe(), approved: ['figma-files'] })
+    const { text, parts } = await drawBlock('recipe=figma-files url=https://example.com/notes')
+    expect(text).toContain('figma-files')
+    expect(text).toContain('does not handle https://example.com/notes')
+    expect(text).not.toContain('Open to load')
+    expect(parts.flatMap(part => part.nav ?? [])).toEqual([])
+  })
+
+  test('a link a built-in page keeps, because the recipe does not override it, draws the error row', async () => {
+    await session({ files: ghPages(), approved: ['gh-pages'] })
+    const { text } = await drawBlock('recipe=gh-pages url=https://github.com/acme/widgets/pull/42')
+    expect(text).toContain('gh-pages')
+    expect(text).toContain('does not handle')
+    expect(text).not.toContain('Open to load')
+  })
+
+  test('a link two approved recipes both claim draws the error row naming both', async () => {
+    await session({ files: { ...figmaRecipe(), ...figmaAll() }, approved: ['figma-files', 'figma-all'] })
+    const { text } = await drawBlock()
+    expect(text).toContain('figma-all')
+    expect(text).not.toContain('Open to load')
+  })
+
+  test('a hostile recipe id draws an error row and touches nothing outside the recipes folder', async () => {
+    await session({ files: figmaRecipe(), approved: ['figma-files'] })
+    const seen = watched()
+    for (const id of ['../x', '../../.ssh', 'figma-files/../../x']) {
+      const { text } = await drawBlock(`recipe=${id} url=${FIGMA}`, seen.io)
+      expect(text).not.toContain('Open to load')
+      expect(text).toContain(id)
+    }
+    expect(seen.paths.filter(path => path !== ROOT && !path.startsWith(`${ROOT}/`))).toEqual([])
+  })
+
+  test('a second draw over unchanged recipe files reads none of them; a changed file is read again', async () => {
+    // A file no other test writes, so what an earlier draw remembered cannot stand in for this first read.
+    const files = folder('figma-files', { source: { run: ['./fetch.sh'] } }, { 'fetch.sh': '#!/bin/sh\necho page\n', 'notes.txt': 'only in this test' })
+    const { w } = await session({ files, approved: ['figma-files'] })
+    const seen = watched()
+    await drawBlock(undefined, seen.io)
+    expect(seen.reads.length).toBeGreaterThan(0)
+    seen.reads.length = 0
+    expect((await drawBlock(undefined, seen.io)).text).toContain('Open to load')
+    expect(seen.reads).toEqual([])
+    w.write(`${ROOT}/figma-files/fetch.sh`, '#!/bin/sh\necho a longer page\n')
+    const { text } = await drawBlock(undefined, seen.io)
+    expect(seen.reads).toContain(`${ROOT}/figma-files/fetch.sh`)
+    expect(text).toContain('draft')
+  })
+})
+
 describe('the recipe cache', () => {
+  test('a draft run, from the pane or from check_recipe, writes no cache', async () => {
+    await session({ files: figmaRecipe() })
+    await show(io, FIGMA, false, { allowDraft: true })
+    expect(((await io.view.read())?.page)?.phase).toBe('ready')
+    const checked = await checkRecipeTool(io, { recipe: 'figma-files', link: FIGMA })
+    expect(checked.result.startsWith('Check passed')).toBe(true)
+    expect(cacheFiles()).toEqual([])
+  })
+
+  test('a cache that cannot be moved into place still lets the page and check_recipe pass, and leaves no temporary file', async () => {
+    await session({ files: figmaRecipe(), approved: ['figma-files'] })
+    cacheFaults.isMoveFailing = true
+    await show(io, FIGMA)
+    expect(((await io.view.read())?.page)?.phase).toBe('ready')
+    const checked = await checkRecipeTool(io, { recipe: 'figma-files', link: FIGMA })
+    expect(checked.result.startsWith('Check passed')).toBe(true)
+    expect([...written.keys()]).toEqual([])
+  })
+
+  test('a cache that cannot be written still lets the page and check_recipe pass', async () => {
+    await session({ files: figmaRecipe(), approved: ['figma-files'] })
+    cacheFaults.isWriteFailing = true
+    await show(io, FIGMA)
+    expect(((await io.view.read())?.page)?.phase).toBe('ready')
+    expect((await checkRecipeTool(io, { recipe: 'figma-files', link: FIGMA })).result.startsWith('Check passed')).toBe(true)
+    expect([...written.keys()]).toEqual([])
+  })
+
+  test('two keys that share a slot: the later write wins and the earlier key reads as no cache', async () => {
+    const { w } = await session({ files: figmaRecipe(), approved: ['figma-files'] })
+    const slot = await recipeCacheFile(HOME, 'figma-files', FIGMA)
+    let other = ''
+    for (let i = 0; i < 2000 && !other; i++) {
+      const link = `https://figma.com/file/n${i}/X`
+      if ((await recipeCacheFile(HOME, 'figma-files', link)) === slot) other = link
+    }
+    expect(other).not.toBe('')
+    const digest = await digestOf(w)
+    await writeRecipeCache(io, { recipe: 'figma-files', link: FIGMA, digest, fetchedAt: w.now(), records: recordsOfPage(LINKED, 'figma-files') })
+    await writeRecipeCache(io, { recipe: 'figma-files', link: other, digest, fetchedAt: w.now(), records: [] })
+    expect(await readRecipeCache(io, 'figma-files', FIGMA)).toBe(null)
+    expect((await readRecipeCache(io, 'figma-files', other))?.link).toBe(other)
+    expect(cacheFiles()).toEqual([slot])
+  })
+
   test('rows without a link are skipped; each kept row carries the recipe id and its section title', () => {
     const records = recordsOfPage(LINKED, 'figma-files')
     expect(records.map(one => [one.name, one.href, one.props?.recipe, one.props?.section])).toEqual([

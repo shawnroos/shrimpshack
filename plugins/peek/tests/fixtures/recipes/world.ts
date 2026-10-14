@@ -7,7 +7,7 @@ export const ROOT = `${HOME}/.local/share/claude-peek/recipes`
 
 export const PAGE = { title: 'Design system', sections: [{ heading: 'Notes', block: { type: 'markdown', text: 'Hello' } }] }
 
-type Node = { kind: 'file'; bytes: Uint8Array } | { kind: 'dir' } | { kind: 'link'; target: string }
+type Node = { kind: 'file'; bytes: Uint8Array; mtimeMs?: number } | { kind: 'dir' } | { kind: 'link'; target: string }
 type Body = string | Uint8Array | { link: string }
 
 export type Child = { argv: readonly string[]; env: Record<string, string>; cwd?: string; stdin?: string }
@@ -21,9 +21,13 @@ type WorldOptions = {
   script?: (child: Child, world: World) => ScriptAnswer
   mcp?: (server: string, tool: string, args: Record<string, unknown> | undefined, world: World) => McpAnswer
   decision?: 'allow' | 'ask' | 'deny'
+  onFs?: (argv: readonly string[], world: World) => Partial<ProcessRunResult> | undefined
 }
 
 export type World = ReturnType<typeof world>
+
+// The commands a run uses to copy a recipe before it runs; an engine-level test hands these to the world too.
+export const FS_BINS: readonly string[] = ['/bin/mkdir', '/bin/rm', '/bin/cp', '/bin/mv']
 
 const encode = (text: string) => new TextEncoder().encode(text)
 
@@ -66,6 +70,7 @@ export function world(options: WorldOptions) {
     children: [] as Child[],
     mcp: [] as { server: string; tool: string; args?: Record<string, unknown> }[],
     check: [] as { tool: string; input: unknown }[],
+    fs: [] as string[][],
   }
   let clock = 1_000_000
   let hung = false
@@ -76,8 +81,8 @@ export function world(options: WorldOptions) {
   }
   const put = (path: string, body: Body) => {
     addDirs(path)
-    if (typeof body === 'string') nodes.set(path, { kind: 'file', bytes: encode(body) })
-    else if (body instanceof Uint8Array) nodes.set(path, { kind: 'file', bytes: body })
+    if (typeof body === 'string') nodes.set(path, { kind: 'file', bytes: encode(body), mtimeMs: clock })
+    else if (body instanceof Uint8Array) nodes.set(path, { kind: 'file', bytes: body, mtimeMs: clock })
     else nodes.set(path, { kind: 'link', target: body.link })
   }
   for (const [path, body] of Object.entries(options.files)) put(path, body)
@@ -106,12 +111,67 @@ export function world(options: WorldOptions) {
     return `/${done.join('/')}`
   }
 
+  // Where a path that may not exist yet lands: links on the way are followed, missing parts are kept as written.
+  const placeOf = (path: string): string => {
+    const parts = path.split('/').filter(part => part !== '' && part !== '.')
+    for (let index = parts.length; index > 0; index--) {
+      const real = resolve(`/${parts.slice(0, index).join('/')}`)
+      if (real !== undefined) return [real.replace(/\/$/, ''), ...parts.slice(index)].join('/') || '/'
+    }
+    return `/${parts.join('/')}`
+  }
+  const under = (root: string) => [...nodes.keys()].filter(path => path === root || path.startsWith(`${root}/`))
+  const ranOk = (answer: Partial<ProcessRunResult> = {}): ProcessRunResult => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false, ...answer })
+
+  const moveTree = (from: string, to: string, isCopy: boolean) => {
+    for (const one of under(from)) {
+      const node = nodes.get(one)
+      if (!node) continue
+      nodes.set(`${to}${one.slice(from.length)}`, node.kind === 'file' ? { kind: 'file', bytes: node.bytes.slice(), mtimeMs: clock } : { ...node })
+      if (!isCopy) nodes.delete(one)
+    }
+  }
+
+  // mkdir, rm, cp and mv act on the fake fs and are recorded apart from the scripts a recipe runs. cp and mv into an
+  // existing folder land inside it, as the real commands do.
+  const fsCommand = (argv: readonly string[]): ProcessRunResult => {
+    calls.fs.push([...argv])
+    const injected = options.onFs?.(argv, self)
+    if (injected) return ranOk(injected)
+    const [bin] = argv
+    const paths = argv.slice(1).filter(word => !word.startsWith('-'))
+    if (bin === '/bin/mkdir') {
+      for (const path of paths) addDirs(`${placeOf(path)}/x`)
+      return ranOk()
+    }
+    if (bin === '/bin/rm') {
+      for (const path of paths) for (const one of under(placeOf(path))) nodes.delete(one)
+      return ranOk()
+    }
+    if ((bin === '/bin/cp' || bin === '/bin/mv') && paths.length === 2) {
+      const [from = '', to = ''] = paths
+      const source = bin === '/bin/cp' ? resolve(from) : placeOf(from)
+      let target = placeOf(to)
+      if (source === undefined || !nodes.has(source)) return ranOk({ exitCode: 1, stderr: `${bin}: ${from}: No such file or directory` })
+      if (nodes.get(target)?.kind === 'dir') target = `${target}/${source.slice(source.lastIndexOf('/') + 1)}`
+      if (nodes.get(target.slice(0, target.lastIndexOf('/')))?.kind !== 'dir') return ranOk({ exitCode: 1, stderr: `${bin}: ${to}: No such file or directory` })
+      moveTree(source, target, bin === '/bin/cp')
+      return ranOk()
+    }
+    return ranOk({ exitCode: 64, stderr: `the recipe world does not model ${argv.join(' ')}` })
+  }
+
   const self = {
     io: undefined as unknown as RunIo,
     calls,
     store,
     env,
     write: (path: string, body: Body) => put(path, body),
+    text: (path: string): string | undefined => {
+      const real = resolve(path)
+      const node = real === undefined ? undefined : nodes.get(real)
+      return node?.kind === 'file' ? new TextDecoder().decode(node.bytes) : undefined
+    },
     advance: (ms: number) => {
       clock += ms
     },
@@ -130,6 +190,7 @@ export function world(options: WorldOptions) {
           name: path.slice(path.lastIndexOf('/') + 1),
           kind: node.kind === 'link' ? 'other' : node.kind,
           size: node.kind === 'file' ? node.bytes.length : 0,
+          mtimeMs: node.kind === 'file' ? (node.mtimeMs ?? 0) : 0,
           isLink: node.kind === 'link',
         }))
     },
@@ -148,6 +209,7 @@ export function world(options: WorldOptions) {
     },
     storeGet: async key => store[key],
     run: async (argv, init) => {
+      if (FS_BINS.includes(argv[0] ?? '')) return fsCommand(argv)
       calls.run.push({ argv, init })
       const host: Record<string, string> = { ...env, ...init?.env }
       let childEnv = host
