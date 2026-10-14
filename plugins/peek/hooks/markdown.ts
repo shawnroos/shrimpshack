@@ -107,7 +107,7 @@ export function linkify(
         })
         .join('')
     })
-    .join('')
+    .join('\n')
 }
 
 export function htmlToMarkdown(html: string): string {

@@ -31,10 +31,10 @@ export const PR_BASELINE: Record<string, Record<string, string>> = {
     'desktop-70': 'fe79547ef4cd18444b9be5c0d9692c89b950d642d2dff7db7f9cd9586e915011',
   },
   'two-fences': {
-    'terminal-100': '2169820ef36db232e6bcf404b3cffdb446e1096f34a2849d8caa9fdc4bf8f6d8',
-    'terminal-70': 'a65702a05afaac78f3a9fd7abb2e862cb74010ed38f77a3310ca969b16f39b74',
-    'desktop-100': 'b5b285dfe6442c844b00a02bd35224c5048bea7932978c7660edbe94b41b7f84',
-    'desktop-70': '4b09cfa5eb8ac64b9666d68098a9a37790345e7a56028f5a1040c3ee52c94442',
+    'terminal-100': '98d56783ef3799d874835584009d76dc7d1a18ab061189ba6afc97a34c361b99',
+    'terminal-70': '99b2187b7bc44305aa9f29dd39f086915c2c3b06bf10bc5a2e081b51ad0e438b',
+    'desktop-100': '145f613d440f529f28403fad65854120c57663fe0964088757437e11ebea8938',
+    'desktop-70': '3d232c1f7e3c07d4dae7cfd840b673afdaff0b5a10687046721f94be19cab027',
   },
   'no-comments': {
     'terminal-100': '9eacace5e0b9701cf424bbea04a5c1c3a3c4bd40649123df01098be9c2e2ba04',

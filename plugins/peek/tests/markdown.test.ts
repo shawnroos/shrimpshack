@@ -30,6 +30,11 @@ describe('linkify', () => {
   test('leaves a path alone when the resolver says it does not exist', () => {
     expect(linkify('see docs/missing.md', () => null)).toBe('see docs/missing.md')
   })
+
+  test('keeps the line breaks around fences, so a fence after prose or another fence stays a fence', () => {
+    const text = 'intro\n```\na\n```\n\n```peek-list\nstatus=todo\n```\noutro\n'
+    expect(linkify(text, () => null)).toBe(text)
+  })
 })
 
 test('fitMarkdown closes a fence it cut through', () => {
