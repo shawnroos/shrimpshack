@@ -233,12 +233,13 @@ Status is never inferred from code, branches or pull requests.
 ### Agent list (mirrored)
 One agent session's own task list, as Claude Code keeps it, followed by peek and copied
 into peek-owned records the first time each item is seen. The records outlive Claude
-Code's files, belong to the repo the session ran in, and form one rule group per list.
+Code's files, belong to the repo the session ran in until the list is moved, and form one rule group per list.
 A list counts as over when every item is closed, its session ended or it was cleared;
 an over list leaves Recent, and its group is removed some hours later.
 
 ### Takeover
 The task doc peek writes in the list's repo when the person or an agent changes a
 mirrored item, or the person adopts one. It keeps the agent session as creator and
-points back to the item, so the agent's later updates still reach it; the latest change
-wins. Peek never writes Claude Code's own task files.
+points back to the item, so the agent's later updates still reach it wherever the doc is
+later moved, and from every open peek window, not only the one that wrote it; the latest
+change wins. Peek never writes Claude Code's own task files.
