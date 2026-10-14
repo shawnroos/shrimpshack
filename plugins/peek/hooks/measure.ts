@@ -187,3 +187,22 @@ export function wrapLines(text: string, width: number, max: number): string[] {
   const last = lines[max - 1] ?? ''
   return [...lines.slice(0, max - 1), `${last.length >= room ? last.slice(0, room - 1).trimEnd() : last}…`]
 }
+
+const ROW_NAME_MIN = 4
+const RIGHT_GAP = 2
+
+export type RowPart = { text: string; keep?: boolean }
+
+// A one-line row: right parts come in drop order (the last droppable goes first), a `keep` part never drops, and
+// the name gives way down to ROW_NAME_MIN before any part does.
+export function fitRow(name: string, right: readonly RowPart[], room: number): { name: string; right: string[] } {
+  const kept = [...right]
+  const used = () => kept.reduce((sum, one) => sum + one.text.length + RIGHT_GAP, 0)
+  while (room - used() < Math.min(ROW_NAME_MIN, name.length)) {
+    const drop = kept.findLastIndex(one => !one.keep)
+    if (drop < 0) break
+    kept.splice(drop, 1)
+  }
+  const nameRoom = Math.max(1, room - used())
+  return { name: name.length <= nameRoom ? name : `${name.slice(0, nameRoom - 1)}…`, right: kept.map(one => one.text) }
+}

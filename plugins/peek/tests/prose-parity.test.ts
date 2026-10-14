@@ -12,6 +12,11 @@ const SHARED = [
   '',
   '> a quoted line',
   '',
+  // After prose, not after a fence: linkify's splitFences drops the newlines between two fences one blank line
+  // apart, so on a remote body the second fence never opens.
+  '```peek-list status=todo',
+  '```',
+  '',
   '| Step | Days |',
   '|---|---:|',
   '| Build | 3 |',
@@ -95,6 +100,8 @@ test('the same markdown draws the same parts on a file page and in a pull reques
   expect(onFile.length).toBeGreaterThan(8)
   expect(onFile).toContain('⏵ ')
   expect(onFile).toContain('code:const x = 1')
+  // No page hands blocks an item source yet, so a collection block draws its empty row on both pages.
+  expect(onFile).toContain('no items · status=todo')
   expect(inPull).toEqual(onFile)
   await ui.unmount()
 })

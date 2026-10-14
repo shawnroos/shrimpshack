@@ -8,6 +8,7 @@ import type { NavIo } from '../../../navigation'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, PAGE_TOP } from '../../chrome'
 import type { ScreenLayout } from '../../layout'
+import type { BlockNav } from '../../blocks/row'
 import type { DrawContext } from '../../types'
 
 export type Jumps = { next: () => void; prev: () => void }
@@ -134,22 +135,24 @@ export function ListBlock(ctx: DrawContext, key: string, items: readonly ListIte
   return { node, rows }
 }
 
-export type Blocks = { drawnParts: RenderChildren[]; partRows: number[]; partHeadings: string[]; note: (rows: number, heading?: string) => void }
+// `nav` holds the page's selectable block rows, in drawn order, for the keyboard.
+export type Blocks = { drawnParts: RenderChildren[]; partRows: number[]; partHeadings: string[]; nav: BlockNav[]; note: (rows: number, heading?: string) => void }
 
 export function newBlocks(): Blocks {
   const drawnParts: RenderChildren[] = []
   const partRows: number[] = []
   const partHeadings: string[] = []
+  const nav: BlockNav[] = []
   const note = (rows: number, heading = '') => {
     while (partRows.length < drawnParts.length) {
       partRows.push(rows)
       partHeadings.push(heading)
     }
   }
-  return { drawnParts, partRows, partHeadings, note }
+  return { drawnParts, partRows, partHeadings, nav, note }
 }
 
-export function settleBlocks(ctx: DrawContext, io: NavIo, { drawnParts, partRows, partHeadings }: Blocks): ViewBody {
+export function settleBlocks(ctx: DrawContext, io: NavIo, { drawnParts, partRows, partHeadings, nav: rows }: Blocks): ViewBody {
   const { Box, textWidth, offset } = ctx
   for (let i = partRows.length; i < drawnParts.length; i++) {
     partRows.push(IMAGE_ROWS)
@@ -182,7 +185,7 @@ export function settleBlocks(ctx: DrawContext, io: NavIo, { drawnParts, partRows
     ),
     jumps: blockJumps(ctx, io, drawnParts.length, 'block'),
     position: `${percent}%${heading ? ` · § ${heading}` : ''}`,
-    layout: { blockStarts, blockHeadings, estimatedRows: Math.max(1, running) },
+    layout: { blockStarts, blockHeadings, estimatedRows: Math.max(1, running), nav: rows.map((one, line) => ({ ...one, line, col: 0 })) },
   }
 }
 
