@@ -1,6 +1,6 @@
 {
   "name": "peek",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A side pane that shows the files and links in a conversation: markdown, code, images, diagrams and folders, styled and scrollable",
   "author": {
     "name": "Shawn Roos"

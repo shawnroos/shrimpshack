@@ -1,0 +1,68 @@
+{
+  "title": "YouTube video aqz-KE-bpKQ",
+  "details": [
+    {
+      "label": "Video",
+      "value": "aqz-KE-bpKQ"
+    },
+    {
+      "label": "Starts at",
+      "value": "1:35"
+    }
+  ],
+  "sections": [
+    {
+      "heading": "Thumbnail",
+      "block": {
+        "type": "media",
+        "items": [
+          {
+            "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/hqdefault.jpg",
+            "alt": "Video thumbnail",
+            "kind": "image"
+          }
+        ]
+      }
+    },
+    {
+      "heading": "Watch",
+      "block": {
+        "type": "list",
+        "items": [
+          {
+            "title": "Watch on YouTube",
+            "meta": "www.youtube.com",
+            "href": "https://www.youtube.com/watch?v=aqz-KE-bpKQ&t=95s"
+          },
+          {
+            "title": "Embedded player, no cookies",
+            "meta": "www.youtube-nocookie.com",
+            "href": "https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ"
+          }
+        ]
+      }
+    },
+    {
+      "heading": "Share",
+      "block": {
+        "type": "fields",
+        "rows": [
+          {
+            "label": "Short link",
+            "value": "https://youtu.be/aqz-KE-bpKQ?t=95"
+          }
+        ]
+      }
+    }
+  ],
+  "actions": [
+    {
+      "label": "Open on YouTube",
+      "open": "https://www.youtube.com/watch?v=aqz-KE-bpKQ&t=95s"
+    },
+    {
+      "label": "Copy short link",
+      "copy": "https://youtu.be/aqz-KE-bpKQ?t=95"
+    }
+  ]
+}

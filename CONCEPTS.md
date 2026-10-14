@@ -211,6 +211,9 @@ or focus; a record block draws one part of a remote page's record. Collection bl
 draw on markdown file pages, in group descriptions and on the Tasks page; record blocks
 draw only on remote pages. The person can switch a collection block's layout in place,
 and peek remembers it for that block.
+A layout block holds no data of its own: it selects items by their props, or, as a
+recipe block, the rows of a recipe's last saved run. It is not a block of the page
+vocabulary, though some names match.
 
 ### Task
 A markdown doc with a status that the person or an agent tracks in peek: a captured
@@ -243,3 +246,46 @@ mirrored item, or the person adopts one. It keeps the agent session as creator a
 points back to the item, so the agent's later updates still reach it wherever the doc is
 later moved, and from every open peek window, not only the one that wrote it; the latest
 change wins. Peek never writes Claude Code's own task files.
+
+### Page vocabulary
+The closed set of concepts, block types and behaviours every recipe page is built from: a
+Page holds a title, Details, ordered Sections and Actions; a Section holds one block
+(markdown, media, table, cards, list or fields); Cards, List items and table rows open
+links or files. Every page drawn from it gets the same keys, ⌃k menu, hover star and
+breadcrumbs, so a new page type cannot invent its own layout.
+
+It is the second of peek's two block systems, and it is separate from layout blocks. A
+page vocabulary block carries its data inline, as the recipe's source printed it, and it
+draws only on that recipe's page. A layout block carries no data: it is a `peek-` fence in
+markdown that selects items by their props. Four names appear in both (cards, list,
+fields, media) with different inputs. The two share only the low-level drawing pieces.
+
+### Recipe block
+A layout block that names a recipe and a link: it draws the rows that recipe's page
+showed for that link as items, so a markdown page or group description can list them. It
+is the one place the two block systems meet. It never runs the recipe. It reads the rows
+peek saved from the last run, which opening the page, a refresh, the recipe's timer or
+`check_recipe` makes, and it shows them only while the recipe is approved and unchanged
+since that run. Until then it offers one row that opens the page.
+
+### Recipe
+A user-level description of a document type peek does not handle itself: the links it
+claims and a source that returns a Page in the page vocabulary: a script, or an MCP tool whose
+result a map script turns into the Page. It lives
+outside the plugin, so it survives peek updates and works in every session of that user.
+A specific built-in page type (GitHub, Linear, Slack) wins a link both claim unless the recipe
+says it overrides it; the generic web page always yields to a recipe.
+
+### Draft
+A recipe that has no approval for its current files: a new recipe, or one with any file
+in its folder changed since it was approved. Normal link opens ignore drafts. Only the
+agent's preview (`open`) and `check_recipe` run one, the preview marked unapproved, and a
+draft runs only what the session's own permissions already allow.
+
+### Approval
+The person's decision, made by pressing Approve in the pane, that a recipe's folder may run
+as it stands. Peek records it in its own store against a digest of every file in the folder,
+so it covers those exact bytes and nothing outside the folder. No agent tool, command or file
+write records an approval, and a marker file in the recipe folder is ignored. Approval
+protects against agent mistakes and against injected instructions; it does not protect against
+a process the user runs that edits peek's store directly.

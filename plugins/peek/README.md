@@ -524,6 +524,21 @@ name. A block with nothing to show draws a dim "no items" line.
 Collection blocks draw on markdown file pages, in group descriptions, on the
 Tasks page and in PR and issue bodies.
 
+**Recipe blocks.** `recipe=<id> url=<link>` on a collection fence draws the
+rows an approved recipe returns for that link, instead of tasks:
+`peek-list recipe=figma-files url=https://figma.com/file/abc/Design`. `url` is
+required, because a recipe always runs against a link. Each row with a link in
+the recipe page's cards, list and table blocks becomes an item named by its
+title, with props `recipe` (the recipe id) and `section` (its section's
+heading, when it has one). Rows without a link are left out. The other options still apply, so
+`section=Files` selects one section's rows. A block never runs its recipe.
+Before the recipe has run for that link, the block draws one "Open to load"
+row; Enter opens the link as the recipe page, which runs it once. After that
+run, the block draws the rows peek saved, with a dim "fetched … ago" line. Only
+opening the page, `u` on it, its opted-in timer and `check_recipe` refresh
+them. When the recipe changes, the block shows "Open to load" again. A draft or
+missing recipe draws one red line naming it.
+
 On a page with blocks, `j`/`k` move between rows, Enter or a click opens the
 selected item, and `n`/`m` jump between blocks. `y` switches the selected
 block's layout (cards, list, tree, sections, board, focus) and `z` folds or
@@ -680,10 +695,75 @@ colors:
 3. Save it as `~/.local/share/claude-peek/views/meeting.md`.
 4. Open a meeting note that has frontmatter. It draws from the template.
 
+## Recipes
+
+A recipe gives peek a page for a kind of link it does not handle, such as Figma
+files or an internal wiki. Ask the agent to "show Figma files in peek". It uses
+the `peek-recipes` skill to write the recipe, check it and show it to you.
+
+A recipe is a folder in `~/.local/share/claude-peek/recipes/<id>/`. It holds a
+`recipe.json` that names the links it handles, and one data source:
+
+- a script in the folder, which gets the link and prints a page as JSON, or
+- an MCP tool, whose result a map script in the folder turns into a page. This works only in sessions where that MCP server is connected.
+
+The page is built from a fixed vocabulary: a title, details, sections (markdown,
+media, table, cards, list or fields) and up to 9 actions that open a link or copy
+text. Peek draws every recipe page with the same keys as its other pages. The
+arrow keys move through cards, list items and table rows, enter opens one, and
+actions have keys `1` to `9` in the ⌃k menu. Recipes live outside the plugin, so
+they work in every session and survive peek updates.
+
+This vocabulary is not the `peek-` blocks of view definitions, though some names
+match. A recipe block carries its own rows, which the script printed. A `peek-`
+block carries no data: it selects items by their props. To show a recipe's rows
+inside a markdown page, use a recipe block (see "Recipe blocks" under The
+template).
+
+A recipe page runs its source when you open it, when you press `u`, and on a
+timer only when the recipe asks for one (every 5 minutes or more). Groups, stars
+and Recent never run it. When the source fails, the page names the recipe and the
+error. It does not fall back to the web page. A GitHub, Linear or Slack link
+stays on its built-in page unless the recipe says it overrides that page.
+
+**Drafts and approval.** A new recipe is a draft, and normal link opens ignore
+it. The agent previews a draft in the pane, marked unapproved. Above the page,
+the approval surface shows what the recipe runs, the links it matches, the
+environment names it reads, warnings for MCP tools that look like they change
+something and for paths outside the folder, and each file's name. **Show files**
+there opens the full text of every file.
+Press **Approve** there to make it live. Only that button approves a recipe: no
+agent tool, command or file write can. Any later change to a file in the folder
+turns the recipe back into a draft until you approve it again. While a recipe is
+a draft, it runs only what the session's permissions already allow.
+
+The agent uses two tools, `check_recipe` and `open` (see Agent tools). Both are
+deferred, so the agent loads them with ToolSearch first.
+
+**Background builder.** The skill does not build the recipe in your session.
+It gathers the type, a sample link and the source, then hands the build to the
+`peek-recipe-builder` agent (`agents/peek-recipe-builder.md`), which runs in the
+background on Haiku while the session goes on. The builder writes the folder,
+tests the script or map, runs `check_recipe` up to five failed times and opens
+the draft preview. It returns `ready`, `stuck` or `needs-permission`; it never
+approves and never calls the type done. On `ready` the agent asks you to press
+Approve, and reports done only when `check_recipe` says the recipe is approved.
+The builder cannot answer permission prompts, so a check that needs one comes
+back as `needs-permission` with the exact rule to allow. For an MCP source the
+session calls the tool once itself and passes the result as a sample, because
+the builder can use only peek's tools. If the agent type does not load, the skill
+runs the same file as the brief for a general background agent on Haiku.
+
+The skill is `skills/peek-recipes/SKILL.md`. The full vocabulary is in its
+`references/vocabulary.md`, and `examples/` holds a script recipe and an MCP
+recipe with their sample pages. The MCP recipe also holds a sample tool result
+for its map script.
+
 ## Agent tools
 
 Peek gives the agent these tools (as `mcp__peek__<name>`). The `peek-tasks`
-skill tells it when to use the task tools.
+skill tells it when to use the task tools, and the `peek-recipes` skill when to
+use `check_recipe` and `open`.
 
 | Tool | Inputs | Does |
 |---|---|---|
@@ -697,6 +777,8 @@ skill tells it when to use the task tools.
 | `save_group` | `id` (leave out to create); `title`; `description`; `sections`; `rule` (text or object; `null` or empty text clears it); `split` (a prop name; empty text clears it); `order`; `add`; `move`; `remove` | Creates or edits a group |
 | `delete_group` | `id`; `force` | Deletes a group |
 | `star` | `target`; `starred` | Stars or unstars a file or link |
+| `check_recipe` | `recipe` (the folder name); `link` | Runs a recipe once against a real link. Reports whether it matched, which page wins the link, any recipe whose links overlap, and whether the page fits the vocabulary. It never approves, and it saves the rows for recipe blocks |
+| `open` | `link` | Opens a link in the pane through normal routing, drafts included. Returns the page outline or the error |
 
 ## Commands
 
@@ -756,4 +838,13 @@ Web reader pages are cleaned with [Defuddle](https://github.com/kepano/defuddle)
 ```
 claude plugin validate .
 claude plugin test .
+python3 tests/mirror-skill-examples.py --check
 ```
+
+The test sandbox cannot read JSON or markdown files, so two fixtures are copies:
+`tests/fixtures/skill-examples.ts` holds the skill's examples, and
+`tests/fixtures/plugin-shape.ts` holds the skills' names, the `peek-recipes`
+skill and the agents. After you edit an example, a skill or an agent, run
+`python3 tests/mirror-skill-examples.py` to rewrite both. `--check` fails when
+a copy is out of date or when an example's output no longer equals its sample
+page.
