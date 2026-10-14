@@ -5,9 +5,10 @@ import { liveKey, liveSession, toggleLive } from '../live-pane'
 import { openExternally, refresh, setMenu, show } from '../navigation'
 import { baseName, kindOf, parseHref } from '../paths'
 import { C as BASE, ICON } from '../theme'
-import { MOVE_KEYS, modeRows, roleRows, scopeRows } from './actions'
+import { MOVE_KEYS, modeRows, openTasksPage, roleRows, scopeRows } from './actions'
 import { rankCommands } from './rank'
 import { canGoLive } from './look'
+import { TASKS_ICON } from './task-data'
 import type { Action, DrawContext, PaneActions } from './types'
 
 const KEY_ICON = '\u{f11c}'
@@ -26,6 +27,8 @@ export function menuLists(ctx: DrawContext, actions: PaneActions): MenuLists {
       ...modeRows(io, Boolean(current)),
       ...roleRows(actions),
       ...scopeRows(actions),
+      // Typed for, not listed: an always-on row would push the last row past the menu's 20-row cap.
+      { id: 'tasks', icon: TASKS_ICON, label: 'Tasks: every task, by now, next and later', isFilteredOnly: true, run: () => void openTasksPage(io) },
       { id: 'top', icon: '\u{f062}', label: 'Scroll to top', hint: 'home', run: () => void io.scroll({ to: 'start' }).catch(() => undefined) },
       { id: 'bottom', icon: '\u{f063}', label: 'Scroll to bottom', hint: 'end', run: () => void io.scroll({ to: 'end' }).catch(() => undefined) },
       ...(current

@@ -17,6 +17,8 @@ import { layoutBuilder } from '../layout'
 import type { ItemLook } from '../look'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemRow, SectionRule } from '../widgets'
+import { itemsOnce } from './view/markdown'
+import { proseParts } from './view/prose'
 
 type Opened = NonNullable<PluginState['peek']['openGroup']>
 
@@ -73,9 +75,16 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
       metaKey: `group-meta-${index}`,
     })
   }
+  // The description's block rows press like links but stay out of the keyboard order, which is the group's items:
+  // their keys start after the items' so every Button key is unique, and the cursor never lands on them.
+  const unselected = { ...io, cursor: { read: async () => -1, update: io.cursor.update } }
+  const description = shown.description
+    ? await proseParts(ctx, unselected, 'group-description', shown.description, { picture: () => null, items: itemsOnce(io), navStart: looks.length })
+    : []
   const layout = layoutBuilder()
   // Three rows for the title and the gap under it, two per block whether it draws or not: the estimate as it was.
   layout.space(3)
+  layout.space(description.reduce((rows, part) => rows + part.rows, 0))
   let next = 0
   const drawn = blocks.map((block, b) => {
     layout.space(2)
@@ -105,7 +114,11 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
       <Box key="group-page-title">
         <Text color={C.accent} bold>{`${shown.starred ? ICON.star : ICON.groups} ${shown.title}`}</Text>
       </Box>
-      {shown.description ? <Text color={C.subtext0}>{shown.description}</Text> : null}
+      {description.length ? (
+        <Box key="group-description" flexDirection="column" width={textWidth}>
+          {description.map(part => part.node)}
+        </Box>
+      ) : null}
       <Box height={1} />
       {members.length === 0 && (
         <Box key="group-no-items" marginBottom={1}>

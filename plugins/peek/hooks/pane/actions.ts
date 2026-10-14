@@ -1,10 +1,22 @@
 import type { Mode } from '../../types'
+import type { Group } from '../../types/groups'
 import { nextOf } from '../gallery'
 import type { RoleFilter, Scope } from '../gallery'
-import { setStar, toggleExpanded, toggleGroupStar } from '../groups-session'
-import { switchMode } from '../navigation'
+import { openGroupPage, setStar, toggleExpanded, toggleGroupStar } from '../groups-session'
+import { openFromPage, refresh, switchMode } from '../navigation'
 import type { Cell, NavIo } from '../navigation'
+import { fileHref, parseHref } from '../paths'
+import { setStatus } from '../tasks/status'
+import { taskSession } from '../tasks/poll'
+import { readDoc } from '../tasks/store'
 import { ICON, ROLE_ICON, SCOPE_ICON } from '../theme'
+import { LAYOUTS } from '../views/definition'
+import type { Item } from '../views/items'
+import { asObj } from '../wire'
+import { cycleLayoutOfRow, onPlaceChange, setPlace, toggleFoldOfRow } from './blocks/common'
+import type { PlaceState } from './blocks/common'
+import { isEnded } from './blocks/row'
+import { isMirrored, ownPlace, placeOfDoc, tasksIoOf } from './task-data'
 import type { Action, PaneActions } from './types'
 
 export const MODES: { id: Mode; label: string; icon: string; hotkey: string; row: string; about: string; isMenuSwitch: boolean }[] = [
@@ -109,3 +121,140 @@ export const expandAction = (actions: PaneActions, chosen: Mode): Action => ({
       if (id) toggleExpanded(actions.io, id)
     }),
 })
+
+// The cursor is one atom shared by every list, so a page opened after another list starts on its first row; it
+// follows the atom again once a person moves it on this page.
+const pageCursor = { href: '', atOpen: 0, isOwned: false }
+
+export async function cursorOnPage(io: Pick<NavIo, 'cursor'>, href: string): Promise<number> {
+  const raw = await io.cursor.read()
+  if (pageCursor.href !== href) Object.assign(pageCursor, { href, atOpen: raw, isOwned: false })
+  else if (!pageCursor.isOwned && raw !== pageCursor.atOpen) pageCursor.isOwned = true
+  return pageCursor.isOwned ? raw : 0
+}
+
+export async function claimCursor(io: Pick<NavIo, 'cursor'>, href: string) {
+  if (pageCursor.href === href && pageCursor.isOwned) return
+  await io.cursor.update(() => 0)
+  Object.assign(pageCursor, { href, atOpen: 0, isOwned: true })
+}
+
+const STATUS_CYCLE = ['todo', 'doing', 'done'] as const
+
+const NO_SESSION = 'peek has not started following tasks in this session yet'
+
+// Every pane status change goes through the one status path; a mirrored record goes through the mirror, which makes
+// the takeover doc first (R21). A refusal leaves the doc as it was and says why.
+export async function changeStatus(io: NavIo, path: string, pick: (current: string | undefined) => string) {
+  const tio = tasksIoOf(io)
+  const doc = await readDoc(tio, path)
+  if (!doc) {
+    io.toast(`Could not set the status: no task doc at ${path}`)
+    return
+  }
+  const status = pick(doc.status)
+  let outcome: { status: string; reason: string }
+  if (await isMirrored(io, path)) {
+    const mirror = taskSession()?.mirror
+    outcome = mirror ? await mirror.setStatus(path, status, { by: 'shawn', source: 'pane' }) : { status: 'refused', reason: NO_SESSION }
+  } else {
+    const { place, worktree } = await placeOfDoc(io, path)
+    outcome = await setStatus(tio, place, { doc: path, status, source: 'pane', by: 'shawn', writer: await io.sessionId(), ...(worktree ? { worktree } : {}) })
+  }
+  if (outcome.status === 'refused') io.toast(`Could not set the status: ${outcome.reason}`)
+  if (outcome.status !== 'applied') return
+  const current = await io.view.read()
+  if (current && parseHref(current.href)?.path === path) await refresh(io, current.href)
+  io.invalidate()
+}
+
+export const nextStatus = (current: string | undefined) => nextOf<string>(STATUS_CYCLE, current ?? '')
+
+export const canAdopt = (item: Item) => item.source === 'mirrored' && isEnded(item) && typeof item.props.takeover !== 'string'
+
+export async function adopt(io: NavIo, item: Item) {
+  const mirror = taskSession()?.mirror
+  const made = mirror ? await mirror.adopt(item.href, 'shawn') : { status: 'refused', reason: NO_SESSION }
+  io.toast(made.status === 'refused' ? `Could not adopt the task: ${made.reason}` : made.reason)
+  io.invalidate()
+}
+
+// `target` is read when the key is pressed: the selected block row, or the page's own task.
+export function taskActions(actions: PaneActions, page: { href: string; hasRows: boolean; statusOf: () => Promise<string | null>; adoptable: Item | null }): Action[] {
+  const io = actions.io
+  const selectedKey = async () => {
+    await claimCursor(io, page.href)
+    return (await actions.selectedNav())?.key
+  }
+  const onRow = (change: (key: string) => unknown) => async () => {
+    const key = await selectedKey()
+    if (key && change(key)) io.invalidate()
+  }
+  const status = (pick: (current: string | undefined) => string) => async () => {
+    const path = await page.statusOf()
+    if (path) await changeStatus(io, path, pick)
+  }
+  return [
+    { id: 'task-status', label: 'Status', hotkey: 'w', menu: 'Status: todo, doing, done', run: status(nextStatus) },
+    { id: 'task-cancel', label: 'Cancel', menu: 'Set cancelled', run: status(() => 'cancelled') },
+    ...(page.hasRows
+      ? [
+          { id: 'task-layout', label: 'Layout', hotkey: 'y', menu: `Layout: switch the selected block (${LAYOUTS.join(', ')})`, run: onRow(cycleLayoutOfRow) },
+          { id: 'task-fold', label: 'Fold', hotkey: 'z', menu: 'Fold or unfold the selected parent', run: onRow(toggleFoldOfRow) },
+        ]
+      : []),
+    ...(page.adoptable ? [{ id: 'task-adopt', label: 'Adopt', menu: 'Adopt this task', run: () => adopt(io, page.adoptable as Item) }] : []),
+  ]
+}
+
+export function creatorRows(io: NavIo, creators: readonly string[], filter: { creator: string | null }): Action[] {
+  const choose = (creator: string | null) => () => {
+    filter.creator = creator
+    io.invalidate()
+  }
+  return [
+    ...[...new Set(creators)].sort().map((creator, index) => ({ id: `task-creator-${index}`, label: creator, menu: `Filter: creator ${creator}`, run: choose(creator) })),
+    { id: 'task-creator-all', label: 'anyone', menu: 'Filter: creator anyone', run: choose(null) },
+  ]
+}
+
+type Archivable = Pick<Group, 'id' | 'title'> & { archivedAt?: number }
+
+export function archivedRows(io: NavIo, groups: readonly Archivable[]): Action[] {
+  return groups
+    .filter((one): one is Archivable & { archivedAt: number } => typeof one.archivedAt === 'number')
+    .sort((a, b) => b.archivedAt - a.archivedAt)
+    .map(one => ({ id: `archived-${one.id}`, label: `Archived: ${one.title}`, menu: `Archived: ${one.title}`, run: () => openGroupPage(io, one.id) }))
+}
+
+export async function openTasksPage(io: NavIo) {
+  await openFromPage(io, fileHref((await ownPlace(io)).folder))
+}
+
+const MAX_SAVED_PLACES = 200
+
+function placeStateOf(raw: unknown): PlaceState | null {
+  const one = asObj(raw)
+  if (!one || !Array.isArray(one.folded) || !one.folded.every(id => typeof id === 'string')) return null
+  if (one.layout !== undefined && !(LAYOUTS as readonly unknown[]).includes(one.layout)) return null
+  return { ...(one.layout === undefined ? {} : { layout: one.layout as PlaceState['layout'] }), folded: one.folded as string[] }
+}
+
+// Called once at session start: loads the saved layout and fold choices, then saves each change.
+export async function wirePlaces(io: Pick<NavIo, 'storeGet' | 'storeSet'>) {
+  const saved = asObj(await io.storeGet('places').catch(() => undefined)) ?? {}
+  const kept: Record<string, PlaceState> = {}
+  for (const [place, raw] of Object.entries(saved).slice(-MAX_SAVED_PLACES)) {
+    const state = placeStateOf(raw)
+    if (!state) continue
+    kept[place] = state
+    setPlace(place, state)
+  }
+  onPlaceChange((place, state) => {
+    delete kept[place]
+    kept[place] = state
+    const oldest = Object.keys(kept)[0]
+    if (oldest !== undefined && Object.keys(kept).length > MAX_SAVED_PLACES) delete kept[oldest]
+    void io.storeSet('places', { ...kept }).catch(() => undefined)
+  })
+}

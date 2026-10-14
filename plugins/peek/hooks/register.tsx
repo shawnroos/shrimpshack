@@ -35,6 +35,7 @@ import { UiGallery } from './ui-gallery'
 import { groupHome, groupPage, openCardItem, openGroupHref, openGroupPage, setStar, starInGroupsTab, toggleGroupStar } from './groups-session'
 import { forgetPath, guess, noteCapture, pathExists, remember, toHref } from './entries'
 import { asObj } from './wire'
+import { wirePlaces } from './pane/actions'
 
 const PANE = 'peek'
 const view = atom({ plugin: 'peek', key: 'view' } as const, null)
@@ -284,6 +285,7 @@ export const register: Register = on => {
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
     for (const tool of Object.values(TOOLS)) await $.tool.register(tool.spec).catch(() => undefined)
     void groupHome(navIoOf($)).catch(() => undefined)
+    void wirePlaces(navIoOf($)).catch(() => undefined)
     if (!isTaskPollStarted) {
       isTaskPollStarted = true
       const ports = portsOf($)
