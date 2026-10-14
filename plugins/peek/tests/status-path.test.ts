@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import { capturePlace, createTask, listFolderTasks } from '../hooks/tasks/store'
 import type { TaskPlace, TasksIo } from '../hooks/tasks/store'
-import { noticeReads, observe, setStatus } from '../hooks/tasks/status'
+import { SETTLE_MS, noticeReads, observe, setStatus } from '../hooks/tasks/status'
 import type { StatusChange } from '../hooks/tasks/status'
 import { tasksWorld } from './fixtures/world'
 import type { World } from './fixtures/world'
@@ -196,4 +196,39 @@ test('a stalled writer whose lock was broken and retaken cannot overwrite the ne
   expect(w.log.some(one => one[1] === 'mv' && one[4] === doc)).toBe(false)
   expect(entriesIn(w, place)).toHaveLength(0)
   expect(w.files[`${lock}/owner`]).toBe('the-other-session')
+})
+
+test('a second entry landing within the same folder time as a poll that has not settled is still seen', async (_$, on) => {
+  const { w, io, place } = await setup(on)
+  const first = await newTask(io, place, 'First')
+  const second = await newTask(io, place, 'Second')
+  const watcher = observe(io, place, { id: 'watcher', root: '/repo' })
+  await watcher.prime()
+  const entries = `${place.stateDir}/entries`
+  await setStatus(io, place, { doc: first, status: 'done', source: 'pane', by: 'shawn', writer: 'one' })
+  const sameMtime = w.dirs.get(entries) ?? 0
+  w.now = sameMtime
+  expect((await watcher.poll()).changes.map(one => one.doc)).toEqual([first])
+  await setStatus(io, place, { doc: second, status: 'done', source: 'pane', by: 'shawn', writer: 'one' })
+  w.dirs.set(entries, sameMtime)
+  expect(w.now).toBe(sameMtime)
+  expect((await watcher.poll()).changes.map(one => one.doc)).toEqual([second])
+})
+
+test('once the entries folder has settled, a poll with its time unchanged neither lists nor reads it', async (_$, on) => {
+  const { w, io, place } = await setup(on)
+  const doc = await newTask(io, place, 'Quiet')
+  const entries = `${place.stateDir}/entries`
+  const listed: string[] = []
+  const watcher = observe({ ...io, list: path => (listed.push(path), io.list(path)) }, place, { id: 'watcher', root: '/repo' })
+  await watcher.prime()
+  await setStatus(io, place, { doc, status: 'done', source: 'pane', by: 'shawn', writer: 'one' })
+  w.now = w.dirs.get(entries) ?? 0
+  expect((await watcher.poll()).changes.map(one => one.doc)).toEqual([doc])
+  w.now += SETTLE_MS + 1
+  expect((await watcher.poll()).changes).toEqual([])
+  listed.length = 0
+  w.reads.length = 0
+  expect((await watcher.poll()).changes).toEqual([])
+  expect([...listed, ...w.reads].filter(one => one.startsWith(entries))).toEqual([])
 })

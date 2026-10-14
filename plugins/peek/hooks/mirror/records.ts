@@ -31,7 +31,7 @@ export const listTitleOf = (list: string) => {
   const { session, key } = splitList(list)
   return `Agent tasks ${session.slice(0, 8)} #${key}`
 }
-const noteOf = (root: string, session: string) => `${root}/${session}/session.json`
+export const noteOf = (root: string, session: string) => `${root}/${session}/session.json`
 export const stateOf = (root: string, session: string) => `${root}/${session}/state.json`
 
 // A record lives in the mirror folder but its status is logged in its repo's change log; with the mirror folder as the

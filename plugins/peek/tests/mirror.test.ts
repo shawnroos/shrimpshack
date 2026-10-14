@@ -9,7 +9,7 @@ import { ruleCandidates } from '../hooks/groups-session'
 import type { NavIo } from '../hooks/navigation'
 import { readListState } from '../hooks/mirror/records'
 import { rebuildItems } from '../hooks/mirror/rebuild'
-import { ARCHIVE_MS, createMirror } from '../hooks/mirror/watch'
+import { ARCHIVE_MS, STALE_MS, createMirror } from '../hooks/mirror/watch'
 import type { Mirror } from '../hooks/mirror/watch'
 import { startTaskPoll } from '../hooks/tasks/poll'
 import { capturePlace, createTask, listFolderTasks, userPlace } from '../hooks/tasks/store'
@@ -343,4 +343,88 @@ test('a poll after this session wrote a list\'s state does not read that state b
   w.reads.length = 0
   await mirror.poll()
   expect(w.reads.filter(one => one.endsWith('/state.json'))).toEqual([])
+})
+
+test('a status change and an adoption racing on one mirrored item make one takeover doc, without waiting on the lock', async (_$, on) => {
+  const { w, io, mirror, repo } = await setup(on)
+  agentItem(w, AGENT, '1', 'Read the parser')
+  await mirror.poll()
+  w.now = w.mtimes.get(record(AGENT, '1')) ?? w.now
+  const before = w.now
+  const [marked, adopted] = await Promise.all([mirror.setStatus(record(AGENT, '1'), 'done', { by: 'shawn', source: 'pane' }), mirror.adopt(record(AGENT, '1'), 'shawn')])
+  const docs = await listFolderTasks(io, repo)
+  expect(docs).toHaveLength(1)
+  expect([marked.doc, adopted.doc]).toEqual([docs[0]?.path, docs[0]?.path])
+  expect(propsAt(w, record(AGENT, '1')).takeover).toBe(docs[0]?.path)
+  expect(w.now).toBe(before)
+})
+
+test('two sessions adopting one mirrored item at once make one takeover doc', async (_$, on) => {
+  const { w, io, mirror, repo } = await setup(on)
+  const other = createMirror(io, { id: 'session-two', root: '/wt/feature' })
+  agentItem(w, AGENT, '1', 'Read the parser')
+  await Promise.all([mirror.poll(), other.poll()])
+  // The fake's file times trail its clock by hours, which would make a held lock look stale enough to break.
+  w.now = w.mtimes.get(record(AGENT, '1')) ?? w.now
+  const outcomes = await Promise.all([mirror.adopt(record(AGENT, '1'), 'shawn'), other.adopt(record(AGENT, '1'), 'shawn')])
+  const docs = await listFolderTasks(io, repo)
+  expect(docs).toHaveLength(1)
+  expect(outcomes.map(one => one.status).sort()).toEqual(['applied', 'unchanged'])
+  expect(propsAt(w, record(AGENT, '1')).takeover).toBe(docs[0]?.path)
+})
+
+test('an idle poll reads no note and lists no items for a finished list or an ended one', async (_$, on) => {
+  const { w, io } = tasksWorld(on)
+  const touched: string[] = []
+  const mirror = createMirror({ ...io, list: path => (touched.push(path), io.list(path)), stat: path => (touched.push(path), io.stat(path)) }, { id: AGENT, root: '/repo' })
+  await mirror.noteStart()
+  agentTranscript(w, '/repo', AGENT_TWO, [{ type: 'user', cwd: '/repo', sessionId: AGENT_TWO }])
+  agentItem(w, AGENT, '1', 'Read the parser', 'completed')
+  agentItem(w, AGENT_TWO, '1', 'Left open')
+  await mirror.poll()
+  await mirror.noteEnd(AGENT_TWO, 'prompt_input_exit')
+  await mirror.poll()
+  expect(propsAt(w, record(AGENT_TWO, '1')).session_ended).toBe(true)
+  await mirror.poll()
+  w.reads.length = 0
+  touched.length = 0
+  await mirror.poll()
+  expect(w.reads).toEqual([])
+  expect(touched.filter(one => one.startsWith(`${agentFolder(AGENT)}/`) || one.startsWith(`${agentFolder(AGENT_TWO)}/`))).toEqual([])
+})
+
+test('an open list whose folder sits still ends once it goes stale, with only time passing, and is then no longer read item by item', async (_$, on) => {
+  const { w, io } = tasksWorld(on)
+  const listed: string[] = []
+  const mirror = createMirror({ ...io, list: path => (listed.push(path), io.list(path)) }, { id: AGENT, root: '/repo' })
+  await mirror.noteStart()
+  agentItem(w, AGENT, '1', 'Left open')
+  agentItem(w, AGENT, '2', 'Adopted, still pending')
+  await mirror.poll()
+  await mirror.adopt(record(AGENT, '2'), 'shawn')
+  await mirror.poll()
+  w.now = (w.dirs.get(agentFolder(AGENT)) ?? 0) + STALE_MS
+  await mirror.poll()
+  expect(propsAt(w, record(AGENT, '1')).session_ended).toBeUndefined()
+  w.now += 1
+  await mirror.poll()
+  expect(propsAt(w, record(AGENT, '1')).session_ended).toBe(true)
+  expect((await readListState(io, AGENT))?.lists['1']?.phase).toBe('folded')
+  listed.length = 0
+  await mirror.poll()
+  expect(listed.filter(one => one === agentFolder(AGENT))).toEqual([])
+})
+
+test('an item Claude Code completes in place, leaving the folder\'s time alone, still folds its list', async (_$, on) => {
+  const { w, io, mirror } = await setup(on)
+  agentItem(w, AGENT, '1', 'Read the parser', 'completed')
+  agentItem(w, AGENT, '2', 'Fix the comma')
+  await mirror.poll()
+  await mirror.poll()
+  expect((await readListState(io, AGENT))?.lists['1']?.phase).toBe('active')
+  const folderMtime = w.dirs.get(agentFolder(AGENT)) ?? 0
+  agentItem(w, AGENT, '2', 'Fix the comma', 'completed')
+  w.dirs.set(agentFolder(AGENT), folderMtime)
+  await mirror.poll()
+  expect((await readListState(io, AGENT))?.lists['1']?.phase).toBe('folded')
 })

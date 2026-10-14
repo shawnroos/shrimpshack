@@ -1,4 +1,5 @@
 import type { PropValue } from '../../types'
+import { dropLock, holdsLock, queuedBy, takeLock } from '../lock'
 import { createGroup, deleteGroup, groupsDir, listGroups, writeGroup } from '../groups'
 import { setStatus } from '../tasks/status'
 import { OPEN_STATUSES } from '../tasks/status-words'
@@ -16,6 +17,7 @@ import {
   mirrorRoot,
   mirrorSessions,
   newestDirs,
+  noteOf,
   parseAgentItem,
   propsOf,
   readListState,
@@ -43,14 +45,24 @@ export type Mirror = {
 
 export const ARCHIVE_MS = 12 * 3600_000
 // An open list whose folder has not moved for this long is treated as ended even with no session end recorded.
-const STALE_MS = 24 * 3600_000
+export const STALE_MS = 24 * 3600_000
 const FOLDERS = 200
 const PLACE_RETRY_MS = 60_000
 const SESSION_FOLDER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ITEM_FILE = /^\d+\.json$/
 
 type Rec = { path: string; list: string; status: string; agentStatus: string; name: string; takeover?: string; isEnded: boolean; mtimeMs?: number }
-type Followed = { folderMtime?: number; stateMtime?: number; files: Map<string, number>; records: Map<string, Rec>; state: ListState | null; isRebuildTried: boolean }
+// dueAt is when the list next needs settling with nothing on disk moved; 0 means at once.
+type Followed = {
+  folderMtime?: number
+  stateMtime?: number
+  noteMtime?: number
+  dueAt: number
+  files: Map<string, number>
+  records: Map<string, Rec>
+  state: ListState | null
+  isRebuildTried: boolean
+}
 
 // Drops the oldest entry, not the whole cache: a cap below the folders one poll scans would otherwise empty it every poll.
 function makeRoom(cache: Map<string, unknown> | Set<string>, cap: number) {
@@ -94,6 +106,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
   const places = new Map<string, TaskPlace>()
   const unplaced = new Map<string, number>()
   const backfilled = new Set<string>()
+  const takeovers = new Map<string, Promise<unknown>>()
   let running: Promise<void> | null = null
 
   const placeOf = async (root: string, session: string): Promise<TaskPlace> => {
@@ -171,6 +184,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       if (known.stateMtime !== stateMtime) {
         known.state = await readListState(io, session, root)
         known.stateMtime = stateMtime
+        known.dueAt = 0
         places.delete(session)
         unplaced.delete(session)
       }
@@ -183,7 +197,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       const rec = recOf(`${root}/${session}/${one.name}`, texts[i] ?? '')
       if (rec) records.set(one.name.slice(0, -'.md'.length), rec)
     })
-    const fresh: Followed = { files: new Map(), records, state: await readListState(io, session, root), stateMtime, isRebuildTried: false }
+    const fresh: Followed = { files: new Map(), records, state: await readListState(io, session, root), stateMtime, dueAt: 0, isRebuildTried: false }
     makeRoom(followed, FOLDERS)
     followed.set(session, fresh)
     return fresh
@@ -198,6 +212,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
   const take = async (root: string, session: string, f: Followed, state: ListState, item: AgentItem) => {
     const status = TASK_STATUS[item.status]
     if (!status) return
+    f.dueAt = 0
     const path = recordPathOf(root, session, item.id)
     let rec = f.records.get(item.id) ?? null
     if (!rec) {
@@ -273,10 +288,11 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     }
   }
 
-  const settle = async (root: string, session: string, f: Followed, state: ListState, folderMtime: number) => {
+  const settle = async (root: string, session: string, f: Followed, state: ListState, folderMtime: number): Promise<number> => {
     const now = await io.now()
     const note = await readNote(io, root, session)
     const isEnded = (note.endedAt !== undefined && (note.endedMtime === undefined || folderMtime <= note.endedMtime)) || now - folderMtime > STALE_MS
+    let dueAt = isEnded ? Infinity : folderMtime + STALE_MS + 1
     for (const [key, entry] of Object.entries(state.lists)) {
       const live = [...f.records.values()].filter(rec => keyOf(rec.list) === key && !rec.takeover)
       if (!live.length) continue
@@ -298,11 +314,16 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
         next = { ...rest, phase: 'archived', archivedAt: now }
       }
       if (next.phase !== 'archived' && !next.groupId) {
-        const groupId = await ensureGroup(await placeOf(root, session), session, key)
+        const place = await placeOf(root, session)
+        const groupId = await ensureGroup(place, session, key)
         if (groupId) next = { ...next, groupId }
+        // A group that could not be written is tried again on the next poll.
+        else if (!place.isUser) dueAt = now
       }
+      if (next.phase === 'folded') dueAt = Math.min(dueAt, (next.foldedAt ?? now) + ARCHIVE_MS)
       state.lists[key] = next
     }
+    return dueAt
   }
 
   const scan = async (root: string, tasks: string, session: string) => {
@@ -310,19 +331,26 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     const stat = await io.stat(dir)
     if (!stat) return
     const f = await follow(root, session)
+    const now = await io.now()
     const isMoved = stat.mtimeMs !== f.folderMtime
     // Claude Code may rewrite an item in place, which leaves the folder's time alone, so a list still in work is read
-    // item by item on every poll.
-    const isInWork = [...f.records.values()].some(rec => rec.agentStatus !== 'completed')
+    // item by item on every poll. An ended or stale list is not in work: its items are read again only when the
+    // folder moves.
+    const isInWork = now - stat.mtimeMs <= STALE_MS && [...f.records.values()].some(rec => rec.agentStatus !== 'completed' && !rec.isEnded)
     const before = JSON.stringify(f.state)
     if (isMoved || isInWork) await readFolder(root, session, dir, f)
     f.folderMtime = stat.mtimeMs
     const state = f.state
     if (!state) return
-    await settle(root, session, f, state, stat.mtimeMs)
     // A repo placement changes only through moveList, which writes it; rereading it each poll would rerun git once the
-    // place cache overflows.
+    // place cache overflows. It is taken before settling, so a session placed this poll gets its group this poll.
     if (state.placeKey === undefined || state.placeKey === 'user') state.placeKey = (await placeOf(root, session)).key
+    // Stat before settle reads the note, so a note written between the two is seen on the next poll.
+    const noteMtime = (await io.stat(noteOf(root, session)))?.mtimeMs
+    if (isMoved || noteMtime !== f.noteMtime || JSON.stringify(state) !== before || now >= f.dueAt) {
+      f.noteMtime = noteMtime
+      f.dueAt = await settle(root, session, f, state, stat.mtimeMs)
+    }
     if (JSON.stringify(state) !== before) await saveState(root, session, state)
   }
 
@@ -348,33 +376,50 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     }
   }
 
-  const takeOver = async (record: string, extra: Record<string, PropValue>, into?: TaskPlace): Promise<MirrorWrite & { place?: TaskPlace }> => {
+  const mirroredProps = async (record: string) => {
     const text = await io.read(record).catch(() => null)
     const props = text === null ? {} : propsOf(text)
-    const session = typeof props.session === 'string' ? props.session : ''
-    const list = typeof props.list === 'string' ? props.list : ''
-    const name = typeof props.name === 'string' ? props.name : ''
-    if (!session || !list || !name) return { status: 'refused', reason: `${record} is not a mirrored task` }
-    const root = await mirrorRoot(io)
-    const place = into ?? (await placeOf(root, session))
-    const prior = typeof props.takeover === 'string' ? props.takeover : ''
-    if (prior && (await io.stat(prior))) {
-      for (const [key, value] of Object.entries(extra)) await edit(prior, one => withProp(one, key, value))
-      return { status: 'unchanged', reason: 'Already taken over', doc: prior, place }
-    }
-    const status = typeof props.status === 'string' ? props.status : 'todo'
-    const made = await createTask(io, place, { name, creator: session, status })
-    if (made.status !== 'applied') return made
-    const carried: Record<string, PropValue | undefined> = { mirror: props.id, list, session, task_id: props.task_id, sequence: props.sequence, ...extra }
-    await edit(made.path, one => Object.entries(carried).reduce((doc, [key, value]) => (value === undefined ? doc : withProp(doc, key, value)), one))
-    await edit(record, one => withProp(withProp(one, 'takeover', made.path), SESSION_ENDED_PROP, undefined))
-    const rec = followed.get(session)?.records.get(typeof props.task_id === 'string' ? props.task_id : '')
-    if (rec) {
-      rec.takeover = made.path
-      rec.isEnded = false
-    }
-    return { status: 'applied', reason: `Took over "${name}"`, doc: made.path, place }
+    const str = (key: string) => (typeof props[key] === 'string' ? (props[key] as string) : '')
+    return str('session') && str('list') && str('name') ? { props, str } : null
   }
+
+  // Same-process callers queue here; another session is kept out by the lock, under which the record is read again so
+  // a takeover it just wrote is seen before a second doc is made.
+  const takeOver = (record: string, extra: Record<string, PropValue>, into?: TaskPlace): Promise<MirrorWrite & { place?: TaskPlace }> =>
+    queuedBy(takeovers, record, async () => {
+      if (!(await mirroredProps(record))) return { status: 'refused', reason: `${record} is not a mirrored task` }
+      const lock = `${record}.lock`
+      const token = await takeLock(io, lock)
+      if (!token) return { status: 'refused', reason: 'The task is busy, try again' }
+      try {
+        const read = await mirroredProps(record)
+        if (!read) return { status: 'refused', reason: `${record} is not a mirrored task` }
+        const { props, str } = read
+        const session = str('session')
+        const root = await mirrorRoot(io)
+        const place = into ?? (await placeOf(root, session))
+        const prior = str('takeover')
+        if (prior && (await io.stat(prior))) {
+          for (const [key, value] of Object.entries(extra)) await edit(prior, one => withProp(one, key, value))
+          return { status: 'unchanged', reason: 'Already taken over', doc: prior, place }
+        }
+        const made = await createTask(io, place, { name: str('name'), creator: session, status: str('status') || 'todo' })
+        if (made.status !== 'applied') return made
+        const carried: Record<string, PropValue | undefined> = { mirror: props.id, list: str('list'), session, task_id: props.task_id, sequence: props.sequence, ...extra }
+        await edit(made.path, one => Object.entries(carried).reduce((doc, [key, value]) => (value === undefined ? doc : withProp(doc, key, value)), one))
+        await edit(record, one => withProp(withProp(one, 'takeover', made.path), SESSION_ENDED_PROP, undefined))
+        const f = followed.get(session)
+        if (f) f.dueAt = 0
+        const rec = f?.records.get(str('task_id'))
+        if (rec) {
+          rec.takeover = made.path
+          rec.isEnded = false
+        }
+        return { status: 'applied', reason: `Took over "${str('name')}"`, doc: made.path, place }
+      } finally {
+        if (await holdsLock(io, lock, token)) await dropLock(io, lock)
+      }
+    })
 
   return {
     poll: () => {

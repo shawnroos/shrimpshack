@@ -24,7 +24,7 @@ const KEEP_MS = 7 * DAY_MS
 // Keeps known.json far under the 4 MiB fs.read limit.
 const KNOWN_CAP = 2000
 // An entries folder touched this recently may gain another entry within the same timestamp, so it is listed again.
-const SETTLE_MS = 2_000
+export const SETTLE_MS = 2_000
 const TIME_DIGITS = 15
 const BUSY = 'The task log is busy, try again'
 
