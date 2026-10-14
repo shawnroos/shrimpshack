@@ -1,8 +1,9 @@
 import type { PropValue } from '../../types'
 import { createGroup, deleteGroup, groupsDir, listGroups, writeGroup } from '../groups'
 import { setStatus } from '../tasks/status'
+import { OPEN_STATUSES } from '../tasks/status-words'
 import type { StatusOutcome, StatusSource } from '../tasks/status'
-import { TASK_CAPS, capturePlace, createTask, userPlace } from '../tasks/store'
+import { TASK_CAPS, capturePlace, createTask, placeOfTasksFolder, userPlace } from '../tasks/store'
 import type { TaskPlace, TasksIo } from '../tasks/store'
 import { findTranscript, readTranscript, rebuildItems, transcriptCwd } from './rebuild'
 import {
@@ -21,6 +22,8 @@ import {
   readNote,
   recordPathOf,
   recordText,
+  sessionDocs,
+  stateOf,
   withProp,
   writeAtomic,
   writeListState,
@@ -45,10 +48,16 @@ const FOLDERS = 200
 const PLACE_RETRY_MS = 60_000
 const SESSION_FOLDER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ITEM_FILE = /^\d+\.json$/
-const OPEN = new Set(['todo', 'doing'])
 
-type Rec = { path: string; list: string; status: string; agentStatus: string; name: string; takeover?: string; isEnded: boolean }
-type Followed = { folderMtime?: number; files: Map<string, number>; records: Map<string, Rec>; state: ListState | null; isRebuildTried: boolean }
+type Rec = { path: string; list: string; status: string; agentStatus: string; name: string; takeover?: string; isEnded: boolean; mtimeMs?: number }
+type Followed = { folderMtime?: number; stateMtime?: number; files: Map<string, number>; records: Map<string, Rec>; state: ListState | null; isRebuildTried: boolean }
+
+// Drops the oldest entry, not the whole cache: a cap below the folders one poll scans would otherwise empty it every poll.
+function makeRoom(cache: Map<string, unknown> | Set<string>, cap: number) {
+  if (cache.size < cap) return
+  const oldest = cache.keys().next().value
+  if (oldest !== undefined) cache.delete(oldest)
+}
 
 const keyOf = (list: string) => list.slice(list.lastIndexOf('#') + 1)
 
@@ -101,7 +110,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       if (path) folder = transcriptCwd(await readTranscript(io, path))
     }
     if (!folder) {
-      if (unplaced.size >= MIRROR_CAPS.sessions) unplaced.clear()
+      makeRoom(unplaced, MIRROR_CAPS.sessions)
       unplaced.set(session, now)
       return userPlace(io)
     }
@@ -110,7 +119,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     // folder can itself be a repo.
     const user = await userPlace(io)
     const place = folder === user.folder ? user : await capturePlace(io, folder)
-    if (places.size >= MIRROR_CAPS.sessions) places.clear()
+    makeRoom(places, MIRROR_CAPS.sessions)
     places.set(session, place)
     return place
   }
@@ -153,20 +162,37 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     await writeGroup(io, { dir: groupsDir(home, place.key), projectKey: place.key }, groupId, current => (current ? deleteGroup(current) : { group: null, outcomes: [] }))
   }
 
+  // Other peek sessions write a list's state (moveList, a fold) and its records (a takeover); a moved file is reread so
+  // this process never writes back, or acts on, what it cached before.
   const follow = async (root: string, session: string): Promise<Followed> => {
+    const stateMtime = (await io.stat(stateOf(root, session)))?.mtimeMs
     const known = followed.get(session)
-    if (known) return known
-    const records = new Map<string, Rec>()
-    const names = (await io.list(`${root}/${session}`).catch(() => [])).filter(one => one.kind === 'file' && one.name.endsWith('.md'))
-    for (const one of names.slice(0, MIRROR_CAPS.items)) {
-      const path = `${root}/${session}/${one.name}`
-      const rec = recOf(path, (await io.read(path).catch(() => null)) ?? '')
-      if (rec) records.set(one.name.slice(0, -'.md'.length), rec)
+    if (known) {
+      if (known.stateMtime !== stateMtime) {
+        known.state = await readListState(io, session, root)
+        known.stateMtime = stateMtime
+        places.delete(session)
+        unplaced.delete(session)
+      }
+      return known
     }
-    const fresh: Followed = { files: new Map(), records, state: await readListState(io, session, root), isRebuildTried: false }
-    if (followed.size >= MIRROR_CAPS.sessions) followed.clear()
+    const records = new Map<string, Rec>()
+    const docs = await sessionDocs(io, root, session)
+    const texts = await Promise.all(docs.map(one => io.read(`${root}/${session}/${one.name}`).catch(() => null)))
+    docs.forEach((one, i) => {
+      const rec = recOf(`${root}/${session}/${one.name}`, texts[i] ?? '')
+      if (rec) records.set(one.name.slice(0, -'.md'.length), rec)
+    })
+    const fresh: Followed = { files: new Map(), records, state: await readListState(io, session, root), stateMtime, isRebuildTried: false }
+    makeRoom(followed, FOLDERS)
     followed.set(session, fresh)
     return fresh
+  }
+
+  const saveState = async (root: string, session: string, state: ListState) => {
+    await writeListState(io, root, session, state)
+    const f = followed.get(session)
+    if (f) f.stateMtime = (await io.stat(stateOf(root, session)))?.mtimeMs
   }
 
   const take = async (root: string, session: string, f: Followed, state: ListState, item: AgentItem) => {
@@ -180,12 +206,21 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       if (onDisk === null) await writeAtomic(io, path, text)
       rec = recOf(path, text)
       if (!rec || f.records.size >= MIRROR_CAPS.items) return
+      rec.mtimeMs = (await io.stat(path))?.mtimeMs
       f.records.set(item.id, rec)
       const key = keyOf(rec.list)
       state.lists[key] ??= { phase: 'active' }
+    } else {
+      const mtimeMs = (await io.stat(path))?.mtimeMs
+      const onDisk = mtimeMs !== undefined && mtimeMs !== rec.mtimeMs ? recOf(path, (await io.read(path).catch(() => null)) ?? '') : null
+      if (onDisk) {
+        rec = { ...onDisk, mtimeMs }
+        f.records.set(item.id, rec)
+      }
     }
     if (rec.agentStatus !== item.status) {
-      const place = await placeOf(root, session)
+      // A takeover doc lives in the place it was adopted into, which a move may have made another repo or the user list.
+      const place = (rec.takeover && (await placeOfTasksFolder(io, rec.takeover.slice(0, rec.takeover.lastIndexOf('/'))))) || (await placeOf(root, session))
       const target = rec.takeover ?? rec.path
       const outcome = await setStatus(io, rec.takeover ? place : mirrorPlaceOf(place, root), { doc: target, status, source: 'mirror', by: session, writer: self.id })
       if (outcome.status === 'refused') return
@@ -224,9 +259,13 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     for (const item of rebuilt) await take(root, session, f, state, item)
     const present = new Set(items.map(one => one.name))
     for (const name of [...f.files.keys()]) if (!present.has(name)) f.files.delete(name)
-    for (const one of items) {
+    const stats = await Promise.allSettled(items.map(one => io.stat(`${dir}/${one.name}`)))
+    for (const [i, one] of items.entries()) {
       const path = `${dir}/${one.name}`
-      const stat = await io.stat(path)
+      const looked = stats[i]
+      // A failed stat still stops the loop at its own item, after the items before it were taken.
+      if (looked?.status === 'rejected') throw looked.reason
+      const stat = looked?.value
       if (!stat || f.files.get(one.name) === stat.mtimeMs) continue
       const item = parseAgentItem((await io.read(path).catch(() => null)) ?? '')
       f.files.set(one.name, stat.mtimeMs)
@@ -244,12 +283,12 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       // A list Claude Code has since cleared is over too: its open items will never move again.
       const isOver = isEnded || Number(key) < state.count
       for (const rec of live) {
-        const isEndedNow = isOver && OPEN.has(rec.status)
+        const isEndedNow = isOver && OPEN_STATUSES.has(rec.status)
         if (rec.isEnded === isEndedNow) continue
         await edit(rec.path, text => withProp(text, SESSION_ENDED_PROP, isEndedNow ? true : undefined))
         rec.isEnded = isEndedNow
       }
-      const isFolded = isOver || !live.some(rec => OPEN.has(rec.status))
+      const isFolded = isOver || !live.some(rec => OPEN_STATUSES.has(rec.status))
       let next: ListEntry = entry
       if (!isFolded) next = entry.phase === 'active' ? entry : { phase: 'active', ...(entry.phase === 'folded' && entry.groupId ? { groupId: entry.groupId } : {}) }
       else if (entry.phase === 'active') next = { ...entry, phase: 'folded', foldedAt: now }
@@ -284,7 +323,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     // A repo placement changes only through moveList, which writes it; rereading it each poll would rerun git once the
     // place cache overflows.
     if (state.placeKey === undefined || state.placeKey === 'user') state.placeKey = (await placeOf(root, session)).key
-    if (JSON.stringify(state) !== before) await writeListState(io, root, session, state)
+    if (JSON.stringify(state) !== before) await saveState(root, session, state)
   }
 
   const pollAll = async () => {
@@ -301,11 +340,11 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     // Lists kept before they recorded their repo, whose task folder Claude Code has since removed, are never scanned.
     for (const session of await mirrorSessions(io, root)) {
       if (backfilled.has(session)) continue
-      if (backfilled.size >= MIRROR_CAPS.sessions * 4) backfilled.clear()
+      makeRoom(backfilled, MIRROR_CAPS.sessions * 4)
       backfilled.add(session)
       const state = await readListState(io, session, root).catch(() => null)
       if (!state || state.placeKey !== undefined) continue
-      await writeListState(io, root, session, { ...state, placeKey: (await placeOf(root, session)).key }).catch(() => undefined)
+      await saveState(root, session, { ...state, placeKey: (await placeOf(root, session)).key }).catch(() => undefined)
     }
   }
 
@@ -392,7 +431,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       }
       if (state) {
         state.placeKey = next.key
-        await writeListState(io, root, session, state)
+        await saveState(root, session, state)
       }
     },
   }

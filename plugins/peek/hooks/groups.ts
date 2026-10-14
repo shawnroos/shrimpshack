@@ -1,6 +1,8 @@
 import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupRule, GroupSection, SectionLayout } from '../types/groups'
+import { dropLock, holdsLock, queuedBy, takeLock } from './lock'
 import { fileHref, parseHref } from './paths'
 import { itemKey } from './refs'
+import { STATUS_VALUES } from './tasks/status-words'
 import type { Item } from './views/items'
 import { matchesRule, split } from './views/select'
 import { asObj, tryJson } from './wire'
@@ -9,7 +11,6 @@ import { asObj, tryJson } from './wire'
 export const GROUP_CAPS = { groups: 50, items: 200, sections: 20, removed: 100, description: 500, label: 200, ruleProps: 10, ruleValue: 200 }
 
 const PROP_NAME = /^[A-Za-z_][\w-]{0,63}$/
-const STATUS_ORDER = ['todo', 'doing', 'done', 'cancelled']
 
 type Step = { group: Group; outcome: GroupOutcome }
 
@@ -272,7 +273,7 @@ export function splitMembers(group: Group, members: readonly GroupItem[], candid
     owner.set(item, member)
     return item
   })
-  return split(items, prop, prop === 'status' ? STATUS_ORDER : []).map(section => ({
+  return split(items, prop, prop === 'status' ? STATUS_VALUES : []).map(section => ({
     key: section.key,
     title: section.key,
     items: section.items.flatMap(item => owner.get(item) ?? []),
@@ -359,11 +360,6 @@ export type GroupPlace = { dir: string; projectKey: string }
 export type GroupWrite =
   | { ok: true; group: Group | null; outcomes: GroupOutcome[]; isChanged: boolean }
   | { ok: false; error: string }
-
-const LOCK_STALE_MS = 10_000
-const LOCK_POLL_MS = 100
-// 20 polls of 100 ms: a lock still held after about 2 s refuses the write.
-const LOCK_POLLS = 20
 
 const GROUP_ID = /^[0-9a-z]{8}$/
 
@@ -473,44 +469,6 @@ export async function listGroups(io: GroupsIo, place: GroupPlace): Promise<Group
   return groups.filter((one): one is Group => one !== null).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
 }
 
-const ownerOf = (lock: string) => `${lock}/owner`
-
-async function dropLock(io: GroupsIo, lock: string) {
-  await io.run(['rm', '-f', ownerOf(lock)]).catch(() => null)
-  await io.run(['rmdir', lock]).catch(() => null)
-}
-
-// A lock older than LOCK_STALE_MS can be broken by another session while its holder is
-// still running, so a holder re-checks this token before it commits or releases.
-async function holdsLock(io: GroupsIo, lock: string, token: string): Promise<boolean> {
-  return (await io.read(ownerOf(lock)).catch(() => null)) === token
-}
-
-async function takeLock(io: GroupsIo, lock: string): Promise<string | null> {
-  let hasBroken = false
-  for (let poll = 0; poll <= LOCK_POLLS; poll++) {
-    const made = await io.run(['mkdir', lock]).catch(() => null)
-    if (made?.exitCode === 0) {
-      const token = `${shortId(Math.random)}${shortId(Math.random)}`
-      const wrote = await io.write(ownerOf(lock), token).then(
-        () => true,
-        () => false,
-      )
-      if (wrote) return token
-      await dropLock(io, lock)
-      return null
-    }
-    const held = await io.stat(lock).catch(() => null)
-    if (held && !hasBroken && (await io.now()) - held.mtimeMs > LOCK_STALE_MS) {
-      hasBroken = true
-      await dropLock(io, lock)
-      continue
-    }
-    if (poll < LOCK_POLLS) await io.sleep(LOCK_POLL_MS)
-  }
-  return null
-}
-
 async function lockedWrite(
   io: GroupsIo,
   place: GroupPlace,
@@ -557,7 +515,6 @@ async function lockedWrite(
 
 const queues = new Map<string, Promise<unknown>>()
 
-// One process queues its own writes per group, so a pane action and a tool call never race each other for the lock.
 export function writeGroup(
   io: GroupsIo,
   place: GroupPlace,
@@ -565,12 +522,5 @@ export function writeGroup(
   change: (current: Group | null) => GroupResult,
 ): Promise<GroupWrite> {
   if (!isGroupId(id)) return Promise.resolve({ ok: false, error: `${id} is not a group id` })
-  const key = fileOf(place, id)
-  const run = (queues.get(key) ?? Promise.resolve()).then(() => lockedWrite(io, place, id, change))
-  const tail = run.catch(() => undefined)
-  queues.set(key, tail)
-  void tail.then(() => {
-    if (queues.get(key) === tail) queues.delete(key)
-  })
-  return run
+  return queuedBy(queues, fileOf(place, id), () => lockedWrite(io, place, id, change))
 }

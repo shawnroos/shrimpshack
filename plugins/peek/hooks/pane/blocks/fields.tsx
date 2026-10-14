@@ -17,7 +17,7 @@ const isRows = (value: unknown): value is Row[] =>
 const isChanges = (value: unknown): value is Changes =>
   typeof value === 'object' && value !== null && ['additions', 'deletions', 'changedFiles'].every(key => typeof (value as Record<string, unknown>)[key] === 'number')
 
-export const iconKey = (label: string) => label.trim().toLowerCase().replace(/\s+/g, '-')
+const iconKey = (label: string) => label.trim().toLowerCase().replace(/\s+/g, '-')
 // Prop names cannot hold "-", so a colors key spells a label's spaces as "_" where its icons key uses "-".
 export const propKey = (label: string) => label.trim().toLowerCase().replace(/\W+/g, '_')
 

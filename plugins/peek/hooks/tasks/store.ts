@@ -17,6 +17,8 @@ export type TaskPlace = { key: string; folder: string; stateDir: string; exclude
 export type TaskDoc = { path: string; props: Record<string, PropValue>; status?: string; mtimeMs: number; worktree?: string }
 export type TaskWrite = { status: 'applied'; reason: string; path: string; id: string } | { status: 'refused'; reason: string }
 
+export const PERSON = 'shawn'
+
 export const TASK_CAPS = { folderDocs: 500, indexed: 2000, name: 200 }
 
 const EXCLUDE_LINE = '.peek/'
@@ -51,6 +53,14 @@ export async function capturePlace(io: TasksIo, worktree: string): Promise<TaskP
     excludeFile: `${common}/info/exclude`,
     isUser: false,
   }
+}
+
+export const TASKS_TAIL = '/.peek/tasks'
+
+export async function placeOfTasksFolder(io: TasksIo, folder: string): Promise<TaskPlace | null> {
+  const user = await userPlace(io)
+  if (folder === user.folder) return user
+  return folder.endsWith(TASKS_TAIL) ? capturePlace(io, folder.slice(0, -TASKS_TAIL.length)) : null
 }
 
 export function statusOf(text: string): string | undefined {

@@ -3,35 +3,31 @@ import { groupHome, ruleCandidates, taskPlaceOf } from '../groups-session'
 import type { NavIo } from '../navigation'
 import { listOf, listTitleOf, mirrorDocs, mirrorRoot, mirrorSessions, placeKeyOf, shownListState, splitList } from '../mirror/records'
 import type { ListPhase } from '../mirror/records'
-import { capturePlace, userPlace } from '../tasks/store'
+import { tasksIoOf } from '../tasks/io'
+import { OPEN_STATUSES } from '../tasks/status-words'
+import { PERSON, TASKS_TAIL, capturePlace, placeOfTasksFolder, userPlace } from '../tasks/store'
 import type { TaskPlace, TasksIo } from '../tasks/store'
 import { matches, requiredPropsFor } from '../views/definition'
 import type { Definition, MatchDoc } from '../views/definition'
 import type { Item } from '../views/items'
 import { createViewRegistry } from '../views/registry'
-import type { ViewFolders, ViewsIo } from '../views/registry'
+import type { ViewsIo, ViewsLoad } from '../views/registry'
 
 export const TASKS_ICON = '\u{f0ae}'
-const TASKS_TAIL = '/.peek/tasks'
 const MAX_ANCESTORS = 20
 
 const registry = createViewRegistry()
 
-export const tasksIoOf = (io: NavIo): TasksIo => ({ ...io.groupsIo(), home: io.home })
-
-const viewsIoOf = (io: NavIo): ViewsIo => ({ list: io.list, read: io.readFile, stat: path => io.stat(path).catch(() => null) })
-
-async function viewFolders(io: NavIo): Promise<ViewFolders> {
-  return { builtIn: `${io.liveIo().root}/views`, user: `${(await io.home()) ?? ''}/.local/share/claude-peek/views` }
+export async function viewsLoad(io: NavIo): Promise<ViewsLoad> {
+  const viewsIo: ViewsIo = { list: io.list, read: io.readFile, stat: path => io.stat(path).catch(() => null) }
+  return registry.load(viewsIo, { builtIn: `${io.liveIo().root}/views`, user: `${(await io.home()) ?? ''}/.local/share/claude-peek/views` })
 }
 
 export async function definitionsOf(io: NavIo): Promise<Definition[]> {
-  return (await registry.load(viewsIoOf(io), await viewFolders(io))).definitions
+  return (await viewsLoad(io)).definitions
 }
 
-export async function definitionOfDoc(io: NavIo, doc: MatchDoc): Promise<Definition | null> {
-  return registry.definitionFor(viewsIoOf(io), await viewFolders(io), doc)
-}
+export const definitionIn = (load: ViewsLoad, doc: MatchDoc): Definition | null => load.definitions.find(one => matches(one, doc)) ?? null
 
 // Every task is read the way a rule group reads its members: through a group whose empty rule matches them all.
 const EVERY_TASK: Group = { projectKey: '', id: 'tasks', title: 'Tasks', description: '', starred: false, updatedAt: 0, sections: [], items: [], removed: [], rule: {} }
@@ -81,10 +77,23 @@ function withDerived(items: readonly Item[], definitions: readonly Definition[])
   })
 }
 
-export async function taskItems(io: NavIo, options: { isEverywhere?: boolean } = {}): Promise<Item[]> {
+export async function taskItems(io: NavIo, options: { isEverywhere?: boolean } = {}, views: () => Promise<ViewsLoad> = () => viewsLoad(io)): Promise<Item[]> {
   const home = await groupHome(io).catch(() => null)
-  const [items, definitions] = await Promise.all([ruleCandidates(io, [EVERY_TASK], home?.worktreeRoot, options), definitionsOf(io)])
-  return withDerived(items, definitions)
+  const [items, load] = await Promise.all([ruleCandidates(io, [EVERY_TASK], home?.worktreeRoot, options), views()])
+  return withDerived(items, load.definitions)
+}
+
+export type DrawData = { views: () => Promise<ViewsLoad>; items: () => Promise<Item[]> }
+
+// Shared by everything one draw reads, and made fresh for each draw so an edited definition or task shows on the next.
+export function drawData(io: NavIo): DrawData {
+  let views: Promise<ViewsLoad> | null = null
+  let items: Promise<Item[]> | null = null
+  const data: DrawData = {
+    views: () => (views ??= viewsLoad(io)),
+    items: () => (items ??= taskItems(io, {}, data.views)),
+  }
+  return data
 }
 
 export const creatorOf = (item: Item) => (typeof item.props.creator === 'string' ? item.props.creator : '')
@@ -105,9 +114,8 @@ export async function ownPlace(io: NavIo): Promise<TaskPlace> {
 export async function placeOfDoc(io: NavIo, path: string): Promise<{ place: TaskPlace; worktree?: string }> {
   const tio = tasksIoOf(io)
   const dir = path.slice(0, path.lastIndexOf('/'))
-  const user = await userPlace(tio)
-  if (dir === user.folder) return { place: user }
-  if (dir.endsWith(TASKS_TAIL)) return { place: await capturePlace(tio, dir.slice(0, -TASKS_TAIL.length)) }
+  const folderPlace = await placeOfTasksFolder(tio, dir)
+  if (folderPlace) return { place: folderPlace }
   const ran = await io.run(['git', '-C', dir, 'rev-parse', '--show-toplevel']).catch(() => null)
   const worktree = (ran?.exitCode === 0 && ran.stdout.split('\n')[0]?.trim()) || dir
   return { place: await capturePlace(tio, worktree), worktree }
@@ -126,8 +134,10 @@ export async function archivedLists(io: NavIo): Promise<ArchivedList[]> {
   if (!root) return []
   const place = await ownPlace(io)
   const found: ArchivedList[] = []
-  for (const session of await mirrorSessions(tio, root)) {
-    const state = await shownListState(tio, root, session)
+  const sessions = await mirrorSessions(tio, root)
+  const states = await Promise.all(sessions.map(session => shownListState(tio, root, session)))
+  for (const [i, session] of sessions.entries()) {
+    const state = states[i]
     if (!state || placeKeyOf(state) !== place.key) continue
     for (const [key, entry] of Object.entries(state.lists)) {
       if (entry.phase !== 'archived') continue
@@ -138,25 +148,23 @@ export async function archivedLists(io: NavIo): Promise<ArchivedList[]> {
   return found
 }
 
-const OPEN = new Set(['todo', 'doing'])
-export const PIN_CAPS = { tasks: 5, lists: 3 }
+const PIN_CAPS = { tasks: 5, lists: 3 }
 
 export type AgentLine = { list: string; open: number; lastAt: number; isFolded: boolean }
 export type RecentPins = { tasks: Item[]; moreTasks: number; lists: AgentLine[]; moreLists: number; tasksPage: string }
 
-const isOpen = (item: { props: Item['props'] }) => typeof item.props.status === 'string' && OPEN.has(item.props.status)
+const isOpen = (item: { props: Item['props'] }) => typeof item.props.status === 'string' && OPEN_STATUSES.has(item.props.status)
 
 async function phaseOf(io: TasksIo, root: string, list: string): Promise<ListPhase | null> {
   return (await shownListState(io, root, splitList(list).session))?.lists[splitList(list).key]?.phase ?? null
 }
 
-// Recent's pinned open work: Shawn's own open tasks, then one line per agent list: an active one with its open count,
-// and a folded one (all closed, or its session ended) until it archives (R22, AE3).
+// A folded agent list (all closed, or its session ended) keeps its line until it archives.
 export async function recentPins(io: NavIo): Promise<RecentPins | null> {
   const root = (await groupHome(io).catch(() => null))?.worktreeRoot
   const items = await ruleCandidates(io, [EVERY_TASK], root)
   const own = items
-    .filter(one => isOpen(one) && creatorOf(one) === 'shawn')
+    .filter(one => isOpen(one) && creatorOf(one) === PERSON)
     .sort((a, b) => Number(b.props.status === 'doing') - Number(a.props.status === 'doing') || a.name.localeCompare(b.name))
   const counts = new Map<string, number>()
   for (const one of items) {
@@ -166,8 +174,9 @@ export async function recentPins(io: NavIo): Promise<RecentPins | null> {
   const tio = tasksIoOf(io)
   const mirror = counts.size ? await mirrorRoot(tio).catch(() => null) : null
   const folded = new Set<string>()
-  for (const [list, open] of counts) {
-    const phase = mirror ? await phaseOf(tio, mirror, list) : null
+  const phases = await Promise.all([...counts.keys()].map(list => (mirror ? phaseOf(tio, mirror, list) : null)))
+  for (const [i, [list, open]] of [...counts].entries()) {
+    const phase = phases[i]
     if (phase === 'folded') folded.add(list)
     else if (phase === 'archived' || !open) counts.delete(list)
   }

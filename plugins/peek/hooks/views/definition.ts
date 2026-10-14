@@ -1,15 +1,15 @@
 import type { PropScalar, PropValue } from '../../types'
 import { readFrontmatter } from '../frontmatter'
 
-export const PROP_KINDS = ['text', 'choice', 'date', 'ref', 'links'] as const
+const PROP_KINDS = ['text', 'choice', 'date', 'ref', 'links'] as const
 export type PropKind = (typeof PROP_KINDS)[number]
 export const BLOCK_LANGUAGES = ['peek-cards', 'peek-list', 'peek-tree', 'peek-sections', 'peek-board', 'peek-focus', 'peek-header', 'peek-fields', 'peek-media', 'peek-comments'] as const
 export type BlockLanguage = (typeof BLOCK_LANGUAGES)[number]
 export const LAYOUTS = ['cards', 'list', 'tree', 'sections', 'board', 'focus'] as const
 export type Layout = (typeof LAYOUTS)[number]
-export const LAYOUT_PLACES = ['page', 'group', 'recent', 'gallery'] as const
+const LAYOUT_PLACES = ['page', 'group', 'recent', 'gallery'] as const
 export type LayoutPlace = (typeof LAYOUT_PLACES)[number]
-export const COLOR_NAMES = ['red', 'yellow', 'green', 'teal', 'blue', 'mauve', 'peach', 'accent', 'text', 'subtext', 'gray', 'muted'] as const
+const COLOR_NAMES = ['red', 'yellow', 'green', 'teal', 'blue', 'mauve', 'peach', 'accent', 'text', 'subtext', 'gray', 'muted'] as const
 export type ColorName = (typeof COLOR_NAMES)[number]
 
 export type PropDecl = { kind: PropKind; isRequired: boolean; values?: string[] }
@@ -35,7 +35,7 @@ export type DefinitionProblem = { file: string; path: string; message: string }
 export type DefinitionCheck = { ok: true; definition: Definition } | { ok: false; problems: DefinitionProblem[]; match?: MatchRule }
 export type MatchDoc = { path?: string; props?: Record<string, PropValue>; recordKind?: string }
 
-export const DEFINITION_CAPS = { problems: 50, props: 40, values: 40, blocks: 40 }
+const DEFINITION_CAPS = { problems: 50, props: 40, values: 40, blocks: 40 }
 
 const TOP_KEYS = ['type', 'match', 'props', 'requires_when', 'layout_default', 'colors', 'icons'] as const
 const MATCH_KEYS = ['folder', 'prop', 'equals', 'record', 'recipe'] as const

@@ -1,4 +1,5 @@
 import type { PropValue } from '../../types'
+import { baseName } from '../paths'
 
 export type ItemSource = 'task-folder' | 'deliverable' | 'mirrored' | 'record'
 export type Item = {
@@ -19,7 +20,7 @@ const textProp = (props: Record<string, PropValue>, key: string): string | undef
   return typeof value === 'string' && value.trim() ? value : undefined
 }
 
-const baseName = (path: string): string => (path.split('/').pop() ?? path).replace(/\.md$/i, '')
+const stemOf = (path: string): string => baseName(path).replace(/\.md$/i, '')
 
 export function itemFromDoc(doc: ItemDoc, how: { type: string; source: Exclude<ItemSource, 'record'>; missing?: string[] }): Item {
   const props = doc.props ?? {}
@@ -27,7 +28,7 @@ export function itemFromDoc(doc: ItemDoc, how: { type: string; source: Exclude<I
     id: textProp(props, 'id') ?? doc.path,
     href: doc.path,
     type: how.type,
-    name: textProp(props, 'name') ?? baseName(doc.path),
+    name: textProp(props, 'name') ?? stemOf(doc.path),
     props,
     source: how.source,
     ...(doc.worktree === undefined ? {} : { worktree: doc.worktree }),

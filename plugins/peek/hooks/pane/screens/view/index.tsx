@@ -12,7 +12,7 @@ import { adapterOfKind } from '../../../sources/adapter'
 import { ICON } from '../../../theme'
 import { FOOTER_ROWS, HEADER_ROWS, PAGE_TOP } from '../../chrome'
 import { archivedRows, canAdopt, claimCursor, closeAction, creatorRows, cursorOnPage, modeActions, taskActions } from '../../actions'
-import { TASKS_ICON, archivedLists, creatorOf, definitionOfDoc, isTasksFolder, taskFilter, taskItems } from '../../task-data'
+import { TASKS_ICON, archivedLists, creatorOf, definitionIn, drawData, isMirrored, isTasksFolder, taskFilter } from '../../task-data'
 import { canGoLive } from '../../look'
 import type { PaneWire } from '../../messages'
 import type { Action, DrawContext, PaneActions, Screen } from '../../types'
@@ -89,13 +89,14 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     : shortPath(folderPath, cwd, home)
 
   const pageIo: NavIo = { ...io, cursor: { read: () => cursorOnPage(io, current.href), update: io.cursor.update } }
+  const draw = drawData(io)
   const isTasks = !current.remote && (await isTasksFolder(io, path))
-  const allTasks = isTasks ? await taskItems(io) : []
+  const allTasks = isTasks ? await draw.items() : []
   const shownTasks = allTasks.filter(one => taskFilter.creator === null || creatorOf(one) === taskFilter.creator)
   let { body, jumps, position, layout }: ViewBody = { body: null, jumps: noJumps(), position: '', layout: {} }
-  if (isTasks) ({ body, jumps, position, layout } = await tasksPageBody(ctx, pageIo, allTasks, shownTasks))
-  else if (current.remote) ({ body, jumps, position, layout } = await remoteBody(ctx, pageIo, current, current.remote))
-  else if (current.markdown !== undefined) ({ body, jumps, position, layout } = await markdownBody(ctx, pageIo, current, current.markdown, path))
+  if (isTasks) ({ body, jumps, position, layout } = await tasksPageBody(ctx, pageIo, allTasks, shownTasks, draw))
+  else if (current.remote) ({ body, jumps, position, layout } = await remoteBody(ctx, pageIo, current, current.remote, draw))
+  else if (current.markdown !== undefined) ({ body, jumps, position, layout } = await markdownBody(ctx, pageIo, current, current.markdown, path, draw))
   else if (current.table) ({ body, jumps, position, layout } = tableBody(ctx, io, current.table))
   else if (current.dir) ({ body, jumps, position, layout } = dirBody(ctx, io, path, current.dir))
   else if (current.code) ({ body, jumps, position, layout } = codeBody(ctx, io, current.code))
@@ -154,11 +155,12 @@ export async function viewScreen(ctx: DrawContext, actions: PaneActions, current
     : null
 
   const rows = layout.nav ?? []
-  const definition = current.markdown !== undefined && current.props ? await definitionOfDoc(io, { path, props: current.props }) : null
+  const definition = current.markdown !== undefined && current.props ? definitionIn(await draw.views(), { path, props: current.props }) : null
   const hasOwnStatus = definition?.props.status !== undefined
   const cursor = rows.length ? Math.max(0, Math.min(rows.length - 1, await cursorOnPage(io, current.href))) : -1
   const selectedHref = rows[cursor]?.href
-  const selectedItem = selectedHref ? (isTasks ? allTasks : await taskItems(io)).find(one => one.href === selectedHref) : undefined
+  // Only a mirrored task can be adopted, and its href is under the mirror folder, so any other row skips the task scan.
+  const selectedItem = selectedHref && (isTasks || (await isMirrored(io, selectedHref))) ? (isTasks ? allTasks : await draw.items()).find(one => one.href === selectedHref) : undefined
   const statusTarget = async () => (hasOwnStatus ? path : ((await actions.selectedNav())?.href ?? null))
   const tasks: Action[] =
     hasOwnStatus || rows.length

@@ -49,7 +49,7 @@ export const isEnded = (item: Item) => item.props[SESSION_ENDED_PROP] === true
 export function glyphOf(env: BlockEnv, item: Item): { glyph: string; color: string } {
   const { C } = env.ctx
   const status = statusOf(item)
-  const builtIn = status === 'doing' ? C.yellow : status === 'done' ? C.green : status === 'cancelled' ? C.overlay0 : C.overlay1
+  const builtIn = new Map([['doing', C.yellow], ['done', C.green], ['cancelled', C.overlay0]]).get(status) ?? C.overlay1
   return { glyph: STATUS_GLYPH[status] ?? '·', color: colorOf(C, env.colorsOf?.(item), 'status', status) ?? builtIn }
 }
 

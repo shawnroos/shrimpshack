@@ -25,14 +25,14 @@ export async function mirrorRoot(io: TasksIo): Promise<string> {
 
 export const recordPathOf = (root: string, session: string, taskId: string) => `${root}/${session}/${taskId}.md`
 export const listOf = (session: string, count: number) => `${session}#${count}`
-export const recordIdOf = (session: string, taskId: string) => `${session}/${taskId}`
+const recordIdOf = (session: string, taskId: string) => `${session}/${taskId}`
 export const splitList = (list: string) => ({ session: list.slice(0, list.lastIndexOf('#')), key: list.slice(list.lastIndexOf('#') + 1) })
 export const listTitleOf = (list: string) => {
   const { session, key } = splitList(list)
   return `Agent tasks ${session.slice(0, 8)} #${key}`
 }
 const noteOf = (root: string, session: string) => `${root}/${session}/session.json`
-const stateOf = (root: string, session: string) => `${root}/${session}/state.json`
+export const stateOf = (root: string, session: string) => `${root}/${session}/state.json`
 
 // A record lives in the mirror folder but its status is logged in its repo's change log; with the mirror folder as the
 // place's folder the status path treats it as a task of that repo, not as a deliverable bound to one worktree.
@@ -173,6 +173,9 @@ export async function newestDirs(io: TasksIo, parent: string, names: readonly st
     .map(one => one.name)
 }
 
+export const sessionDocs = async (io: TasksIo, root: string, session: string) =>
+  (await io.list(`${root}/${session}`).catch(() => [])).filter(one => one.kind === 'file' && one.name.endsWith('.md')).slice(0, MIRROR_CAPS.items)
+
 const docCache = new Map<string, { mtimeMs: number; doc: TaskDoc | null }>()
 
 export const mirrorSessions = async (io: TasksIo, root: string) =>
@@ -188,15 +191,25 @@ export async function mirrorDocs(io: TasksIo, place?: { key: string }): Promise<
   for (const session of sessions) {
     const state = place ? await shownListState(io, root, session) : null
     if (place && placeKeyOf(state) !== place.key) continue
-    const names = (await io.list(`${root}/${session}`).catch(() => [])).filter(one => one.kind === 'file' && one.name.endsWith('.md'))
-    for (const one of names.slice(0, MIRROR_CAPS.items)) {
-      const path = `${root}/${session}/${one.name}`
-      const stat = await io.stat(path)
-      if (!stat) continue
-      let known = docCache.get(path)
-      if (known?.mtimeMs !== stat.mtimeMs) {
-        if (docCache.size >= MIRROR_CAPS.docs) docCache.clear()
-        known = { mtimeMs: stat.mtimeMs, doc: await readDoc(io, path) }
+    const looked = await Promise.all(
+      (await sessionDocs(io, root, session)).map(async one => {
+        const path = `${root}/${session}/${one.name}`
+        const stat = await io.stat(path)
+        if (!stat) return null
+        const known = docCache.get(path)
+        if (known?.mtimeMs === stat.mtimeMs) return { path, known, isFresh: false }
+        return { path, known: { mtimeMs: stat.mtimeMs, doc: await readDoc(io, path) }, isFresh: true }
+      }),
+    )
+    for (const one of looked) {
+      if (!one) continue
+      const { path, known } = one
+      if (one.isFresh) {
+        docCache.delete(path)
+        if (docCache.size >= MIRROR_CAPS.docs) {
+          const oldest = docCache.keys().next().value
+          if (oldest !== undefined) docCache.delete(oldest)
+        }
         docCache.set(path, known)
       }
       const list = known.doc?.props.list
@@ -213,9 +226,8 @@ const escapeLinkText = (text: string) => text.replace(/[[\]\\]/g, '\\$&')
 export async function writeArchivePage(io: TasksIo, list: string): Promise<string> {
   const root = await mirrorRoot(io)
   const { session, key } = splitList(list)
-  const names = (await io.list(`${root}/${session}`).catch(() => [])).filter(one => one.kind === 'file' && one.name.endsWith('.md'))
   const rows: { order: number; line: string }[] = []
-  for (const one of names.slice(0, MIRROR_CAPS.items)) {
+  for (const one of await sessionDocs(io, root, session)) {
     const path = `${root}/${session}/${one.name}`
     const props = propsOf(await io.read(path).catch(() => ''))
     if (props.list !== list) continue

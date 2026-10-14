@@ -6,19 +6,18 @@ import { pressLink } from '../../../navigation'
 import type { NavIo } from '../../../navigation'
 import { baseName, fileHref } from '../../../paths'
 import { problemLine } from '../../../views/definition'
-import type { Definition } from '../../../views/definition'
 import { fillTemplate } from '../../../views/fill'
 import type { Item } from '../../../views/items'
-import { createViewRegistry, problemsFor } from '../../../views/registry'
-import type { ViewsIo } from '../../../views/registry'
-import { definitionOfDoc, definitionsOf, taskItems } from '../../task-data'
+import { problemsFor } from '../../../views/registry'
+import { definitionIn, taskItems } from '../../task-data'
+import type { DrawData } from '../../task-data'
 import type { DrawContext } from '../../types'
 import { newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
 import { drawProse } from './prose'
 import type { ProseOptions } from './prose'
 
-export const NO_TASKS = 'No tasks yet. Tell the agent: "task: ..."'
+const NO_TASKS = 'No tasks yet. Tell the agent: "task: ..."'
 const TASKS_PAGE = '```peek-focus\n```'
 
 // Read once per draw, and only when a block asks.
@@ -27,27 +26,16 @@ export function itemsOnce(io: NavIo): NonNullable<ProseOptions['items']> {
   return () => (loaded ??= taskItems(io))
 }
 
-export function definitionsOnce(io: NavIo): NonNullable<ProseOptions['definitions']> {
-  let loaded: Promise<Definition[]> | null = null
-  return () => (loaded ??= definitionsOf(io))
-}
+const definitionsOnce = (draw: DrawData): NonNullable<ProseOptions['definitions']> => async () => (await draw.views()).definitions
 
-const views = createViewRegistry()
-
-async function pageProblems(ctx: DrawContext, io: NavIo, path: string, props: View['props']): Promise<string[]> {
-  const viewsIo: ViewsIo = { list: dir => io.list(dir), read: io.readFile, stat: file => io.stat(file).catch(() => null) }
-  const folders = { builtIn: `${io.liveIo().root}/views`, user: `${ctx.home}/.local/share/claude-peek/views` }
-  return problemsFor(await views.load(viewsIo, folders), { path, props: props ?? {} }).map(problemLine)
-}
-
-export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, markdown: string, path: string): Promise<ViewBody> {
+export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, markdown: string, path: string, draw: DrawData): Promise<ViewBody> {
   const { Box, Text, Image, Markdown, C, isMenuOpen, textWidth } = ctx
   const source = fullText.get(current.href) ?? markdown
   const blocks = newBlocks()
   const options: ProseOptions = {
     canTickTasks: true,
-    items: itemsOnce(io),
-    definitions: definitionsOnce(io),
+    items: draw.items,
+    definitions: definitionsOnce(draw),
     picture: async (alt, src, key, width) => {
       const picture = await docImage(io, src, path)
       if (picture?.png && Image) {
@@ -70,7 +58,7 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
     },
   }
   const props = current.props
-  const problems = await pageProblems(ctx, io, path, props)
+  const problems = problemsFor(await draw.views(), { path, props: props ?? {} }).map(problemLine)
   if (problems.length) {
     blocks.drawnParts.push(
       <Box key="view-problems" flexDirection="column" width={textWidth}>
@@ -81,7 +69,7 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
     )
     blocks.note(problems.length)
   }
-  const definition = props ? await definitionOfDoc(io, { path, props }) : null
+  const definition = props ? definitionIn(await draw.views(), { path, props }) : null
   if (!props || !definition) {
     await drawProse(ctx, io, blocks, 'body', source, options)
     return settleBlocks(ctx, io, blocks)
@@ -94,14 +82,14 @@ export async function markdownBody(ctx: DrawContext, io: NavIo, current: View, m
   return settleBlocks(ctx, io, blocks)
 }
 
-export async function tasksPageBody(ctx: DrawContext, io: NavIo, items: readonly Item[], shown: readonly Item[]): Promise<ViewBody> {
+export async function tasksPageBody(ctx: DrawContext, io: NavIo, items: readonly Item[], shown: readonly Item[], draw: DrawData): Promise<ViewBody> {
   const { Text, C } = ctx
   const blocks = newBlocks()
   if (!items.length) {
     blocks.drawnParts.push(<Text key="no-tasks" color={C.overlay1}>{NO_TASKS}</Text>)
     blocks.note(1)
   } else {
-    await drawProse(ctx, io, blocks, 'tasks', TASKS_PAGE, { picture: () => null, items: () => shown, definitions: definitionsOnce(io) })
+    await drawProse(ctx, io, blocks, 'tasks', TASKS_PAGE, { picture: () => null, items: () => shown, definitions: definitionsOnce(draw) })
   }
   return settleBlocks(ctx, io, blocks)
 }

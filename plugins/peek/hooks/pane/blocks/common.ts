@@ -4,17 +4,15 @@ import { parseRule } from '../../views/select'
 import type { Rule } from '../../views/select'
 
 export const RECORD_BLOCKS = ['peek-header', 'peek-fields', 'peek-media', 'peek-comments'] as const
-export const STATUS_VALUES = ['todo', 'doing', 'done', 'cancelled'] as const
-export const LAYOUT_KEYS: ReadonlySet<string> = new Set(['layout', 'split', 'cap', 'values', 'nest'])
+const LAYOUT_KEYS: ReadonlySet<string> = new Set(['layout', 'split', 'cap', 'values', 'nest'])
 
 export type BlockSpec = { layout: Layout; rule: Rule; options: Record<string, string>; cap?: number; selects: string }
 
 const OPTION = /^([\w.-]+)=(.*)$/
 
-export const layoutOfLanguage = (lang: string): Layout | undefined => LAYOUTS.find(layout => `peek-${layout}` === lang)
+const layoutOfLanguage = (lang: string): Layout | undefined => LAYOUTS.find(layout => `peek-${layout}` === lang)
 
-// Options are the fence's key=value tokens; every one that is not a layout key is a rule, and a rule written in the
-// block body ("a=b and c=d") joins them.
+// A rule written in the block body ("a=b and c=d") joins the fence's rule options.
 export function blockSpec(lang: string, info: string, body: string): BlockSpec | null {
   const layout = layoutOfLanguage(lang)
   if (!layout) return null

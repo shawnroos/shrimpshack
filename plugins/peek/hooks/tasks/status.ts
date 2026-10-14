@@ -1,4 +1,5 @@
 import { shortId } from '../groups'
+import { dropLock, holdsLock, queuedBy, takeLock } from '../lock'
 import { asObj, tryJson } from '../wire'
 import { isStatusWord, statusOf } from './store'
 import type { TaskPlace, TasksIo } from './store'
@@ -19,19 +20,15 @@ type Known = Record<string, { status: string; at: number }>
 type Held = { commit: (text: string, to: string) => Promise<void> }
 
 const DAY_MS = 86_400_000
-export const KEEP_MS = 7 * DAY_MS
+const KEEP_MS = 7 * DAY_MS
 // Keeps known.json far under the 4 MiB fs.read limit.
 const KNOWN_CAP = 2000
-const LOCK_STALE_MS = 10_000
-const LOCK_POLL_MS = 100
-const LOCK_POLLS = 20
 // An entries folder touched this recently may gain another entry within the same timestamp, so it is listed again.
 const SETTLE_MS = 2_000
 const TIME_DIGITS = 15
 const BUSY = 'The task log is busy, try again'
 
 const lockOf = (place: TaskPlace) => `${place.stateDir}/lock`
-const ownerOf = (lock: string) => `${lock}/owner`
 const entriesOf = (place: TaskPlace) => `${place.stateDir}/entries`
 const claimsOf = (place: TaskPlace) => `${place.stateDir}/claims`
 const knownOf = (place: TaskPlace) => `${place.stateDir}/known.json`
@@ -41,42 +38,6 @@ const timeOf = (id: string) => Number(id.slice(0, TIME_DIGITS)) || 0
 const isEntryName = (name: string) => /^\d{15}-.+\.json$/.test(name)
 const isInside = (path: string, dir: string) => path.startsWith(`${dir}/`)
 const newestOf = (ids: readonly string[]) => ids.reduce((most, one) => (one > most ? one : most), '')
-
-async function dropLock(io: TasksIo, lock: string) {
-  await io.run(['rm', '-f', ownerOf(lock)]).catch(() => null)
-  await io.run(['rmdir', lock]).catch(() => null)
-}
-
-// The groups.ts lock: one older than LOCK_STALE_MS can be broken while its holder still runs, so the holder
-// re-checks its token before every commit.
-async function holdsLock(io: TasksIo, lock: string, token: string): Promise<boolean> {
-  return (await io.read(ownerOf(lock)).catch(() => null)) === token
-}
-
-async function takeLock(io: TasksIo, lock: string): Promise<string | null> {
-  let hasBroken = false
-  for (let poll = 0; poll <= LOCK_POLLS; poll++) {
-    const made = await io.run(['mkdir', lock]).catch(() => null)
-    if (made?.exitCode === 0) {
-      const token = `${shortId(Math.random)}${shortId(Math.random)}`
-      const wrote = await io.write(ownerOf(lock), token).then(
-        () => true,
-        () => false,
-      )
-      if (wrote) return token
-      await dropLock(io, lock)
-      return null
-    }
-    const held = await io.stat(lock)
-    if (held && !hasBroken && (await io.now()) - held.mtimeMs > LOCK_STALE_MS) {
-      hasBroken = true
-      await dropLock(io, lock)
-      continue
-    }
-    if (poll < LOCK_POLLS) await io.sleep(LOCK_POLL_MS)
-  }
-  return null
-}
 
 async function underLock<T>(io: TasksIo, place: TaskPlace, work: (held: Held) => Promise<T>): Promise<T | null> {
   const stagedDir = `${place.stateDir}/staged`
@@ -111,17 +72,6 @@ async function underLock<T>(io: TasksIo, place: TaskPlace, work: (held: Held) =>
 }
 
 const queues = new Map<string, Promise<unknown>>()
-
-// One process queues its own writes per project, so a pane action and a tool call never race each other for the lock.
-function queued<T>(place: TaskPlace, work: () => Promise<T>): Promise<T> {
-  const run = (queues.get(place.stateDir) ?? Promise.resolve()).then(work)
-  const tail = run.catch(() => undefined)
-  queues.set(place.stateDir, tail)
-  void tail.then(() => {
-    if (queues.get(place.stateDir) === tail) queues.delete(place.stateDir)
-  })
-  return run
-}
 
 async function entryIds(io: TasksIo, place: TaskPlace): Promise<string[]> {
   const listed = await io.list(entriesOf(place)).catch(() => [])
@@ -189,7 +139,7 @@ export function setStatus(io: TasksIo, place: TaskPlace, input: StatusInput): Pr
   if (!isStatusWord(input.status)) return Promise.resolve(refuse(`"${input.status}" is not a status`))
   const isDeliverable = !isInside(input.doc, place.folder)
   if (isDeliverable && !input.worktree) return Promise.resolve(refuse(`${input.doc} is outside the tasks folder, so its worktree is needed`))
-  return queued(place, async () => {
+  return queuedBy(queues, place.stateDir, async () => {
     try {
       const done = await underLock(io, place, async (held): Promise<StatusOutcome> => {
         const text = await io.read(input.doc).catch(() => null)
@@ -227,7 +177,7 @@ export async function noticeReads(io: TasksIo, place: TaskPlace, docs: readonly 
   const known = await readKnown(io, place)
   const suspects = docs.filter(one => one.status !== undefined && known[one.path]?.status !== one.status)
   if (!suspects.length) return []
-  return queued(place, async () => {
+  return queuedBy(queues, place.stateDir, async () => {
     const logged = await underLock(io, place, async held => {
       const fresh = await readKnown(io, place)
       const at = await io.now()

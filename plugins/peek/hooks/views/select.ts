@@ -1,4 +1,5 @@
 import type { PropScalar, PropValue } from '../../types'
+import { CLOSED_STATUSES } from '../tasks/status-words'
 import type { Item } from './items'
 
 export type Rule = Record<string, PropScalar>
@@ -13,7 +14,6 @@ export type FocusBuckets = { now: Item[]; next: Item[]; later: Item[]; cycles: C
 
 export const NONE_SECTION = 'none'
 export const FOCUS_NEXT_CAP = 5
-const CLOSED = new Set(['done', 'cancelled'])
 const ITEM_FIELDS = ['id', 'href', 'type', 'name'] as const
 
 export function parseRule(text: string): Rule {
@@ -242,9 +242,9 @@ export function focus(items: readonly Item[]): FocusBuckets {
   const list = ordered.items
   const status = (item: Item) => (typeof item.props.status === 'string' ? item.props.status : '')
   const { preds } = sequenceLinks(list)
-  const isWaiting = (index: number) => [...(preds[index] ?? [])].some(pred => !CLOSED.has(status(list[pred] as Item)))
+  const isWaiting = (index: number) => [...(preds[index] ?? [])].some(pred => !CLOSED_STATUSES.has(status(list[pred] as Item)))
   const now = list.filter(item => status(item) === 'doing')
   const next = list.filter((item, index) => status(item) === 'todo' && !isWaiting(index)).slice(0, FOCUS_NEXT_CAP)
-  const later = list.filter(item => !CLOSED.has(status(item)) && status(item) !== 'doing' && !next.includes(item))
+  const later = list.filter(item => !CLOSED_STATUSES.has(status(item)) && status(item) !== 'doing' && !next.includes(item))
   return { now, next, later, cycles: ordered.cycles }
 }

@@ -9,7 +9,7 @@ const PLACEHOLDER = /\{\{([A-Za-z_][\w-]{0,31})\}\}/g
 const MARKDOWN_SIGNS = /[\\`*_{}[\]()#+!|<>~]/g
 const UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g
 
-export function plainValue(value: PropValue | undefined): string {
+function plainValue(value: PropValue | undefined): string {
   if (value === undefined || value === null) return ''
   if (Array.isArray(value)) return value.map(one => plainValue(one)).filter(Boolean).join(', ')
   if (typeof value === 'object') return Object.entries(value).map(([key, one]) => `${key}: ${plainValue(one)}`).join(', ')

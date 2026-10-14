@@ -12,7 +12,7 @@ import { rebuildItems } from '../hooks/mirror/rebuild'
 import { ARCHIVE_MS, createMirror } from '../hooks/mirror/watch'
 import type { Mirror } from '../hooks/mirror/watch'
 import { startTaskPoll } from '../hooks/tasks/poll'
-import { capturePlace, createTask, listFolderTasks } from '../hooks/tasks/store'
+import { capturePlace, createTask, listFolderTasks, userPlace } from '../hooks/tasks/store'
 import type { TaskPlace, TasksIo } from '../hooks/tasks/store'
 import { AGENT, AGENT_TWO, HOME, agentFolder, agentItem, agentTranscript, clearAgentList, deleteAgentItems, dirOf, fakeTimers, lockOnlyFolder, tasksWorld } from './fixtures/world'
 import type { World } from './fixtures/world'
@@ -290,4 +290,57 @@ test('a list recorded before lists kept their repo, whose task folder is gone, i
   await mirror.poll()
   expect(await mirroredNames(io, '/other')).toEqual(['Old list item'])
   expect(await mirroredNames(io, '/repo')).toEqual([])
+})
+
+test('a list moved by one session stays in its new repo when another session later folds it', async (_$, on) => {
+  const { w, io, mirror, repo } = await setup(on)
+  const other = createMirror(io, { id: 'session-two', root: '/wt/feature' })
+  agentItem(w, AGENT, '1', 'Read the parser')
+  await mirror.poll()
+  agentItem(w, AGENT, '1', 'Read the parser', 'in_progress')
+  await other.poll()
+  await mirror.moveList(AGENT, '/other')
+  agentItem(w, AGENT, '1', 'Read the parser', 'completed')
+  await other.poll()
+  expect((await readListState(io, AGENT))?.lists['1']?.phase).toBe('folded')
+  expect((await readListState(io, AGENT))?.placeKey).toBe('/other/.git')
+  expect(await mirroredNames(io, '/other')).toEqual(['Read the parser'])
+  expect(await mirroredNames(io, '/repo')).toEqual([])
+  expect(entriesIn(w, repo).map(one => one.status)).toEqual(['doing'])
+  expect(entriesIn(w, await capturePlace(io, '/other')).map(one => one.status)).toEqual(['done'])
+})
+
+test('an item adopted in one session gets the agent\'s next change through another session', async (_$, on) => {
+  const { w, io, mirror, repo } = await setup(on)
+  const other = createMirror(io, { id: 'session-two', root: '/wt/feature' })
+  agentItem(w, AGENT, '1', 'Read the parser')
+  await mirror.poll()
+  await other.poll()
+  expect((await mirror.adopt(record(AGENT, '1'), 'shawn')).status).toBe('applied')
+  agentItem(w, AGENT, '1', 'Read the parser', 'in_progress')
+  await other.poll()
+  expect((await listFolderTasks(io, repo)).map(one => one.status)).toEqual(['doing'])
+  expect(propsAt(w, record(AGENT, '1')).status).toBe('todo')
+})
+
+test('R21: an item moved to the user-level list still follows the agent\'s later changes', async (_$, on) => {
+  const { w, io, mirror } = await setup(on)
+  agentItem(w, AGENT, '1', 'Read the parser')
+  await mirror.poll()
+  const user = await userPlace(io)
+  expect((await mirror.adopt(record(AGENT, '1'), 'shawn', user)).status).toBe('applied')
+  agentItem(w, AGENT, '1', 'Read the parser', 'completed')
+  await mirror.poll()
+  expect((await listFolderTasks(io, user)).map(one => one.status)).toEqual(['done'])
+})
+
+test('a poll after this session wrote a list\'s state does not read that state back', async (_$, on) => {
+  const { w, mirror } = await setup(on)
+  agentItem(w, AGENT, '1', 'Read the parser')
+  await mirror.poll()
+  agentItem(w, AGENT, '1', 'Read the parser', 'completed')
+  await mirror.poll()
+  w.reads.length = 0
+  await mirror.poll()
+  expect(w.reads.filter(one => one.endsWith('/state.json'))).toEqual([])
 })

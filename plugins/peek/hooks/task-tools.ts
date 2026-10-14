@@ -6,11 +6,13 @@ import { mirrorRoot, readListState, withProp, writeAtomic } from './mirror/recor
 import { createMirror } from './mirror/watch'
 import type { Mirror } from './mirror/watch'
 import type { NavIo } from './navigation'
-import { definitionsOf, ownPlace, placeOfDoc, taskItems, tasksIoOf } from './pane/task-data'
-import { resolvePath } from './paths'
+import { definitionsOf, ownPlace, placeOfDoc, taskItems } from './pane/task-data'
+import { baseName, resolvePath } from './paths'
+import { tasksIoOf } from './tasks/io'
 import { taskSession } from './tasks/poll'
+import { STATUS_VALUES } from './tasks/status-words'
 import { setStatus } from './tasks/status'
-import { TASK_CAPS, capturePlace, createTask, ensureExcluded, userPlace } from './tasks/store'
+import { PERSON, TASK_CAPS, capturePlace, createTask, ensureExcluded, userPlace } from './tasks/store'
 import type { TaskPlace } from './tasks/store'
 import { problemLine, readDefinition } from './views/definition'
 import type { Item } from './views/items'
@@ -19,9 +21,6 @@ export type TaskToolName = 'list_tasks' | 'read_task' | 'save_task' | 'move_task
 type TaskTool = { spec: { name: TaskToolName; description: string; inputSchema: Record<string, unknown> }; run: (io: NavIo, input: unknown) => Promise<{ result: string }> }
 type Result = { result: string }
 
-// The creator the pane writes for Shawn's own actions (pane/actions.ts), so his tasks read the same from either side.
-const PERSON = 'shawn'
-const STATUSES = ['todo', 'doing', 'done', 'cancelled']
 const SEQUENCE_KEYS = ['after', 'before', 'with']
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 const LIST = /^([^#\s/]+)#(\d+)$/
@@ -30,7 +29,7 @@ const CAPS = { listed: 200, attachments: 20, refs: 20, description: 20_000 }
 const MESSAGES = {
   name: 'Give a name to create a task, or an id to change one.',
   onBehalf: 'on_behalf is person (a task Shawn asked for) or self (your own work).',
-  status: `status is one of ${STATUSES.join(', ')}.`,
+  status: `status is one of ${STATUS_VALUES.join(', ')}.`,
   due: 'due is a date like 2026-11-02.',
   sequence: 'sequence is { after, before, with }, each a task id or a list of them.',
   attachments: 'attachments is a list of file paths or URLs.',
@@ -123,7 +122,7 @@ async function readEdits(io: NavIo, input: SaveInput, items: readonly Item[]): P
     if (input.name.trim().length > TASK_CAPS.name) return said(`A task name holds at most ${TASK_CAPS.name} characters.`)
     edits.name = input.name.trim()
   }
-  if (input.status !== undefined && !(isText(input.status) && STATUSES.includes(input.status))) return said(MESSAGES.status)
+  if (input.status !== undefined && !(isText(input.status) && (STATUS_VALUES as readonly string[]).includes(input.status))) return said(MESSAGES.status)
   if (input.due !== undefined) {
     if (!isText(input.due) || !DATE.test(input.due)) return said(MESSAGES.due)
     edits.due = input.due
@@ -250,7 +249,7 @@ async function moveDoc(io: NavIo, item: Item, place: TaskPlace): Promise<Moved> 
   }
   if (item.source === 'deliverable') return { ref, status: 'refused', reason: `${item.href} is a deliverable; it stays in its worktree` }
   if (textOf(item, 'mirror')) return { ref, status: 'refused', reason: 'It took over an agent\'s item, which still points at it, so it stays where it is' }
-  const name = item.href.slice(item.href.lastIndexOf('/') + 1)
+  const name = baseName(item.href)
   const to = `${place.folder}/${name}`
   if (to === item.href) return { ref, status: 'unchanged', reason: 'Already there', doc: to }
   if (await tio.stat(to)) return { ref, status: 'refused', reason: `${to} already exists` }
@@ -330,7 +329,7 @@ export const TASK_TOOLS: Record<TaskToolName, TaskTool> = {
       inputSchema: {
         type: 'object',
         properties: {
-          status: { type: 'string', enum: STATUSES },
+          status: { type: 'string', enum: [...STATUS_VALUES] },
           creator: { type: 'string', description: 'person for the tasks Shawn created, self for this session\'s, or a session id' },
           list: { type: 'string', description: 'An agent list, <session id>#<n>' },
         },
@@ -357,7 +356,7 @@ export const TASK_TOOLS: Record<TaskToolName, TaskTool> = {
           id: { type: 'string', description: `${REF_HELP}; leave out to create one` },
           name: { type: 'string', description: `What to do, up to ${TASK_CAPS.name} characters` },
           on_behalf: { type: 'string', enum: ['person', 'self'], description: 'person: the person asked for this task. self: it is your own work' },
-          status: { type: 'string', enum: STATUSES },
+          status: { type: 'string', enum: [...STATUS_VALUES] },
           description: { type: 'string', description: 'The body of the task doc' },
           sequence: {
             type: 'object',

@@ -16,6 +16,7 @@ import { itemKey } from './refs'
 import { capturePlace, createIndex, folderDocPaths, readDoc, TASK_CAPS, userPlace } from './tasks/store'
 import type { TaskDoc, TaskIndex, TaskPlace, TasksIo } from './tasks/store'
 import { mirrorDocs } from './mirror/records'
+import { tasksIoOf } from './tasks/io'
 import { taskSession } from './tasks/poll'
 import { ICON } from './theme'
 import { itemFromDoc } from './views/items'
@@ -275,8 +276,6 @@ const RULE_CAPS = { worktrees: 4, docs: 2 * TASK_CAPS.folderDocs }
 const ruleIndexes = new Map<string, TaskIndex>()
 const ruleDocs = new Map<string, { mtimeMs: number; doc: TaskDoc | null }>()
 
-const tasksIoOf = (io: NavIo): TasksIo => ({ ...io.groupsIo(), home: io.home })
-
 function indexOf(worktree: string): TaskIndex {
   const known = ruleIndexes.get(worktree)
   if (known) return known
@@ -321,16 +320,17 @@ export async function ruleCandidates(io: NavIo, groups: readonly Group[], worktr
   if (!groups.some(one => one.rule || one.split)) return []
   const tio = tasksIoOf(io)
   const live = liveSession(worktreeRoot)
-  const user = await userPlace(tio).catch(() => null)
-  const repo = worktreeRoot ? await taskPlaceOf(tio, worktreeRoot).catch(() => null) : null
+  const [user, repo] = await Promise.all([userPlace(tio).catch(() => null), worktreeRoot ? taskPlaceOf(tio, worktreeRoot).catch(() => null) : null])
   const places = [repo, user].filter((one, at, all): one is TaskPlace => one !== null && all.findIndex(other => other?.folder === one.folder) === at)
-  const folders = (await Promise.all(places.map(place => folderTaskDocs(tio, place).catch(() => [])))).flat()
   const index = worktreeRoot && repo && !repo.isUser ? (live?.index ?? indexOf(worktreeRoot)) : null
-  if (index && !live) await index.refresh(tio).catch(() => undefined)
+  const shownPlace = repo ?? user
+  const [folders, , mirrored] = await Promise.all([
+    Promise.all(places.map(place => folderTaskDocs(tio, place).catch(() => []))).then(found => found.flat()),
+    index && !live ? index.refresh(tio).catch(() => undefined) : undefined,
+    options.isEverywhere ? mirrorDocs(tio).catch(() => []) : shownPlace ? mirrorDocs(tio, shownPlace).catch(() => []) : [],
+  ])
   const seen = new Set<string>()
   const items: Item[] = []
-  const shownPlace = repo ?? user
-  const mirrored = options.isEverywhere ? await mirrorDocs(tio).catch(() => []) : shownPlace ? await mirrorDocs(tio, shownPlace).catch(() => []) : []
   for (const [docs, source] of [[folders, 'task-folder'], [index?.docs() ?? [], 'deliverable'], [mirrored, 'mirrored']] as const) {
     for (const doc of docs) {
       if (seen.has(doc.path)) continue

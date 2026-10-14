@@ -3,15 +3,15 @@ import type { RenderChildren } from 'claude-code'
 import { sectioned } from '../../views/select'
 import type { Item } from '../../views/items'
 import type { TreeNode } from '../../views/select'
+import { STATUS_VALUES } from '../../tasks/status-words'
 import { SectionRule } from '../widgets'
-import { STATUS_VALUES } from './common'
 import { DimLine, countNodes } from './row'
 import type { BlockDraw, BlockEnv } from './row'
 import { treeLines } from './tree'
 
 export type Shelf = { key: string; label: string; roots: readonly TreeNode[] }
 
-export function splitOf(options: Record<string, string>): { split: string; values: readonly string[] } {
+function splitOf(options: Record<string, string>): { split: string; values: readonly string[] } {
   const split = options.split || 'status'
   const values = options.values ? options.values.split(',').map(one => one.trim()).filter(Boolean) : split === 'status' ? STATUS_VALUES : []
   return { split, values }

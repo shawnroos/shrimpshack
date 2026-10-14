@@ -8,7 +8,8 @@ import type { Cell, NavIo } from '../navigation'
 import { fileHref, parseHref } from '../paths'
 import { setStatus } from '../tasks/status'
 import { taskSession } from '../tasks/poll'
-import { readDoc } from '../tasks/store'
+import { tasksIoOf } from '../tasks/io'
+import { PERSON, readDoc } from '../tasks/store'
 import { ICON, ROLE_ICON, SCOPE_ICON } from '../theme'
 import { LAYOUTS } from '../views/definition'
 import type { Item } from '../views/items'
@@ -16,7 +17,7 @@ import { asObj } from '../wire'
 import { cycleLayoutOfRow, onPlaceChange, setPlace, toggleFoldOfRow } from './blocks/common'
 import type { PlaceState } from './blocks/common'
 import { isEnded } from './blocks/row'
-import { isMirrored, ownPlace, placeOfDoc, tasksIoOf } from './task-data'
+import { isMirrored, ownPlace, placeOfDoc } from './task-data'
 import type { ArchivedList } from './task-data'
 import type { Action, PaneActions } from './types'
 
@@ -146,7 +147,7 @@ const NO_SESSION = 'peek has not started following tasks in this session yet'
 
 // Every pane status change goes through the one status path; a mirrored record goes through the mirror, which makes
 // the takeover doc first (R21). A refusal leaves the doc as it was and says why.
-export async function changeStatus(io: NavIo, path: string, pick: (current: string | undefined) => string) {
+async function changeStatus(io: NavIo, path: string, pick: (current: string | undefined) => string) {
   const tio = tasksIoOf(io)
   const doc = await readDoc(tio, path)
   if (!doc) {
@@ -154,13 +155,14 @@ export async function changeStatus(io: NavIo, path: string, pick: (current: stri
     return
   }
   const status = pick(doc.status)
+  const who = { by: PERSON, source: 'pane' as const }
   let outcome: { status: string; reason: string }
   if (await isMirrored(io, path)) {
     const mirror = taskSession()?.mirror
-    outcome = mirror ? await mirror.setStatus(path, status, { by: 'shawn', source: 'pane' }) : { status: 'refused', reason: NO_SESSION }
+    outcome = mirror ? await mirror.setStatus(path, status, who) : { status: 'refused', reason: NO_SESSION }
   } else {
     const { place, worktree } = await placeOfDoc(io, path)
-    outcome = await setStatus(tio, place, { doc: path, status, source: 'pane', by: 'shawn', writer: await io.sessionId(), ...(worktree ? { worktree } : {}) })
+    outcome = await setStatus(tio, place, { doc: path, status, ...who, writer: await io.sessionId(), ...(worktree ? { worktree } : {}) })
   }
   if (outcome.status === 'refused') io.toast(`Could not set the status: ${outcome.reason}`)
   if (outcome.status !== 'applied') return
@@ -169,13 +171,13 @@ export async function changeStatus(io: NavIo, path: string, pick: (current: stri
   io.invalidate()
 }
 
-export const nextStatus = (current: string | undefined) => nextOf<string>(STATUS_CYCLE, current ?? '')
+const nextStatus = (current: string | undefined) => nextOf<string>(STATUS_CYCLE, current ?? '')
 
 export const canAdopt = (item: Item) => item.source === 'mirrored' && isEnded(item) && typeof item.props.takeover !== 'string'
 
 export async function adopt(io: NavIo, item: Item) {
   const mirror = taskSession()?.mirror
-  const made = mirror ? await mirror.adopt(item.href, 'shawn') : { status: 'refused', reason: NO_SESSION }
+  const made = mirror ? await mirror.adopt(item.href, PERSON) : { status: 'refused', reason: NO_SESSION }
   io.toast(made.status === 'refused' ? `Could not adopt the task: ${made.reason}` : made.reason)
   io.invalidate()
 }

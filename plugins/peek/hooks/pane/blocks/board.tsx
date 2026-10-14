@@ -6,7 +6,7 @@ import type { BlockDraw, BlockEnv } from './row'
 import { drawShelves, shelvesOf } from './sections'
 import { treeLines } from './tree'
 
-export const boardFits = (columns: number, width: number) => columns * CARD_MIN + Math.max(0, columns - 1) * CARD_GAP <= width
+const boardFits = (columns: number, width: number) => columns * CARD_MIN + Math.max(0, columns - 1) * CARD_GAP <= width
 
 // Columns side by side when each gets a card's width; otherwise the same split stacks as sections.
 export function drawBoard(env: BlockEnv, items: readonly Item[], options: Record<string, string>): BlockDraw {

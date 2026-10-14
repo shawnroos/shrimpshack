@@ -8,24 +8,22 @@ import { adapterOfKind, failureText } from '../../../sources/adapter'
 import { matches, problemLine } from '../../../views/definition'
 import type { Definition, DefinitionProblem } from '../../../views/definition'
 import { fillTemplate } from '../../../views/fill'
-import { createViewRegistry, problemsFor } from '../../../views/registry'
-import type { ViewsIo } from '../../../views/registry'
+import { problemsFor } from '../../../views/registry'
 import { drawComments } from '../../blocks/comments'
 import { drawFields, propKey } from '../../blocks/fields'
 import { drawHeader, sectionRule } from '../../blocks/header'
 import type { RecordEnv } from '../../blocks/header'
 import { drawMedia, recordPictures } from '../../blocks/media'
+import type { DrawData } from '../../task-data'
 import type { DrawContext, PictureBudget } from '../../types'
 import { newBlocks, settleBlocks } from './blocks'
 import type { ViewBody } from './blocks'
-import { itemsOnce } from './markdown'
 import { drawProse } from './prose'
 import type { ProsePart, RecordBlock } from './prose'
 import { slackThread } from './slack'
 
 const MAX_LINK_MEMO = 400
 const linkMemo = new Map<string, string>()
-const views = createViewRegistry()
 
 const BODY_LABEL: Partial<Record<string, string>> = { 'gh-repo': 'README', web: 'Page', 'slack-thread': 'Message' }
 const LISTS_FIRST = new Set(['gh-repo', 'linear-issue'])
@@ -38,10 +36,8 @@ const RECORD_DRAWERS: Record<RecordBlock, (env: RecordEnv, options: Record<strin
 }
 
 // A record kind with a loaded view definition draws from its template; the rest keep the drawing below.
-async function viewOf(ctx: DrawContext, io: NavIo, kind: string): Promise<{ definition: Definition | null; definitions: Definition[]; problems: DefinitionProblem[] }> {
-  const viewsIo: ViewsIo = { list: dir => io.list(dir), read: io.readFile, stat: io.stat }
-  const folders = { builtIn: `${io.liveIo().root}/views`, user: `${ctx.home}/.local/share/claude-peek/views` }
-  const load = await views.load(viewsIo, folders)
+async function viewOf(draw: DrawData, kind: string): Promise<{ definition: Definition | null; definitions: Definition[]; problems: DefinitionProblem[] }> {
+  const load = await draw.views()
   return {
     definition: load.definitions.find(one => matches(one, { recordKind: kind })) ?? null,
     definitions: load.definitions,
@@ -68,7 +64,7 @@ async function recordParts(env: RecordEnv, lang: RecordBlock, options: Record<st
   return own.drawnParts.map((node, i) => ({ node, rows: own.partRows[i] ?? 1, heading: own.partHeadings[i] ?? '', ...(i === last && own.nav.length ? { nav: own.nav } : {}) }))
 }
 
-export async function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: NonNullable<View['remote']>): Promise<ViewBody> {
+export async function remoteBody(ctx: DrawContext, io: NavIo, current: View, remote: NonNullable<View['remote']>, draw: DrawData): Promise<ViewBody> {
   const { Box, Text, Button, C, textWidth } = ctx
   const record = remote.record
   const blocks = newBlocks()
@@ -100,7 +96,7 @@ export async function remoteBody(ctx: DrawContext, io: NavIo, current: View, rem
     note(remote.failureDetail ? 4 : 3)
     return settleBlocks(ctx, io, blocks)
   }
-  const { definition, definitions, problems } = await viewOf(ctx, io, record.kind)
+  const { definition, definitions, problems } = await viewOf(draw, record.kind)
   if (problems.length) {
     drawnParts.push(
       <Box key="view-problems" flexDirection="column" width={textWidth}>
@@ -111,7 +107,7 @@ export async function remoteBody(ctx: DrawContext, io: NavIo, current: View, rem
     )
     note(problems.length)
   }
-  const items = itemsOnce(io)
+  const items = draw.items
   const env: RecordEnv = { ctx, io, blocks, remote, record, budget, linked, picture, navBase: 0, icons: definition?.icons ?? {}, colors: definition?.colors ?? {}, items, definitions: () => definitions }
   if (definition) {
     const body = record.body ?? ''

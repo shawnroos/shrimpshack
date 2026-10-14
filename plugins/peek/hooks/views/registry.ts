@@ -1,3 +1,4 @@
+import { baseName } from '../paths'
 import { matches, matchesRule, readDefinition } from './definition'
 import type { Definition, DefinitionCheck, DefinitionProblem, MatchDoc, MatchRule } from './definition'
 
@@ -14,7 +15,7 @@ export type ViewRegistry = {
   definitionFor: (io: ViewsIo, folders: ViewFolders, doc: MatchDoc) => Promise<Definition | null>
 }
 
-export const REGISTRY_CAPS = { filesPerFolder: 100, cached: 250 }
+const REGISTRY_CAPS = { filesPerFolder: 100, cached: 250 }
 
 async function definitionFiles(io: ViewsIo, dir: string): Promise<{ files: string[]; problems: DefinitionProblem[] }> {
   const entries = await io.list(dir).catch(() => [])
@@ -70,12 +71,13 @@ export function createViewRegistry(): ViewRegistry {
   }
 
   async function load(io: ViewsIo, folders: ViewFolders): Promise<ViewsLoad> {
-    const listed = [await definitionFiles(io, folders.builtIn), await definitionFiles(io, folders.user)]
-    const checks: { file: string; check: DefinitionCheck }[] = []
-    for (const file of listed.flatMap(one => one.files)) {
-      const check = await checkOf(io, file)
-      if (check) checks.push({ file, check })
-    }
+    const listed = await Promise.all([definitionFiles(io, folders.builtIn), definitionFiles(io, folders.user)])
+    const files = listed.flatMap(one => one.files)
+    const looked = await Promise.all(files.map(file => checkOf(io, file)))
+    const checks = files.flatMap((file, i) => {
+      const check = looked[i]
+      return check ? [{ file, check }] : []
+    })
     const loaded = withoutConflicts(checks)
     const sources = [...listed.flatMap(one => one.problems.map(problem => ({ file: problem.file, problems: [problem] }))), ...loaded.sources]
     return { definitions: loaded.definitions, problems: sources.flatMap(one => one.problems), sources }
@@ -90,7 +92,7 @@ export function createViewRegistry(): ViewRegistry {
   }
 }
 
-const typeNameOf = (file: string) => (file.split('/').pop() ?? '').replace(/\.md$/, '')
+const typeNameOf = (file: string) => baseName(file).replace(/\.md$/, '')
 
 // A definition too broken to name its own match is shown only on the record page its file is named after.
 export function problemsFor(load: ViewsLoad, doc: MatchDoc): DefinitionProblem[] {
