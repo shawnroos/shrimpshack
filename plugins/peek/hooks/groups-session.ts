@@ -2,7 +2,7 @@ import type { Group, GroupItem, GroupOp, GroupResult } from '../types/groups'
 import { sessionMemo } from './cache'
 import { gitRoot, toHref } from './entries'
 import { toggleStar } from './gallery'
-import { applyGroupOps, groupsDir, isScheme, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'
+import { applyGroupOps, groupsDir, isScheme, membersOf, refPath, resolveProjectKey, shortId, starGroup, storedRef } from './groups'
 import type { GroupPlace, GroupWrite } from './groups'
 import { remotePicture } from './images'
 import { nav, navigate, saveTitles, remoteLoader, remoteRef, show, starKeyOf, startTicking } from './navigation'
@@ -13,7 +13,11 @@ import { baseName, dirName, fileHref, kindOf, parseHref, resolvePath } from './p
 import { cached, refreshItem } from './refresh'
 import type { TitleEntry } from './refresh'
 import { itemKey } from './refs'
+import { capturePlace, createIndex, folderDocPaths, readDoc, TASK_CAPS, userPlace } from './tasks/store'
+import type { TaskDoc, TaskIndex, TaskPlace, TasksIo } from './tasks/store'
 import { ICON } from './theme'
+import { itemFromDoc } from './views/items'
+import type { Item } from './views/items'
 import { parseUrl } from './wire'
 
 export async function setStar(io: NavIo, raw: string, wanted?: boolean): Promise<boolean> {
@@ -80,11 +84,15 @@ export async function starInGroupsTab(io: NavIo, id: string) {
 
 async function personGroupWrite(io: NavIo, id: string, title: string, op: Extract<GroupOp, { op: 'addItem' | 'removeItem' }>) {
   const verb = op.op === 'addItem' ? 'add to' : 'remove from'
+  const home = await groupHome(io)
+  const shown = home && op.op === 'removeItem' ? await io.shownGroup(home.place, id) : null
+  const candidates = shown && home ? await ruleCandidates(io, [shown], home.worktreeRoot) : []
+  const ruleMembers = (current: Group) => membersOf(current, candidates, home?.worktreeRoot).flatMap(one => (one.addedBy === 'rule' ? [one.ref] : []))
   await personWrite(
     io,
     id,
     `Could not ${verb} ${title}`,
-    (current, now) => applyGroupOps(current, [op], { now, newId: () => shortId(Math.random), actor: 'person', others: [] }),
+    (current, now) => applyGroupOps(current, [op], { now, newId: () => shortId(Math.random), actor: 'person', others: [], ruleMembers: ruleMembers(current) }),
     write => {
       const outcome = write.outcomes[0]
       const name = write.group?.title ?? title
@@ -259,4 +267,56 @@ export async function itemState(io: NavIo, ref: string, worktreeRoot?: string): 
   const entry = cached(ref)
   if (entry?.failure === 'gone') return 'missing'
   return entry?.state === 'failed' || entry?.state === 'stale-since' ? 'unavailable' : 'ok'
+}
+
+const RULE_CAPS = { worktrees: 4, docs: 2 * TASK_CAPS.folderDocs }
+const ruleIndexes = new Map<string, TaskIndex>()
+const ruleDocs = new Map<string, { mtimeMs: number; doc: TaskDoc | null }>()
+
+const tasksIoOf = (io: NavIo): TasksIo => ({ ...io.groupsIo(), home: io.home })
+
+function indexOf(worktree: string): TaskIndex {
+  const known = ruleIndexes.get(worktree)
+  if (known) return known
+  if (ruleIndexes.size >= RULE_CAPS.worktrees) ruleIndexes.clear()
+  const index = createIndex(worktree)
+  ruleIndexes.set(worktree, index)
+  return index
+}
+
+async function folderTaskDocs(io: TasksIo, place: TaskPlace): Promise<TaskDoc[]> {
+  const docs = await Promise.all(
+    (await folderDocPaths(io, place)).map(async path => {
+      const stat = await io.stat(path)
+      if (!stat) return null
+      const known = ruleDocs.get(path)
+      if (known?.mtimeMs === stat.mtimeMs) return known.doc
+      const doc = await readDoc(io, path)
+      if (ruleDocs.size >= RULE_CAPS.docs) ruleDocs.clear()
+      ruleDocs.set(path, { mtimeMs: stat.mtimeMs, doc })
+      return doc
+    }),
+  )
+  return docs.filter((one): one is TaskDoc => one !== null)
+}
+
+export async function ruleCandidates(io: NavIo, groups: readonly Group[], worktreeRoot?: string): Promise<Item[]> {
+  if (!groups.some(one => one.rule || one.split)) return []
+  const tio = tasksIoOf(io)
+  const user = await userPlace(tio).catch(() => null)
+  const repo = worktreeRoot ? await capturePlace(tio, worktreeRoot).catch(() => null) : null
+  const places = [repo, user].filter((one, at, all): one is TaskPlace => one !== null && all.findIndex(other => other?.folder === one.folder) === at)
+  const folders = (await Promise.all(places.map(place => folderTaskDocs(tio, place).catch(() => [])))).flat()
+  const index = worktreeRoot && repo && !repo.isUser ? indexOf(worktreeRoot) : null
+  if (index) await index.refresh(tio).catch(() => undefined)
+  const seen = new Set<string>()
+  const items: Item[] = []
+  for (const [docs, source] of [[folders, 'task-folder'], [index?.docs() ?? [], 'deliverable']] as const) {
+    for (const doc of docs) {
+      if (seen.has(doc.path)) continue
+      seen.add(doc.path)
+      items.push(itemFromDoc(doc, { type: 'task', source }))
+    }
+  }
+  return items
 }

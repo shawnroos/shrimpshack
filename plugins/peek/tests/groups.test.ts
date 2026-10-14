@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { applyGroupOps, createGroup, deleteGroup, GROUP_CAPS, shortId, starGroup } from '../hooks/groups'
+import { applyGroupOps, createGroup, deleteGroup, GROUP_CAPS, membersOf, shortId, splitMembers, starGroup } from '../hooks/groups'
+import { itemFromDoc } from '../hooks/views/items'
+import type { PropValue } from '../types'
 import type { Group, GroupActor, GroupContext, GroupOp } from '../types/groups'
 
 const NOW = 1_000
@@ -474,4 +476,69 @@ test('shortId gives eight base-36 characters from the random source', () => {
   expect(shortId(() => 0.5)).toMatch(/^[0-9a-z]{8}$/)
   expect(shortId(() => 0.5)).toBe(shortId(() => 0.5))
   expect(shortId(() => 0.1)).not.toBe(shortId(() => 0.9))
+})
+
+describe('rule groups and splits', () => {
+  const ROOT = '/repo'
+  const task = (file: string, props: Record<string, PropValue>) => itemFromDoc({ path: `${ROOT}/.peek/tasks/${file}`, props }, { type: 'task', source: 'task-folder' })
+  const ruled = (rule: Record<string, string>, ops: GroupOp[] = []) => applyGroupOps(make(ops), [{ op: 'setRule', rule }], ctx()).group
+  const refsOf = (items: readonly { ref: string; addedBy: string }[]) => items.map(one => `${one.ref}:${one.addedBy}`)
+
+  test('covers AE9: a rule group shows a newly matching task without anyone adding it, and splits by status into todo, doing and done', () => {
+    const group = ruled({ parent: 'markdown-views-plan' })
+    expect(group.rule).toEqual({ parent: 'markdown-views-plan' })
+    expect(group.items).toEqual([])
+    const first = [task('a.md', { name: 'Write tests', parent: 'markdown-views-plan', status: 'done' }), task('b.md', { name: 'Other', parent: 'elsewhere', status: 'todo' })]
+    expect(refsOf(membersOf(group, first, ROOT))).toEqual(['.peek/tasks/a.md:rule'])
+    const later = [...first, task('c.md', { name: 'Build it', parent: 'markdown-views-plan', status: 'doing' }), task('d.md', { name: 'Ship it', parent: 'markdown-views-plan', status: 'todo' })]
+    const members = membersOf(group, later, ROOT)
+    expect(refsOf(members)).toEqual(['.peek/tasks/a.md:rule', '.peek/tasks/c.md:rule', '.peek/tasks/d.md:rule'])
+    expect(members.map(one => one.label)).toEqual(['Write tests', 'Build it', 'Ship it'])
+    const bySplit = applyGroupOps(group, [{ op: 'setSplit', split: 'status' }], ctx()).group
+    const sections = splitMembers(bySplit, members, later, ROOT)
+    expect(sections?.map(one => `${one.key}:${one.items.map(item => item.ref).join(',')}`)).toEqual(['todo:.peek/tasks/d.md', 'doing:.peek/tasks/c.md', 'done:.peek/tasks/a.md'])
+  })
+
+  test('the person removing a rule-matched item keeps it out while the rule still matches; an agent removal is unchanged', () => {
+    const group = ruled({ creator: 'agent-1' })
+    const items = [task('a.md', { creator: 'agent-1' }), task('b.md', { creator: 'agent-1' })]
+    const ruleMembers = membersOf(group, items, ROOT).map(one => one.ref)
+    const byAgent = applyGroupOps(group, [{ op: 'removeItem', ref: '.peek/tasks/a.md' }], ctx({ ruleMembers }))
+    expect(byAgent.outcomes[0]?.status).toBe('unchanged')
+    expect(byAgent.outcomes[0]?.reason).toMatch(/rule/)
+    expect(byAgent.group).toEqual(group)
+    const byPerson = applyGroupOps(group, [{ op: 'removeItem', ref: '.peek/tasks/a.md' }], as('person', { ruleMembers }))
+    expect(byPerson.outcomes[0]?.status).toBe('applied')
+    expect(byPerson.group.removed).toEqual(['.peek/tasks/a.md'])
+    expect(refsOf(membersOf(byPerson.group, items, ROOT))).toEqual(['.peek/tasks/b.md:rule'])
+    const added = applyGroupOps(byPerson.group, [{ op: 'addItem', ref: '.peek/tasks/a.md' }], as('person')).group
+    expect(refsOf(membersOf(added, items, ROOT))).toEqual(['.peek/tasks/a.md:person', '.peek/tasks/b.md:rule'])
+  })
+
+  test('a group with hand-added items and a rule shows both, the hand-added copy once', () => {
+    const group = applyGroupOps(ruled({ creator: 'agent-1' }), [{ op: 'addItem', ref: '.peek/tasks/a.md' }, { op: 'addItem', ref: PR }], as('person')).group
+    const items = [task('a.md', { creator: 'agent-1' }), task('b.md', { creator: 'agent-1' }), itemFromDoc({ path: '/home/.local/share/claude-peek/tasks/u.md', props: { creator: 'agent-1' } }, { type: 'task', source: 'task-folder' })]
+    expect(refsOf(membersOf(group, items, ROOT))).toEqual(['.peek/tasks/a.md:person', `${PR}:person`, '.peek/tasks/b.md:rule', 'file:///home/.local/share/claude-peek/tasks/u.md:rule'])
+  })
+
+  test('a group split by creator shows one section per creator, and items without one last', () => {
+    const group = applyGroupOps(ruled({ isTask: 'true' }, [{ op: 'addItem', ref: PR }]), [{ op: 'setSplit', split: 'creator' }], ctx()).group
+    const items = [task('a.md', { isTask: true, creator: 'zed' }), task('b.md', { isTask: true, creator: 'amy' }), task('c.md', { isTask: true, creator: 'zed' })]
+    const sections = splitMembers(group, membersOf(group, items, ROOT), items, ROOT)
+    expect(sections?.map(one => `${one.key}:${one.items.map(item => item.ref).join(',')}`)).toEqual(['amy:.peek/tasks/b.md', 'zed:.peek/tasks/a.md,.peek/tasks/c.md', `none:${PR}`])
+    expect(splitMembers(make(), [], items, ROOT)).toBeNull()
+  })
+
+  test('a rule or split is set, refused when unreadable, and cleared by an empty value', () => {
+    const group = make()
+    expect(applyGroupOps(group, [{ op: 'setRule', rule: {} }], ctx()).outcomes[0]?.status).toBe('refused')
+    expect(applyGroupOps(group, [{ op: 'setRule', rule: { 'not a prop': 'x' } }], ctx()).outcomes[0]?.status).toBe('refused')
+    expect(applyGroupOps(group, [{ op: 'setSplit', split: 'two words' }], ctx()).outcomes[0]?.status).toBe('refused')
+    const set = applyGroupOps(group, [{ op: 'setRule', rule: { parent: 'x' } }, { op: 'setSplit', split: 'status' }], ctx()).group
+    expect([set.rule, set.split]).toEqual([{ parent: 'x' }, 'status'])
+    expect(applyGroupOps(set, [{ op: 'setRule', rule: { parent: 'x' } }], ctx()).outcomes[0]?.status).toBe('unchanged')
+    const cleared = applyGroupOps(set, [{ op: 'setRule', rule: null }, { op: 'setSplit', split: null }], ctx()).group
+    expect('rule' in cleared || 'split' in cleared).toBe(false)
+    expect('rule' in group || 'split' in group).toBe(false)
+  })
 })

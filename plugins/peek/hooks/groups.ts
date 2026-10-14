@@ -1,10 +1,15 @@
-import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupSection, SectionLayout } from '../types/groups'
-import { parseHref } from './paths'
+import type { Group, GroupContext, GroupItem, GroupOp, GroupOutcome, GroupResult, GroupRule, GroupSection, SectionLayout } from '../types/groups'
+import { fileHref, parseHref } from './paths'
 import { itemKey } from './refs'
+import type { Item } from './views/items'
+import { matchesRule, split } from './views/select'
 import { asObj, tryJson } from './wire'
 
 // A group file at these caps stays far under the 4 MiB fs.read limit.
-export const GROUP_CAPS = { groups: 50, items: 200, sections: 20, removed: 100, description: 500, label: 200 }
+export const GROUP_CAPS = { groups: 50, items: 200, sections: 20, removed: 100, description: 500, label: 200, ruleProps: 10, ruleValue: 200 }
+
+const PROP_NAME = /^[A-Za-z_][\w-]{0,63}$/
+const STATUS_ORDER = ['todo', 'doing', 'done', 'cancelled']
 
 type Step = { group: Group; outcome: GroupOutcome }
 
@@ -175,6 +180,10 @@ function applyOne(group: Group, op: GroupOp, ctx: GroupContext): Step {
     }
     case 'removeItem': {
       const present = findItem(group, op.ref)
+      const key = itemKey(op.ref)
+      const isRuleMember = !present && (ctx.ruleMembers ?? []).some(one => itemKey(one) === key)
+      if (isRuleMember && ctx.actor === 'agent') return keep('unchanged', `${op.ref} is in this group by its rule; change the rule to drop it`, { ref: op.ref })
+      if (isRuleMember) return done({ ...group, removed: tombstone(group.removed, key) }, `Removed ${op.ref}`, { ref: op.ref })
       if (!present) return keep('unchanged', `${op.ref} is not in this group`, { ref: op.ref })
       if (ctx.actor === 'agent' && present.addedBy === 'person' && !op.force) {
         return keep('refused', `The person added ${present.ref}; pass force to remove it`, { ref: present.ref, needsForce: true })
@@ -189,7 +198,85 @@ function applyOne(group: Group, op: GroupOp, ctx: GroupContext): Step {
         { ref: present.ref },
       )
     }
+    case 'setRule': {
+      const rule = op.rule && Object.keys(op.rule).length ? readRule(op.rule) : null
+      if (op.rule && !rule) return keep('refused', `A rule is up to ${GROUP_CAPS.ruleProps} props, each a prop name equal to one value`)
+      if (sameRule(rule, group.rule)) return keep('unchanged', rule ? 'The rule is already that' : 'The group has no rule')
+      const { rule: _old, ...rest } = group
+      return done(rule ? { ...rest, rule } : rest, rule ? `Rule set to ${ruleText(rule)}` : 'Rule cleared')
+    }
+    case 'setSplit': {
+      const prop = op.split?.trim() || null
+      if (prop && !PROP_NAME.test(prop)) return keep('refused', `"${prop}" is not a prop name`)
+      if (prop === (group.split ?? null)) return keep('unchanged', prop ? `The group already splits by ${prop}` : 'The group is not split')
+      const { split: _old, ...rest } = group
+      return done(prop ? { ...rest, split: prop } : rest, prop ? `Split by ${prop}` : 'Split cleared')
+    }
   }
+}
+
+export const ruleText = (rule: GroupRule) =>
+  Object.entries(rule)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' and ')
+
+function readRule(value: unknown): GroupRule | null {
+  if (!isLoose(value) || Array.isArray(value)) return null
+  const entries = Object.entries(value)
+  if (!entries.length || entries.length > GROUP_CAPS.ruleProps) return null
+  const isReadable = entries.every(
+    ([key, one]) => PROP_NAME.test(key) && (one === null || typeof one === 'number' || typeof one === 'boolean' || (typeof one === 'string' && one.length <= GROUP_CAPS.ruleValue)),
+  )
+  return isReadable ? (Object.fromEntries(entries) as GroupRule) : null
+}
+
+function sameRule(a: GroupRule | null, b: GroupRule | undefined): boolean {
+  if (!a || !b) return !a && !b
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every(key => a[key] === b[key])
+}
+
+// A rule member's ref takes the stored form an agent or person add would give the same file, so keys compare.
+function ruleRef(item: Item, worktreeRoot?: string): string {
+  return item.href.startsWith('/') ? storedRef(fileHref(item.href), worktreeRoot) : item.href
+}
+
+export function membersOf(group: Group, candidates: readonly Item[], worktreeRoot?: string): GroupItem[] {
+  const rule = group.rule
+  if (!rule) return group.items
+  const taken = new Set([...group.items.map(one => itemKey(one.ref)), ...group.removed])
+  const matched: GroupItem[] = []
+  for (const item of candidates) {
+    if (matched.length >= GROUP_CAPS.items) break
+    if (!matchesRule(item, rule)) continue
+    const ref = ruleRef(item, worktreeRoot)
+    const key = itemKey(ref)
+    if (taken.has(key)) continue
+    taken.add(key)
+    matched.push({ ref, addedBy: 'rule', addedAt: 0, label: item.name })
+  }
+  return [...group.items, ...matched]
+}
+
+export type SplitSection = { key: string; title: string; items: GroupItem[] }
+
+// A member no candidate describes, such as a link, has no props and so lands in the last, none section.
+export function splitMembers(group: Group, members: readonly GroupItem[], candidates: readonly Item[], worktreeRoot?: string): SplitSection[] | null {
+  const prop = group.split
+  if (!prop) return null
+  const byKey = new Map(candidates.map(item => [itemKey(ruleRef(item, worktreeRoot)), item]))
+  const owner = new Map<Item, GroupItem>()
+  const items = members.map(member => {
+    const known = byKey.get(itemKey(member.ref))
+    const item: Item = known && !owner.has(known) ? known : { id: member.ref, href: member.ref, type: 'link', name: member.label ?? member.ref, props: {}, source: 'record' }
+    owner.set(item, member)
+    return item
+  })
+  return split(items, prop, prop === 'status' ? STATUS_ORDER : []).map(section => ({
+    key: section.key,
+    title: section.key,
+    items: section.items.flatMap(item => owner.get(item) ?? []),
+  }))
 }
 
 export function applyGroupOps(group: Group, ops: readonly GroupOp[], ctx: GroupContext): { group: Group; outcomes: GroupOutcome[] } {
@@ -359,7 +446,15 @@ function parseGroup(text: string, projectKey: string): Group | null {
     sections,
     items: (group.items as unknown[]).flatMap(parseItem).map(one => (one.section && !kept.has(one.section) ? placed(one, undefined) : one)),
     removed: (group.removed as unknown[]).filter((one): one is string => typeof one === 'string'),
+    ...ruleAndSplit(group as Loose),
   }
+}
+
+// Both keys are written only when present, so a group from before rules saves back with the same keys it had.
+function ruleAndSplit(group: Loose): Pick<Group, 'rule' | 'split'> {
+  const rule = readRule(group.rule)
+  const prop = typeof group.split === 'string' && PROP_NAME.test(group.split) ? group.split : null
+  return { ...(rule ? { rule } : {}), ...(prop ? { split: prop } : {}) }
 }
 
 export const fileOf = (place: GroupPlace, id: string) => `${place.dir}/${id}.json`

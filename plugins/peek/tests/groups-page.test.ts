@@ -1044,3 +1044,145 @@ test('an untitled Slack thread is named by its channel in Recent but by its addr
   expect(await ui.find({ text: /acme\/widgets/ })).toBeDefined()
   await ui.unmount()
 })
+
+const TASKS = '/repo/.peek/tasks'
+
+function seedTask(w: World, file: string, props: Record<string, string>) {
+  const path = `${TASKS}/${file}`
+  w.files[path] = ['---', ...Object.entries(props).map(([key, value]) => `${key}: ${value}`), '---', ''].join('\n')
+  w.touch(path)
+}
+
+async function sectionTitles(ui: PageUi) {
+  const titles: string[] = []
+  for (let i = 0; i < 10; i++) {
+    const one = await ui.find({ key: `group-section-${i}` })
+    if (one) titles.push(one.text.replace(/[─\s\d]+$/u, '').trim())
+  }
+  return titles
+}
+
+test('covers AE9: a rule group page shows a task an agent creates later without anyone adding it, split into status sections', async ($, on) => {
+  const w = fakeFs(on)
+  const { id } = await create($, [], 'Markdown views')
+  editGroup(w, id, group => {
+    group.rule = { parent: 'markdown-views-plan' }
+    group.split = 'status'
+  })
+  seedTask(w, 'write-tests-aaaa1111.md', { name: 'Write tests', parent: 'markdown-views-plan', status: 'done' })
+  seedTask(w, 'other-bbbb2222.md', { name: 'Unrelated', parent: 'elsewhere', status: 'todo' })
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['Write tests'])
+  expect(await sectionTitles(ui)).toEqual(['DONE'])
+  seedTask(w, 'build-it-cccc3333.md', { name: 'Build it', parent: 'markdown-views-plan', status: 'doing' })
+  seedTask(w, 'ship-it-dddd4444.md', { name: 'Ship it', parent: 'markdown-views-plan', status: 'todo' })
+  await ui.redraw()
+  expect(await rowTexts(ui)).toEqual(['Ship it', 'Build it', 'Write tests'])
+  expect(await sectionTitles(ui)).toEqual(['TODO', 'DOING', 'DONE'])
+  expect(await ui.find({ text: 'Markdown views · 3 items · 0 missing' })).toBeDefined()
+  expect(savedGroup(w, id)?.items).toEqual([])
+  await ui.press({ key: 'mode-groups' })
+  await ui.press({ key: 'mode-groups' })
+  expect(await ui.find({ text: /^3 items/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the person removing a rule-matched task from the group page keeps it out while the rule still matches', async ($, on) => {
+  const w = fakeFs(on)
+  const { id } = await create($, [], 'Agent one')
+  editGroup(w, id, group => (group.rule = { creator: 'agent-1' }))
+  seedTask(w, 'a-aaaa1111.md', { name: 'First', creator: 'agent-1' })
+  seedTask(w, 'b-bbbb2222.md', { name: 'Second', creator: 'agent-1' })
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['First', 'Second'])
+  await ui.press({ key: 'next' })
+  await openMenu($, ui)
+  await ui.press({ key: 'menu-group-remove-here' })
+  expect(w.toasts).toContain('Removed from Agent one')
+  expect(savedGroup(w, id)).toMatchObject({ items: [], removed: ['.peek/tasks/b-bbbb2222.md'] })
+  seedTask(w, 'b-bbbb2222.md', { name: 'Second', creator: 'agent-1', status: 'doing' })
+  await ui.redraw()
+  expect(await rowTexts(ui)).toEqual(['First'])
+  await ui.unmount()
+})
+
+test('a group with a hand-added task and a rule matching it shows the task once, with the rule\'s other matches', async ($, on) => {
+  const w = fakeFs(on)
+  seedTask(w, 'a-aaaa1111.md', { name: 'First', creator: 'agent-1' })
+  seedTask(w, 'b-bbbb2222.md', { name: 'Second', creator: 'agent-1' })
+  const { id } = await create($, [{ target: `${TASKS}/a-aaaa1111.md` }, { target: 'docs/plan.md' }], 'Mixed')
+  editGroup(w, id, group => (group.rule = { creator: 'agent-1' }))
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['a-aaaa1111.md', 'plan.md', 'Second'])
+  expect(await ui.find({ text: 'Mixed · 3 items · 0 missing' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a group split by creator draws one section per creator, and a hand-added item with no creator last', async ($, on) => {
+  const w = fakeFs(on)
+  const { id } = await create($, [{ target: 'docs/plan.md' }], 'By creator')
+  editGroup(w, id, group => {
+    group.rule = { isTask: 'true' }
+    group.split = 'creator'
+  })
+  seedTask(w, 'a-aaaa1111.md', { name: 'Zed one', creator: 'zed', isTask: 'true' })
+  seedTask(w, 'b-bbbb2222.md', { name: 'Amy one', creator: 'amy', isTask: 'true' })
+  seedTask(w, 'c-cccc3333.md', { name: 'Zed two', creator: 'zed', isTask: 'true' })
+  const ui = await openFirstGroup($)
+  expect(await sectionTitles(ui)).toEqual(['AMY', 'ZED', 'NONE'])
+  expect(await rowTexts(ui)).toEqual(['Amy one', 'Zed one', 'Zed two', 'plan.md'])
+  await ui.unmount()
+})
+
+test('a group file from before rules loads unchanged, and an agent save writes back only what it changed', async ($, on) => {
+  const w = fakeFs(on)
+  const old = {
+    projectKey: '/repo/.git',
+    id: 'abcd1234',
+    title: 'Old group',
+    description: 'From before rules',
+    starred: false,
+    updatedAt: 1,
+    sections: [{ id: 's1', title: 'Docs', layout: 'cards' }],
+    items: [{ ref: 'docs/plan.md', section: 's1', addedBy: 'agent', addedAt: 1 }],
+    removed: [],
+  }
+  const file = `${dirOf('/repo/.git')}/abcd1234.json`
+  w.files[file] = JSON.stringify(old, null, 2)
+  w.touch(file)
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['plan.md'])
+  expect(await sectionTitles(ui)).toEqual(['DOCS'])
+  const read = jsonOf(await call($, 'read_group', { id: 'abcd1234' }))
+  expect('rule' in read || 'split' in read).toBe(false)
+  const saved = await call($, 'save_group', { id: 'abcd1234', add: [{ target: 'notes/todo.md' }] })
+  expect(saved.split('\n')[0]).toMatch(/1 applied, 0 unchanged, 0 refused/)
+  expect(JSON.parse(w.files[file] ?? '{}')).toEqual({ ...old, updatedAt: w.now, items: [...old.items, { ref: 'notes/todo.md', addedBy: 'agent', addedAt: w.now }] })
+  await ui.unmount()
+})
+
+test('a group file with an unreadable rule or split still loads, without them', async ($, on) => {
+  const w = fakeFs(on)
+  const { id } = await create($, [{ target: 'docs/plan.md' }], 'Broken rule')
+  editGroup(w, id, group => {
+    group.rule = 'parent=x'
+    group.split = 7
+  })
+  seedTask(w, 'a-aaaa1111.md', { name: 'First', parent: 'x' })
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['plan.md'])
+  await ui.unmount()
+})
+
+test('a rule group also picks up a tracked doc marked isTask outside the tasks folder', async ($, on) => {
+  const w = fakeFs(on)
+  const { id } = await create($, [], 'Spec work')
+  editGroup(w, id, group => (group.rule = { parent: 'spec' }))
+  w.tracked = { '/repo': ['docs/spec-task.md', 'docs/plan.md'] }
+  w.files['/repo/docs/spec-task.md'] = '---\nname: Spec the API\nisTask: true\nparent: spec\n---\n'
+  w.touch('/repo/docs/spec-task.md')
+  const ui = await openFirstGroup($)
+  expect(await rowTexts(ui)).toEqual(['Spec the API'])
+  expect(savedGroup(w, id)?.items).toEqual([])
+  await ui.unmount()
+})

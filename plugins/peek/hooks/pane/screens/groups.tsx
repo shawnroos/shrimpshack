@@ -1,8 +1,8 @@
 import type { Group, SectionLayout } from '../../../types/groups'
 import { describeAge, plural } from '../../format'
 import { gridColumns } from '../../gallery'
-import { layoutOf } from '../../groups'
-import { expandedGroups, groupHome, groupItemLook, groupPage, loadGroupRemote, openGroupHref, openGroupPage, starInGroupsTab, starredFirst, toggleExpanded } from '../../groups-session'
+import { layoutOf, membersOf, splitMembers } from '../../groups'
+import { expandedGroups, groupHome, groupItemLook, groupPage, loadGroupRemote, openGroupHref, openGroupPage, ruleCandidates, starInGroupsTab, starredFirst, toggleExpanded } from '../../groups-session'
 import { pixels } from '../../images'
 import { iconFor, kindLabel } from '../../kinds'
 import { fitName, wrapLines } from '../../measure'
@@ -29,18 +29,25 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
   const starKeys = new Set((await io.stars.read()).map(starKeyOf))
   const worktreeRoot = (await groupHome(io))?.worktreeRoot
   const known = titlesByKey()
+  const candidates = await ruleCandidates(io, groups, worktreeRoot)
   const drawn = await Promise.all(
     groups.map(async (group, i) => {
       const index = firstIndex + i
       const isSelected = index === selected
       const isExpanded = expandedGroups.has(group.id)
+      const members = membersOf(group, candidates, worktreeRoot)
+      const split = splitMembers(group, members, candidates, worktreeRoot)
       const sectionIds = new Set(group.sections.map(one => one.id))
-      const loose = group.items.filter(one => !one.section || !sectionIds.has(one.section))
+      const loose = members.filter(one => !one.section || !sectionIds.has(one.section))
       let first = 0
-      const blocks = [
-        ...(loose.length ? [{ section: -1, title: '', layout: 'cards' as SectionLayout, items: loose }] : []),
-        ...group.sections.map((one, section) => ({ section, title: one.title, layout: layoutOf(one), items: group.items.filter(item => item.section === one.id) })),
-      ].map(block => {
+      const blocks = (
+        split
+          ? split.map((one, section) => ({ section, title: one.title, layout: 'cards' as SectionLayout, items: one.items }))
+          : [
+              ...(loose.length ? [{ section: -1, title: '', layout: 'cards' as SectionLayout, items: loose }] : []),
+              ...group.sections.map((one, section) => ({ section, title: one.title, layout: layoutOf(one), items: members.filter(item => item.section === one.id) })),
+            ]
+      ).map(block => {
         const numbered = { ...block, first }
         first += block.items.length
         return numbered
@@ -161,7 +168,7 @@ export async function groupCards(ctx: DrawContext, actions: PaneActions, groups:
                 <Text color={isSelected ? C.accent : C.text} bold hover={{ color: C.accent }} wrap="truncate-end">{` ${group.title.toUpperCase()}`}</Text>
               </Box>
               <Box flexShrink={0} marginLeft={1}>
-                <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(group.items.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
+                <Text color={isSelected ? C.overlay1 : C.overlay0}>{`${plural(members.length, 'item')} · ${describeAge(group.updatedAt, now)}`}</Text>
               </Box>
               {HoverLayer(ctx, `hover-${prefix}-${i}`, { kind: 'rows', width: inner, height: 1, starX: 0, starY: 0, items: [{ group: group.id, isStarred: group.starred }] })}
             </Box>,

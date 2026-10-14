@@ -2,7 +2,8 @@ import type { PluginState } from 'claude-code'
 
 import type { Group } from '../../../types/groups'
 import { plural } from '../../format'
-import { groupItemLook, groupPage, loadGroupRemote, openGroupHref, setStar } from '../../groups-session'
+import { membersOf, splitMembers } from '../../groups'
+import { groupItemLook, groupPage, loadGroupRemote, openGroupHref, ruleCandidates, setStar } from '../../groups-session'
 import type { GroupHome } from '../../groups-session'
 import { pixels } from '../../images'
 import { iconFor } from '../../kinds'
@@ -26,11 +27,16 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
   groupPage.goneNotice = ''
   const worktreeRoot = home?.worktreeRoot
   const known = titlesByKey()
+  const candidates = await ruleCandidates(io, [shown], worktreeRoot)
+  const members = membersOf(shown, candidates, worktreeRoot)
   const sectionIds = new Set(shown.sections.map(one => one.id))
-  const blocks = [
-    { title: '', items: shown.items.filter(one => !one.section || !sectionIds.has(one.section)) },
-    ...shown.sections.map(one => ({ title: one.title, items: shown.items.filter(item => item.section === one.id) })),
-  ]
+  const splitBlocks = splitMembers(shown, members, candidates, worktreeRoot)
+  const blocks = splitBlocks
+    ? [{ title: '', items: [] }, ...splitBlocks]
+    : [
+        { title: '', items: members.filter(one => !one.section || !sectionIds.has(one.section)) },
+        ...shown.sections.map(one => ({ title: one.title, items: members.filter(item => item.section === one.id) })),
+      ]
   const looks = await Promise.all(blocks.flatMap(block => block.items).map(one => groupItemLook(io, one, worktreeRoot, known)))
   const remotes = looks.filter(one => one.href && !parseHref(one.href) && remoteRef(one.href))
   for (const one of remotes) if (!cached(one.href)) loadGroupRemote(io, one.href)
@@ -101,7 +107,7 @@ export async function groupPageScreen(ctx: DrawContext, actions: PaneActions, pa
       </Box>
       {shown.description ? <Text color={C.subtext0}>{shown.description}</Text> : null}
       <Box height={1} />
-      {shown.items.length === 0 && (
+      {members.length === 0 && (
         <Box key="group-no-items" marginBottom={1}>
           <Text color={C.overlay0}>No items</Text>
         </Box>
