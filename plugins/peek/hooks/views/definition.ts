@@ -23,6 +23,7 @@ export type Definition = {
   requiresWhen?: RequiresWhen
   layoutDefault: { [P in LayoutPlace]?: Layout }
   colors: Record<string, Record<string, string>>
+  icons: Record<string, string>
   template: string
   templateStartLine: number
   blocks: Block[]
@@ -33,13 +34,15 @@ export type MatchDoc = { path?: string; props?: Record<string, PropValue>; recor
 
 export const DEFINITION_CAPS = { problems: 50, props: 40, values: 40, blocks: 40 }
 
-const TOP_KEYS = ['type', 'match', 'props', 'requires_when', 'layout_default', 'colors'] as const
+const TOP_KEYS = ['type', 'match', 'props', 'requires_when', 'layout_default', 'colors', 'icons'] as const
 const MATCH_KEYS = ['folder', 'prop', 'equals', 'record', 'recipe'] as const
 const PROP_KEYS = ['kind', 'required', 'values'] as const
 const TYPE_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/
 const FOLDER_SEGMENT = /^[\w.-]+$/
 const COLOR = /^[a-z][a-z-]{0,23}$/
+const LABEL_KEY = /^[a-z][a-z0-9_-]{0,39}$/
+const ICON = /^[^\s\u0000-\u001F\u007F-\u009F]{1,4}$/u
 const PLACEHOLDER = /^\{\{[A-Za-z_][\w-]{0,31}\}\}$/
 // An allowlist of token shapes: anything that is not one of these, a loop, an expression or code alike, is refused.
 const OPTION = /^([A-Za-z_][\w-]{0,31})=([\w.:/,@#-]{1,200}|\{\{[A-Za-z_][\w-]{0,31}\}\})$/
@@ -257,6 +260,25 @@ function colorsOf(report: Report, raw: unknown, props: Record<string, PropDecl>)
   return colors
 }
 
+function iconsOf(report: Report, raw: unknown): Record<string, string> {
+  const icons: Record<string, string> = {}
+  if (raw === undefined || raw === null) return icons
+  if (!isRecord(raw)) {
+    report('icons', `must map a field label to an icon, got ${kindOf(raw)}`)
+    return icons
+  }
+  for (const [label, icon] of Object.entries(raw)) {
+    const path = join('icons', LABEL_KEY.test(label) ? label : '<key>')
+    if (!LABEL_KEY.test(label)) {
+      report(path, `${shown(label)} is not a field label; write it lowercase with - for spaces`)
+      continue
+    }
+    const glyph = word(report, icon, path, ICON, 'an icon; use one to four characters')
+    if (glyph) icons[label] = glyph
+  }
+  return icons
+}
+
 function placeholderProblems(report: Report, line: string, at: number): void {
   for (const found of line.matchAll(/\{\{|\{%/g)) {
     const start = found.index ?? 0
@@ -343,6 +365,7 @@ export function readDefinition(file: string, text: string): DefinitionCheck {
   const requiresWhen = requiresWhenOf(report, top.requires_when, props)
   const layoutDefault = layoutsOf(report, top.layout_default)
   const colors = colorsOf(report, top.colors, props)
+  const icons = iconsOf(report, top.icons)
   const blocks = templateBlocks(report, front.body, front.bodyStartLine)
   if (sink.length || type === undefined || match === undefined) return { ok: false, problems: sink }
   return {
@@ -356,6 +379,7 @@ export function readDefinition(file: string, text: string): DefinitionCheck {
       ...optional('requiresWhen', requiresWhen),
       layoutDefault,
       colors,
+      icons,
       template: front.body,
       templateStartLine: front.bodyStartLine,
       blocks,

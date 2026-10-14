@@ -155,7 +155,7 @@ describe('readDefinition: frontmatter', () => {
       ].join('\n'),
     )
     expect(problemsOf(check)).toEqual([
-      'odd.md: owner "owner" is not part of a definition; it takes type, match, props, requires_when, layout_default, colors',
+      'odd.md: owner "owner" is not part of a definition; it takes type, match, props, requires_when, layout_default, colors, icons',
       'odd.md: match.where "where" is not part of match; it takes folder, prop, equals, record, recipe',
       'odd.md: props.size.kind "number" is not a prop kind; use text, choice, date, ref, links',
       'odd.md: props.note.default "default" is not part of a prop; it takes kind, required, values',
@@ -187,6 +187,19 @@ describe('readDefinition: frontmatter', () => {
   test('a frontmatter the reader cannot read errors with the file and line', () => {
     expect(problemsOf(readDefinition('deep.md', ['---', 'type: deep', 'match:', '  a:', '    b: c', '---'].join('\n')))[0]).toMatch(/^deep\.md: frontmatter line 5 /)
     expect(problemsOf(readDefinition('plain.md', '# no frontmatter'))).toEqual(['plain.md: $ has no frontmatter; a definition starts with ---'])
+  })
+
+  test('icons maps a field label to a glyph; a label key is lowercase with - for spaces', () => {
+    const check = readDefinition('icons.md', ['---', 'type: icons', 'match: { record: icons }', 'icons:', '  author: \u{f0004}', '  merge-state: \u{f419}', '---'].join('\n'))
+    expect(loaded(check).icons).toEqual({ author: '\u{f0004}', 'merge-state': '\u{f419}' })
+    expect(loaded(readDefinition('none.md', ['---', 'type: none', 'match: { record: none }', '---'].join('\n'))).icons).toEqual({})
+  })
+
+  test('an icon that is not a short glyph, or icons that are not a map, errors naming the label', () => {
+    const lines = (icons: string[]) => problemsOf(readDefinition('icons.md', ['---', 'type: icons', 'match: { record: icons }', ...icons, '---'].join('\n')))
+    expect(lines(['icons:', '  author: a whole sentence here'])).toEqual(['icons.md: icons.author "a whole sentence here" is not an icon; use one to four characters'])
+    expect(lines(['icons:', '  author: [a, b]'])).toEqual(['icons.md: icons.author must be text, got a list'])
+    expect(lines(['icons: author'])).toEqual(['icons.md: icons must map a field label to an icon, got text'])
   })
 
   test('requires_when must name declared props', () => {

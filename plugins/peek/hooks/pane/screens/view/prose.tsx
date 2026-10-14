@@ -36,9 +36,23 @@ export type ProseOptions = {
   items?: (rule: Rule, options: Record<string, string>) => readonly Item[] | Promise<readonly Item[]>
   // The page's keyboard row the first block row takes, when earlier prose on the page already claimed rows.
   navStart?: number
+  // A record page draws the record blocks (header, fields, media, comments) from its record; elsewhere each is a note.
+  record?: (lang: RecordBlock, options: Record<string, string>, navStart: number) => Promise<ProsePart[]>
 }
 
+export type RecordBlock = (typeof RECORD_BLOCKS)[number]
+
 export type ProsePart = { node: RenderChildren; rows: number; heading?: string; nav?: BlockNav[] }
+
+const INFO_OPTION = /^([\w.-]+)=(.*)$/
+
+const isRecordBlock = (lang: string): lang is RecordBlock => (RECORD_BLOCKS as readonly string[]).includes(lang)
+
+const infoOptions = (info: string): Record<string, string> =>
+  Object.fromEntries(info.split(/\s+/).flatMap(token => {
+    const option = INFO_OPTION.exec(token)
+    return option?.[1] && option[2] !== undefined ? [[option[1], option[2]]] : []
+  }))
 
 const MAX_PARSED = 300
 const parsed = new Map<string, DocPart[]>()
@@ -74,7 +88,12 @@ export async function proseParts(ctx: DrawContext, io: NavIo, key: string, text:
       }
     } else if (part.kind === 'heading') {
       add(Heading(inner, `${at}-heading`, part.level, part.text), part.level === 1 ? 2 : 1, part.text)
-    } else if (part.kind === 'code' && (RECORD_BLOCKS as readonly string[]).includes(part.lang)) {
+    } else if (part.kind === 'code' && isRecordBlock(part.lang) && options.record) {
+      for (const drawn of await options.record(part.lang, infoOptions(part.info), navCount)) {
+        navCount += drawn.nav?.length ?? 0
+        add(drawn.node, drawn.rows, drawn.heading, drawn.nav)
+      }
+    } else if (part.kind === 'code' && isRecordBlock(part.lang)) {
       add(DimLine(inner, `${at}-record`, `${part.lang} · drawn on a record page`, width), 1)
     } else if (spec) {
       cursor ??= await io.cursor.read()

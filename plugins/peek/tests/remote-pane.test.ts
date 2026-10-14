@@ -5,7 +5,8 @@ import { C, META_ICON, mute } from '../hooks/theme'
 import { issueList, pullList, pullView, repoView } from './fixtures/github/items'
 import { hoverLayers } from './fixtures/overlay'
 import { exited } from './fixtures/results'
-import { PANE_PROPS, baseWorld, fakeHttp, fakeProcess, noDisk } from './fixtures/world'
+import { GH_PR_DEFINITION } from './fixtures/github/gh-pr-definition'
+import { PANE_PROPS, baseWorld, fakeHttp, fakeProcess } from './fixtures/world'
 
 const NOW = 10 * 3600_000
 const ran: string[][] = []
@@ -17,8 +18,18 @@ function fakeWorld(on: On, options: { ghAuthExit?: number; isClockMocked?: boole
   baseWorld(on)
   fakeHttp(on)
   if (!options.isClockMocked) on('clock.now', () => ({ value: NOW }))
-  noDisk(on)
+  // Only the built-in PR definition is on disk, so every pull request page here draws from views/gh-pr.md.
+  const isDefinition = (path: string) => path.endsWith('/views/gh-pr.md') && !path.includes('/.local/share/')
+  on('fs.stat', (_$, e) => {
+    if (isDefinition(e.path)) return { value: { kind: 'file' as const, size: GH_PR_DEFINITION.length, mtimeMs: 1, isLink: false } }
+    throw new Error(`ENOENT ${e.path}`)
+  })
+  on('fs.list', (_$, e) => {
+    if (isDefinition(`${e.path}/gh-pr.md`)) return { value: [{ name: 'gh-pr.md', kind: 'file' as const, size: GH_PR_DEFINITION.length, mtimeMs: 1, isLink: false }] }
+    throw new Error(`ENOENT ${e.path}`)
+  })
   on('fs.read', (_$, e) => {
+    if (isDefinition(e.path)) return { value: GH_PR_DEFINITION }
     if (e.path === '/Users/me/notes.md') return { value: '# Notes\n\n- [ ] one\n' }
     throw new Error(`ENOENT ${e.path}`)
   })
