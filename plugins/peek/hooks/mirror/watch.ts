@@ -10,8 +10,10 @@ import {
   SESSION_ENDED_PROP,
   TASK_STATUS,
   listOf,
+  listTitleOf,
   mirrorPlaceOf,
   mirrorRoot,
+  mirrorSessions,
   newestDirs,
   parseAgentItem,
   propsOf,
@@ -82,6 +84,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
   const followed = new Map<string, Followed>()
   const places = new Map<string, TaskPlace>()
   const unplaced = new Map<string, number>()
+  const backfilled = new Set<string>()
   let running: Promise<void> | null = null
 
   const placeOf = async (root: string, session: string): Promise<TaskPlace> => {
@@ -132,7 +135,7 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
       current
         ? { group: current, outcomes: [] }
         : createGroup(
-            { projectKey: place.key, id, title: `Agent tasks ${session.slice(0, 8)} #${key}` },
+            { projectKey: place.key, id, title: listTitleOf(list) },
             [
               { op: 'setRule', rule: { list } },
               { op: 'setSplit', split: 'status' },
@@ -278,6 +281,9 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     const state = f.state
     if (!state) return
     await settle(root, session, f, state, stat.mtimeMs)
+    // A repo placement changes only through moveList, which writes it; rereading it each poll would rerun git once the
+    // place cache overflows.
+    if (state.placeKey === undefined || state.placeKey === 'user') state.placeKey = (await placeOf(root, session)).key
     if (JSON.stringify(state) !== before) await writeListState(io, root, session, state)
   }
 
@@ -291,6 +297,15 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
     for (const session of sessions) {
       // One unreadable folder must not stop the others from mirroring.
       await scan(root, tasks, session).catch(() => undefined)
+    }
+    // Lists kept before they recorded their repo, whose task folder Claude Code has since removed, are never scanned.
+    for (const session of await mirrorSessions(io, root)) {
+      if (backfilled.has(session)) continue
+      if (backfilled.size >= MIRROR_CAPS.sessions * 4) backfilled.clear()
+      backfilled.add(session)
+      const state = await readListState(io, session, root).catch(() => null)
+      if (!state || state.placeKey !== undefined) continue
+      await writeListState(io, root, session, { ...state, placeKey: (await placeOf(root, session)).key }).catch(() => undefined)
     }
   }
 
@@ -375,7 +390,10 @@ export function createMirror(io: TasksIo, self: { id: string; root: string }): M
         const groupId = await ensureGroup(next, session, key)
         if (groupId) entry.groupId = groupId
       }
-      if (state && open.length) await writeListState(io, root, session, state)
+      if (state) {
+        state.placeKey = next.key
+        await writeListState(io, root, session, state)
+      }
     },
   }
 }

@@ -352,3 +352,12 @@ export function agentTranscript(w: World, cwd: string, session: string, lines: r
   w.files[path] = lines.map(one => JSON.stringify(one)).join('\n')
   return path
 }
+
+export const MIRROR_ROOT = `${HOME}/.local/share/claude-peek/mirror`
+
+// The list state the mirror keeps per session: each list's phase, and the repo the session was placed in.
+export function mirrorListState(w: World, session: string, lists: Record<string, { phase: string; archivedAt?: number; foldedAt?: number }>, placeKey = '/repo/.git') {
+  const path = `${MIRROR_ROOT}/${session}/state.json`
+  w.files[path] = JSON.stringify({ count: Math.max(1, Object.keys(lists).length), watermark: 0, isCleared: false, lists, placeKey })
+  w.touch(path)
+}

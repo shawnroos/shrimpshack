@@ -93,7 +93,7 @@ async function listTasks(io: NavIo, raw: unknown): Promise<Result> {
 async function readTask(io: NavIo, raw: unknown): Promise<Result> {
   const id = (raw as { id?: unknown } | null)?.id
   if (!isText(id)) return said('Give the id of a task from list_tasks.')
-  const item = await findTask(io, await taskItems(io), id)
+  const item = await findTask(io, await taskItems(io, { isEverywhere: true }), id)
   if (!item) return noTask(id)
   const text = await io.readFile(item.href).catch(() => '')
   const body = readFrontmatter(text).body.trim()
@@ -181,7 +181,7 @@ async function saveTask(io: NavIo, raw: unknown): Promise<Result> {
   if (!isUpdate && !isText(input.name)) return said(MESSAGES.name)
   const onBehalf = input.on_behalf
   if ((!isUpdate || onBehalf !== undefined) && onBehalf !== 'person' && onBehalf !== 'self') return said(MESSAGES.onBehalf)
-  const items = await taskItems(io)
+  const items = await taskItems(io, { isEverywhere: true })
   const read = await readEdits(io, input, items)
   if ('result' in read) return read
   const { edits } = read
@@ -281,7 +281,7 @@ async function moveTasks(io: NavIo, raw: unknown): Promise<Result> {
     return said(`Moved list ${input.list} to ${target.place.folder}.`)
   }
 
-  const items = await taskItems(io)
+  const items = await taskItems(io, { isEverywhere: true })
   const found: Item[] = []
   for (const ref of input.tasks as string[]) {
     const item = await findTask(io, items, ref)

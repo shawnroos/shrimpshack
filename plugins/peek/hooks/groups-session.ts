@@ -315,7 +315,9 @@ export async function taskPlaceOf(io: TasksIo, worktreeRoot?: string): Promise<T
   return worktreeRoot ? capturePlace(io, worktreeRoot) : userPlace(io)
 }
 
-export async function ruleCandidates(io: NavIo, groups: readonly Group[], worktreeRoot?: string): Promise<Item[]> {
+// Mirrored lists are read for this worktree's repo, or for the user-level list outside one; `isEverywhere` reads every
+// list, archived ones too, for finding a task by its id.
+export async function ruleCandidates(io: NavIo, groups: readonly Group[], worktreeRoot?: string, options: { isEverywhere?: boolean } = {}): Promise<Item[]> {
   if (!groups.some(one => one.rule || one.split)) return []
   const tio = tasksIoOf(io)
   const live = liveSession(worktreeRoot)
@@ -327,7 +329,8 @@ export async function ruleCandidates(io: NavIo, groups: readonly Group[], worktr
   if (index && !live) await index.refresh(tio).catch(() => undefined)
   const seen = new Set<string>()
   const items: Item[] = []
-  const mirrored = await mirrorDocs(tio).catch(() => [])
+  const shownPlace = repo ?? user
+  const mirrored = options.isEverywhere ? await mirrorDocs(tio).catch(() => []) : shownPlace ? await mirrorDocs(tio, shownPlace).catch(() => []) : []
   for (const [docs, source] of [[folders, 'task-folder'], [index?.docs() ?? [], 'deliverable'], [mirrored, 'mirrored']] as const) {
     for (const doc of docs) {
       if (seen.has(doc.path)) continue

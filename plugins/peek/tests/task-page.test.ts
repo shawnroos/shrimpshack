@@ -2,13 +2,13 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { cycleLayoutOfRow, getPlace, noteRow, onPlaceChange, setPlace } from '../hooks/pane/blocks/common'
-import { archivedRows, canAdopt, wirePlaces } from '../hooks/pane/actions'
+import { canAdopt, wirePlaces } from '../hooks/pane/actions'
 import { readFrontmatter } from '../hooks/frontmatter'
 import { recordText, withProp } from '../hooks/mirror/records'
 import { fillTemplate } from '../hooks/views/fill'
 import { readDefinition } from '../hooks/views/definition'
 import type { Item } from '../hooks/views/items'
-import { PANE_PROPS, call, fakeFs } from './fixtures/world'
+import { MIRROR_ROOT, PANE_PROPS, call, fakeFs, mirrorListState } from './fixtures/world'
 import type { World } from './fixtures/world'
 
 const FENCE = '```'
@@ -309,6 +309,7 @@ describe('the Tasks page', () => {
     const record = '/home/.local/share/claude-peek/mirror/s9/3.md'
     const text = withProp(recordText({ session: 's9', count: 1, item: { id: '3', subject: 'Left over', status: 'pending', blockedBy: [] }, status: 'todo' }), 'session_ended', true)
     const w = taskWorld(on, { [record]: text, '/home/.local/share/claude-peek/mirror/s9/session.json': JSON.stringify({ root: '/repo', endedAt: 1 }) })
+    mirrorListState(w, 's9', { 1: { phase: 'folded', foldedAt: 1 } })
     on('clock.every', () => ({ value: undefined }))
     on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }) as never)
     await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
@@ -325,21 +326,45 @@ describe('the Tasks page', () => {
     await ui.unmount()
   })
 
-  test('"Archived sequences" lists archived groups newest first, and a row opens its group', async () => {
-    const opened: unknown[] = []
-    const cell = (start: unknown) => {
-      let value = start
-      return { read: async () => value, update: async (change: (old: unknown) => unknown) => (value = change(value)) }
+  test('"Archived sequences" lists this repo\'s archived agent lists newest first, a row opens a page of the list\'s items, and the Tasks page leaves them out', async ($, on) => {
+    const OLD = 'aaaaaaaa-0000-4000-8000-000000000000'
+    const NEW = 'bbbbbbbb-0000-4000-8000-000000000000'
+    const ELSEWHERE = 'cccccccc-0000-4000-8000-000000000000'
+    const agentRecord = (session: string, id: string, subject: string, status: string, isEnded = false) => {
+      const text = recordText({ session, count: 1, item: { id, subject, status: status === 'todo' ? 'pending' : 'completed', blockedBy: [] }, status })
+      return { [`${MIRROR_ROOT}/${session}/${id}.md`]: isEnded ? withProp(text, 'session_ended', true) : text }
     }
-    const openGroup = cell(null)
-    const io = { openGroup, mode: cell('view'), page: cell(3), view: cell(null), mentions: cell([]) }
-    const group = (id: string, title: string, archivedAt?: number) => ({ id, title, ...(archivedAt === undefined ? {} : { archivedAt }) })
-    const rows = archivedRows(io as never, [group('aaaaaaaa', 'Old run', 100), group('bbbbbbbb', 'Live run'), group('cccccccc', 'New run', 300)] as never)
-    expect(rows.map(one => one.label)).toEqual(['Archived: New run', 'Archived: Old run'])
-    await rows[1]?.run()
-    opened.push(await openGroup.read())
-    expect(opened).toEqual([{ id: 'aaaaaaaa', item: null }])
-    expect(await io.mode.read()).toBe('groups')
+    const w = taskWorld(on, {
+      ...FAMILY,
+      ...agentRecord(OLD, '1', 'Old step one', 'done'),
+      ...agentRecord(OLD, '2', 'Old step two', 'todo', true),
+      ...agentRecord(NEW, '1', 'New step one', 'done'),
+      ...agentRecord(ELSEWHERE, '1', 'Elsewhere step', 'done'),
+    })
+    mirrorListState(w, OLD, { 1: { phase: 'archived', archivedAt: 100 } })
+    mirrorListState(w, NEW, { 1: { phase: 'archived', archivedAt: 300 } })
+    mirrorListState(w, ELSEWHERE, { 1: { phase: 'archived', archivedAt: 200 } }, '/other/.git')
+    const ui = await mount($)
+    await menuPress(ui, $, 'Tasks: ')
+    const page = await drawnText(ui)
+    expect(page).toContain('Ship the export')
+    expect(page).not.toContain('Old step')
+    await $.command.run({ command: 'peek-menu' } as never)
+    await ui.redraw()
+    await ui.input({ key: 'menu-filter', text: 'Archived: ', kind: 'change' })
+    const menu = await drawnText(ui)
+    expect(menu.indexOf('Archived: Agent tasks bbbbbbbb #1')).toBeGreaterThan(-1)
+    expect(menu.indexOf('Archived: Agent tasks aaaaaaaa #1')).toBeGreaterThan(menu.indexOf('Archived: Agent tasks bbbbbbbb #1'))
+    expect(menu).not.toContain('cccccccc')
+    const row = await ui.find({ type: 'Button', text: /^Archived: Agent tasks aaaaaaaa #1/ })
+    await ui.press({ key: String(row?.props.key) })
+    await settle()
+    const opened = await drawnText(ui)
+    expect(opened).toContain('Old step one')
+    expect(opened).toContain('Old step two')
+    expect(opened).toContain('session ended')
+    expect(opened).not.toContain('New step one')
+    await ui.unmount()
   })
 })
 

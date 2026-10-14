@@ -1,8 +1,8 @@
 import type { Mode } from '../../types'
-import type { Group } from '../../types/groups'
 import { nextOf } from '../gallery'
 import type { RoleFilter, Scope } from '../gallery'
-import { openGroupPage, setStar, toggleExpanded, toggleGroupStar } from '../groups-session'
+import { setStar, toggleExpanded, toggleGroupStar } from '../groups-session'
+import { writeArchivePage } from '../mirror/records'
 import { openFromPage, refresh, switchMode } from '../navigation'
 import type { Cell, NavIo } from '../navigation'
 import { fileHref, parseHref } from '../paths'
@@ -17,6 +17,7 @@ import { cycleLayoutOfRow, onPlaceChange, setPlace, toggleFoldOfRow } from './bl
 import type { PlaceState } from './blocks/common'
 import { isEnded } from './blocks/row'
 import { isMirrored, ownPlace, placeOfDoc, tasksIoOf } from './task-data'
+import type { ArchivedList } from './task-data'
 import type { Action, PaneActions } from './types'
 
 export const MODES: { id: Mode; label: string; icon: string; hotkey: string; row: string; about: string; isMenuSwitch: boolean }[] = [
@@ -218,13 +219,16 @@ export function creatorRows(io: NavIo, creators: readonly string[], filter: { cr
   ]
 }
 
-type Archivable = Pick<Group, 'id' | 'title'> & { archivedAt?: number }
+async function openArchivedList(io: NavIo, list: string) {
+  const page = await writeArchivePage(tasksIoOf(io), list).catch(() => null)
+  if (page) await openFromPage(io, fileHref(page))
+  else io.toast(`Could not open the archived list ${list}`)
+}
 
-export function archivedRows(io: NavIo, groups: readonly Archivable[]): Action[] {
-  return groups
-    .filter((one): one is Archivable & { archivedAt: number } => typeof one.archivedAt === 'number')
+export function archivedRows(io: NavIo, lists: readonly ArchivedList[]): Action[] {
+  return [...lists]
     .sort((a, b) => b.archivedAt - a.archivedAt)
-    .map(one => ({ id: `archived-${one.id}`, label: `Archived: ${one.title}`, menu: `Archived: ${one.title}`, run: () => openGroupPage(io, one.id) }))
+    .map(one => ({ id: `archived-${one.list}`, label: `Archived: ${one.title}`, menu: `Archived: ${one.title}`, run: () => openArchivedList(io, one.list) }))
 }
 
 export async function openTasksPage(io: NavIo) {

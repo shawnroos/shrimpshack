@@ -1,7 +1,8 @@
 import type { Group } from '../../types/groups'
 import { groupHome, ruleCandidates, taskPlaceOf } from '../groups-session'
 import type { NavIo } from '../navigation'
-import { mirrorDocs, mirrorRoot, newestDirs, readListState, MIRROR_CAPS, SESSION_ENDED_PROP } from '../mirror/records'
+import { listOf, listTitleOf, mirrorDocs, mirrorRoot, mirrorSessions, placeKeyOf, shownListState, splitList } from '../mirror/records'
+import type { ListPhase } from '../mirror/records'
 import { capturePlace, userPlace } from '../tasks/store'
 import type { TaskPlace, TasksIo } from '../tasks/store'
 import { matches, requiredPropsFor } from '../views/definition'
@@ -80,9 +81,9 @@ function withDerived(items: readonly Item[], definitions: readonly Definition[])
   })
 }
 
-export async function taskItems(io: NavIo): Promise<Item[]> {
+export async function taskItems(io: NavIo, options: { isEverywhere?: boolean } = {}): Promise<Item[]> {
   const home = await groupHome(io).catch(() => null)
-  const [items, definitions] = await Promise.all([ruleCandidates(io, [EVERY_TASK], home?.worktreeRoot), definitionsOf(io)])
+  const [items, definitions] = await Promise.all([ruleCandidates(io, [EVERY_TASK], home?.worktreeRoot, options), definitionsOf(io)])
   return withDerived(items, definitions)
 }
 
@@ -117,20 +118,21 @@ export async function isMirrored(io: NavIo, path: string): Promise<boolean> {
   return root !== null && path.startsWith(`${root}/`)
 }
 
-// Archived agent lists, each named by its group's title when the group is still there.
-export async function archivedLists(io: NavIo): Promise<{ id: string; title: string; archivedAt: number }[]> {
+export type ArchivedList = { list: string; title: string; archivedAt: number }
+
+export async function archivedLists(io: NavIo): Promise<ArchivedList[]> {
   const tio = tasksIoOf(io)
   const root = await mirrorRoot(tio).catch(() => null)
   if (!root) return []
-  const home = await groupHome(io).catch(() => null)
-  const groups = home ? await io.shownGroups(home.place).catch(() => []) : []
-  const sessions = await newestDirs(tio, root, (await io.list(root).catch(() => [])).filter(one => one.kind === 'dir').map(one => one.name), MIRROR_CAPS.sessions)
-  const found: { id: string; title: string; archivedAt: number }[] = []
-  for (const session of sessions) {
-    const state = await readListState(tio, session, root).catch(() => null)
-    for (const [list, entry] of Object.entries(state?.lists ?? {})) {
-      if (entry.phase !== 'archived' || !entry.groupId) continue
-      found.push({ id: entry.groupId, title: groups.find(one => one.id === entry.groupId)?.title ?? list, archivedAt: entry.archivedAt ?? 0 })
+  const place = await ownPlace(io)
+  const found: ArchivedList[] = []
+  for (const session of await mirrorSessions(tio, root)) {
+    const state = await shownListState(tio, root, session)
+    if (!state || placeKeyOf(state) !== place.key) continue
+    for (const [key, entry] of Object.entries(state.lists)) {
+      if (entry.phase !== 'archived') continue
+      const list = listOf(session, Number(key))
+      found.push({ list, title: listTitleOf(list), archivedAt: entry.archivedAt ?? 0 })
     }
   }
   return found
@@ -139,13 +141,17 @@ export async function archivedLists(io: NavIo): Promise<{ id: string; title: str
 const OPEN = new Set(['todo', 'doing'])
 export const PIN_CAPS = { tasks: 5, lists: 3 }
 
-export type AgentLine = { list: string; open: number; lastAt: number }
+export type AgentLine = { list: string; open: number; lastAt: number; isFolded: boolean }
 export type RecentPins = { tasks: Item[]; moreTasks: number; lists: AgentLine[]; moreLists: number; tasksPage: string }
 
 const isOpen = (item: { props: Item['props'] }) => typeof item.props.status === 'string' && OPEN.has(item.props.status)
 
-// Recent's pinned open work: Shawn's own open tasks, then one line per agent list that still has open items. A list
-// whose session ended or whose items are all closed is left out, the same test watch.ts folds a list by.
+async function phaseOf(io: TasksIo, root: string, list: string): Promise<ListPhase | null> {
+  return (await shownListState(io, root, splitList(list).session))?.lists[splitList(list).key]?.phase ?? null
+}
+
+// Recent's pinned open work: Shawn's own open tasks, then one line per agent list: an active one with its open count,
+// and a folded one (all closed, or its session ended) until it archives (R22, AE3).
 export async function recentPins(io: NavIo): Promise<RecentPins | null> {
   const root = (await groupHome(io).catch(() => null))?.worktreeRoot
   const items = await ruleCandidates(io, [EVERY_TASK], root)
@@ -155,19 +161,25 @@ export async function recentPins(io: NavIo): Promise<RecentPins | null> {
   const counts = new Map<string, number>()
   for (const one of items) {
     const list = one.props.list
-    if (typeof list !== 'string' || !isOpen(one) || one.props[SESSION_ENDED_PROP] === true) continue
-    counts.set(list, (counts.get(list) ?? 0) + 1)
+    if (typeof list === 'string') counts.set(list, (counts.get(list) ?? 0) + Number(isOpen(one)))
+  }
+  const tio = tasksIoOf(io)
+  const mirror = counts.size ? await mirrorRoot(tio).catch(() => null) : null
+  const folded = new Set<string>()
+  for (const [list, open] of counts) {
+    const phase = mirror ? await phaseOf(tio, mirror, list) : null
+    if (phase === 'folded') folded.add(list)
+    else if (phase === 'archived' || !open) counts.delete(list)
   }
   if (!own.length && !counts.size) return null
-  const tio = tasksIoOf(io)
   const lastAt = new Map<string, number>()
   for (const doc of counts.size ? await mirrorDocs(tio).catch(() => []) : []) {
     const list = doc.props.list
     if (typeof list === 'string' && counts.has(list)) lastAt.set(list, Math.max(lastAt.get(list) ?? 0, doc.mtimeMs))
   }
   const lists = [...counts]
-    .map(([list, open]) => ({ list, open, lastAt: lastAt.get(list) ?? 0 }))
-    .sort((a, b) => b.lastAt - a.lastAt || a.list.localeCompare(b.list))
+    .map(([list, open]) => ({ list, open, lastAt: lastAt.get(list) ?? 0, isFolded: folded.has(list) }))
+    .sort((a, b) => Number(a.isFolded) - Number(b.isFolded) || b.lastAt - a.lastAt || a.list.localeCompare(b.list))
   const place = await taskPlaceOf(tio, root)
   return {
     tasks: own.slice(0, PIN_CAPS.tasks),

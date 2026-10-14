@@ -1,6 +1,7 @@
 import type { PropValue } from '../../types'
 import { readFrontmatter } from '../frontmatter'
 import { shortId } from '../groups'
+import { fileHref } from '../paths'
 import { readDoc } from '../tasks/store'
 import type { TaskDoc, TaskPlace, TasksIo } from '../tasks/store'
 import { asObj, tryJson } from '../wire'
@@ -8,10 +9,10 @@ import { asObj, tryJson } from '../wire'
 export type AgentItem = { id: string; subject: string; description?: string; status: string; blockedBy: string[] }
 export type ListPhase = 'active' | 'folded' | 'archived'
 export type ListEntry = { phase: ListPhase; groupId?: string; foldedAt?: number; archivedAt?: number }
-export type ListState = { count: number; watermark: number; isCleared: boolean; lists: Record<string, ListEntry> }
+export type ListState = { count: number; watermark: number; isCleared: boolean; lists: Record<string, ListEntry>; placeKey?: string }
 export type SessionNote = { root?: string; endedAt?: number; endedMtime?: number; reason?: string }
 
-export const MIRROR_CAPS = { sessions: 64, items: 500, docs: 2000 }
+export const MIRROR_CAPS = { sessions: 64, items: 500, docs: 2000, states: 256 }
 // The prop the U5 row drawer (SESSION_ENDED_PROP in pane/blocks/row.tsx) reads to show "session ended".
 export const SESSION_ENDED_PROP = 'session_ended'
 export const TASK_STATUS: Readonly<Record<string, string>> = { pending: 'todo', in_progress: 'doing', completed: 'done' }
@@ -25,6 +26,11 @@ export async function mirrorRoot(io: TasksIo): Promise<string> {
 export const recordPathOf = (root: string, session: string, taskId: string) => `${root}/${session}/${taskId}.md`
 export const listOf = (session: string, count: number) => `${session}#${count}`
 export const recordIdOf = (session: string, taskId: string) => `${session}/${taskId}`
+export const splitList = (list: string) => ({ session: list.slice(0, list.lastIndexOf('#')), key: list.slice(list.lastIndexOf('#') + 1) })
+export const listTitleOf = (list: string) => {
+  const { session, key } = splitList(list)
+  return `Agent tasks ${session.slice(0, 8)} #${key}`
+}
 const noteOf = (root: string, session: string) => `${root}/${session}/session.json`
 const stateOf = (root: string, session: string) => `${root}/${session}/state.json`
 
@@ -136,8 +142,25 @@ export async function readListState(io: TasksIo, session: string, root?: string)
       ...(archivedAt !== undefined ? { archivedAt } : {}),
     }
   }
-  return { count, watermark: numberOf(raw.watermark) ?? 0, isCleared: raw.isCleared === true, lists }
+  return { count, watermark: numberOf(raw.watermark) ?? 0, isCleared: raw.isCleared === true, lists, ...(typeof raw.placeKey === 'string' ? { placeKey: raw.placeKey } : {}) }
 }
+
+const stateCache = new Map<string, { mtimeMs: number; state: ListState | null }>()
+
+export async function shownListState(io: TasksIo, root: string, session: string): Promise<ListState | null> {
+  const path = stateOf(root, session)
+  const mtimeMs = (await io.stat(path))?.mtimeMs
+  if (mtimeMs === undefined) return null
+  const known = stateCache.get(path)
+  if (known?.mtimeMs === mtimeMs) return known.state
+  const state = await readListState(io, session, root).catch(() => null)
+  if (stateCache.size >= MIRROR_CAPS.states) stateCache.clear()
+  stateCache.set(path, { mtimeMs, state })
+  return state
+}
+
+// A list peek could not place belongs to the user-level list (R21).
+export const placeKeyOf = (state: ListState | null) => state?.placeKey ?? 'user'
 
 export const writeListState = (io: TasksIo, root: string, session: string, state: ListState) => writeAtomic(io, stateOf(root, session), JSON.stringify(state))
 
@@ -152,12 +175,19 @@ export async function newestDirs(io: TasksIo, parent: string, names: readonly st
 
 const docCache = new Map<string, { mtimeMs: number; doc: TaskDoc | null }>()
 
-// A record a takeover doc replaced is left out: the doc carries the same list, so the item would show twice.
-export async function mirrorDocs(io: TasksIo): Promise<TaskDoc[]> {
+export const mirrorSessions = async (io: TasksIo, root: string) =>
+  newestDirs(io, root, (await io.list(root).catch(() => [])).filter(one => one.kind === 'dir').map(one => one.name), MIRROR_CAPS.sessions)
+
+// A record a takeover doc replaced is left out: the doc carries the same list, so the item would show twice. With a
+// place, only lists placed there and not yet archived are read; without one, every record is, so a task can still be
+// found by its id after its list moved or archived.
+export async function mirrorDocs(io: TasksIo, place?: { key: string }): Promise<TaskDoc[]> {
   const root = await mirrorRoot(io)
-  const sessions = await newestDirs(io, root, (await io.list(root).catch(() => [])).filter(one => one.kind === 'dir').map(one => one.name), MIRROR_CAPS.sessions)
+  const sessions = await mirrorSessions(io, root)
   const docs: TaskDoc[] = []
   for (const session of sessions) {
+    const state = place ? await shownListState(io, root, session) : null
+    if (place && placeKeyOf(state) !== place.key) continue
     const names = (await io.list(`${root}/${session}`).catch(() => [])).filter(one => one.kind === 'file' && one.name.endsWith('.md'))
     for (const one of names.slice(0, MIRROR_CAPS.items)) {
       const path = `${root}/${session}/${one.name}`
@@ -169,8 +199,36 @@ export async function mirrorDocs(io: TasksIo): Promise<TaskDoc[]> {
         known = { mtimeMs: stat.mtimeMs, doc: await readDoc(io, path) }
         docCache.set(path, known)
       }
-      if (known.doc && typeof known.doc.props.takeover !== 'string') docs.push(known.doc)
+      const list = known.doc?.props.list
+      const isArchived = place !== undefined && typeof list === 'string' && state?.lists[splitList(list).key]?.phase === 'archived'
+      if (known.doc && typeof known.doc.props.takeover !== 'string' && !isArchived) docs.push(known.doc)
     }
   }
   return docs
+}
+
+const escapeLinkText = (text: string) => text.replace(/[[\]\\]/g, '\\$&')
+
+// An archived list has no group left, so it opens as a page written from its records when Shawn asks for it.
+export async function writeArchivePage(io: TasksIo, list: string): Promise<string> {
+  const root = await mirrorRoot(io)
+  const { session, key } = splitList(list)
+  const names = (await io.list(`${root}/${session}`).catch(() => [])).filter(one => one.kind === 'file' && one.name.endsWith('.md'))
+  const rows: { order: number; line: string }[] = []
+  for (const one of names.slice(0, MIRROR_CAPS.items)) {
+    const path = `${root}/${session}/${one.name}`
+    const props = propsOf(await io.read(path).catch(() => ''))
+    if (props.list !== list) continue
+    const takeover = typeof props.takeover === 'string' && (await io.stat(props.takeover)) ? props.takeover : null
+    const shown = takeover ? propsOf(await io.read(takeover).catch(() => '')) : props
+    const status = typeof shown.status === 'string' ? shown.status : 'todo'
+    const name = typeof props.name === 'string' ? props.name : one.name
+    const ended = shown[SESSION_ENDED_PROP] === true ? ' · session ended' : ''
+    rows.push({ order: Number(props.task_id) || 0, line: `- ${status}${ended} · [${escapeLinkText(name)}](${fileHref(takeover ?? path)})` })
+  }
+  rows.sort((a, b) => a.order - b.order)
+  const text = [`# ${listTitleOf(list)}`, '', `Archived agent list, ${rows.length} task${rows.length === 1 ? '' : 's'}.`, '', ...rows.map(one => one.line), ''].join('\n')
+  const page = `${root.slice(0, root.lastIndexOf('/'))}/archive/${session}-${key}.md`
+  await writeAtomic(io, page, text)
+  return page
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { recordText, withProp } from '../hooks/mirror/records'
-import { HOME, PANE_PROPS, call, fakeFs } from './fixtures/world'
+import { HOME, PANE_PROPS, call, fakeFs, mirrorListState } from './fixtures/world'
 import type { World } from './fixtures/world'
 
 const TASKS = '/repo/.peek/tasks'
@@ -14,7 +14,9 @@ function task(w: World, id: string, props: { status?: string; creator?: string }
 }
 
 // One mirrored agent list: `open` items still to do and `done` finished ones, written last so it is the most recent.
-function agentList(w: World, session: string, open: number, done = 0, isEnded = false) {
+function agentList(w: World, session: string, open: number, done = 0, isEnded = false, list: { phase?: string; placeKey?: string } = {}) {
+  const phase = list.phase ?? (isEnded || !open ? 'folded' : 'active')
+  mirrorListState(w, session, { 1: { phase, ...(phase === 'archived' ? { archivedAt: w.now } : {}) } }, list.placeKey)
   for (let n = 0; n < open + done; n++) {
     const status = n < open ? 'todo' : 'done'
     const item = { id: String(n + 1), subject: `Step ${n + 1} of ${session}`, status: n < open ? 'pending' : 'completed', blockedBy: [] }
@@ -102,21 +104,23 @@ describe('open work pinned at the top of Recent (R31)', () => {
     await ui.unmount()
   })
 
-  test('two active agent sequences show as two lines with their open counts, not their items; an ended or finished list does not', async ($, on) => {
+  test('an active agent list shows as one line with its open count; a finished or ended list folds to one line until it archives; another repo\'s list stays out', async ($, on) => {
     const w = fakeFs(on)
     agentList(w, sessionOf(1), 2, 1)
-    agentList(w, sessionOf(2), 3)
     agentList(w, sessionOf(3), 0, 2)
     agentList(w, sessionOf(4), 2, 0, true)
+    agentList(w, sessionOf(5), 0, 1, false, { phase: 'archived' })
+    agentList(w, sessionOf(6), 2, 0, false, { placeKey: '/other/.git' })
     const ui = await recent($)
     const names = await rowNames(ui)
-    expect(names.slice(0, 2)).toEqual(['Agent tasks 22222222 #1', 'Agent tasks 11111111 #1'])
+    expect(names.slice(0, 3)).toEqual(['Agent tasks 11111111 #1', 'Agent tasks 44444444 #1', 'Agent tasks 33333333 #1'])
     const text = await drawnText(ui)
-    expect(text).toContain('3 open')
     expect(text).toContain('2 open')
+    expect(text).toContain('2 session ended')
+    expect(text).toContain('finished')
     expect(text).not.toContain('Step 1 of')
-    expect(text).not.toContain('33333333')
-    expect(text).not.toContain('44444444')
+    expect(text).not.toContain('55555555')
+    expect(text).not.toContain('66666666')
     expect(text).not.toContain('More on the Tasks page')
     await ui.press({ key: 'item-0' })
     expect(await drawnText(ui)).toContain('Step 1 of')
@@ -138,7 +142,7 @@ describe('open work pinned at the top of Recent (R31)', () => {
     await ui.unmount()
   })
 
-  test('with no open tasks of Shawn\'s and no active agent list, Recent looks as it does today', async ($, on) => {
+  test('with no open tasks of Shawn\'s and only an archived agent list, Recent looks as it does today', async ($, on) => {
     const w = fakeFs(on)
     await call($, 'star', { target: '/repo/docs/plan.md' })
     const ui = await recent($)
@@ -146,7 +150,7 @@ describe('open work pinned at the top of Recent (R31)', () => {
     task(w, 'x', { status: 'done' })
     task(w, 'y', { status: 'cancelled' })
     task(w, 'z', { creator: sessionOf(9) })
-    agentList(w, sessionOf(3), 0, 2)
+    agentList(w, sessionOf(3), 0, 2, false, { phase: 'archived' })
     expect(withoutHandles(await drawnText(ui))).toBe(before)
     expect(before).not.toContain('OPEN WORK')
     await ui.unmount()

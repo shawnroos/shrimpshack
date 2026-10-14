@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import type { Group } from '../types/groups'
 import { readFrontmatter } from '../hooks/frontmatter'
 import { listGroups, membersOf } from '../hooks/groups'
 import type { GroupPlace } from '../hooks/groups'
@@ -29,12 +30,18 @@ async function setup(on: On, self = { id: AGENT, root: '/repo' }): Promise<Setup
   return { w, io, mirror, repo: await capturePlace(io, '/repo') }
 }
 
+const ANY_TASK: Group = { projectKey: '', id: 'tasks', title: 'Tasks', description: '', starred: false, updatedAt: 0, sections: [], items: [], removed: [], rule: {} }
+const PLACED_NOWHERE = '11111111-2222-4333-8444-555555555555'
 const propsAt = (w: World, path: string) => readFrontmatter(w.files[path] ?? '').props ?? {}
 const navOf = (io: TasksIo) => ({ groupsIo: () => io, home: io.home }) as unknown as NavIo
 const entriesIn = (w: World, place: TaskPlace) =>
   Object.entries(w.files)
     .filter(([path]) => path.startsWith(`${place.stateDir}/entries/`))
     .map(([, text]) => JSON.parse(text) as Record<string, unknown>)
+
+async function mirroredNames(io: TasksIo, worktreeRoot?: string) {
+  return (await ruleCandidates(navOf(io), [ANY_TASK], worktreeRoot)).filter(one => one.source === 'mirrored').map(one => one.name)
+}
 
 async function members(io: TasksIo) {
   const groups = await listGroups(io, REPO_GROUPS)
@@ -108,10 +115,13 @@ test('AE8: an ended session\'s open tasks read "session ended" and archive, whil
   expect(propsAt(w, record(AGENT, '1')).session_ended).toBe(true)
   expect(propsAt(w, record(AGENT, '2')).session_ended).toBe(true)
   expect(propsAt(w, record(AGENT, '3')).session_ended).toBeUndefined()
+  expect(await mirroredNames(io, '/repo')).toEqual(['Read the parser', 'Fix the comma'])
   w.now += ARCHIVE_MS + 1
   await mirror.poll()
   expect((await readListState(io, AGENT))?.lists['1']?.phase).toBe('archived')
   expect(await listGroups(io, REPO_GROUPS)).toHaveLength(0)
+  expect(await mirroredNames(io, '/repo')).toEqual([])
+  expect((await ruleCandidates(navOf(io), [ANY_TASK], '/repo')).map(one => one.name)).toEqual(['Run the tests'])
   const kept = await listFolderTasks(io, repo)
   expect(kept.map(one => [one.props.name, one.status, one.props.creator, one.props.adopted_by])).toEqual([['Run the tests', 'todo', AGENT, 'shawn']])
 })
@@ -252,4 +262,32 @@ test('with more session folders than the cap, the newest ones are followed and t
   agentItem(w, AGENT, '1', 'Newest list')
   await mirror.poll()
   expect((await members(io)).map(one => one.items.map(item => item.name))).toEqual([['Newest list']])
+})
+
+test('R21: a list shows only in the repo its session ran in, an unplaced one only in the user-level list, and a moved one in its new repo', async (_$, on) => {
+  const { w, io, mirror } = await setup(on)
+  agentTranscript(w, '/other', AGENT_TWO, [{ type: 'user', cwd: '/other', sessionId: AGENT_TWO }])
+  agentItem(w, AGENT, '1', 'In this repo')
+  agentItem(w, AGENT_TWO, '1', 'In the other repo')
+  agentItem(w, PLACED_NOWHERE, '1', 'Placed nowhere')
+  await mirror.poll()
+  expect(await mirroredNames(io, '/repo')).toEqual(['In this repo'])
+  expect(await mirroredNames(io, '/wt/feature')).toEqual(['In this repo'])
+  expect(await mirroredNames(io, '/other')).toEqual(['In the other repo'])
+  expect(await mirroredNames(io)).toEqual(['Placed nowhere'])
+  await mirror.moveList(AGENT, '/other')
+  expect(await mirroredNames(io, '/repo')).toEqual([])
+  expect((await mirroredNames(io, '/other')).sort()).toEqual(['In the other repo', 'In this repo'])
+})
+
+test('a list recorded before lists kept their repo, whose task folder is gone, is placed from its session note', async (_$, on) => {
+  const { w, io, mirror } = await setup(on)
+  w.files[`${MIRROR}/${AGENT_TWO}/session.json`] = JSON.stringify({ root: '/other' })
+  w.files[`${MIRROR}/${AGENT_TWO}/state.json`] = JSON.stringify({ count: 1, watermark: 0, isCleared: false, lists: { 1: { phase: 'folded', foldedAt: w.now } } })
+  w.files[record(AGENT_TWO, '1')] = `---\nname: "Old list item"\nid: "${AGENT_TWO}/1"\nstatus: "done"\nlist: "${AGENT_TWO}#1"\n---\n`
+  w.touch(record(AGENT_TWO, '1'))
+  expect(await mirroredNames(io, '/other')).toEqual([])
+  await mirror.poll()
+  expect(await mirroredNames(io, '/other')).toEqual(['Old list item'])
+  expect(await mirroredNames(io, '/repo')).toEqual([])
 })

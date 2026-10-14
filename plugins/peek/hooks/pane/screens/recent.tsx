@@ -26,7 +26,8 @@ function pinRows(pins: RecentPins): PinRow[] {
     ...pins.tasks.map(one => ({ href: fileHref(one.href), name: one.name, meta: typeof one.props.status === 'string' ? one.props.status : '' })),
     ...pins.lists.map(one => {
       const at = one.list.lastIndexOf('#')
-      return { href: page, name: `Agent tasks ${one.list.slice(0, Math.min(8, at))} ${one.list.slice(at)}`, meta: `${one.open} open` }
+      const meta = !one.isFolded ? `${one.open} open` : one.open ? `${one.open} session ended` : 'finished'
+      return { href: page, name: `Agent tasks ${one.list.slice(0, Math.min(8, at))} ${one.list.slice(at)}`, meta }
     }),
     ...(more.length ? [{ href: page, name: 'More on the Tasks page', meta: more.join(' · ') }] : []),
   ]
