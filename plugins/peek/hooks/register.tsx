@@ -24,7 +24,7 @@ import { groupsScreen } from './pane/screens/groups'
 import { recentScreen } from './pane/screens/recent'
 import { galleryScreen } from './pane/screens/gallery'
 import { viewScreen } from './pane/screens/view/index'
-import { armEscape, bootLinear, clamp, nav, openFromPage, personClose, pressLink, refContext, repoContext, setMenu, show, switchMode } from './navigation'
+import { armEscape, bootLinear, clamp, nav, openFromPage, openLink, personClose, pressLink, refContext, repoContext, setMenu, show, switchMode } from './navigation'
 import type { NavIo } from './navigation'
 import { TOOLS } from './group-tools'
 import { createGroupStore } from './groups-store'
@@ -125,7 +125,7 @@ async function selectedNav($: EngineInterface): Promise<NavItem | undefined> {
 async function openNav($: EngineInterface, one: NavItem | undefined) {
   if (one?.groupItem) await openGroupHref(navIoOf($), { id: one.groupItem.group, title: one.groupItem.title }, one.groupItem.key, one.href)
   else if (one?.group) await openGroupPage(navIoOf($), one.group)
-  else if (one?.href) await show(navIoOf($), one.href)
+  else if (one?.href) await openLink(navIoOf($), one.href)
 }
 
 const GALLERY = 'peek-ui'
@@ -535,7 +535,7 @@ export const register: Register = on => {
         return {}
       case 'open': {
         const at = await openedRow($, message.href).catch(() => -1)
-        await (at >= 0 ? selectAndOpen($, at) : show(io, message.href)).catch(() => undefined)
+        await (at >= 0 ? selectAndOpen($, at) : openLink(io, message.href)).catch(() => undefined)
         return {}
       }
     }

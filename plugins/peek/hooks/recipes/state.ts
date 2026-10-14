@@ -1,3 +1,4 @@
+import type { View } from '../../types'
 import type { RecipePage, RecipeRouted } from '../../types/recipes'
 import { fetchedAge } from '../format'
 import type { Page } from './page'
@@ -15,6 +16,14 @@ export const conflictText = (ids: readonly string[]) =>
   `Recipes ${ids.map(id => `"${id}"`).join(' and ')} both handle this link, so peek ran neither. Change one recipe's match so only one claims it.`
 
 export const recipeLabel = (state: RecipePage) => (state.phase === 'conflict' ? 'Recipe conflict' : state.name)
+
+export const pageView = (href: string, state: RecipePage): View => ({
+  href,
+  title: state.phase === 'ready' ? state.page.title : recipeLabel(state),
+  location: state.link,
+  kind: 'recipe',
+  page: state,
+})
 
 const routedOf = ({ id, name, link, isDraft, digest, refreshMinutes, review }: RecipeRouted): RecipeRouted => ({ id, name, link, isDraft, digest, refreshMinutes, ...(review ? { review } : {}) })
 

@@ -1,5 +1,4 @@
 import type { View } from '../../types'
-import type { RecipePage } from '../../types/recipes'
 import { clip, plural } from '../format'
 import { isWebUrl } from '../live'
 import { remoteRef, show } from '../navigation'
@@ -12,9 +11,6 @@ import { PAGE_CAPS, focusItemsOf, outlineOf as pageOutlineOf } from './page'
 import type { Page } from './page'
 import { isApproved, loadRecipe, loadRecipes, matches, overlaps, recipeFamilyOf, recipesDir, routeOf } from './recipes'
 import { SOURCE_FIELDS, recipeFailureText, runRecipe } from './run'
-
-// Until View carries the recipe page itself, the tools read it through this widening.
-type Shown = View & { page?: RecipePage }
 
 export const skillPathOf = (pluginRoot: string) => `${pluginRoot}/skills/peek-recipes/SKILL.md`
 
@@ -175,7 +171,7 @@ export type Placed = { isPlaced: true } | { isPlaced: false; reason: string }
 
 const linkHelp = (skill: string) => ({ result: `Give a link: an http(s) URL. How to write a recipe: ${skill}` })
 
-export function openResult(skill: string, link: string, seen: { was: Shown | null; shown: Shown | null; placed: Placed; route: OpenRoute }) {
+export function openResult(skill: string, link: string, seen: { was: View | null; shown: View | null; placed: Placed; route: OpenRoute }) {
   const { was, shown, placed, route } = seen
   const before = was ? { href: was.href, ...(was.kind ? { kind: was.kind } : {}), ...(was.page && was.page.phase !== 'conflict' ? { recipe: was.page.id } : {}) } : null
   const placing = placed.isPlaced ? { isPlaced: true } : { isPlaced: false, reason: placed.reason }
@@ -198,7 +194,7 @@ export function openResult(skill: string, link: string, seen: { was: Shown | nul
   return { result: `Opened ${who} in peek${marker}${where}.\n${JSON.stringify(body)}` }
 }
 
-function openRouteOf(shown: Shown | null): OpenRoute {
+function openRouteOf(shown: View | null): OpenRoute {
   const state = shown?.page
   if (state) return state.phase === 'conflict' ? { kind: 'conflict' } : { kind: 'recipe', id: state.id, isDraft: state.isDraft }
   if (!shown) return { kind: 'web' }
@@ -207,13 +203,13 @@ function openRouteOf(shown: Shown | null): OpenRoute {
   return ref && recipeFamilyOf(ref.kind) !== 'web' ? { kind: 'builtin', family: recipeFamilyOf(ref.kind) } : { kind: 'web' }
 }
 
-export async function openTool(io: NavIo, raw: unknown, open: (io: NavIo, link: string) => Promise<void> = (one, link) => show(one, link)) {
+export async function openTool(io: NavIo, raw: unknown, open: (io: NavIo, link: string) => Promise<void> = (one, link) => show(one, link, false, { allowDraft: true })) {
   const link = typeof raw === 'string' ? raw.trim() : ''
   const skill = skillPathOf(io.pluginRoot)
   if (!isWebUrl(link)) return linkHelp(skill)
-  const was: Shown | null = await io.view.read().catch(() => null)
+  const was: View | null = await io.view.read().catch(() => null)
   await open(io, link)
-  const shown: Shown | null = await io.view.read()
+  const shown: View | null = await io.view.read()
   // show() fires its own open and drops the answer, so the tool asks again to learn whether the pane is drawn.
   const placed: Placed = await io
     .open({ title: shown?.title ?? 'Peek' })

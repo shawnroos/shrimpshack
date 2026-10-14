@@ -1,18 +1,20 @@
 import type { EngineInterface, PluginState } from 'claude-code'
 
 import type { Loaded, Mode, RemoteRecord, View } from '../types'
+import type { RecipePage } from '../types/recipes'
 import type { Group, GroupResult } from '../types/groups'
 import { bootLinearIdentity, linearContext } from './sources/linear-identity'
-import { describeAge } from './format'
+import { describeAge, fetchedAge } from './format'
 import { noteMentions } from './gallery'
 import type { GroupPlace, GroupWrite, GroupsIo } from './groups'
+import { isWebUrl } from './live'
 import type { LiveIo } from './live'
 import { SCRATCH } from './net'
 import { AVATAR_EDGES, WEB_EDGES, mediaFiles, pictures, remotePicture, withDrawnMermaid } from './images'
 import { bootstrapLinear } from './sources/linear'
 import type { LinearBootstrap } from './sources/linear'
 import { markdownPage, mermaidFences, mermaidPage, toggleTaskLine } from './markdown'
-import { kindOf, parseHref } from './paths'
+import { fileHref, kindOf, parseHref } from './paths'
 import { IDLE_MS, cached, isCurrent, isTimed, refreshItem, snapshotTitles, takeTitleChange, tick } from './refresh'
 import type { CacheEntry } from './refresh'
 import { itemKey, keyOf, parseRef } from './refs'
@@ -22,6 +24,8 @@ import type { RemoteIo } from './remote'
 import type { Ports } from './ports'
 import type { RecipesIo } from './recipes/recipes'
 import type { RunIo } from './recipes/run'
+import { recipeView, refreshPage, tickPage } from './recipes/session'
+import { pageView } from './recipes/state'
 import { adapterOfKind } from './sources/adapter'
 import { remoteFileOf } from './sources/web'
 
@@ -251,7 +255,18 @@ export function starKeyOf(raw: string): string {
   return ref ? keyOf(ref) : itemKey(raw)
 }
 
-export async function show(io: NavIo, raw: string, isFromGroupChain = false) {
+const paneHref = (href: string) => (href.startsWith('/') ? fileHref(href) : href)
+
+async function isPageOnScreen(io: NavIo): Promise<boolean> {
+  return (await io.mode.read()) === 'view' && Boolean((await io.view.read())?.page)
+}
+
+// From a recipe page a link goes through openFromPage, so b comes back to the page.
+export async function openLink(io: NavIo, href: string) {
+  await ((await isPageOnScreen(io)) ? openFromPage(io, href) : show(io, href))
+}
+
+export async function show(io: NavIo, raw: string, isFromGroupChain = false, options: { allowDraft?: boolean } = {}) {
   if (!isFromGroupChain) nav.groupBack = null
   const generation = ++showGeneration
   const ref = remoteRef(raw)
@@ -264,7 +279,12 @@ export async function show(io: NavIo, raw: string, isFromGroupChain = false) {
   void io.open({ title: 'Peek' })
   let next: View
   try {
-    next = file ? await io.loadFile(href, file.path, file.line) : ref ? await loadRemote(io, ref) : await io.loadUrl(href)
+    const onRouted = async (state: RecipePage) => {
+      if (generation === showGeneration) await io.view.update(() => pageView(href, state))
+    }
+    const recipe = file ? null : await recipeView(io, href, raw, options.allowDraft === true, onRouted)
+    if (recipe) startTicking(io)
+    next = recipe ?? (file ? await io.loadFile(href, file.path, file.line) : ref ? await loadRemote(io, ref) : await io.loadUrl(href))
   } catch (error) {
     next = { ...loading, title: 'Could not open', error: error instanceof Error ? error.message : String(error) }
   }
@@ -274,6 +294,10 @@ export async function show(io: NavIo, raw: string, isFromGroupChain = false) {
 }
 
 export async function openExternally(io: NavIo, current: View) {
+  if (current.page) {
+    if (isWebUrl(current.page.link)) await io.run(['open', current.page.link])
+    return
+  }
   const file = parseHref(current.href)
   if (!file) {
     await io.run(['open', current.href])
@@ -298,6 +322,12 @@ export async function switchMode(io: NavIo, to: Mode) {
 }
 
 export async function refresh(io: NavIo, href: string) {
+  const current = await io.view.read()
+  if (current?.page && current.href === href) {
+    const was = current.page
+    await (was.phase === 'conflict' ? show(io, was.link, false, { allowDraft: was.isDraft }) : refreshPage(io, href, was))
+    return
+  }
   const ref = remoteRef(href)
   if (ref) {
     const entry = await refreshItem(ref.address, remoteLoader(io, true), await io.now())
@@ -315,14 +345,15 @@ export async function refresh(io: NavIo, href: string) {
 export function sourceLine(remote: NonNullable<View['remote']>, now: number): string {
   const { tier, fetchedAt, staleSince } = remote
   const name = adapterOfKind(remote.record?.kind ?? 'web').tierLabel(tier)
-  const seconds = fetchedAt === undefined ? 0 : Math.max(0, Math.round((now - fetchedAt) / 1000))
-  const age = fetchedAt === undefined ? '' : seconds < 60 ? `${seconds}s ago` : describeAge(fetchedAt, now)
+  const age = fetchedAge(fetchedAt, now)
   const stale = staleSince === undefined ? '' : ` · stale since ${describeAge(staleSince, now)}`
   return `${name}${age ? ` · ${age}` : ''}${stale}`
 }
 
 async function redrawIfCurrent(io: NavIo, address: string) {
   const current = await io.view.read()
+  // A background load of an overridden link must not turn the recipe page on screen back into the built-in page.
+  if (current?.page) return
   const ref = current && remoteRef(current.href)
   const entry = cached(address)
   if (!current || !ref || !entry || !isCurrent(current.href, address)) return
@@ -332,6 +363,7 @@ async function redrawIfCurrent(io: NavIo, address: string) {
 
 async function tickRemote(io: NavIo) {
   if ((await io.now()) - nav.lastActivity >= IDLE_MS) return
+  void tickPage(io).catch(() => undefined)
   const current = await io.view.read()
   const onScreen = current?.remote && (await io.mode.read()) === 'view' ? current.href : undefined
   const hrefs = [...(await io.mentions.read()).map(one => one.href), ...(await io.stars.read()), ...((await io.openGroup.read()) ? io.openGroupRemotes() : [])]
@@ -354,7 +386,7 @@ export async function pressLink(io: NavIo, href: string) {
       return
     }
   }
-  await openFromPage(io, href)
+  await openFromPage(io, current?.page ? paneHref(href) : href)
 }
 
 // Esc closes a pane only while it is opened with closeOnEscape, so the menu

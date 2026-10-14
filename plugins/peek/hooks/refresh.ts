@@ -4,11 +4,11 @@ import { adapterFor, adapterOfAddress } from './sources/adapter'
 import type { SourceId } from './sources/adapter'
 
 const ON_SCREEN_MS = 60_000
-const BACKGROUND_MS = 5 * 60_000
+export const BACKGROUND_MS = 5 * 60_000
 export const BACKGROUND_CAP = 20
 export const IDLE_MS = 10 * 60_000
 const BACKOFF_START_MS = 60_000
-const BACKOFF_MAX_MS = 30 * 60_000
+export const BACKOFF_MAX_MS = 30 * 60_000
 const MAX_SAVED_TITLES = 500
 
 export type CacheState = 'loading' | 'fresh' | 'refreshing' | 'stale-since' | 'frozen' | 'failed'
@@ -225,8 +225,14 @@ export function takeTitleChange(): boolean {
 }
 
 function noteTitle(record: RemoteRecord, now: number): void {
-  const key = itemKey(record.address)
-  const next = titleOf(record)
+  noteEntry(itemKey(record.address), titleOf(record), now)
+}
+
+export function notePageTitle(href: string, next: Omit<TitleEntry, 'updatedAt'>, now: number): void {
+  noteEntry(itemKey(href), next, now)
+}
+
+function noteEntry(key: string, next: Omit<TitleEntry, 'updatedAt'>, now: number): void {
   const { updatedAt: _, ...known } = titles[key] ?? { updatedAt: 0 }
   if (JSON.stringify(known) === JSON.stringify(next)) return
   titles = withTitle(titles, key, next, now)
