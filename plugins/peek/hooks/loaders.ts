@@ -2,6 +2,7 @@ import type { RemoteRecord, View } from '../types'
 import { gitRoot } from './entries'
 import { describeAge, describeSize } from './format'
 import { drawMermaid, toPng, withDrawnMermaid } from './images'
+import { readFrontmatter } from './frontmatter'
 import { fitMarkdown, htmlToMarkdown, linkTasks, outlineOf } from './markdown'
 import { loadRemote } from './navigation'
 import type { NavIo } from './navigation'
@@ -34,12 +35,18 @@ function withText(load: TextLoader): Loader {
 }
 
 const markdown: TextLoader = async ({ io, href, path, base }, text, meta) => {
+  // Tasks link on the full source so each #task-<line> stays a line of the file; the frontmatter comes off after.
   const tasks = linkTasks(text, fileHref(path))
-  const drawn = await withDrawnMermaid(io, tasks.text)
+  const front = readFrontmatter(text)
+  const body = tasks.text.split('\n').slice(front.bodyStartLine - 1).join('\n')
+  const problem = front.problems[0]
+  const shown = problem ? `*Frontmatter could not be read: ${problem.message}*\n\n${body}` : body
+  const drawn = await withDrawnMermaid(io, shown)
   fullText.set(href, drawn)
   const outline = outlineOf(drawn).map(({ level, text: heading }) => ({ level, text: heading }))
   const taskCount = tasks.total ? `${tasks.done}/${tasks.total} tasks` : undefined
-  return { ...base, kind: 'markdown', meta, tasks: taskCount, outline, markdown: fitMarkdown(drawn) }
+  const props = !problem && front.props ? { props: front.props } : {}
+  return { ...base, kind: 'markdown', meta, tasks: taskCount, outline, markdown: fitMarkdown(drawn), ...props }
 }
 
 const mermaid: TextLoader = async ({ io, base }, text, meta) => {

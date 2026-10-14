@@ -67,6 +67,10 @@ export type Loaded =
   | { ok: true; record: RemoteRecord; tier: Tier; fetchedAt: number; liveFailure?: RemoteFailure }
   | { ok: false; failure: RemoteFailure; detail?: string }
 
+export type PropScalar = string | number | boolean | null
+// Spelled out rather than recursive: a recursive type on View is too deep for the state types to instantiate.
+export type PropValue = PropScalar | PropScalar[] | Record<string, PropScalar | PropScalar[] | Record<string, PropScalar | PropScalar[]>>
+
 export type View = {
   href: string
   title: string
@@ -76,6 +80,7 @@ export type View = {
   kind?: string
   meta?: string
   tasks?: string
+  props?: Record<string, PropValue>
   summary?: string
   table?: { header: string[]; rows: string[][]; total: number }
   dir?: { name: string; isDir: boolean; size: number; mtimeMs: number }[]
