@@ -1,7 +1,7 @@
 import type { Group } from '../../types/groups'
 import { groupHome, ruleCandidates } from '../groups-session'
 import type { NavIo } from '../navigation'
-import { mirrorRoot, newestDirs, readListState, MIRROR_CAPS } from '../mirror/records'
+import { mirrorDocs, mirrorRoot, newestDirs, readListState, MIRROR_CAPS, SESSION_ENDED_PROP } from '../mirror/records'
 import { capturePlace, userPlace } from '../tasks/store'
 import type { TaskPlace, TasksIo } from '../tasks/store'
 import { matches, requiredPropsFor } from '../views/definition'
@@ -134,4 +134,46 @@ export async function archivedLists(io: NavIo): Promise<{ id: string; title: str
     }
   }
   return found
+}
+
+const OPEN = new Set(['todo', 'doing'])
+export const PIN_CAPS = { tasks: 5, lists: 3 }
+
+export type AgentLine = { list: string; open: number; lastAt: number }
+export type RecentPins = { tasks: Item[]; moreTasks: number; lists: AgentLine[]; moreLists: number; tasksPage: string }
+
+const isOpen = (item: { props: Item['props'] }) => typeof item.props.status === 'string' && OPEN.has(item.props.status)
+
+// Recent's pinned open work: Shawn's own open tasks, then one line per agent list that still has open items. A list
+// whose session ended or whose items are all closed is left out, the same test watch.ts folds a list by.
+export async function recentPins(io: NavIo): Promise<RecentPins | null> {
+  const root = (await groupHome(io).catch(() => null))?.worktreeRoot
+  const items = await ruleCandidates(io, [EVERY_TASK], root)
+  const own = items
+    .filter(one => isOpen(one) && creatorOf(one) === 'shawn')
+    .sort((a, b) => Number(b.props.status === 'doing') - Number(a.props.status === 'doing') || a.name.localeCompare(b.name))
+  const counts = new Map<string, number>()
+  for (const one of items) {
+    const list = one.props.list
+    if (typeof list !== 'string' || !isOpen(one) || one.props[SESSION_ENDED_PROP] === true) continue
+    counts.set(list, (counts.get(list) ?? 0) + 1)
+  }
+  if (!own.length && !counts.size) return null
+  const tio = tasksIoOf(io)
+  const lastAt = new Map<string, number>()
+  for (const doc of counts.size ? await mirrorDocs(tio).catch(() => []) : []) {
+    const list = doc.props.list
+    if (typeof list === 'string' && counts.has(list)) lastAt.set(list, Math.max(lastAt.get(list) ?? 0, doc.mtimeMs))
+  }
+  const lists = [...counts]
+    .map(([list, open]) => ({ list, open, lastAt: lastAt.get(list) ?? 0 }))
+    .sort((a, b) => b.lastAt - a.lastAt || a.list.localeCompare(b.list))
+  const place = root ? await capturePlace(tio, root) : await userPlace(tio)
+  return {
+    tasks: own.slice(0, PIN_CAPS.tasks),
+    moreTasks: Math.max(0, own.length - PIN_CAPS.tasks),
+    lists: lists.slice(0, PIN_CAPS.lists),
+    moreLists: Math.max(0, lists.length - PIN_CAPS.lists),
+    tasksPage: place.folder,
+  }
 }

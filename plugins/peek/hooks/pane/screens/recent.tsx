@@ -3,8 +3,11 @@ import { selectEntries } from '../../gallery'
 import { groupHome } from '../../groups-session'
 import { iconFor } from '../../kinds'
 import { clamp } from '../../navigation'
+import { fileHref } from '../../paths'
 import { closeAction, expandAction, modeActions, roleAction, scopeAction, selectActions } from '../actions'
 import { LIST_CHUNK } from '../layout'
+import { TASKS_ICON, recentPins } from '../task-data'
+import type { RecentPins } from '../task-data'
 import type { DrawContext, PaneActions, Screen } from '../types'
 import { HoverLayer, ItemRow, SectionRule } from '../widgets'
 import { fileListing } from './files'
@@ -12,12 +15,70 @@ import { groupCards } from './groups'
 
 const PINNED_GROUPS = 4
 
+type PinRow = { href: string; name: string; meta: string }
+
+const plural = (count: number, one: string) => `${count} more ${one}${count === 1 ? '' : 's'}`
+
+function pinRows(pins: RecentPins): PinRow[] {
+  const page = fileHref(pins.tasksPage)
+  const more = [pins.moreTasks ? plural(pins.moreTasks, 'task') : '', pins.moreLists ? plural(pins.moreLists, 'agent') : ''].filter(Boolean)
+  return [
+    ...pins.tasks.map(one => ({ href: fileHref(one.href), name: one.name, meta: typeof one.props.status === 'string' ? one.props.status : '' })),
+    ...pins.lists.map(one => {
+      const at = one.list.lastIndexOf('#')
+      return { href: page, name: `Agent tasks ${one.list.slice(0, Math.min(8, at))} ${one.list.slice(at)}`, meta: `${one.open} open` }
+    }),
+    ...(more.length ? [{ href: page, name: 'More on the Tasks page', meta: more.join(' · ') }] : []),
+  ]
+}
+
 export async function recentScreen(ctx: DrawContext, actions: PaneActions): Promise<Screen> {
   const { Box, Text, C, textWidth } = ctx
   const io = actions.io
   const { rest, favourites, scopeNote, role, scopeCrumbs, waiting, selected, layout, looks, describe, favouritesBlock, groupsOf, scope, starSet } = await fileListing(ctx, actions)
   const favs = selectEntries(favourites, 'all', '', 'recent')
   const recentList = rest ? selectEntries(rest, 'all', '', 'recent').slice(0, 300) : []
+  const pins = await recentPins(io).catch(() => null)
+  const pinBlock = (() => {
+    if (!pins) return null
+    const rows = pinRows(pins)
+    const list = layout.section(() =>
+      layout.list(rows, LIST_CHUNK, (one, i) => ({ href: one.href, key: `pins-${i}` }), (chunk, i, first) => (
+        <Box key={`pins-${i}`} flexDirection="column" width={textWidth}>
+          {chunk.map((one, j) => {
+            const index = first + j
+            const isSelected = index === selected
+            return ItemRow(ctx, { key: one.href, href: one.href, name: one.name, kind: 'task', where: '', state: 'ok' }, {
+              key: `pins-${i}-${j}`,
+              width: textWidth,
+              isSelected,
+              icon: {
+                isStarred: false,
+                icon: TASKS_ICON,
+                imageKey: `favicon-${index}`,
+                buttonKey: `item-${index}`,
+                autoFocus: isSelected ? true : undefined,
+                onPress: () => void actions.selectAndOpen(index),
+                boxes: {},
+              },
+              nameKey: `name-${index}`,
+              nameColor: isSelected ? C.accent : C.text,
+              meta: one.meta,
+              metaColor: C.overlay0,
+            })
+          })}
+        </Box>
+      )),
+    )
+    const open = pins.tasks.length + pins.moreTasks
+    return (
+      <Box flexDirection="column" width={textWidth} marginBottom={1}>
+        {SectionRule(ctx, 'OPEN WORK', open ? `${open} yours` : '', textWidth)}
+        <Box height={1} />
+        {list}
+      </Box>
+    )
+  })()
   const starredGroups = await groupHome(io)
     .then(found => (found ? io.shownGroups(found.place) : []))
     .then(all => all.filter(one => one.starred))
@@ -76,10 +137,11 @@ export async function recentScreen(ctx: DrawContext, actions: PaneActions): Prom
   const pinnedOn = pinned.find(one => one.id === pinnedId)
   const content = (
     <Box flexDirection="column" width={textWidth}>
+      {pinBlock}
       {pinnedBlock}
       {favBlock}
       {!rest && waiting}
-      {rest && recentList.length === 0 && favs.length === 0 && pinned.length === 0 && (
+      {rest && recentList.length === 0 && favs.length === 0 && pinned.length === 0 && !pins && (
         <Text color={C.overlay0}>
           {scope === 'session' ? 'Nothing mentioned yet. Paths and links in replies land here.' : 'No files found here.'}
         </Text>
