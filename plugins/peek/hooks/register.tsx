@@ -36,6 +36,7 @@ import { groupHome, groupPage, openCardItem, openGroupHref, openGroupPage, setSt
 import { forgetPath, guess, noteCapture, pathExists, remember, toHref } from './entries'
 import { asObj } from './wire'
 import { wirePlaces } from './pane/actions'
+import { isPeekStore } from './recipes/tools'
 
 const PANE = 'peek'
 const view = atom({ plugin: 'peek', key: 'view' } as const, null)
@@ -146,6 +147,7 @@ function portsOf($: EngineInterface): Ports {
       if (name === 'PATH') return $.env.get('PATH')
       if (name === 'LANG') return $.env.get('LANG')
       if (name === 'TMPDIR') return $.env.get('TMPDIR')
+      if (name === 'CLAUDE_CONFIG_DIR') return $.env.get('CLAUDE_CONFIG_DIR')
       // $.env.get takes only a literal name, so a name a recipe declares is read the way its script would see it.
       const ran = await $.process.run(['/usr/bin/printenv', name]).catch(() => null)
       return ran?.exitCode === 0 ? ran.stdout.replace(/\n$/, '') : undefined
@@ -298,7 +300,7 @@ export const register: Register = on => {
     void bootLinear(navIoOf($)).catch(() => undefined)
     const saved = await $.store.get('stars').catch(() => undefined)
     if (Array.isArray(saved)) await update($, stars, () => saved.filter((one): one is string => typeof one === 'string'))
-    for (const tool of Object.values(TOOLS)) await $.tool.register(tool.spec).catch(() => undefined)
+    for (const tool of Object.values(TOOLS)) await $.tool.register(typeof tool.spec === 'function' ? tool.spec($.plugin.root) : tool.spec).catch(() => undefined)
     void groupHome(navIoOf($)).catch(() => undefined)
     void wirePlaces(navIoOf($)).catch(() => undefined)
     if (!isTaskPollStarted) {
@@ -477,6 +479,20 @@ export const register: Register = on => {
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
   on('tool.call', { tool: /^mcp__peek__check_view$/ }, async ($, e) => TOOLS.check_view.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__open$/ }, async ($, e) => TOOLS.open.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^mcp__peek__check_recipe$/ }, async ($, e) => TOOLS.check_recipe.run(navIoOf($), e))
+
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^(?:Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
+    const input = e as unknown as { file_path?: unknown; notebook_path?: unknown }
+    const path = typeof input.file_path === 'string' ? input.file_path : input.notebook_path
+    if (typeof path === 'string' && (await isPeekStore(portsOf($), path))) return { deny: "That file is peek's approval store: only the person approves a recipe, from the peek pane." }
+    return next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: "peek could not check whether this file is peek's approval store, so it refused the write." }))
 
   // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
   on('tool.call', { tool: /^(?:Bash$|WebFetch$|mcp__(?!peek__))/ }, async ($, e, next) => {

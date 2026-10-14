@@ -11,9 +11,11 @@ import { itemKey } from './refs'
 import { TASK_TOOLS } from './task-tools'
 import type { TaskToolName } from './task-tools'
 import { parseRule } from './views/select'
+import { checkRecipeTool, checkToolSpec, openTool, openToolSpec } from './recipes/tools'
 
-type ToolName = 'star' | 'list_groups' | 'read_group' | 'save_group' | 'delete_group' | TaskToolName
-type PeekTool = { spec: { name: ToolName; description: string; inputSchema: Record<string, unknown> }; run: (io: NavIo, input: unknown) => Promise<{ result: string }> }
+type ToolName = 'star' | 'list_groups' | 'read_group' | 'save_group' | 'delete_group' | 'open' | 'check_recipe' | TaskToolName
+type ToolSpec = { name: ToolName; description: string; inputSchema: Record<string, unknown>; isDeferred?: boolean }
+type PeekTool = { spec: ToolSpec | ((pluginRoot: string) => ToolSpec); run: (io: NavIo, input: unknown) => Promise<{ result: string }> }
 
 // A rule group's members are computed on every read, so the item list, its count and the split all come from here.
 async function withMembers(io: NavIo, group: Group, worktreeRoot?: string) {
@@ -314,6 +316,8 @@ export const TOOLS: Record<ToolName, PeekTool> = {
       return deleteGroupTool(io, one.id, one.force === true)
     },
   },
+  open: { spec: openToolSpec, run: (io, input) => openTool(io, (input as { link?: unknown }).link) },
+  check_recipe: { spec: checkToolSpec, run: (io, input) => checkRecipeTool(io, input as { recipe?: unknown; link?: unknown }) },
   ...TASK_TOOLS,
 }
 
