@@ -170,7 +170,7 @@ is ignored.
 | Session in | Tasks folder |
 |---|---|
 | A git repo | `.peek/tasks/` in the main checkout: the folder that holds the repo's shared `.git`. Every worktree of the repo reads and writes this one folder, so removing a worktree never deletes tasks. |
-| No git repo | `~/.local/share/claude-peek/tasks/`, the user-level list. Every session shows it. |
+| No git repo | `~/.local/share/claude-peek/tasks/`, the user-level list. Every session shows your own tasks in it; mirrored agent lists placed there show only in sessions outside a repo. |
 
 The first time peek writes a repo's tasks folder, it adds `.peek/` to the
 repo's `.git/info/exclude`. That file is local and every worktree shares it;
@@ -259,15 +259,17 @@ transcript; this is a best effort and often finds nothing.
 Each list gets one group in its repo, titled
 `Agent tasks <first 8 characters of the session id> #<n>`,
 with the rule `list=<session id>#<n>` and split by status (see Rule groups
-below). A list outside any repo gets no group, but its items still show on the
-Tasks page.
+below). A list outside any repo gets no group; its items show on the Tasks page
+of sessions outside a repo. A list shows only in the repo its session ran in.
 
 **Finished and ended lists.** A list is finished when every item is done or
 cancelled, when its session ended, when Claude Code cleared it, or when its
 folder has not changed for 24 hours. Open items in a list that is over read
-"session ended". A finished list drops out of Recent, and 12 hours later peek
-removes its group, unless you starred the group or added items to it. The
-records stay on disk. A task that goes back to todo or doing makes the list
+"session ended". A finished list folds to one line in Recent ("finished" or
+"N session ended"). 12 hours later it archives: peek removes its group, unless
+you starred the group or added items to it, and its items leave the Tasks page,
+`list_tasks` and Recent. On the Tasks page, ⌃k "Archived: Agent tasks …" opens a
+page of an archived list's items, newest archive first. A task that goes back to todo or doing makes the list
 active again and brings its group back. Your own tasks never close or move on
 their own.
 
@@ -284,8 +286,8 @@ does the same and records `adopted_by: shawn`, so the task stays in your list.
 
 The top of Recent, above starred groups and Favourites, shows **OPEN WORK**:
 your own open tasks (todo or doing, doing first), up to 5, then one line per
-agent list that still has open items in a live session, up to 3, each with its
-open count. A list's line opens the Tasks page. When there are more, a last
+agent list of this repo, up to 3: active lists first with their open count,
+then finished lists until they archive. A list's line opens the Tasks page. When there are more, a last
 row counts them.
 
 ### The Tasks page
@@ -293,8 +295,8 @@ row counts them.
 Open it from ⌃k: type "Tasks" (the row shows only when you type) and pick
 "Tasks: every task, by now, next and later". The page is your tasks folder,
 drawn as one focus block over every task peek knows: your list, the user-level
-list, deliverables in this worktree and the mirrored items of every agent
-session.
+list, deliverables in this worktree and the mirrored items of this repo's agent
+lists that have not archived.
 
 - **Now:** doing.
 - **Next:** up to 5 todo tasks not waiting on an unfinished task, by sequence
@@ -356,9 +358,8 @@ Peek picks a definition this way:
 Before saving one, have the agent call `check_view` with the text (or a file
 path). It reports every problem with its line, including a type name another
 definition already uses. Always check: a definition with problems does not
-load. On a remote page, problems in `<kind>.md` show in red at the top of the
-page. A markdown file whose definition has problems draws as plain markdown
-with no message.
+load. Its problems show in red at the top of every page it would match, file
+or remote, and a type-name clash names both files.
 
 ### Frontmatter keys
 
@@ -417,13 +418,14 @@ colors:
 
 The names that draw are `red`,
 `yellow`, `green`, `teal`, `blue`, `mauve`, `peach`, `accent`, `text`,
-`subtext`, `gray` and `muted`. Today only a fields box on a remote page reads
-colors, and only for `ciTone` in a change summary.
+`subtext`, `gray` and `muted`; any other name is an error. Colors apply to a
+fields-box value (the prop key is the label, lowercase, with `_` for spaces,
+such as `merge_state`), to the header title, and to a row's status icon
+(`colors.status`).
 
 **`icons`** maps a fields-box label, lowercase with `-` for spaces
-(`merge-state`), to an icon of 1 to 4 characters. Declaring any icon turns off
-peek's built-in label icons on that page, so list every label you want an icon
-for.
+(`merge-state`), to an icon of 1 to 4 characters. A declared icon replaces the
+built-in one for its label; other labels keep theirs.
 
 **`layout_default`** maps a place (`page`, `group`, `recent`, `gallery`) to a
 layout (`cards`, `list`, `tree`, `sections`, `board`, `focus`). Peek checks it
@@ -454,8 +456,11 @@ The body after the frontmatter is the page. It is ordinary markdown, plus
 placeholders and blocks.
 
 **Placeholders.** `{{name}}` (a letter or `_`, then letters, digits, `_` or
-`-`) inserts a prop of the markdown file being drawn. `name` is the `name`
-prop or the file name, and `id` is the `id` prop or the file path.
+`-`) inserts a prop of the item being drawn. On a markdown file, `name` is the
+`name` prop or the file name, and `id` is the `id` prop or the file path. On a
+remote page, the values are the record's fields (by label, lowercase with `_`
+for spaces), its change counts, and `title`, `kind`, `address`, `url` and
+`status`.
 
 - In text, a placeholder inserts plain text: markdown characters are escaped,
   a list is joined with commas, and a missing prop inserts nothing.
@@ -463,8 +468,6 @@ prop or the file name, and `id` is the `id` prop or the file path.
   markdown body, drawn on its own, so it can never break the template's
   blocks.
 - In a block's options, spaces in the value become `_`.
-- On a remote page, placeholders are not filled; its blocks name record
-  fields with `from=` instead.
 - `{% … %}`, `{{#each …}}` and anything else that is not a plain `{{name}}` is
   an error.
 
@@ -510,15 +513,16 @@ creator=shawn and status=todo
 ````
 
 The items are every task peek knows: your tasks folder, the user-level list,
-deliverables in this worktree and mirrored agent items. Each item also has two
+deliverables in this worktree and the mirrored items of this repo's agent lists
+that have not archived. Each item also has two
 props no file stores: `neighbours`, the ids its sequence links in either
 direction, and `ancestors`, its parent chain. So `ancestors={{id}}` selects
 every task under this one. Rules match props as described in Rule groups.
 Items sort by sequence (`after`, `before`, `with`) first, then due date, then
 name. A block with nothing to show draws a dim "no items" line.
 
-Collection blocks draw on markdown file pages, in group descriptions and on
-the Tasks page. On a remote page they draw "no items".
+Collection blocks draw on markdown file pages, in group descriptions, on the
+Tasks page and in PR and issue bodies.
 
 On a page with blocks, `j`/`k` move between rows, Enter or a click opens the
 selected item, and `n`/`m` jump between blocks. `y` switches the selected
@@ -683,8 +687,8 @@ skill tells it when to use the task tools.
 
 | Tool | Inputs | Does |
 |---|---|---|
-| `list_tasks` | `status`; `creator` (`person`, `self` or a session id); `list` (`<session id>#<n>`) | Lists tasks, deliverables and mirrored items, up to 200, with id, name, path, status, creator and any list, parent, sequence and due date |
-| `read_task` | `id` (an id or a path) | One task in full: every prop, its body, and any required prop it is missing |
+| `list_tasks` | `status`; `creator` (`person`, `self` or a session id); `list` (`<session id>#<n>`) | Lists tasks, deliverables and the mirrored items of this repo's lists that have not archived, up to 200, with id, name, path, status, creator and any list, parent, sequence and due date |
+| `read_task` | `id` (an id or a path) | One task in full: every prop, its body, and any required prop it is missing. Finds any task by id, including other repos' and archived lists |
 | `save_task` | `id` (leave out to create); `name`; `on_behalf` (`person` or `self`; required to create); `status`; `description`; `sequence` (`{ after, before, with }`, ids); `parent`; `due` (`YYYY-MM-DD`); `attachments` (paths or URLs) | Creates a task in your list, or changes one. A mirrored item changes only its status, through a takeover doc |
 | `move_tasks` | `tasks` (ids) or `list` (`<session id>#<n>`); `to` (`mine`, `user`, or a folder in another git repo) | Moves task docs to another list. Moving a mirrored item adopts it. Moving a list moves where that session's lists belong, with their groups |
 | `check_view` | `text` or `path` | Checks a view definition and reports every problem |
