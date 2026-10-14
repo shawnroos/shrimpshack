@@ -15,6 +15,7 @@ import type { TitleEntry } from './refresh'
 import { itemKey } from './refs'
 import { capturePlace, createIndex, folderDocPaths, readDoc, TASK_CAPS, userPlace } from './tasks/store'
 import type { TaskDoc, TaskIndex, TaskPlace, TasksIo } from './tasks/store'
+import { mirrorDocs } from './mirror/records'
 import { ICON } from './theme'
 import { itemFromDoc } from './views/items'
 import type { Item } from './views/items'
@@ -311,7 +312,8 @@ export async function ruleCandidates(io: NavIo, groups: readonly Group[], worktr
   if (index) await index.refresh(tio).catch(() => undefined)
   const seen = new Set<string>()
   const items: Item[] = []
-  for (const [docs, source] of [[folders, 'task-folder'], [index?.docs() ?? [], 'deliverable']] as const) {
+  const mirrored = await mirrorDocs(tio).catch(() => [])
+  for (const [docs, source] of [[folders, 'task-folder'], [index?.docs() ?? [], 'deliverable'], [mirrored, 'mirrored']] as const) {
     for (const doc of docs) {
       if (seen.has(doc.path)) continue
       seen.add(doc.path)

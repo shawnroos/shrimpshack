@@ -2,6 +2,8 @@ import { capturePlace, createIndex, folderDocPaths, readDoc, userPlace } from '.
 import type { TaskDoc, TaskIndex, TaskPlace, TasksIo } from './store'
 import { noticeReads, observe } from './status'
 import type { Observer } from './status'
+import { createMirror } from '../mirror/watch'
+import type { Mirror } from '../mirror/watch'
 
 export type TaskSessionIo = TasksIo & { every: (ms: number, fn: () => void) => void; isActive: () => Promise<boolean> }
 
@@ -11,6 +13,8 @@ export type TaskSession = {
   places: TaskPlace[]
   observers: Observer[]
   index: TaskIndex
+  mirror: Mirror
+  nudge: () => void
   polled: (count: number) => Promise<void>
   refreshed: (count: number) => Promise<void>
 }
@@ -50,6 +54,8 @@ export async function startTaskPoll(io: TaskSessionIo, started: { id: string; ro
   const observers = places.map(place => observe(io, place, session))
   await Promise.all(observers.map(one => one.prime()))
   const index = createIndex(session.root)
+  const mirror = createMirror(io, session)
+  await mirror.noteStart().catch(() => undefined)
   const folderTimes = places.map(() => new Map<string, number>())
   const folderStamps = places.map((): { mtimeMs?: number } => ({}))
 
@@ -91,6 +97,7 @@ export async function startTaskPoll(io: TaskSessionIo, started: { id: string; ro
   const pollOnce = async () => {
     if (!repo.isUser) await notice(repo, await index.changed(io))
     for (const [at, place] of places.entries()) await notice(place, await movedFolderDocs(at, false))
+    await mirror.poll().catch(() => undefined)
     for (const one of observers) await one.poll()
   }
 
@@ -99,7 +106,7 @@ export async function startTaskPoll(io: TaskSessionIo, started: { id: string; ro
   const refreshes: Counter = { count: 0, waiters: [] }
   let isPolling = false
   let isRefreshing = false
-  io.every(POLL_MS, () => {
+  const tick = () => {
     if (isPolling) return
     isPolling = true
     void pollOnce()
@@ -108,7 +115,8 @@ export async function startTaskPoll(io: TaskSessionIo, started: { id: string; ro
         isPolling = false
         bump(polls)
       })
-  })
+  }
+  io.every(POLL_MS, tick)
   io.every(REFRESH_MS, () => {
     if (isRefreshing) return
     isRefreshing = true
@@ -121,6 +129,6 @@ export async function startTaskPoll(io: TaskSessionIo, started: { id: string; ro
         bump(refreshes)
       })
   })
-  current = { ...session, places, observers, index, polled: count => reached(polls, count), refreshed: count => reached(refreshes, count) }
+  current = { ...session, places, observers, index, mirror, nudge: tick, polled: count => reached(polls, count), refreshed: count => reached(refreshes, count) }
   return current
 }

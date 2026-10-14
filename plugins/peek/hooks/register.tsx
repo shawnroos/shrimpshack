@@ -9,7 +9,7 @@ import type { LiveIo } from './live'
 import { IDLE_MS, hydrateTitles } from './refresh'
 import type { TitleEntry } from './refresh'
 import type { GroupsIo } from './groups'
-import { startTaskPoll } from './tasks/poll'
+import { startTaskPoll, taskSession } from './tasks/poll'
 import type { TaskSessionIo } from './tasks/poll'
 import { classifyBlocks } from './gallery'
 import { linkify, pathCandidates } from './markdown'
@@ -295,6 +295,20 @@ export const register: Register = on => {
     await $.command.register({ name: 'peek-ui', description: 'Show every Claude Code UI element a mod can draw, live' })
     await $.command.register({ name: 'peek', description: 'Peek at a file, folder or URL in the side pane: a path, a description ("the export diagram"), or nothing for the last one' })
     return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    await taskSession()?.mirror.noteEnd(e.sessionId, e.reason).catch(() => undefined)
+    return next(e)
+  })
+
+  // The classic TaskCreated and TaskCompleted events would duplicate this, and an organization's managed settings can
+  // withhold them from installed plugins.
+  // @ts-ignore TS2589: tool.call's types span every tool's input, too deep for tsc; the validator checks this hook
+  on('tool.call', { tool: /^Task(?:Create|Update)$/ }, async ($, e, next) => {
+    const answer = await next(e)
+    taskSession()?.nudge()
+    return answer
   })
 
   on('session.append', async ($, e, next) => {

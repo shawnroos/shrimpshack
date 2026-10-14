@@ -315,3 +315,40 @@ export function fakeTimers(w: World): Timers {
     },
   }
 }
+
+// Claude Code's own task folders, in the shapes U1 found on disk: a folder per session UUID holding `.lock`, an
+// optional `.highwatermark` and one `<id>.json` per item.
+export const AGENT = '2fed97d7-856a-4f46-8093-52433cc1af0b'
+export const AGENT_TWO = '04b1befa-7bf3-4e11-8a58-129666ae59b4'
+export const agentFolder = (session: string) => `${HOME}/.claude/tasks/${session}`
+
+export function agentItem(w: World, session: string, id: string, subject: string, status = 'pending', blockedBy: string[] = []) {
+  const folder = agentFolder(session)
+  if (w.files[`${folder}/.lock`] === undefined) w.files[`${folder}/.lock`] = ''
+  const path = `${folder}/${id}.json`
+  w.files[path] = JSON.stringify({ id, subject, description: subject, activeForm: `Doing ${subject}`, status, blocks: [], blockedBy })
+  w.touch(path)
+}
+
+export function deleteAgentItems(w: World, session: string) {
+  const folder = agentFolder(session)
+  for (const path of Object.keys(w.files)) if (path.startsWith(`${folder}/`) && path.endsWith('.json')) delete w.files[path]
+  w.touch(`${folder}/.lock`)
+}
+
+export function clearAgentList(w: World, session: string, watermark: number) {
+  deleteAgentItems(w, session)
+  w.files[`${agentFolder(session)}/.highwatermark`] = String(watermark)
+  w.touch(`${agentFolder(session)}/.highwatermark`)
+}
+
+export function lockOnlyFolder(w: World, session: string, watermark?: number) {
+  w.files[`${agentFolder(session)}/.lock`] = ''
+  if (watermark !== undefined) w.files[`${agentFolder(session)}/.highwatermark`] = String(watermark)
+}
+
+export function agentTranscript(w: World, cwd: string, session: string, lines: readonly unknown[]) {
+  const path = `${HOME}/.claude/projects/${cwd.replace(/\//g, '-')}/${session}.jsonl`
+  w.files[path] = lines.map(one => JSON.stringify(one)).join('\n')
+  return path
+}
