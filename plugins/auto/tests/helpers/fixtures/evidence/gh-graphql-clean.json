@@ -1,0 +1,48 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "commits": {
+     "nodes": [
+      {
+       "commit": {
+        "oid": "9e265cc6c301071b75921e4a73121701f1b5cebd",
+        "statusCheckRollup": {
+         "contexts": {
+          "nodes": [
+           {
+            "__typename": "CheckRun",
+            "conclusion": "SUCCESS",
+            "isRequired": true,
+            "name": "plugin tests",
+            "status": "COMPLETED"
+           },
+           {
+            "__typename": "StatusContext",
+            "context": "CodeRabbit",
+            "isRequired": false,
+            "state": "SUCCESS"
+           }
+          ],
+          "totalCount": 2
+         },
+         "state": "SUCCESS"
+        }
+       }
+      }
+     ]
+    },
+    "headRefOid": "9e265cc6c301071b75921e4a73121701f1b5cebd",
+    "mergeCommit": {
+     "oid": "a9fa84f4fb57a66039745e916632b0cdcd33a7dd"
+    },
+    "merged": true,
+    "reviewThreads": {
+     "nodes": [],
+     "totalCount": 0
+    },
+    "state": "MERGED"
+   }
+  }
+ }
+}

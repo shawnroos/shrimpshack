@@ -1,0 +1,173 @@
+{
+  "protocol_format": 1,
+  "rules": [
+    {
+      "id": "flagged-code",
+      "applies_when": {
+        "change_kinds": [
+          "flagged_code"
+        ]
+      },
+      "requires": [
+        "merged",
+        "flagged",
+        "verified",
+        "recorded"
+      ],
+      "evidence_bar": {
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "flagged": "The flag's served value, read back per environment, is off in prod and on in stage and dev.",
+        "verified": "A build that contains the merge commit ran the fix at runtime, and the trace or job id is posted on the issue. Automated tests and CI do not count.",
+        "recorded": "The issue is in its done state and carries a root-cause comment."
+      },
+      "caveat": "A prod flag stays off until Shawn says otherwise.",
+      "autonomy": "act",
+      "added_by": "auto plugin",
+      "added_at": "2026-10-06T00:00:00Z",
+      "why": "Code behind a flag ships dark and is proved at runtime before it counts."
+    },
+    {
+      "id": "fix-only",
+      "applies_when": {
+        "change_kinds": [
+          "fix_only"
+        ]
+      },
+      "requires": [
+        "merged",
+        "verified",
+        "recorded"
+      ],
+      "evidence_bar": {
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "verified": "A build that contains the merge commit ran the fix at runtime, and the trace or job id is posted on the issue. Automated tests and CI do not count.",
+        "recorded": "The issue is in its done state and carries a root-cause comment."
+      },
+      "caveat": "Use this only when the change stops broken behaviour and adds nothing new.",
+      "autonomy": "act",
+      "added_by": "auto plugin",
+      "added_at": "2026-10-06T00:00:00Z",
+      "why": "A fix with no new behaviour needs no flag, but it still needs runtime proof."
+    },
+    {
+      "id": "shared-package",
+      "applies_when": {
+        "change_kinds": [
+          "shared_package"
+        ]
+      },
+      "requires": [
+        "merged",
+        "released",
+        "recorded"
+      ],
+      "evidence_bar": {
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "released": "The registry version and shasum equal the tested build, and an eval experiment exists or a named waiver is active.",
+        "recorded": "The issue is in its done state and carries a root-cause comment."
+      },
+      "caveat": "A full release needs Shawn's yes. An eval waiver must be a named instruction.",
+      "autonomy": "act_and_tell",
+      "added_by": "auto plugin",
+      "added_at": "2026-10-06T00:00:00Z",
+      "why": "Other code consumes a shared package, so a release must match the build that was tested."
+    },
+    {
+      "id": "evals-or-docs",
+      "applies_when": {
+        "change_kinds": [
+          "evals_or_docs"
+        ]
+      },
+      "requires": [
+        "merged",
+        "recorded"
+      ],
+      "evidence_bar": {
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "recorded": "The issue is in its done state and carries a root-cause comment."
+      },
+      "caveat": "",
+      "autonomy": "act",
+      "added_by": "auto plugin",
+      "added_at": "2026-10-06T00:00:00Z",
+      "why": "Eval and doc changes have no runtime effect to verify."
+    },
+    {
+      "id": "product-question",
+      "applies_when": {
+        "change_kinds": [
+          "product_question"
+        ]
+      },
+      "requires": [
+        "handed"
+      ],
+      "evidence_bar": {
+        "handed": "The question is handed to Shawn and the notification is journaled."
+      },
+      "caveat": "The PM never decides a product question.",
+      "autonomy": "propose",
+      "added_by": "auto plugin",
+      "added_at": "2026-10-06T00:00:00Z",
+      "why": "Product calls belong to Shawn."
+    },
+    {
+      "id": "shared-blocker",
+      "applies_when": {
+        "change_kinds": [
+          "shared_blocker"
+        ]
+      },
+      "requires": [
+        "debugged"
+      ],
+      "evidence_bar": {
+        "debugged": "The PM debugged the blocker at runtime and recorded its trace or job id before any item counts as waiting on it."
+      },
+      "caveat": "The PM never fixes another team's code. It debugs and records only.",
+      "autonomy": "never",
+      "added_by": "auto plugin",
+      "added_at": "2026-10-06T00:00:00Z",
+      "why": "A blocker held by another team, or shared by two or more items, must have a recorded trace before items wait on it."
+    }
+  ],
+  "autonomy": {
+    "merge_at_gate": {
+      "level": "act"
+    },
+    "prod_off_flag": {
+      "level": "act"
+    },
+    "file_issue": {
+      "level": "act"
+    },
+    "eval_backed_prerelease": {
+      "level": "act_and_tell"
+    },
+    "worker_session_approval": {
+      "level": "act_and_tell"
+    },
+    "prod_deploy": {
+      "level": "propose"
+    },
+    "full_release": {
+      "level": "propose"
+    },
+    "eval_waiver": {
+      "level": "propose"
+    },
+    "spend_over_cap": {
+      "level": "propose"
+    },
+    "product_call": {
+      "level": "propose"
+    },
+    "fix_other_team_code": {
+      "level": "never"
+    },
+    "merge_around_gate": {
+      "level": "never"
+    }
+  }
+}

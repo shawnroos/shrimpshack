@@ -24,6 +24,35 @@ The engine is **workflow-blind**: it drives any toolchain through a thin backend
   flow, no loop. The agent proposes a context-fit check you accept or edit, runs
   it once, and returns a `pass` / `fail` / `unverified` verdict.
 
+## Programme runs
+
+A **programme** is the second kind of run. A task run drives the steps of one plan.
+A programme lets a PM session manage every piece of work (each one an **item**) in
+one herdr space. It tracks who owns each item, what each item waits on, and what
+evidence shows it is done. The PM checks that evidence itself (a merged PR, a flag
+state, a deployed build, a published package, a recorded root cause) and does not
+take a worker's word for it.
+
+- **`/auto:programme`** starts a programme in the current herdr space. It claims the
+  space first, so only one programme runs there. It then shows the proposed
+  agreement (remit, stop rule, autonomy, cadence) and the rules it loaded. Nothing
+  else happens until you accept the agreement in a typed message.
+- **`/programme-view`** opens a live pane in the PM session. It shows what the PM is
+  doing now, its queue, what it watches, who waits on whom, the decisions waiting on
+  you, what it just did, and the rules in force.
+- **`/auto:programme-status [<run>]`** prints the same view once, as text.
+- **`/auto:programme-takeover`** moves the programme to a new session when the old
+  session is gone. **`/auto:programme-handover`**, typed in the PM session, passes
+  it to another session. **`/auto:programme-end`** ends it and frees the space.
+  Each of these works only from a typed message, and auto records the request.
+
+The PM can stop only when the stop rule allows it, for example when nothing is left
+that it can act on. Workers report finished work with a `claim`, and the PM confirms
+each claim before it counts. After a context compaction the PM reloads the rules in
+force before it writes anything. Standing rules come from three protocol files
+(plugin, personal, project). The PM can propose a new rule, but a rule takes effect
+only after you approve it in a typed message.
+
 ## Workflows
 
 A **workflow** is a named loop topology — an ordered graph of steps. Fire `/auto <plan>`
@@ -100,6 +129,7 @@ The load-bearing ones (`docs/contracts/` has the rest):
 - `verification-contract.md` — the typed verification gates (LOCKED v0.7.0).
 - `agent-tool-surface.md` — the CLI verbs a driving agent may call.
 - `preset-format.md` — the preset format (PROVISIONAL).
+- `programme-protocol-format.md` — the protocol rules a programme checks evidence against.
 
 ## Tests
 

@@ -1,0 +1,26 @@
+{
+ "errors": [
+  {
+   "extensions": {
+    "code": "GRAPHQL_VALIDATION_FAILED",
+    "http": {
+     "headers": {},
+     "status": 400
+    },
+    "type": "graphql error",
+    "userError": true
+   },
+   "locations": [
+    {
+     "column": 21,
+     "line": 1
+    },
+    {
+     "column": 91,
+     "line": 1
+    }
+   ],
+   "message": "Variable \"$number\" of type \"Int!\" used in position expecting type \"Float\"."
+  }
+ ]
+}

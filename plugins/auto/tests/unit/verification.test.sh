@@ -81,6 +81,33 @@ elif op == "agg-pending":
 elif op == "agg-injected-advisor":
     crits = [{"id": "a", "type": "programmatic"}, {"id": "j", "type": "advisor_judge"}]
     print(v.aggregate(crits, {"a": "pass"}, {"j": "pass"})["signal"])
+elif op == "ep-evidence-strings":
+    t = v.evaluate_programmatic({"id": "c", "argv": ["sleep", "5"], "check": "exit_zero", "timeout_sec": 1})
+    m = v.evaluate_programmatic({"id": "c", "argv": ["this-binary-does-not-exist-xyz"], "check": "exit_zero"})
+    e = v.evaluate_programmatic({"id": "c", "argv": [], "check": "exit_zero"})
+    print("|".join([t["evidence"], m["evidence"].split(":")[0], e["evidence"]]))
+elif op == "rc-ran":
+    r = v.run_capped(["sh", "-c", "printf out; printf err >&2; exit 3"])
+    print(r["ran"], r["exit_code"], r["stdout"], r["stderr"], r["truncated"], r["timed_out"])
+elif op == "rc-timeout":
+    r = v.run_capped(["sleep", "5"], timeout=1)
+    print(r["ran"], r["timed_out"], r["exit_code"])
+elif op == "rc-missing":
+    r = v.run_capped(["this-binary-does-not-exist-xyz"])
+    print(r["ran"], r["missing"], r["exit_code"])
+elif op == "rc-truncated":
+    r = v.run_capped(["sh", "-c", "printf 0123456789"], cap=4)
+    print(r["ran"], r["truncated"], r["stdout"])
+elif op == "rc-env-cwd":
+    r = v.run_capped(["/bin/sh", "-c", 'printf "%s|%s|%s" "$ONLY" "${HOME-unset}" "$(pwd -P)"'],
+                     cwd="/", env={"ONLY": "x", "PATH": "/usr/bin:/bin"})
+    print(r["stdout"].decode())
+elif op == "rc-env-path-lookup":
+    r = v.run_capped(["true"], env={"PATH": "/nonexistent"})
+    print(r["ran"], r["missing"])
+elif op == "rc-empty":
+    r = v.run_capped([])
+    print(r["ran"], r["error"])
 else:
     print("UNKNOWN_OP")
 PYEOF
@@ -126,6 +153,30 @@ assert_eq "None|j" "$(vf agg-pending)"
 
 it "aggregate: programmatic pass + injected advisor pass → advance"
 assert_eq "advance" "$(vf agg-injected-advisor)"
+
+it "evaluate_programmatic evidence text is unchanged for timeout, missing binary and empty argv"
+assert_eq "timed out after 1s: sleep 5|could not run ['this-binary-does-not-exist-xyz']|empty argv (nothing to run)" "$(vf ep-evidence-strings)"
+
+it "run_capped: ran, exit code, both streams"
+assert_eq "True 3 b'out' b'err' False False" "$(vf rc-ran)"
+
+it "run_capped: timeout is not a run"
+assert_eq "False True None" "$(vf rc-timeout)"
+
+it "run_capped: missing binary is not a run and says so"
+assert_eq "False True None" "$(vf rc-missing)"
+
+it "run_capped: output past the cap sets truncated"
+assert_eq "True True b'0123'" "$(vf rc-truncated)"
+
+it "run_capped: the child gets exactly the given env and cwd"
+assert_eq "x|unset|/" "$(vf rc-env-cwd)"
+
+it "run_capped: the binary is looked up on the given env's PATH"
+assert_eq "False True" "$(vf rc-env-path-lookup)"
+
+it "run_capped: empty argv is not a run"
+assert_eq "False empty argv (nothing to run)" "$(vf rc-empty)"
 
 echo ""
 echo "verification.test.sh: ${PASS} passed, ${FAIL} failed"

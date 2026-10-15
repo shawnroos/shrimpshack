@@ -16,6 +16,11 @@ ACTIVE-RUN POLICY:
     gate (schema §5 I-2), so a lurking stalled/pending step (findings counters
     zero) keeps the stop blocked.
 
+    Only the stopping session's own runs count: a task run holds its
+    `driving_session_id`, a batch holds its `host_session_id`, and a programme
+    holds the session its lease and record name. A task run or batch that
+    records no session holds every session in the repo.
+
     The `driver == "self"` conjunct is the HANDOFF/MANUAL carve-out: the engine
     blocks premature stop only during ACTIVE work — a live pulse chain (driver ==
     "self") that expects to keep going. When the engine writes `driver:
@@ -68,9 +73,11 @@ STALE-CHAIN CARVE-OUT (Bug #9):
 
 from __future__ import annotations
 
+import datetime
 import glob
 import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -89,14 +96,34 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 phase_grammar = load_lib_module("phase-grammar")
 
 
-def _read_stop_hook_active(raw: str) -> bool:
+CLAIMS_FILE = "claims.jsonl"
+_SID_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _hook_input(raw: str) -> dict:
     if not raw:
-        return False
+        return {}
     try:
         data = json.loads(raw)
     except Exception:
-        return False
-    return bool(isinstance(data, dict) and data.get("stop_hook_active"))
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _read_stop_hook_active(raw: str) -> bool:
+    return bool(_hook_input(raw).get("stop_hook_active"))
+
+
+def _read_session_id(raw: str):
+    sid = _hook_input(raw).get("session_id")
+    return sid if isinstance(sid, str) and sid else None
+
+
+def _holds_session(owner, session_id) -> bool:
+    # A stop with no session id stays held: an absent id must never drop a hold.
+    if not owner or not session_id:
+        return True
+    return owner == session_id
 
 
 def _is_blocking(led, *, run_record, skip_staleness, stale_threshold, now):
@@ -162,7 +189,7 @@ def _is_worktree_or_host(git_path: str) -> bool:
     return False
 
 
-def _blocking_runs(repo_root: str, now=None):
+def _blocking_runs(repo_root: str, now=None, session_id=None):
     """Return [(run_id, predicate_dict)] for every ACTIVE run that is NOT met.
 
     Lock-free: each run-record file is read as a whole via the atomic-rename
@@ -174,10 +201,11 @@ def _blocking_runs(repo_root: str, now=None):
     predicate to each sub-run run-record (sub-runs live in worktree-local
     run-record dirs the per-worktree glob can't reach).
     """
+    if not repo_root:
+        return []
     run_record = load_run_record()
     skip_staleness = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK")
     stale_threshold = run_record.DRIVER_SELF_STALE_SECONDS
-    import datetime
 
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -186,6 +214,10 @@ def _blocking_runs(repo_root: str, now=None):
 
     # Per-worktree run-records (the main scan) — iter_worktree_run_records owns the glob.
     for run_id, led in iter_worktree_run_records(repo_root):
+        if not isinstance(led, dict) or led.get("run_kind") == "programme":
+            continue
+        if not _holds_session(led.get("driving_session_id"), session_id):
+            continue
         predicate = _is_blocking(
             led, run_record=run_record, skip_staleness=skip_staleness,
             stale_threshold=stale_threshold, now=now,
@@ -216,6 +248,8 @@ def _blocking_runs(repo_root: str, now=None):
         if sidecar is None:  # load_run_record_safe returns None for non-dict too.
             continue
         if sidecar.get("status") != "committed":
+            continue
+        if not _holds_session(sidecar.get("host_session_id"), session_id):
             continue
         batch_id = sidecar.get("id", "?")
         for plan in sidecar.get("plans") or []:
@@ -280,7 +314,18 @@ def _reason_for(blocking) -> str:
     )
 
 
-def _nag_signature(blocking) -> str:
+def _programme_reason_texts(status) -> list:
+    out = []
+    for reason in status.get("reasons") or []:
+        if not isinstance(reason, dict):
+            continue
+        target = reason.get("item") or reason.get("system") or reason.get("count")
+        text = str(reason.get("kind"))
+        out.append(f"{text} {target}" if target not in (None, "") else text)
+    return sorted(out)
+
+
+def _nag_signature(blocking, programmes=()) -> str:
     """A deterministic signature of the blocking set (U2 / finding #9).
 
     Two turn-ends have the "same" block iff the same runs are blocking with the
@@ -296,26 +341,39 @@ def _nag_signature(blocking) -> str:
         )
         for rid, p in blocking
     )
-    return json.dumps(items, sort_keys=True)
+    if not programmes:
+        return json.dumps(items, sort_keys=True)
+    held = sorted((hold["run"], _programme_reason_texts(hold["status"])) for hold in programmes)
+    return json.dumps({"task": items, "programme": held}, sort_keys=True)
 
 
-def _nag_state_path(repo_root: str) -> str:
+def _nag_dir(repo_root: str, programmes=()) -> str | None:
+    if repo_root:
+        return os.path.join(repo_root, ".claude", "auto")
+    for hold in programmes:
+        return os.path.join(hold["home"], ".claude", "auto")
+    return None
+
+
+def _nag_state_path(nag_dir: str, session_id=None) -> str:
     # A DOTFILE, so the `*.json` run-record glob (glob excludes leading-dot names)
     # never sweeps it; U1's shape guard is a second backstop.
-    return os.path.join(repo_root, ".claude", "auto", ".stop-nag.json")
+    if not session_id:
+        return os.path.join(nag_dir, ".stop-nag.json")
+    return os.path.join(nag_dir, f".stop-nag-{_SID_UNSAFE.sub('_', session_id)[:128]}.json")
 
 
-def _load_last_nag(repo_root: str):
+def _load_last_nag(nag_dir: str, session_id=None):
     try:
-        with open(_nag_state_path(repo_root)) as fh:
+        with open(_nag_state_path(nag_dir, session_id)) as fh:
             return json.load(fh).get("sig")
     except Exception:
         return None
 
 
-def _store_nag(repo_root: str, sig: str) -> None:
+def _store_nag(nag_dir: str, sig: str, session_id=None) -> None:
     try:
-        path = _nag_state_path(repo_root)
+        path = _nag_state_path(nag_dir, session_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as fh:
             json.dump({"sig": sig}, fh)
@@ -323,9 +381,11 @@ def _store_nag(repo_root: str, sig: str) -> None:
         pass  # rel-001: never let nag-state I/O break the stop machinery.
 
 
-def _clear_nag(repo_root: str) -> None:
+def _clear_nag(nag_dir, session_id=None) -> None:
+    if not nag_dir:
+        return
     try:
-        os.remove(_nag_state_path(repo_root))
+        os.remove(_nag_state_path(nag_dir, session_id))
     except OSError:
         pass
 
@@ -341,11 +401,96 @@ def _terse_reason_for(blocking) -> str:
     )
 
 
-def decide(repo_root: str, stdin_raw: str) -> dict | None:
+def _inbox_size(home: str) -> int:
+    try:
+        with open(os.path.join(home, CLAIMS_FILE), "rb") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+def _driven_programmes(session_id, now) -> list:
+    if not session_id:
+        return []
+    try:
+        programme_home = load_lib_module("programme_home")
+        programme_predicate = load_lib_module("programme_predicate")
+        holds = programme_home.driven_runs(session_id, now)
+    except Exception:
+        return []
+    found = []
+    for hold in holds:
+        try:
+            status = programme_predicate.compute(hold["record"], now, _inbox_size(hold["home"]))
+            if any(isinstance(r, dict) and r.get("kind") == "corrupt_record"
+                   for r in status.get("reasons") or []):
+                continue
+            found.append(dict(hold, status=status))
+        except Exception:
+            continue
+    return found
+
+
+def _rules_suffix(hold) -> str:
+    flag = os.path.join(hold["home"], load_lib_module("programme_home").COMPACT_FLAG)
+    if not os.path.exists(flag):
+        return ""
+    return ("\n\nRules in force were reloaded after compaction; run `programme.sh rules --ack` "
+            "before your next write.")
+
+
+def _programme_reason_for(hold) -> str:
+    status = hold["status"]
+    text = (
+        f"auto: programme {hold['run']} may not stop yet — "
+        + "; ".join(_programme_reason_texts(status))
+        + ". Act on your next step, or give each wait a live watcher or a named "
+        "person who reports back."
+    )
+    unwatched = status.get("unwatched_waits") or []
+    if unwatched:
+        text += (
+            " Unwatched waits: " + ", ".join(unwatched) + ". Stopping again lets "
+            "the stop through and journals them as stopped unwatched, for Shawn."
+        )
+    return text + _rules_suffix(hold)
+
+
+def _terse_programme_reason_for(hold) -> str:
+    return (
+        f"auto: programme {hold['run']} still may not stop (unchanged): "
+        + "; ".join(_programme_reason_texts(hold["status"]))
+        + "." + _rules_suffix(hold)
+    )
+
+
+def _journal_stopped_unwatched(session_id, now) -> None:
+    try:
+        holds = _driven_programmes(session_id, now)
+        if not holds:
+            return
+        programme_journal = load_lib_module("programme_journal")
+    except Exception:
+        return
+    for hold in holds:
+        unwatched = hold["status"].get("unwatched_waits") or []
+        if not unwatched:
+            continue
+        try:
+            programme_journal.append(hold["run"], "stopped_unwatched", session_id,
+                                     {"items": list(unwatched)})
+        except Exception:
+            continue
+
+
+def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
     """Return the decision dict to print, or None to allow stop silently.
 
     Loop-safety: a re-fired Stop (stop_hook_active) always allows the stop.
     """
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+    session_id = _read_session_id(stdin_raw)
     if _read_stop_hook_active(stdin_raw):
         # Re-fired after a prior block — allow the stop SILENTLY (return None =>
         # no decision, no systemMessage, stop proceeds). We used to emit a
@@ -357,36 +502,45 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
         # and the note became one spam line per iteration. The run is durable on
         # disk regardless; the FIRST real block (below) already says so once.
         # Stay quiet on re-fire so auto adds no noise to a loop it isn't driving.
+        _journal_stopped_unwatched(session_id, now)
         return None
 
-    blocking = _blocking_runs(repo_root)
-    if not blocking:
-        _clear_nag(repo_root)  # reset so a future block re-emits full guidance.
-        return None  # nothing active+unmet => allow stop silently.
+    driven = _driven_programmes(session_id, now)
+    programmes = [hold for hold in driven if not hold["status"].get("may_stop")]
+    blocking = _blocking_runs(repo_root, now=now, session_id=session_id)
+    nag_dir = _nag_dir(repo_root, programmes)
+    if not blocking and not programmes:
+        # reset so a future block re-emits full guidance.
+        _clear_nag(nag_dir, session_id)
+        for hold in driven:
+            _clear_nag(_nag_dir("", [hold]), session_id)
+        return None
 
     # U2 (finding #9): de-duplicate the ~10x identical nag across turns. The block
     # is ALWAYS preserved (deliberate-stop); only the MESSAGE is collapsed to a
     # terse reminder once the driver has already seen the full guidance for this
     # exact blocking state. A changed/cleared state re-emits the full guidance.
-    sig = _nag_signature(blocking)
-    repeat = sig == _load_last_nag(repo_root)
-    _store_nag(repo_root, sig)
+    sig = _nag_signature(blocking, programmes)
+    repeat = sig == _load_last_nag(nag_dir, session_id)
+    _store_nag(nag_dir, sig, session_id)
 
     if repeat:
-        return {
-            "decision": "block",
-            "reason": _terse_reason_for(blocking),
-        }
+        parts = [_terse_programme_reason_for(hold) for hold in programmes]
+        if blocking:
+            parts.append(_terse_reason_for(blocking))
+        return {"decision": "block", "reason": "\n\n".join(parts)}
 
-    return {
-        "decision": "block",
-        "reason": _reason_for(blocking),
-        "systemMessage": (
+    parts = [_programme_reason_for(hold) for hold in programmes]
+    if blocking:
+        parts.append(_reason_for(blocking))
+        message = (
             f"auto held the stop: {len(blocking)} run(s) have unmet loop exit "
             "conditions. If you have background work in flight, the harness "
             "will re-invoke you when a verdict lands — do not poll."
-        ),
-    }
+        )
+    else:
+        message = "auto held the stop: the programme has work it can still act on."
+    return {"decision": "block", "reason": "\n\n".join(parts), "systemMessage": message}
 
 
 def _cli(argv) -> int:

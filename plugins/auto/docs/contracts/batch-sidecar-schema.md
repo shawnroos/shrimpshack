@@ -59,6 +59,7 @@ scanning runs only; the Stop hook globs `batches/*.json` separately.
 | `status` | enum | `"provisional"` (worktrees being created) \| `"committed"` (all worktrees succeeded, sub-runs may now spawn) |
 | `composite_intent` | string | one-line operator-facing description of the batch — driver uses this when binding harness `/goal` |
 | `plans` | array | per-plan record; see §2.2 |
+| `host_session_id` | string \| absent | the Claude session that ran the fanout, from `CLAUDE_CODE_SESSION_ID`. Written at the commit step. Absent when the id was unset, and on sidecars written before this field existed |
 
 ### 2.2 `plans[]` entry
 
@@ -112,9 +113,10 @@ A spawn proceeds in this order:
    per plan. On the FIRST failure: tear down successfully-created
    worktrees from this batch (`git worktree remove`), delete the
    provisional sidecar, raise to the caller.
-6. **COMMIT the sidecar.** Atomic write with `status: "committed"`. The
-   Stop hook gates session exit only on committed sidecars (provisional
-   ones are ignored — round-3 R3-003).
+6. **COMMIT the sidecar.** Atomic write with `status: "committed"` and
+   `host_session_id` (when the session id is known). The Stop hook gates
+   session exit only on committed sidecars (provisional ones are ignored —
+   round-3 R3-003).
 
 ### 3.2 Stop hook consumption
 
@@ -126,6 +128,10 @@ A spawn proceeds in this order:
   must be true.
 - Provisional sidecars are SKIPPED — they may belong to a failed
   half-built batch.
+- A sidecar with `host_session_id` holds only that session's stop. Other
+  sessions in the same repo are never held by it.
+- A sidecar without `host_session_id` holds every session in the repo, as
+  before the field existed.
 
 ---
 

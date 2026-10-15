@@ -37,8 +37,20 @@ __cd_find_repo() {
   return 1
 }
 
-__cd_repo="$(__cd_find_repo)" || exit 0
-[ -d "${__cd_repo}/.claude/auto" ] || exit 0
+# Programme gate (runs in every session, repo or not): a lease file means a
+# programme holds a herdr space, and Bash commands naming its driver's pane are checked.
+__cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
+__cd_any_lease=0
+for __cd_f in "${__cd_leases}"/*.json; do
+  [ -e "$__cd_f" ] && __cd_any_lease=1
+  break
+done
+
+__cd_repo="$(__cd_find_repo)" || __cd_repo=""
+if [ -n "$__cd_repo" ] && [ ! -d "${__cd_repo}/.claude/auto" ]; then
+  __cd_repo=""
+fi
+[ -n "$__cd_repo" ] || [ "$__cd_any_lease" = 1 ] || exit 0
 
 PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -49,6 +61,13 @@ fi
 __cd_stdin_json=""
 if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
+fi
+
+# Outside a repo the checks are the driver-pane check, which denies any Bash
+# command naming a driver's pane however herdr is spelled, and the tracker guard on
+# Linear MCP calls, so no finer text prefilter here.
+if [ -z "$__cd_repo" ]; then
+  [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] || exit 0
 fi
 
 # Hand off ALL decision logic to Python. `|| true` keeps the PROCESS exit 0

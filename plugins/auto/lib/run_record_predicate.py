@@ -342,7 +342,11 @@ def recompute_predicate(run_record: dict) -> dict:
     via ``phase_grammar.current_phase`` rather than raw subscript).
 
     Returns the new dict (does NOT mutate ``run_record``; the caller assigns it).
+    A programme record gets ``programme_predicate.compute`` instead, which has no
+    ``met``; the caller stores it under ``programme_status``.
     """
+    if run_record_core.run_kind(run_record) == "programme":
+        return run_record_core._lazy_load("programme_predicate").compute(run_record)
     blockers, majors, minors = _count_severities_by_step(run_record)
     gaps_open = _read_cached_gaps_open(run_record)
     term = _compute_terminality(run_record)

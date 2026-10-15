@@ -58,6 +58,7 @@ run_record_producers = load_lib_module("run_record_producers")
 # U10: the operator `downgrade` command needs the INVERSE map. format_compat is a DAG
 # ROOT (imports no sibling), so this edge closes no cycle — same as core's own.
 format_compat = load_lib_module("format_compat")
+run_record_evidence = load_lib_module("run_record_evidence")
 
 # ──────────────────────────────────────────────────────────────────────────
 # Re-exports from run_record_core: constants + errors + pure logic + primitives.
@@ -462,6 +463,25 @@ def _h_set_stall_threshold(argv):
     return 0
 
 
+def _h_check_deliverable(argv):
+    rest, ref = list(argv[2:]), None
+    if len(rest) == 3 and rest[1] == "--ref":
+        ref = rest.pop(2)
+        rest.pop(1)
+    if len(rest) != 1:
+        raise ValueError("usage: check-deliverable <run> <deliverable> --ref <reference>")
+    out = run_record_evidence.check_deliverable(resolve_repo(), argv[1], rest[0], ref)
+    json.dump(out, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+def _h_evidence_journal(argv):
+    json.dump(run_record_evidence.read_journal(argv[1], argv[2]), sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
 _VERBS = {
     # read / inspection
     "describe": _Verb(_h_describe, "[run]  (with <run>: overlays THIS run's phase model)", reads=True),
@@ -527,6 +547,14 @@ _VERBS = {
         "<run> <step> <seconds>  (per-step stall threshold the stall clock reads)",
         rejects="RunRecordError on a non-integer or non-positive seconds.",
     ),
+    "check-deliverable": _Verb(
+        _h_check_deliverable,
+        "<run> <deliverable> --ref <reference>  (task run; result kept apart from the exit predicate)",
+        rejects="exit 2 if CLAUDE_CODE_SESSION_ID is unset, the deliverable is unknown or the "
+        "reference is missing or has spaces; RunRecordError unless the caller is the run's "
+        "driving session. Stores confirmed, refuted or unknown from the checker; never takes a result.",
+    ),
+    "evidence-journal": _Verb(_h_evidence_journal, "<repo> <run>  (the run's journaled evidence checks)", reads=True),
 }
 
 

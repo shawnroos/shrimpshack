@@ -6,6 +6,13 @@
 > the two bumps are separate so no version label ever denotes two different
 > normative texts.)
 >
+> **Changelog — programme runs (`programme_format: 1`, additive re-lock):** a second
+> run kind. New top-level fields `run_kind`, `programme_format`, `programme`,
+> `programme_status` (programme records) and `task_evidence` (task records). A
+> programme record carries no `exit_predicate_result` and no steps; its layout,
+> lease, journal, registry, read model and env overrides are §10. Task records are
+> unchanged apart from the optional `task_evidence` block, which no predicate reads.
+>
 > **Changelog — v0.3.0 (concept-vocabulary rename, U9 — rename re-lock):** the
 > contract file is renamed to `run-record-schema.md`, and the implementation
 > identifiers it pins are renamed with it: the whole module family, the facade +
@@ -144,6 +151,11 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 | `agent_session_ids` | string[] | **(v0.13.0 U8, additive — appended by `register_session`)** the OWNERSHIP SET the two PreToolUse hooks gate on, alongside `driving_session_id`. When the loop's phase work runs in background sub-agents (each carrying its own `session_id`), a scalar `driving_session_id` match went dark for the whole tree — including `fix`, which writes code and runs Bash. A dispatched sub-agent registers here, and both hooks match MEMBERSHIP of `{driving_session_id} ∪ agent_session_ids` (R21/KTD-7). Membership is opt-IN by registration — an unrelated session in the same worktree is never gated. The action gate's operator-pause exemption stays scoped to `driving_session_id` alone (a sub-agent is never the operator). **Defaults to `[]`**; idempotent; bounded at 256 (oldest evicted). NEVER read by any predicate. |
 | `driving_session_id` | string/null | **(v0.6.0 U5, additive — written by `init_run_record` at arm time, mutated by `set_driving_session_id`)** the DRIVING interactive session's `session_id` (`CLAUDE_CODE_SESSION_ID`; v0.6.4 dropped the earlier `CLAUDE_CODE_CHILD_SESSION`-falsey assertion — the harness sets that var in every Bash-tool subprocess where arm/resume run, so it darkened the backstop on every run and is not a driver-vs-sub-agent signal). The advisor-gate PreToolUse hooks (`lib/on-pretooluse-askuser.py`, `lib/on-pretooluse-action.py`) match a denied `AskUserQuestion` / a destructive Bash·Write to THIS run by testing the hook's stdin `session_id` for MEMBERSHIP of `{driving_session_id} ∪ agent_session_ids` (KTD-5, widened to a set in v0.13.0 U8) — so a concurrent STANDALONE ce-skill in the same worktree (registered in neither) is correctly ignored. **`null` on a legacy run-record or a run armed without the env var present** — read DEFENSIVELY by the hooks: absent → no match → fail-open (question gate) / fail-safe (action gate). Stored top-level (run-identity, NOT liveness — it does NOT live inside `loop`). NEVER read by any predicate. Arm-time only: a run resumed from a DIFFERENT interactive session keeps the arm-time id (accepted v0.6.0 limitation). |
 | `advisor_audit` | array | **(v0.6.0 U5, additive — appended by `append_advisor_audit`)** the structured audit trail of every autonomous advisor-gate decision (KTD-5). Each record is `{ "kind": "advisor"\|"action", "subject": str, "classification": str, "resolution": str, "at": <iso> }`: `kind="advisor"` = the driving agent consulted the advisor on a denied `AskUserQuestion` and itself classified it (`subject`=the question, `classification`∈ mechanical·design-fork, `resolution`∈ resolved-autonomously·escalated-via-pause); `kind="action"` = the destructive-action backstop fired (`subject`=the Bash command, `classification`=the destructive-pattern label, `resolution`=blocked-and-paused). **Absent on a run that hit no gate decisions** (the key is created lazily on first append). The append happens INSIDE the locked `mutate` closure, so concurrent fan-out `record_verdict` writes cannot clobber the list. Surfaced in the exit report next to the P3 findings — a wrong autonomous call or a fired backstop is diagnosable (trust earned by visibility). NEVER read by any predicate. |
+| `run_kind` | string/absent | **(programme runs, additive)** `"task"` \| `"programme"` (`RUN_KINDS`). **Absent means `"task"`**; read it with `run_record_core.run_kind(record)`. Set once by `init_run_record(..., run_kind=...)`. See §10. |
+| `programme_format` | int/absent | **(programme runs)** the programme shape version, `1` (`PROGRAMME_FORMAT`). Present only on programme records; a higher value than this code knows makes the lease read as `newer` and every hook hold nothing. |
+| `programme` | object/absent | **(programme runs)** the programme block: remit, agreement, instructions, proposed rules, items, working model, watchers, sources, inbox offset, ended. Shape in §10.5. Passed through `format_compat` verbatim. |
+| `programme_status` | object/absent | **(programme runs)** the programme predicate's result, written by `_atomic_write` in place of `exit_predicate_result`. A display copy: deciders recompute it (§10.4). |
+| `task_evidence` | object/absent | **(task runs, additive)** evidence a task run's driving session checked: `{<deliverable>: {<ref>: {result, checked_at, confirmed_at, fields, misses, note}}}` (§10.12). Never read by any predicate. |
 
 ### 2.2 `exit_predicate_result` (the cached predicate — I-1)
 
@@ -156,6 +168,9 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 | `gaps_open` | int | open plan-loop gaps (backend-supplied); `0` outside plan-loop |
 | `all_steps_terminal` | bool | `true` iff EVERY step is terminal (see "terminal" definition, §4, I-2) |
 | `iteration_pending` | bool | **(v0.3.0, additive — KTD §B)** `true` iff the run declares an `iteration` block AND the gate step's `dispatch_context.decision == "iterate"` AND the bound is unbreached (`iteration_attempts < max_attempts` AND `active_wall_seconds < max_wall_seconds`). The new `met` rule is `met = (existing met conditions) AND NOT iteration_pending` — without this AND-NOT clause, a workflow that emits plan-N steps while `loop_phase == "work"` would see work-met fire spuriously (the phase-scoped terminal check ignores plan-N steps; they are phase=plan, invisible). A run-record with no `iteration` block reads `iteration_pending = false` and the predicate behaves exactly as v0.2.x. |
+
+A programme record (`run_kind == "programme"`) has no `exit_predicate_result`:
+`_atomic_write` removes it and writes `programme_status` instead (§10.4).
 
 This whole object is **recomputed from the in-memory step state on every write**
 (I-1) and persisted in the same atomic snapshot. It is a cache of a pure function
@@ -385,6 +400,9 @@ U7's hooks — read `exit_predicate_result` directly and NEVER re-derive it.
 
 ### I-2 — Done requires terminal steps
 
+Task runs only. A programme run has no steps; its done comes from
+`lib/programme_predicate.py` over its items (§10.4).
+
 `exit_predicate_result.met == true` is **phase-aware**:
 
 ```
@@ -453,6 +471,8 @@ not hardcode copies — hardcoding causes drift.
 | `PLAN_STEPS` | `("plan","deepen","review_plan")` | valid non-null `plan_step` values (`null` is also valid: no step yet) |
 | `STEP_STATES` | the six states | valid `state` values |
 | `SEVERITIES` | `("blocker","major","minor")` | valid finding severities (shared scale, R3) |
+| `RUN_KINDS` | `("task","programme")` | valid `run_kind` values (in `lib/run_record_core.py`) |
+| `PROGRAMME_FORMAT` | `1` | the programme shape version this code writes (in `lib/run_record_core.py`) |
 
 ---
 
@@ -506,6 +526,8 @@ Consumers use these; the schema above is what they read/write through them.
 | `set_loop(repo_root, run_id, *, loop_phase=None, handoff_paused=None, driver=None, beat=False, plan_step=<unset>, blocked_on=<unset>, backstop_latched=<unset>)` | phase / liveness / plan-step / pause-reason updates (U4); recompute + atomic write. `plan_step` uses an UNSET sentinel default (not `None`) because `null` is a valid stored value — pass `plan_step=None` to clear it, or a step name to set it. `blocked_on` (§2.4) uses the SAME UNSET-sentinel convention — omit it to leave the pause reason unchanged, pass `blocked_on=None` to clear it (the resume `continue` path), or a string to record why the run is paused (set alongside `driver="manual"` by the operator pause path, the destructive-action backstop, and upstream-cluster escalation). `backstop_latched` (§2.4, v0.6.0 P3-b) also uses the UNSET-sentinel convention — pass `backstop_latched=True` to latch (the destructive-action backstop, alongside `driver="manual"`), `False` to clear it (the resume `continue` path). Not part of the predicate — the recompute is a no-op for `blocked_on`/`backstop_latched` |
 | `set_gaps_open(repo_root, run_id, gaps_open)` | persist the plan-loop open-gap count from `review_plan`'s return length (U4); writes `exit_predicate_result.gaps_open` then recompute + atomic write (I-1). The ONLY writer of `gaps_open` |
 | `step_is_terminal(step)` | pure `terminal(u)` predicate (§4.1) |
+| `run_record_core.run_kind(run_record)` | **(programme runs)** `"task"` when `run_kind` is absent, else the stored value. `init_run_record` also takes `run_kind=None, programme=None`; a programme block needs `run_kind="programme"`, no steps and phase `work` |
+| `run_record_evidence.check_deliverable(repo, run, deliverable, ref)` | **(task runs)** CLI `check-deliverable <run> <deliverable> --ref <ref>`: runs one evidence check for the driving session, stores it under `task_evidence`, journals `evidence_checked` (§10.12). `evidence-journal <repo> <run>` prints that journal |
 | `is_orphaned(run_record, now=None)` | pure I-3 orphan predicate (§5) |
 | `recompute_predicate(run_record)` | pure predicate computation; used internally by `_atomic_write`, exposed for tests. **(v0.3.0)** also returns `iteration_pending: bool` (KTD §B) |
 | `set_verdict_decision(repo, run, gate_step_id, decision, payload=None)` | **(v0.3.0, U2)** write `dispatch_context.decision` (validated against `iteration.DECISIONS`) + optional `dispatch_context.decision_payload`. Mirrors `set_winner_step_id`. Atomic; predicate recomputed |
@@ -542,6 +564,303 @@ CLI entry (for `lib/run_record.sh` and ad-hoc scripting): `python3 run_record.py
 - Slugify source: `claude-modes/lib/validate-mode-name.sh:104-136`.
 - Deliberate-fail test precedent: `claude-modes/tests/integration/concurrent-mode-set.test.sh`.
 - Memory: `feedback_loop_monitor_terminal_state_field` (read the cached terminal-state field, never a proxy), `feedback_new_tests_need_deliberate_fail_smoke_check` (deliberate-fail hatches).
+
+---
+
+## 10. Programme runs
+
+A programme run is the second run kind. A PM agent manages many **items** across one
+herdr space (its **remit**) instead of driving steps. It uses the same record file
+format, lock and atomic write as a task run, so §1–§7 apply unless this section says
+otherwise. `lib/programme_home.py` owns the shape; the verbs in `lib/programme.py`
+and its parts are the only writers.
+
+### 10.1 What differs from a task run
+
+- `run_kind` is `"programme"`. A missing `run_kind` means `"task"`; read it with
+  `run_record_core.run_kind(record)`, never by the key.
+- `steps` is `[]`, `backend` is `"native"`, the phase starts at `work` and moves to
+  `done` only when the programme ends. `loop` keeps `{driver, last_beat_at}`.
+- The record has **no `exit_predicate_result`**. `_atomic_write` removes it and stores
+  `programme_status` instead (§10.4). A reader that takes `exit_predicate_result.met`
+  as "task finished" must check `run_kind` first.
+- I-2 (done requires terminal steps) applies to task runs only. A programme's "done"
+  comes from `lib/programme_predicate.py` over its items.
+- `driving_session_id` is the PM session that holds the lease. Takeover and handover
+  rewrite it and the lease's `session_id` together. `agent_session_ids` never count
+  as the driver for a programme verb.
+- `format_compat` passes the `programme`, `programme_status` and `task_evidence`
+  subtrees through verbatim on read and on downgrade: their keys are chosen at run
+  time (item ids, watcher ids) and must never be renamed.
+
+### 10.2 Data dir and programme home
+
+Programmes live outside every repo, under the auto data dir:
+
+```
+<data>/programmes/<run-id>/                    # the home (0700)
+<data>/programmes/<run-id>/.claude/auto/<run-id>.json   # the record (same layout as §1)
+<data>/programmes/<run-id>/journal.jsonl       # the journal (§10.5), 0600
+<data>/programmes/<run-id>/.journal.lock
+<data>/programmes/<run-id>/claims.jsonl        # the worker inbox (§10.6), 0600
+<data>/programmes/<run-id>/.compact-flag       # present only after a compaction (§10.7)
+<data>/programmes/<run-id>/views/view.json     # the read model (§10.8); folder 0700, file 0600
+<data>/programmes/<run-id>/.claude/auto/.stop-nag-<sid>.json   # Stop hook nag state (§10.9)
+<data>/programmes/leases/<server>.<workspace>.json   # one lease per herdr space (§10.3)
+<data>/programmes/leases.lock                  # flock for leases; beside the folder, never in it
+<data>/programmes/.personal-protocol.lock      # flock for the adopt verbs' personal-file write
+<data>/sessions/<server>.<workspace>.jsonl     # the session registry (§10.10)
+```
+
+- `<data>` is `CLAUDE_AUTO_DATA_DIR`, else `~/.claude/plugins/data/auto-shrimpshack`.
+  It must be absolute, and it may not sit under `~/.claude/shared`, `~/.claude/skills`,
+  `~/.claude/auto` or a `~/.claude/projects/*/memory` folder (`UnsafeDataDir`).
+- The run id is its own record slug (`check_run_id`). Minted ids look like
+  `prog-YYYYmmdd-HHMMSS-<6 hex>`.
+- The leases folder holds only lease files, so an empty folder means "no programme on
+  this machine". The hook shims test that with a bash glob and skip Python entirely.
+- Lock order: the leases lock first, then the record lock. The journal append runs
+  after the record write commits, outside the record lock.
+
+### 10.3 Lease file
+
+```json
+{ "programme_format": 1, "run": "prog-…", "home": "<data>/programmes/prog-…",
+  "session_id": "<driving session>", "server": "default", "workspace": "w2",
+  "created_at": "<iso>" }
+```
+
+No `run_id` or `loop` key. `lease_status(lease)` returns one of `LEASE_STATES`:
+`free` (no lease), `newer` (lease or record has a higher `programme_format`; hold
+nothing), `orphaned` (corrupt, home mismatch, unreadable record, or last beat older
+than 2 cadence periods), `ended` (phase `done`), `expired` (agreement not accepted
+within 1 cadence period), `live`. `end_programme` sets the phase to `done`, then
+`programme.ended`, then deletes every lease of the run.
+
+### 10.4 `programme_status` (display copy)
+
+Written by `_atomic_write` from `programme_predicate.compute(record)` on every write.
+Readers that decide anything (the Stop hook, `status`) call `compute(record, now,
+inbox_size)` again with the real `claims.jsonl` line count; the stored copy has
+`inbox_checked: false`.
+
+```
+{ done, may_stop, stop_rule, ended,
+  reasons: [{kind, item? | system?, who?, count?, until?}],
+  waits: [{item, who, reporter, watched} | {system, since, watcher, watched}],
+  unwatched_waits: [item ids], new_items: [item ids],
+  items: {total, finished, open, waiting}, inbox_checked, computed_at }
+```
+
+Reason kinds (`REASON_KINDS`): `corrupt_record`, `never_stop`, `not_done`,
+`until_time`, `unproven_done`, `no_rule_proposed`, `undebugged_blocker`,
+`ownerless_item`, `open_item`, `unwatched_wait`, `queued_action`, `unread_claim`,
+`source_unavailable`. A source outage holds the stop with `source_unavailable` for
+two cadence periods, then becomes a wait on the system; an outage whose `watcher`
+is live is a watched wait at once and never holds. A source with
+`unsupported_since` set counts as not configured: no reason and no wait. An item is effectively done only when `matched_rule` is set,
+`deliverables` is non-empty and every entry has `result: "confirmed"`; a stored
+`done` without that reads as `unproven_done`.
+
+### 10.5 The `programme` block
+
+`PROGRAMME_FIELDS` plus the keys the verbs add. `normalize_programme` fills missing
+keys and keeps unknown ones.
+
+| key | shape |
+|-----|-------|
+| `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
+| `created_at` | `<iso>` |
+| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, terms: {remit, stop_rule, autonomy, cadence, sources}}` |
+| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
+| `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
+| `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
+| `items` | `{"<source>:<key>": item}` (below) |
+| `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
+| `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
+| `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `sources` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
+| `recorded_issues` | `{provider: "linear-mcp", at, dropped, issues: {"<key>": {title, state, state_type, state_id, url, project: {id, name} \| null, initiatives: [{id, name}] \| null, source: "linear-mcp"}}}`, written by `record-issues` from the PM's MCP read. It claims the tracker provider only when no other provider has it available. `state_type` is one of triage, backlog, unstarted, started, completed, canceled, or null; `state_id` is a UUID or null. The tracker guard reads it to resolve state names and ids; the recorded check never reads it |
+| `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
+| `ended` | `null \| {at, reason}` |
+
+Item (`ITEM_FIELDS` plus the fields verbs add):
+
+| key | shape |
+|-----|-------|
+| `id` | `[a-z][a-z0-9_-]*:<key>`, max 128 characters, e.g. `linear:AI-753`, `herdr:<ws>/<pane>` |
+| `title`, `joined_at` | string, `<iso>` |
+| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped` (`FINISHED_ITEM_STATES` are the last three). No verb sets `done`; the predicate derives it |
+| `aliases` | other ids that resolve to this item |
+| `owner` | `{pane, terminal_id, session_id}` |
+| `sessions[]` | `{session_id, pane, terminal_id, name, at}` |
+| `change_kinds`, `requires` | the kinds given to `add-item` and the protocol match's `requires` (deliverables plus outcomes such as `handed`) |
+| `matched_rule` | list of rule ids, or `null` when no rule matched |
+| `deliverables` | `{"<name>": entry}`, names from `DELIVERABLES` (`merged`, `flagged`, `verified`, `released`, `recorded`); a new entry is `{result: "unknown"}` |
+| deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
+| `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
+| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it |
+| `handed` | `{at, question, answered: null \| {at, choice: ship\|decline, prompt_id}}` |
+| `tested_build` | `{shasum, package, version, at}` |
+| `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
+| `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
+| `task_runs[]` | `{repo, run_id}` |
+| `dropped_reason` | string or `null` |
+| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `tested_build`, `tracker_synced`, `started`, `start_failed`, `reopened` |
+
+### 10.6 Journal and claims
+
+`<home>/journal.jsonl`, one JSON object per line:
+
+```json
+{ "kind": "<KINDS member>", "at": "<iso>", "session_id": "<caller>",
+  "payload": { }, "cites": ["p1a2b3c"], "prompt_id": "p1a2b3c" }
+```
+
+`cites` and `prompt_id` are optional. No line has a `run_id`, `loop` or loop-phase
+key. An unknown kind raises `JournalError`. `KINDS` today:
+
+`prompt`, `takeover_request`, `handover_request`, `end_request`,
+`blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
+`term_amended`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
+`rule_adopted`, `rules_acked`, `stopped_unwatched`, `item_added`, `item_updated`,
+`item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
+`item_handed`, `handed_answered`, `claim`, `claims_read`, `working_now`,
+`queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
+`evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
+`worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
+`taken_over`, `handed_over`, `programme_ended`, `request_refused`.
+
+- Lifecycle payloads: `programme_started {home, leases, session}`;
+  `taken_over` and `handed_over {from_session, to_session, leases, request}`;
+  `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
+  monitor_task_ids, process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
+  A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
+  An expired programme found by `end`, `expire` or `takeover` journals `programme_ended`
+  with reason `agreement_unaccepted` and `request: null`; `takeover` also journals its
+  `request_refused`, rebuilds the view and prints the CronDelete and TaskStop lines.
+- `blocked_driver_send` carries `{verb, target, pane_id, command}`. `verb` is the
+  parsed herdr verb (for example `agent prompt`), or null when the command was denied
+  only because its text names the driver's pane; `target` is then the pane id or
+  terminal id it named. `command` is redacted and capped at 2000 characters.
+- `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
+  `adopt-check`: `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
+  quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
+  autonomy entry, and `repo` and `check` for a check. `target` is `rule:<id>`,
+  `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
+  The protocol loader needs this line: a same-machine adoption loads only when a
+  `rule_adopted` line in the cited run cites the adoption's prompt and carries the entry's
+  target and hash (programme-protocol-format §4). The verb refuses a prompt whose text
+  does not name the target (agent-tool-surface, Programme verbs), so `quote` names it.
+
+- A `prompt` line has `prompt_id` (`p` + 6 hex) and payload `{text, origin: typed|cron}`.
+  `text` is redacted: token patterns and every value of 6 or more characters in the
+  secrets file are replaced before the line is written.
+- **Citation rule.** A prompt is kept while another line names it in `cites` or in
+  `payload.prompt_id`. `prune --run <id>` drops uncited prompts older than 7 days and
+  journals `prompts_pruned`. Every approval verb writes `payload.prompt_id`,
+  `payload.quote` and `cites: [prompt_id]`.
+- A typed approval is valid only when the prompt is in this programme's journal, has
+  origin `typed`, and its `session_id` equals the record's `driving_session_id`.
+- Request lines (`takeover_request`, `handover_request`, `end_request`) carry
+  `{verb, text, origin, space, lease_status, driving}`.
+- `stopped_unwatched` carries `{items: [item ids]}`, appended on each allowed re-fire
+  of the Stop hook; readers dedupe by item.
+- `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
+  PR head. No verb writes it yet.
+
+`<home>/claims.jsonl` is the worker inbox. Each line has the journal line shape with
+kind `claim`, `session_id` = the worker, payload `{item, deliverable, ref}`. Inbox
+size is `programme_record.claims_count(home)`; the unread count is that minus
+`programme.inbox_offset`.
+
+Task runs keep a journal too: `<repo>/.claude/auto/journal/<run slug>.jsonl`, one
+`evidence_checked` line per check with payload
+`{deliverable, ref, result, previous, fields, misses, note}`.
+
+### 10.7 Compaction flag
+
+The PreCompact hook writes `<home>/.compact-flag` (0600) for each programme the
+compacting session drives, with body `{at, session_id, trigger}`. Its presence is
+the signal: write verbs refuse and print the rules in force until
+`programme.py rules --ack` deletes it (`watcher-beat` is exempt), and the Stop hook
+adds to its reason: "Rules in force were reloaded after compaction; run
+`programme.sh rules --ack` before your next write." It does not repeat the block.
+
+### 10.8 Read model
+
+`<home>/views/view.json` is a display copy rebuilt after every programme write:
+`{view_format: 1, run, generated_at, model, rows}`. `model` holds
+`programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
+the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
+`decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`.
+`rules_in_force` holds `agreement`, `rules[] {id, layer, autonomy, requires, caveat,
+adopted_on}`, `autonomy[] {action, level, layer, adopted_on}` (entries not from the
+plugin layer), `rejected_rules[]` and `instructions[]`; an `adopted_on` machine shows
+as "adopted on <machine>". `watching` always holds one row each for tracker, tasks
+and plans (rows with `source` and `state_only`), plus watchers and outages. Each
+item carries `now`: its owner session's in-progress task and how many tasks are
+done, read from the tasks source while it is on. `rows` is
+`[{style: title|head|text|dim|warn, text}]`; `status` prints the rows and the mod
+draws them, so both show the same text. Nothing reads it to decide anything.
+
+### 10.9 Stop hook state
+
+The nag file is `<repo>/.claude/auto/.stop-nag-<sid>.json`, or
+`<home>/.claude/auto/.stop-nag-<sid>.json` when there is no repo. `<sid>` keeps only
+`[A-Za-z0-9_-]` and is capped at 128 characters. A stop with no session id uses
+`.stop-nag.json`. A programme holds only its driving session's stop.
+
+### 10.10 Session registry
+
+`<data>/sessions/<server>.<workspace>.jsonl` (0600, folder 0700, lock
+`.registry.lock`), written by the SessionStart hook inside herdr. One line per start:
+
+```json
+{ "at": "<iso>", "session_id": "…", "pane_id": "…", "env_pane": "…", "terminal_id": "…",
+  "tab_id": "…", "server": "…", "workspace": "…", "source": "startup", "cwd": "…",
+  "interactive": true, "resolved": "herdr" }
+```
+
+`resolved` is `herdr` when herdr named the pane and `env` when only `HERDR_PANE_ID`
+did. The file keeps the last 50 lines per pane.
+
+### 10.11 Injected context tags
+
+- `<auto-data>…</auto-data>` wraps one JSON line `{origin, prompt_id, run}` that the
+  UserPromptSubmit hook adds as context after it journals a prompt.
+- `<auto-rules>…</auto-rules>` wraps readable lines of the rules in force, one per
+  line: `programme: <run>`, `agreement: accepted <at>|not accepted`, one
+  `<term>: <value>[, until <iso>][, seconds <n>]` per term, one
+  `instruction <id>: "<quote>" (applies to <target>[, until <text>])` per active
+  instruction, one `rule <id>: <autonomy>, requires <deliverables>[; caveat: <text>]`
+  per loaded rule, one `autonomy <action>: <level>` per entry, and
+  `rejected rules: <n> (<ids>)`. `<` is escaped and control text stripped.
+  `programme.render_rules(record)` builds it for `rules`, the compaction reload and
+  write-verb refusals, from the same lines as the view's "Rules in force" section.
+  Both tags carry data, never instructions.
+
+### 10.12 `task_evidence` (task runs)
+
+`record.task_evidence[<deliverable>][<ref>] = {result, checked_at, confirmed_at,
+fields, misses, note}`, written by `run_record.py check-deliverable <run>
+<deliverable> --ref <ref>` from the driving session only. It is opaque to the task
+predicate; the recompute ignores it.
+
+### 10.13 Environment overrides
+
+| env var | default | read by |
+|---------|---------|---------|
+| `CLAUDE_AUTO_DATA_DIR` | `~/.claude/plugins/data/auto-shrimpshack` | every programme module and hook shim |
+| `CLAUDE_AUTO_SECRETS_FILE` | `~/.secrets` | journal redaction and checker tokens; the path and values are never printed |
+| `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
+| `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
+| `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |
+| `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, each tracker provider 15 s | every source read in `sweep` |
+| `CLAUDE_AUTO_TASKS_DIR` | `~/.claude/tasks` | the tasks source in `sweep`, `programme-watch` and the view |
+| `CLAUDE_AUTO_WORKER_WAIT` | `30` | `start-worker`, waiting for the new session |
+| `CLAUDE_AUTO_SPINOFF_TIMEOUT` | `600` | `start-worker`, the spinoff call |
+| `CLAUDE_AUTO_WATCH_INTERVAL_SECONDS` | `30` | `programme-watch`, the poll interval |
+| `CLAUDE_AUTO_PROGRAMME_CLI` | `python3 lib/programme.py` | `programme-watch`, the CLI it writes through |
 
 ---
 

@@ -1468,6 +1468,8 @@ TARGET_DOWNGRADE=""       # "<asked> → <got>: why", relayed in the summary blo
 BASE_SURPRISE=""          # set when an omitted --base did not mean the caller's HEAD
 SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by the skill when backgrounded)
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
+SESSION_ID=""                # optional: the new session's id, minted by the caller
+SESSION_ID_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
@@ -1482,6 +1484,7 @@ while [ $# -gt 0 ]; do
     --launcher) LAUNCHER="$2"; shift 2 ;;
     --session-transcript) SESSION_TRANSCRIPT="$2"; shift 2 ;;
     --session-cwd) SESSION_CWD="$2"; shift 2 ;;
+    --session-id) SESSION_ID="${2-}"; SESSION_ID_GIVEN=1; [ $# -ge 2 ] && shift 2 || shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -1497,6 +1500,15 @@ esac
 FORCED_LAUNCHER="$LAUNCHER"
 
 [ -n "$NAME" ] || die "missing --name <kebab-feature-name>"
+# Checked before any worktree exists: a refused id must leave nothing behind.
+if [ "$SESSION_ID_GIVEN" = 1 ]; then
+  case "$SESSION_ID" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) die "invalid --session-id '$SESSION_ID' (expected a lowercase uuid)" ;;
+  esac
+fi
+CLAUDE_SID_ARG=""
+[ -n "$SESSION_ID" ] && CLAUDE_SID_ARG="--session-id $(shq "$SESSION_ID") "
 # $LABEL reaches `herdr pane rename "$pane" "$LABEL"` as a BARE positional. Measured
 # on herdr 0.8.0 a leading '-' is in fact accepted there as a positional, so this
 # guard is belt-and-braces against a future backend that parses it as a flag, not a
@@ -1891,10 +1903,10 @@ printf '%s\n' "$KICKOFF" > "$BRIEF_FILE" 2>/dev/null || true
 _brief_excl="$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null)"
 [ -n "$_brief_excl" ] && { grep -qxF '/.spinoff-brief' "$_brief_excl" 2>/dev/null || printf '/.spinoff-brief\n' >> "$_brief_excl"; }
 
-LAUNCH_CMD="cd $(shq "$WORKTREE") && claude --name $(shq "$LABEL") \"\$(cat $(shq "$BRIEF_FILE"))\""
+LAUNCH_CMD="cd $(shq "$WORKTREE") && claude ${CLAUDE_SID_ARG}--name $(shq "$LABEL") \"\$(cat $(shq "$BRIEF_FILE"))\""
 # Recovery line for the summary: never references the brief file, so it stays
 # runnable even if that file is gone.
-MANUAL_CMD="cd $(shq "$WORKTREE") && claude --name $(shq "$LABEL")"
+MANUAL_CMD="cd $(shq "$WORKTREE") && claude ${CLAUDE_SID_ARG}--name $(shq "$LABEL")"
 
 # Detect the backend once (KTD-2), then drive the launch through the neutral
 # verbs. resolve_launcher's precedence (herdr live > cmux > none) subsumes the old
@@ -2152,7 +2164,7 @@ if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
     echo "  $KICKOFF_FAIL." >&2
     echo "  The worktree, branch and handoff are intact. Start the briefed session in that pane:" >&2
     echo >&2
-    echo "    claude --name $(shq "$LABEL") \"\$(cat .spinoff-brief)\"" >&2
+    echo "    claude ${CLAUDE_SID_ARG}--name $(shq "$LABEL") \"\$(cat .spinoff-brief)\"" >&2
     exit 3
   fi
   echo "  The launch itself did not complete — the failure is reported above, not swallowed." >&2

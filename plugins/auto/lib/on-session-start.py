@@ -4,6 +4,10 @@
 Scans every run-record under <repo>/.claude/auto/ and prints a one-line resume
 hint for each resumable run. SURFACES ONLY — never auto-runs (auto-resume is U8).
 
+For a programme's driving session it instead emits one SessionStart
+`additionalContext` holding those lines plus the programme's rules in force, so
+the rules come back at session start and after every compaction.
+
 Classification (schema §5 I-3), in order:
   * loop_phase == "done"                          -> skip (no line).
   * loop_phase == "handoff" AND handoff_paused == true  -> handoff-specific hint
@@ -21,7 +25,9 @@ A single bad run-record never aborts the scan of its siblings.
 
 from __future__ import annotations
 
+import json
 import os
+import select
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +41,8 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 # The ONE phase-decision module (U5): all phase routing reads through it so the
 # AST lint can forbid a divergent raw "loop_phase" literal anywhere else in lib/.
 phase_grammar = load_lib_module("phase-grammar")
+
+STDIN_WAIT_SECONDS = 0.5
 
 
 def surfacing_lines(repo_root: str):
@@ -68,12 +76,39 @@ def surfacing_lines(repo_root: str):
     return lines
 
 
+def _stdin_payload() -> str:
+    # Direct callers (the suites) leave stdin as an open pipe; a blocking read
+    # would hang them, so wait briefly and treat silence as no payload.
+    if sys.stdin.isatty() or not select.select([sys.stdin], [], [], STDIN_WAIT_SECONDS)[0]:
+        return ""
+    return sys.stdin.read()
+
+
+def programme_context(stdin_raw) -> list:
+    pre_compact = load_lib_module("on-pre-compact")
+    holds = pre_compact.driven_programmes(
+        pre_compact.main_thread_session(pre_compact.hook_input(stdin_raw)))
+    if not holds:
+        return []
+    programme = load_lib_module("programme")
+    return [programme.render_rules(hold["record"]) for hold in holds]
+
+
 def _cli(argv) -> int:
     repo_root = argv[0] if argv else os.getcwd()
     try:
-        lines = surfacing_lines(repo_root)
+        lines = surfacing_lines(repo_root) if repo_root else []
     except Exception:
         lines = []  # rel-001: never break session start.
+    try:
+        blocks = programme_context(_stdin_payload())
+    except Exception:
+        blocks = []
+    if blocks:
+        context = "\n".join(lines + blocks)
+        sys.stdout.write(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": context}}) + "\n")
+        return 0
     for line in lines:
         sys.stdout.write(line + "\n")
     return 0

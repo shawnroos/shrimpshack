@@ -460,6 +460,31 @@ def iter_worktree_run_records(repo_root: str):
         yield run_id, led
 
 
+def iter_programme_homes():
+    """Yield ``(home, run_id, run_record_dict)`` for each programme record under
+    ``<data dir>/programmes/<run-id>/``. Skips the leases folder, dot names and
+    anything that fails the path-segment check. Never raises.
+    """
+    try:
+        programme_home = load_lib_module("programme_home")
+        root = programme_home.programmes_dir()
+        names = sorted(os.listdir(root))
+    except Exception:
+        return
+    for name in names:
+        if name == "leases" or name.startswith("."):
+            continue
+        try:
+            home = programme_home.home_path(name)
+        except programme_home.ProgrammeHomeError:
+            continue
+        if not os.path.isdir(home):
+            continue
+        for run_id, led in iter_worktree_run_records(home):
+            if led.get("run_kind") == "programme":
+                yield home, run_id, led
+
+
 def iter_active_runs(repo_root: str):
     """Yield ``(run_id, run_record_dict)`` for each NON-``done`` run under
     ``<repo_root>/.claude/auto/*.json``, in ``iter_worktree_run_records``' sorted order.

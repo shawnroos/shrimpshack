@@ -509,6 +509,28 @@ r="$(fc opaque-namespaces 2>&1)"
 expected='{"emit_template_resolves": true, "inner_op": "do_step", "inner_phase": "handoff", "payload_keys": ["emit_count", "units"], "template_names": ["emitter", "gate_unit", "units"], "verdict_ids": ["emitter", "units"]}'
 assert_eq "$expected" "$r"
 
+it "programme block: item keys and a term named units survive upgrade and downgrade unchanged, at any depth"
+r="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, json, copy
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+fcm = load_lib_module("format_compat")
+block = {
+    "items": {
+        "linear:AI-753": {"id": "linear:AI-753", "deliverables": {"units": {"emitter": 1}}},
+        "herdr:w2/p26": {"id": "herdr:w2/p26", "seam_paused": True},
+    },
+    "agreement": {"terms": {"units": {"key": "units", "value": "adapter_op"}}},
+    "working_model": {"queue": [{"recipe": "x", "gate_unit": "y"}]},
+}
+rec = {"run_id": "p", "run_kind": "programme", "programme": copy.deepcopy(block)}
+up = fcm.upgrade_run_record(rec)
+down = fcm.downgrade_run_record(up)
+print(json.dumps({"up": up["programme"] == block, "down": down["programme"] == block}, sort_keys=True))
+PYEOF
+)"
+assert_eq '{"down": true, "up": true}' "$r"
+
 it "a v1 PRESET upgrades (invokes.backend_op/do_step), is never format-stamped, and round-trips"
 r="$(fc preset 2>&1)"
 expected='{"idempotent": true, "invokes": {"backend_op": "do_step", "prompt_template": "p.md"}, "no_format_stamp": true, "roundtrip": true}'

@@ -84,6 +84,21 @@ REQUIRED=(
   # v0.6.0 P3-b: the destructive-backstop pause latch (loop.backstop_latched)
   # that distinguishes a backstop pause from an operator pause.
   "backstop_latched"
+  "run_kind"
+  "programme_format"
+  "programme"
+  "programme_status"
+  "task_evidence"
+  "RUN_KINDS"
+  "PROGRAMME_FORMAT"
+  "KINDS"
+  "inbox_offset"
+  "claims.jsonl"
+  "journal.jsonl"
+  ".compact-flag"
+  "view.json"
+  "CLAUDE_AUTO_DATA_DIR"
+  "CLAUDE_AUTO_SECRETS_FILE"
 )
 
 # ─── Scenario 0: anti-vacuity floors ────────────────────────────────────────
