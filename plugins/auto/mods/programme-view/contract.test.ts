@@ -171,3 +171,14 @@ test("another session's lease renders nothing", async ($, on) => {
   expect(await lines(pane)).toEqual([])
   expect(await pane.find({ type: 'Text', text: /drives no auto programme/ })).toBeDefined()
 })
+
+test('a fixed-cadence proposal names its interval, and action labels carry no doubled hotkey', async ($, on) => {
+  const terms = contractPart().terms.map(one => ({ ...one }))
+  const at = terms.findIndex(one => one.key === 'cadence')
+  terms[at] = term('cadence', { proposal: { value: 'fixed', extras: { seconds: 900 }, at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'pending' } })
+  world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
+  const pane = await contractPane($)
+  expect((await lines(pane)).find(line => line.includes('cadence '))).toContain('proposed: fixed every 15 min')
+  const reread = await findNode(pane, one => one.type === 'Button' && one.props?.key === 'act:reread')
+  expect(reread?.props?.label).toBe('ask the PM to re-read the rules')
+})

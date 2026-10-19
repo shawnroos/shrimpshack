@@ -49,6 +49,16 @@ export function duration(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h${minutes ? ` ${minutes}m` : ''}`
 }
 
+export function liveAge<T>(raw: T, nowMs: number): T {
+  if (typeof raw !== 'object' || raw === null) return raw
+  const entry = raw as Record<string, unknown>
+  const at = typeof entry.recorded_at === 'string' ? Date.parse(entry.recorded_at) : Number.NaN
+  if (Number.isNaN(at)) return raw
+  const age = Math.max(0, Math.floor((nowMs - at) / 1000))
+  const after = typeof entry.fade_after_seconds === 'number' ? entry.fade_after_seconds : undefined
+  return { ...entry, age_seconds: age, faded: after === undefined ? entry.faded : age > after } as T
+}
+
 export function planChanged(entry: WorkEntry, viewed: unknown): boolean {
   return Boolean(entry.change_hash) && entry.changed_since_first && viewed !== entry.change_hash
 }

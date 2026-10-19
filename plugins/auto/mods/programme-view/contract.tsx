@@ -87,6 +87,13 @@ function valueText(value: unknown): string {
   return String(value ?? '')
 }
 
+function proposalValue(proposal: Proposal): string {
+  const seconds = (proposal.extras as { seconds?: unknown } | undefined)?.seconds
+  if (typeof seconds !== 'number') return valueText(proposal.value)
+  const every = seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`
+  return `${valueText(proposal.value)} every ${every}`
+}
+
 function proposalText(proposal: Proposal): string {
   switch (proposal.state) {
     case 'refused': {
@@ -147,7 +154,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
     line(`${key}:reply`, <Text bold>{`${' '.repeat(width)}${reply}`}</Text>)
   }
   const action = (key: string, hotkey: string, label: string, onPress: () => void) => (
-    <Button key={key} label={`${hotkey}  ${label}`} plain hotkey={hotkey} onPress={onPress} />
+    <Button key={key} label={label} plain hotkey={hotkey} onPress={onPress} />
   )
 
   function customOptions(term: Term, draft: Draft | undefined) {
@@ -241,7 +248,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
         ? [
             <Text color={proposal.state === 'refused' ? COLOR.refused : COLOR.warning}>{`   ${GLYPH.draft} `}</Text>,
             <Text dimColor>
-              {proposal.state === 'pending' ? `proposed: ${valueText(proposal.value)}` : proposalText(proposal)}
+              {proposal.state === 'pending' ? `proposed: ${proposalValue(proposal)}` : proposalText(proposal)}
             </Text>,
           ]
         : []),
@@ -260,7 +267,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
       line(
         `${term.key}:proposal`,
         <Text color={proposal.state === 'refused' ? COLOR.refused : COLOR.warning}>{`        ${GLYPH.draft}  `}</Text>,
-        <Text>{`Proposed: ${valueText(proposal.value)} · ${proposalText(proposal)}`}</Text>,
+        <Text>{`Proposed: ${proposalValue(proposal)} · ${proposalText(proposal)}`}</Text>,
       )
     }
     const draft = drafts[term.key]

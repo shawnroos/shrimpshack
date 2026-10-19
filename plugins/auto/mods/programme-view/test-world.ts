@@ -139,7 +139,7 @@ export function world(on: On, files: Record<string, string>, mtimes: Record<stri
   on('command.register', () => ({ value: { command: 'programme-view' } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  mock.clock(on)
+  const clock = mock.clock(on, { now: Date.parse('2026-10-19T10:00:00Z') })
   on('ui.focus', () => ({}))
   on('ui.scroll', (_$, e) => {
     scrolls.push({ offset: e.offset, by: e.by })
@@ -163,7 +163,7 @@ export function world(on: On, files: Record<string, string>, mtimes: Record<stri
     if (!(e.path in files)) throw new Error('ENOENT')
     return { value: { kind: 'file' as const, size: 1, mtimeMs: mtimes[e.path] ?? 1, isLink: false } }
   })
-  return { store, scrolls }
+  return { store, scrolls, clock }
 }
 
 export const lease = (session = 'sess-pm') => JSON.stringify({ session_id: session, run: 'prog-1', home: HOME })

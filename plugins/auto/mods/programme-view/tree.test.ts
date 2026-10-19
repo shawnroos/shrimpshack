@@ -104,7 +104,7 @@ test('waiting steps read their watch state, and nothing watching is a warning', 
 })
 
 test('a faded item shows its age and is dimmed', async ($, on) => {
-  const item = workEntry('linear:WEB-4', 'Old work', { age_seconds: 2400, faded: true })
+  const item = workEntry('linear:WEB-4', 'Old work', { recorded_at: '2026-10-19T09:20:00Z', age_seconds: 2400, faded: true })
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ work: [item, workEntry('linear:WEB-5', 'Fresh work')] }) })
   const pane = await openPane($)
   const drawn = await lines(pane)
@@ -113,6 +113,25 @@ test('a faded item shows its age and is dimmed', async ($, on) => {
   expect(title?.props?.dimColor).toBe(true)
   const fresh = await findNode(pane, one => one.type === 'Text' && one.children?.[0] === 'Fresh work')
   expect(fresh?.props?.dimColor).not.toBe(true)
+})
+
+test('age and fade follow the clock, not the view build: a stalled PM still fades', async ($, on) => {
+  const item = workEntry('linear:WEB-4', 'Stalled work', { recorded_at: '2026-10-19T09:20:00Z', age_seconds: 5, faded: false })
+  world(on, { [LEASE]: lease(), [VIEW]: viewText({ work: [item] }) })
+  const pane = await openPane($)
+  const drawn = await lines(pane)
+  expect(drawn.find(line => line.includes('Stalled work'))).toContain('40m')
+  const title = await findNode(pane, one => one.type === 'Text' && one.children?.[0] === 'Stalled work')
+  expect(title?.props?.dimColor).toBe(true)
+})
+
+test('the pane redraws as a minute passes with no view change', async ($, on) => {
+  const item = workEntry('linear:WEB-4', 'Ticking work', { recorded_at: '2026-10-19T09:59:00Z', age_seconds: 5 })
+  const { clock } = world(on, { [LEASE]: lease(), [VIEW]: viewText({ work: [item] }) })
+  const pane = await openPane($)
+  expect((await lines(pane)).find(line => line.includes('Ticking work'))).toContain('1m')
+  await clock.advance(61_000)
+  expect((await lines(pane)).find(line => line.includes('Ticking work'))).toContain('2m')
 })
 
 test('an item with no trajectory reads "no plan yet"', async ($, on) => {

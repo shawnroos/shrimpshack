@@ -8,7 +8,7 @@ import { ContractView, draftText, noteKey, optionRowKey, termRowKey, toolEditKey
 import type { Contract, Reread, Term } from './contract'
 import { getSelection, onSelect, select, viewedKey } from './selection'
 import type { Selection } from './selection'
-import { WorkView, itemRowKey, stepRowKey } from './tree'
+import { WorkView, itemRowKey, liveAge, stepRowKey } from './tree'
 import type { WorkEntry } from './tree'
 
 const PANE = 'programme-view'
@@ -82,12 +82,12 @@ function spacesOf(model: unknown): string[] {
     .map(space => `${String(space.server)}.${String(space.workspace)}`)
 }
 
-function partsOf(view: { work?: unknown; contract?: Partial<Contract>; reread?: Partial<Reread>; model?: unknown }) {
+function partsOf(view: { work?: unknown; contract?: Partial<Contract>; reread?: Partial<Reread>; model?: unknown }, nowMs: number) {
   const { work, contract, reread, model } = view
   if (!Array.isArray(work) || !contract || !reread) return
   return {
     spaces: spacesOf(model),
-    work: work as WorkEntry[],
+    work: work.map(entry => liveAge(entry, nowMs)) as WorkEntry[],
     contract: {
       terms: Array.isArray(contract.terms) ? contract.terms : [],
       instructions: Array.isArray(contract.instructions) ? contract.instructions : [],
@@ -116,7 +116,7 @@ async function findView($: EngineInterface): Promise<Found> {
       style: String(row?.style ?? 'text'),
       text: String(row?.text ?? '').slice(0, ROW_CAP),
     }))
-    return { kind: 'view', path, rows, generatedAt: String(view.generated_at ?? ''), parts: partsOf(view) }
+    return { kind: 'view', path, rows, generatedAt: String(view.generated_at ?? ''), parts: partsOf(view, await $.clock.now()) }
   } catch (error) {
     return { kind: 'unreadable', path, why: String(error) }
   }
@@ -150,10 +150,13 @@ async function openView($: EngineInterface): Promise<{ text: string }> {
     polling = true
     onSelect(() => void $.ui.invalidate('ui.render'))
     lastStamp = await stamp($)
+    let lastMinute = Math.floor((await $.clock.now()) / 60_000)
     $.clock.every(POLL_MS, async () => {
       const current = await stamp($).catch(() => lastStamp)
-      if (current !== lastStamp) {
+      const minute = Math.floor((await $.clock.now()) / 60_000)
+      if (current !== lastStamp || minute !== lastMinute) {
         lastStamp = current
+        lastMinute = minute
         await $.ui.invalidate('ui.render')
       }
     })
@@ -169,7 +172,9 @@ async function readBandWork($: EngineInterface): Promise<BandEntry[]> {
   if (text === undefined) return []
   try {
     const view = JSON.parse(text)
-    return view?.view_format === VIEW_FORMAT ? readWork(view.work) : []
+    if (view?.view_format !== VIEW_FORMAT || !Array.isArray(view.work)) return []
+    const now = await $.clock.now()
+    return readWork(view.work.map((entry: unknown) => liveAge(entry, now)))
   } catch {
     return []
   }
