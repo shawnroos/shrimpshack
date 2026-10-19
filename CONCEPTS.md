@@ -185,6 +185,15 @@ Archival does not mean every requirement passed or authorize deletion.
 A new Programme linked to an archived Programme.
 It needs its own accepted agreement and does not reopen the archive.
 
+### Promotion
+The one-way move of a Programme's home from plain files to its durable store.
+After promotion the store is the only source of truth and the files are exports rebuilt from it.
+A writer that chose the plain-file path before promotion must check again under the lock before it writes.
+
+### Foreign write
+A change found in a promoted Programme's exports that the store did not make.
+Appended rows are absorbed into the store as a record of what happened, but they never count as approval; rewritten files are set aside.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.
