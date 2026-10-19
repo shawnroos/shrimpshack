@@ -30,7 +30,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
 
-CLAIMS_NAME = "claims.jsonl"
+CLAIMS_NAME = programme_journal.CLAIMS_NAME
 SOURCES = ("herdr", "tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
 CHOICES = ("ship", "decline")
@@ -546,11 +546,7 @@ def claims_path(home) -> str:
 
 
 def claims_count(home) -> int:
-    try:
-        with open(claims_path(home), "rb") as fh:
-            return sum(1 for _ in fh)
-    except OSError:
-        return 0
+    return programme_journal.claims_count(os.path.basename(os.path.normpath(home)))
 
 
 def _h_claim(host, argv):
@@ -572,7 +568,7 @@ def _h_claim(host, argv):
         raise RecordError(f"{deliverable!r} is not a deliverable of {key!r}")
     sid = programme_sanitize.token(driver_session.driving_session_id() or "")
     payload = {"item": key, "deliverable": deliverable, "ref": ref}
-    programme_journal.append_to(claims_path(home), "claim", sid, payload)
+    programme_journal.append_claim(run_id, sid, payload)
     host._emit({"ok": True, "run": run_id, "kind": "claim", **payload})
     return 0
 

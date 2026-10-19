@@ -96,7 +96,6 @@ from _bootstrap import (  # noqa: E402 — after _LIB_DIR is on sys.path.
 phase_grammar = load_lib_module("phase-grammar")
 
 
-CLAIMS_FILE = "claims.jsonl"
 _SID_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -402,11 +401,12 @@ def _terse_reason_for(blocking) -> str:
 
 
 def _inbox_size(home: str) -> int:
-    try:
-        with open(os.path.join(home, CLAIMS_FILE), "rb") as fh:
-            return sum(1 for _ in fh)
-    except OSError:
-        return 0
+    return load_lib_module("programme_journal").claims_count(os.path.basename(os.path.normpath(home)))
+
+
+def _held_status(hold) -> dict:
+    return {"may_stop": False, "reasons": [{"kind": "authority_" + hold["outcome"]}],
+            "unwatched_waits": [], "hold": hold}
 
 
 def _driven_programmes(session_id, now) -> list:
@@ -420,6 +420,9 @@ def _driven_programmes(session_id, now) -> list:
         return []
     found = []
     for hold in holds:
+        if hold.get("hold"):
+            found.append(dict(hold, status=_held_status(hold["hold"])))
+            continue
         try:
             status = programme_predicate.compute(hold["record"], now, _inbox_size(hold["home"]))
             if any(isinstance(r, dict) and r.get("kind") == "corrupt_record"
@@ -441,6 +444,10 @@ def _rules_suffix(hold) -> str:
 
 def _programme_reason_for(hold) -> str:
     status = hold["status"]
+    if status.get("hold"):
+        return (f"auto: programme {hold['run']} may not stop: its authority is "
+                f"{status['hold']['outcome']} ({status['hold']['detail']}), so auto cannot tell what it "
+                "still owes. Report this to Shawn; do not treat the programme as finished or free.")
     text = (
         f"auto: programme {hold['run']} may not stop yet — "
         + "; ".join(_programme_reason_texts(status))

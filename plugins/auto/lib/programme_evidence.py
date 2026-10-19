@@ -597,7 +597,7 @@ def _resolve(programme, item_id) -> str:
 
 def _claimed_ref(home, key, deliverable):
     ref = None
-    for row in programme_journal.read_path(programme_record.claims_path(home)):
+    for row in programme_journal.claims(os.path.basename(os.path.normpath(home))):
         payload = row.get("payload") or {}
         if payload.get("item") == key and payload.get("deliverable") == deliverable:
             ref = payload.get("ref")

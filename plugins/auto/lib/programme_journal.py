@@ -24,6 +24,7 @@ run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 
 JOURNAL_NAME = "journal.jsonl"
+CLAIMS_NAME = "claims.jsonl"
 LOCK_NAME = ".journal.lock"
 SECRETS_ENV = "CLAUDE_AUTO_SECRETS_FILE"
 DEFAULT_SECRETS_FILE = "~/.secrets"
@@ -81,6 +82,9 @@ KINDS = (
     "handed_over",
     "programme_ended",
     "request_refused",
+    "effects_recorded",
+    "legacy_imported",
+    "foreign_write_absorbed",
 )
 
 _TOKEN_PATTERNS = [
@@ -170,8 +174,28 @@ def _write_line(path: str, entry: dict) -> None:
         os.close(fd)
 
 
-def append_to(path: str, kind: str, session_id, payload=None, *, cites=None,
-              prompt_id=None, now=None) -> dict:
+def _authority():
+    return load_lib_module("programme_authority")
+
+
+def _promoted(run_id) -> bool:
+    return _authority().promoted(programme_home.home_path(run_id), run_id)
+
+
+def _refuse_promoted(path: str) -> None:
+    folder, name = os.path.split(os.path.abspath(path))
+    if name not in (JOURNAL_NAME, CLAIMS_NAME):
+        return
+    run_id = os.path.basename(folder)
+    try:
+        home = programme_home.home_path(run_id)
+    except programme_home.ProgrammeHomeError:
+        return
+    if os.path.realpath(home) == os.path.realpath(folder) and _authority().promoted(home, run_id):
+        raise JournalError(f"{path} is an export of a promoted programme; write through programme.db")
+
+
+def entry(kind: str, session_id, payload=None, *, cites=None, prompt_id=None, now=None) -> dict:
     if kind not in KINDS:
         raise JournalError(f"journal kind must be one of {list(KINDS)}; got {kind!r}")
     if payload is not None and not isinstance(payload, dict):
@@ -186,21 +210,44 @@ def append_to(path: str, kind: str, session_id, payload=None, *, cites=None,
         entry["cites"] = [c for c in cites if isinstance(c, str)]
     if prompt_id:
         entry["prompt_id"] = prompt_id
-    _locked(path, lambda: _write_line(path, entry))
     return entry
 
 
+def append_to(path: str, kind: str, session_id, payload=None, *, cites=None,
+              prompt_id=None, now=None) -> dict:
+    row = entry(kind, session_id, payload, cites=cites, prompt_id=prompt_id, now=now)
+    _refuse_promoted(path)
+    _locked(path, lambda: _write_line(path, row))
+    return row
+
+
+def claims_path(run_id: str) -> str:
+    return os.path.join(programme_home.home_path(run_id), CLAIMS_NAME)
+
+
+def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived") -> dict:
+    if _promoted(run_id):
+        return _authority().append_row(run_id, row, channel=channel, provenance=provenance)
+    path = claims_path(run_id) if channel == "claims" else journal_path(run_id)
+    _locked(path, lambda: _write_line(path, row))
+    return row
+
+
 def append(run_id: str, kind: str, session_id, payload=None, *, cites=None, now=None) -> dict:
-    return append_to(journal_path(run_id), kind, session_id, payload, cites=cites, now=now)
+    return append_row(run_id, entry(kind, session_id, payload, cites=cites, now=now))
+
+
+def append_claim(run_id: str, session_id, payload) -> dict:
+    return append_row(run_id, entry("claim", session_id, payload), channel="claims",
+                      provenance="worker_result")
 
 
 def append_prompt(run_id: str, session_id, text: str, origin: str, now=None) -> dict:
     if origin not in PROMPT_ORIGINS:
         raise JournalError(f"prompt origin must be one of {list(PROMPT_ORIGINS)}; got {origin!r}")
     prompt_id = "p" + secrets.token_hex(3)
-    return append_to(journal_path(run_id), "prompt", session_id,
-                     {"text": redact(text), "origin": origin},
-                     prompt_id=prompt_id, now=now)
+    return append_row(run_id, entry("prompt", session_id, {"text": redact(text), "origin": origin},
+                                    prompt_id=prompt_id, now=now))
 
 
 def read_path(path: str) -> list:
@@ -221,7 +268,25 @@ def read_path(path: str) -> list:
 
 
 def read(run_id: str) -> list:
+    if _promoted(run_id):
+        return _authority().journal_rows(run_id)
     return read_path(journal_path(run_id))
+
+
+def claims(run_id: str) -> list:
+    if _promoted(run_id):
+        return _authority().claims_rows(run_id)
+    return read_path(claims_path(run_id))
+
+
+def claims_count(run_id: str) -> int:
+    if _promoted(run_id):
+        return len(_authority().claims_rows(run_id))
+    try:
+        with open(claims_path(run_id), "rb") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
 
 
 def find_prompt(run_id: str, prompt_id: str, rows=None):
@@ -242,21 +307,39 @@ def _cited_ids(rows) -> set:
     return cited
 
 
+def _prunable(rows, now, max_age_seconds) -> list:
+    cited = _cited_ids(rows)
+    out = []
+    for row in rows:
+        when = run_record_core.parse_iso(row.get("at"))
+        if (row.get("kind") == "prompt" and row.get("prompt_id") not in cited
+                and when is not None and (now - when).total_seconds() > max_age_seconds):
+            out.append(row)
+    return out
+
+
+def _prune_promoted(run_id, now, max_age_seconds) -> int:
+    def row(rows):
+        dropped = [r.get("prompt_id") for r in _prunable(rows, now, max_age_seconds)]
+        if not dropped:
+            return None
+        return entry("prompts_pruned", None, {"removed": len(dropped), "prompt_ids": dropped}, now=now)
+
+    built = _authority().append_row(run_id, row)
+    return built["payload"]["removed"] if built else 0
+
+
 def prune_uncited_prompts(run_id: str, now=None, max_age_seconds=PRUNE_AFTER_SECONDS) -> int:
     path = journal_path(run_id)
     now = now or datetime.datetime.now(datetime.timezone.utc)
+    if _promoted(run_id):
+        return _prune_promoted(run_id, now, max_age_seconds)
 
     def body():
         rows = read_path(path)
-        cited = _cited_ids(rows)
-        keep, removed = [], 0
-        for row in rows:
-            when = run_record_core.parse_iso(row.get("at"))
-            if (row.get("kind") == "prompt" and row.get("prompt_id") not in cited
-                    and when is not None and (now - when).total_seconds() > max_age_seconds):
-                removed += 1
-                continue
-            keep.append(row)
+        dropped = {id(r) for r in _prunable(rows, now, max_age_seconds)}
+        keep = [r for r in rows if id(r) not in dropped]
+        removed = len(dropped)
         if not removed:
             return 0
 

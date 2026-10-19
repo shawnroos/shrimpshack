@@ -210,7 +210,9 @@ def _secret_values(journal, secrets_path):
 def _secret_bearing(journal, text, values) -> bool:
     if any(value in text for value in values):
         return True
-    return any(p.search(text) for p in journal._TOKEN_PATTERNS) or bool(journal._ASSIGNMENT.search(text))
+    if any(p.search(text) for p in journal._TOKEN_PATTERNS):
+        return True
+    return any(m.group(3) != journal.REDACTED for m in journal._ASSIGNMENT.finditer(text))
 
 
 def admit(subject, *, provenance: str, basis: str, secrets_path=None) -> Admission:
@@ -572,6 +574,13 @@ class Store:
             references = [str(exc)]
         return {"integrity": integrity, "foreign_keys": foreign, "references": references,
                 "ok": not (integrity or foreign or references)}
+
+
+def head(store) -> dict:
+    def body():
+        revision, state = store._db().execute("SELECT revision, state FROM authority WHERE id = 1").fetchone()
+        return {"revision": revision, "state": json.loads(state)}
+    return store._transact(body)
 
 
 def _initialize(conn, run_id) -> None:

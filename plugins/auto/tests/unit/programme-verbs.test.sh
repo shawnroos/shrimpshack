@@ -70,13 +70,9 @@ EOF
 edit() {
   run_py "$RUN" "$1" <<'EOF'
 run, expr = args
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 EOF
 }
 
@@ -96,7 +92,7 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed beat check-deliverable claim close-instruction describe drop-item end expire hand-item handover mark-read merge-item prompt-item propose-agreement propose-rule queue record-instruction record-issues record-tested-build reopen-item rules set-now set-remit set-source set-waiting start start-worker status sweep takeover tracker-synced validate watcher-beat" "$VERBS"
+check "accept-agreement add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed beat check-deliverable claim close-instruction describe drop-item end expire hand-item handover mark-read merge-item promote prompt-item propose-agreement propose-rule queue reconcile-leases record-instruction record-issues record-tested-build reopen-item rules set-now set-remit set-source set-waiting start start-worker status sweep takeover tracker-synced validate watcher-beat" "$VERBS"
 
 P_TYPED="$(prompt typed 'stop rule: only when done, stop only when everything is done')"
 P_CRON="$(prompt cron 'wake up and sweep the space')"

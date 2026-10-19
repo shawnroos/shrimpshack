@@ -91,7 +91,14 @@ def programme_context(stdin_raw) -> list:
     if not holds:
         return []
     programme = load_lib_module("programme")
-    return [programme.render_rules(hold["record"]) for hold in holds]
+    return [_held_block(hold) if hold.get("hold") else programme.render_rules(hold["record"])
+            for hold in holds]
+
+
+def _held_block(hold) -> str:
+    return (f"auto: programme {hold['run']} cannot restore its rules: its authority is "
+            f"{hold['hold']['outcome']} ({hold['hold']['detail']}). Do not act for it until it "
+            "is repaired; tell Shawn.\n")
 
 
 def _cli(argv) -> int:

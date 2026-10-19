@@ -104,10 +104,10 @@ core = load_lib_module("run_record_core")
 args = sys.argv[2:]
 def rec_path(run):
     return os.path.join(ph.home_path(run), ".claude", "auto", run + ".json")
-def load(run):
-    return json.load(open(rec_path(run)))
-def save(run, rec):
-    json.dump(rec, open(rec_path(run), "w"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+load = programme_records.load
+save = programme_records.save
 def ago(hours):
     t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
     return t.strftime("%Y-%m-%dT%H:%M:%SZ")

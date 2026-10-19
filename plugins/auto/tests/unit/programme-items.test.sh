@@ -86,14 +86,9 @@ EOF
 edit() {
   run_py "$RUN" "$1" <<'EOF'
 run, expr = args
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-items = rec["programme"]["items"]
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 EOF
 }
 
@@ -371,8 +366,8 @@ prog hand-item linear:AI-802 --question "Ship the new crop now or hold for desig
 check '"handed"' "$(field 'items["linear:AI-802"]["state"]')"
 it "the tracker provider was called and herdr was not"
 check "board" "$(cut -d' ' -f1 "$CALLS" | sort -u | tr '\n' ' ' | sed 's/ $//')"
-it "the hand is journaled with the tracker exit status"
-check '[0, null]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
+it "the hand's notification outcome is journaled after the hand, with the tracker exit status"
+check '[0, null, "item_handed"]' "$("$PY" -c 'import json,sys; d=json.loads(sys.stdin.read())["payload"]; p=d["notify"]; print(json.dumps([p["tracker"], p["herdr"], d["kind"]]))' <<< "$(journal_last effects_recorded)")"
 it "hand-item on an already handed item is refused and notifies nothing"
 : > "$CALLS"
 prog hand-item linear:AI-802 --question "again?"
@@ -384,7 +379,7 @@ prog add-item linear:AI-803 --title "Product call" --kind product_question
 FAKE_BOARD_EXIT=3 prog hand-item linear:AI-803 --question "Which crop default?"
 check "board herdr" "$(cut -d' ' -f1 "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
 it "the journal records both exit statuses"
-check '[3, 0]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
+check '[3, 0]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last effects_recorded)")"
 it "the herdr notification names the question"
 has "Which crop default?" "$(cat "$CALLS")"
 

@@ -35,8 +35,9 @@ FINISHED_ITEM_STATES = ("done", "handed", "dropped")
 DELIVERABLES = ("merged", "flagged", "verified", "released", "recorded")
 STOP_RULES = ("nothing_it_can_act_on", "only_when_done", "until_time", "never_stop")
 AUTONOMY_LEVELS = ("act", "act_and_tell", "propose", "never")
-LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer")
-HELD_LEASE_STATES = ("live", "orphaned", "expired")
+LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer", "unavailable")
+HELD_LEASE_STATES = ("live", "orphaned", "expired", "unavailable")
+AUTHORITY_HOLDS = ("unsupported", "corrupt", "unavailable")
 COMPACT_FLAG = ".compact-flag"
 WATCHER_KINDS = ("cron", "monitor")
 SWEEP_SOURCES = ("tracker", "tasks", "plans")
@@ -319,11 +320,20 @@ def read_lease(path: str):
     return lease
 
 
-def _read_record(run_id: str):
+def read_programme(run_id: str) -> tuple:
     try:
-        return run_record_core.read_run_record(home_path(run_id), run_id)
-    except (run_record_core.RunRecordError, ProgrammeHomeError, OSError, ValueError):
-        return None
+        return run_record_core.read_run_record(home_path(run_id), run_id), None
+    except run_record_core.RunRecordError as exc:
+        outcome = getattr(exc, "outcome", None)
+        if outcome in AUTHORITY_HOLDS:
+            return None, {"outcome": outcome, "detail": str(exc)}
+        return None, None
+    except (ProgrammeHomeError, OSError, ValueError):
+        return None, None
+
+
+def _read_record(run_id: str):
+    return read_programme(run_id)[0]
 
 
 def _newer(stamp) -> bool:
@@ -348,7 +358,9 @@ def lease_status(lease, now=None) -> str:
             return "orphaned"
     except ProgrammeHomeError:
         return "orphaned"
-    record = _read_record(run)
+    record, hold = read_programme(run)
+    if hold is not None:
+        return "unavailable"
     if record is None:
         return "orphaned"
     if _newer(record.get("programme_format")):
@@ -399,7 +411,10 @@ def driven_runs(session_id, now=None) -> list:
                 continue
             if lease_status(lease, now) not in HELD_LEASE_STATES:
                 continue
-            record = _read_record(run)
+            record, hold = read_programme(run)
+            if hold is not None:
+                found.append({"run": run, "home": home_path(run), "record": None, "hold": hold})
+                continue
             if not isinstance(record, dict) or record.get("driving_session_id") != session_id:
                 continue
             found.append({"run": run, "home": home_path(run), "record": record})
@@ -450,19 +465,20 @@ def _release_leases(run_id: str) -> None:
                 pass
 
 
-def _end_locked(run_id: str, reason: str, now_iso: str) -> None:
-    record = _read_record(run_id)
+def _end_locked(run_id: str, reason: str, now_iso: str, event=None) -> None:
+    record, hold = read_programme(run_id)
+    if hold is not None:
+        raise ProgrammeHomeError(f"programme {run_id} cannot end: its authority is {hold['outcome']}")
     if record is not None:
         home = home_path(run_id)
+        phase_key = load_lib_module("phase-grammar").LOOP_PHASE_KEY
 
         def mutate(rec):
-            programme = rec.setdefault("programme", {})
-            programme["ended"] = {"at": now_iso, "reason": reason}
+            rec[phase_key] = "done"
+            rec.setdefault("programme", {})["ended"] = {"at": now_iso, "reason": reason}
 
-        # Phase first: a crash between the two writes must leave a record that
-        # reads as ended, or its lease stays held as live or orphaned.
-        load_lib_module("run_record").set_loop(home, run_id, loop_phase="done")
-        run_record_core._with_locked_run_record(home, run_id, mutate)
+        load_lib_module("programme_authority").write(
+            home, run_id, mutate, (lambda _result, _rec: event) if event else None)
     _release_leases(run_id)
 
 
@@ -476,6 +492,85 @@ def end_programme(run_id: str, reason: str, now=None) -> None:
     check_run_id(run_id)
     stamp = _iso(_now(now))
     _with_leases_lock(lambda: _end_locked(run_id, reason, stamp))
+
+
+def _remit_keys(record) -> list:
+    keys = []
+    for space in ((record.get("programme") or {}).get("remit") or {}).get("spaces") or []:
+        try:
+            keys.append(space_key(space.get("server") or DEFAULT_SERVER, space.get("workspace")))
+        except (ProgrammeHomeError, AttributeError):
+            continue
+    return keys
+
+
+def _stale_remit(home, run_id) -> list:
+    try:
+        with open(run_record_core.run_record_path(home, run_id)) as fh:
+            return _remit_keys(json.load(fh))
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def _claimants(now, stamp) -> dict:
+    found = {}
+    for entry in load_lib_module("_bootstrap").iter_programme_outcomes():
+        run, home, record = entry["run_id"], entry["home"], entry["record"]
+        if entry["outcome"] in AUTHORITY_HOLDS:
+            keys = _stale_remit(home, run) + [k for k, lease in iter_leases()
+                                               if lease and lease.get("run") == run]
+            synthetic = {"run": run, "home": home, "session_id": None,
+                         "programme_format": run_record_core.PROGRAMME_FORMAT}
+            for key in keys:
+                found.setdefault(key, {"lease": synthetic, "status": "unavailable", "record": None})
+            continue
+        if record is None or (record.get("programme") or {}).get("ended"):
+            continue
+        synthetic = {"run": run, "home": home, "session_id": record.get("driving_session_id"),
+                     "programme_format": record.get("programme_format"),
+                     "created_at": (record.get("programme") or {}).get("created_at") or stamp}
+        status = lease_status(synthetic, now)
+        if status == "expired":
+            _end_locked(run, "agreement_unaccepted", stamp)
+            continue
+        if status in ("free", "ended"):
+            continue
+        for key in _remit_keys(record):
+            found.setdefault(key, {"lease": synthetic, "status": status, "record": record})
+    return found
+
+
+def _republish(claim, server, workspace, stamp) -> None:
+    lease = claim["lease"]
+    if claim["record"] is None or read_lease(lease_path(server, workspace)) is not None:
+        return
+    _write_lease(server, workspace, lease["run"], lease["home"], lease["session_id"],
+                 lease.get("created_at") or stamp)
+
+
+def reconcile_run_leases(run_id: str) -> list:
+    check_run_id(run_id)
+
+    def body():
+        record, hold = read_programme(run_id)
+        if hold is not None:
+            raise ProgrammeHomeError(f"programme {run_id} authority is {hold['outcome']}: {hold['detail']}")
+        if record is None or (record.get("programme") or {}).get("ended"):
+            raise ProgrammeHomeError(f"programme {run_id} has no live record to reconcile from")
+        home, sid = home_path(run_id), record.get("driving_session_id")
+        written = []
+        for key in _remit_keys(record):
+            server, workspace = key.split(".", 1)
+            lease = read_lease(lease_path(server, workspace))
+            if lease and (lease.get("corrupt") or lease.get("run") != run_id):
+                raise LeaseHeld(key, lease, lease_status(lease))
+            if lease is None or lease.get("session_id") != sid or lease.get("home") != home:
+                _write_lease(server, workspace, run_id, home, sid,
+                             (lease or {}).get("created_at") or _iso(_now()))
+                written.append(key)
+        return written
+
+    return _with_leases_lock(body)
 
 
 def _mint_run_id(now) -> str:
@@ -504,11 +599,16 @@ def create_programme(spaces, session_id, *, run_id=None, now=None) -> dict:
             lease = read_lease(lease_path(server, workspace))
             if lease_status(lease, now) == "expired":
                 _end_locked(lease["run"], "agreement_unaccepted", stamp)
+        claimants = _claimants(now, stamp)
         for server, workspace in parsed:
             lease = read_lease(lease_path(server, workspace))
             status = lease_status(lease, now)
             if status not in ("free", "ended"):
                 raise LeaseHeld(space_key(server, workspace), lease, status)
+            claim = claimants.get(space_key(server, workspace))
+            if claim is not None:
+                _republish(claim, server, workspace, stamp)
+                raise LeaseHeld(space_key(server, workspace), claim["lease"], claim["status"])
         home = home_path(run_id)
         if os.path.exists(home):
             raise ProgrammeHomeError(f"programme home already exists: {home}")

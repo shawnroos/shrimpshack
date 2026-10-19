@@ -74,20 +74,30 @@
 #   iteration         → verification [lazy]
 #   run_record_predicate → programme_predicate [lazy, via _lazy_load]
 #   run_record (facade)  → run_record_evidence (in addition to the list above)
-#   _bootstrap           → programme_home [lazy] (programme_home imports _bootstrap at top)
+#   _bootstrap           → programme_home [lazy] (programme_home imports _bootstrap at top),
+#                          programme_authority [lazy]
+#   run_record_core      → programme_authority [lazy, via _lazy_load] (programme homes only)
+#   run_record (facade)  → programme_authority [lazy] (the offline downgrade refusal)
 #
 # Programme runs. This family builds on run_record_core directly, not on the facade:
 # a programme record has no steps, so the facade's step verbs never apply to it.
 #   verb_cli             → (nothing)                           leaf
 #   programme_sanitize   → (nothing)                           leaf
-#   programme_home       → run_record_core; run_record [lazy], phase-grammar [lazy]
-#                          The lazy facade load sits inside the end path only, so the
-#                          chain run_record → run_record_evidence → … → programme_home
-#                          closes no import-time cycle.
+#   programme_home       → run_record_core; phase-grammar [lazy], programme_authority [lazy],
+#                          _bootstrap [lazy]
+#                          The end path writes through programme_authority, loaded lazily,
+#                          so programme_authority → programme_home closes no import-time cycle.
 #   programme_predicate  → run_record_core, programme_home; phase-grammar [lazy]
 #   programme_protocol   → programme_home                      (never programme_journal:
 #                          the prompt lookup is passed in by the caller)
-#   programme_journal    → run_record_core, programme_home
+#   programme_journal    → run_record_core, programme_home; programme_authority [lazy]
+#   programme_store      → run_record_core, programme_home; programme_journal [lazy]
+#   programme_authority  → run_record_core, programme_home, programme_store;
+#                          programme_journal [lazy], format_compat [lazy, via _lazy_load]
+#                          run_record_core, _bootstrap, programme_home, programme_journal and
+#                          run_record reach it lazily, so it closes no import-time cycle.
+#   programme_import     → run_record_core, programme_home, programme_store,
+#                          programme_authority; programme_journal [lazy]
 #   session_registry     → run_record_core, programme_home, driver_session
 #   programme_exec       → programme_sanitize
 #   programme_tracker    → programme_exec, programme_journal, programme_sanitize
@@ -106,13 +116,14 @@
 #   programme_view       → programme_home, programme_predicate, programme_sanitize,
 #                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
-#                          programme_protocol, session_registry, driver_session, verb_cli;
+#                          programme_authority, programme_protocol, session_registry,
+#                          driver_session, verb_cli; programme_store, programme_import [lazy];
 #                          then, after its verb table is built: programme_record,
 #                          programme_evidence, programme_sources, programme_view,
 #                          programme_lifecycle
 #                          Those five receive `programme` as a `host` argument and never
 #                          load it back.
-#   programme_lifecycle  → run_record_core, programme_home, programme_journal,
+#   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
 #                          session_registry, driver_session, programme_sanitize
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
 #                          programme_record, programme_sanitize, programme_tracker,
@@ -423,7 +434,8 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme.py programme.sh verb_cli.py programme_record.py programme_sanitize.py \
            programme_evidence.py programme_sources.py programme-watch.py programme-watch.sh \
            programme_view.py run_record_evidence.py programme_lifecycle.py \
-           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py; do
+           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
+           programme_store.py programme_authority.py programme_import.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -456,6 +468,25 @@ it "programme_evidence.py and run_record_evidence.py do NOT load the run_record 
 if loads_sibling "programme_evidence.py" "run_record" \
    || loads_sibling "run_record_evidence.py" "run_record"; then
   fail "the facade loads run_record_evidence, which reaches programme_evidence — a facade load from either closes a cycle"
+else
+  pass
+fi
+
+for _low in programme_store programme_authority programme_import; do
+  it "${_low}.py does NOT load programme or a programme verb module"
+  if loads_sibling "${_low}.py" "programme" || loads_sibling "${_low}.py" "programme_record" \
+     || loads_sibling "${_low}.py" "programme_lifecycle"; then
+    fail "${_low}.py sits below the verb modules; loading one closes a cycle"
+  else
+    pass
+  fi
+done
+
+it "programme_journal.py and programme_store.py load each other only lazily"
+if grep -qE '^[a-z_]+ = load_lib_module\("programme_(authority|store)"\)' "$LIB/programme_journal.py" \
+   || grep -qE '^[a-z_]+ = load_lib_module\("programme_journal"\)' "$LIB/programme_store.py" \
+   || grep -qE '^[a-z_]+ = load_lib_module\("programme_journal"\)' "$LIB/programme_authority.py"; then
+  fail "a module-top load between the journal and the store closes an import-time cycle"
 else
   pass
 fi

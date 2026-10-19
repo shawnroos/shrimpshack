@@ -736,11 +736,12 @@ def _driven_programme(session_id):
     if not session_id:
         return None
     programme_home = load_lib_module("programme_home")
-    run_record_core = load_lib_module("run_record_core")
     runs = {lease.get("run") for lease in programme_home.leases_for_session(session_id)
             if programme_home.lease_status(lease) in programme_home.HELD_LEASE_STATES}
     for run_id in sorted(r for r in runs if isinstance(r, str)):
-        record = run_record_core.read_run_record(programme_home.home_path(run_id), run_id)
+        record, hold = programme_home.read_programme(run_id)
+        if hold is not None:
+            return run_id, None
         programme = record.get("programme") if isinstance(record, dict) else None
         if (isinstance(programme, dict) and not programme.get("ended")
                 and record.get("driving_session_id") == session_id):
@@ -840,7 +841,10 @@ def tracker_write_denial(stdin_raw: str) -> dict | None:
         return None
     run_id, programme = driven
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    what = _proof_write(tool_input, programme) or _remit_write(data["tool_name"], tool_input, programme)
+    if programme is None:
+        what = "comes from a programme whose authority cannot be read, so its remit cannot be checked"
+    else:
+        what = _proof_write(tool_input, programme) or _remit_write(data["tool_name"], tool_input, programme)
     if what is None:
         return None
     try:

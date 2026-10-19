@@ -627,6 +627,14 @@ def downgrade_record_file(path: str) -> bool:
     """
     import tempfile
 
+    dispatch = os.path.dirname(os.path.abspath(path))
+    home = os.path.dirname(os.path.dirname(dispatch))
+    run_id = os.path.splitext(os.path.basename(path))[0]
+    if os.path.basename(os.path.dirname(home)) == "programmes" \
+            and load_lib_module("programme_authority").routes(home, run_id):
+        raise ValueError(f"{path} is an export of a promoted programme; its authority is programme.db, "
+                         "which a format downgrade does not apply to")
+
     def body():
         with open(path) as fh:
             before = json.load(fh)          # RAW read: never _read_json (it upgrades)

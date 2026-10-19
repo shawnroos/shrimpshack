@@ -98,8 +98,19 @@ session.
   writes nothing. Every write through the shared write path then rebuilds the same
   model into `<home>/views/view.json` (mode 0600), which the programme-view mod
   draws. A failed rebuild prints `view refresh failed` on stderr and never fails
-  the write. `claim` writes only `claims.jsonl`, so a new claim shows at the next
-  write or `status`.
+  the write. `claim` changes only the claims, so a new claim shows in the view at
+  the next write or `status`.
+- **Storage**: a programme keeps its record, journal and claims in
+  `<home>/programme.db`, and each write commits the record change and its journal
+  entry together. `<home>/.claude/auto/<run>.json` (tagged `projection_of_revision`),
+  `journal.jsonl` and `claims.jsonl` are exports rebuilt after each commit; nothing
+  reads them back as state, and a raw write to one is refused or, from an older
+  auto, recorded as `foreign_write_absorbed` at the next write. A programme made
+  by an auto that predates the database stays on its JSON files until `promote`
+  imports it (`--run <id>`); a prompt imported that way approves nothing new.
+  `reconcile-leases` rewrites a run's leases from its committed remit and driving
+  session. Any write verb takes `--op <id>`: a retry with the same id replays the
+  committed result instead of writing again.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
   value must be one of that term's options. Wording that fits no option is an
@@ -141,14 +152,14 @@ session.
   otherwise.
 - **Handing**: `hand-item` hands an item to Shawn with a question and notifies
   once: the tracker's needs-you mark for an issue item, else a herdr
-  notification. Its journal entry records both exit statuses as tracker and
-  herdr (null when not run or not found, "skipped" for the tracker on an item
-  with no issue). `answer-handed`
+  notification. After the hand commits, an `effects_recorded` journal entry
+  records both exit statuses as tracker and herdr (null when not run or not
+  found, "skipped" for the tracker on an item with no issue). `answer-handed`
   needs a typed `--prompt` and `--choice ship|decline`. Ship reopens the item with
   the deliverables its change kinds imply (or the kinds passed with `--kind`);
   decline drops it.
 - **Worker inbox**: `claim --run <id> --item <id> --deliverable <name> --ref <ref>`
-  appends one structured claim to `<home>/claims.jsonl`. Free text and a
+  commits one structured claim, exported to `<home>/claims.jsonl`. Free text and a
   reference with spaces are refused, and a claim never changes evidence. `mark-read`
   moves the programme's inbox read offset to the claim count, or to `--offset`.
 - **Working model and sources**: `set-now` records what the PM is doing now;

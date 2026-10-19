@@ -41,13 +41,28 @@ def classify_origin(text: str, record: dict) -> str:
 
 
 def _driving_run(session_id):
+    held = None
     for lease in programme_home.leases_for_session(session_id):
         if programme_home.lease_status(lease) not in programme_home.HELD_LEASE_STATES:
             continue
-        record = programme_home._read_record(lease.get("run"))
+        record, hold = programme_home.read_programme(lease.get("run"))
+        if hold is not None:
+            held = held or dict(hold, run=lease.get("run"))
+            continue
         if session_registry.caller_drives(record, session_id=session_id):
             return lease["run"], record, lease
-    return None, None, None
+    return held, None, None
+
+
+def _held_context(held) -> dict:
+    context = (
+        f"<{DATA_TAG}>\n"
+        f"auto did not journal this prompt: programme {held['run']}'s authority is "
+        f"{held['outcome']} ({held['detail']}). Nothing typed here can approve a change "
+        "until it is repaired.\n"
+        f"</{DATA_TAG}>"
+    )
+    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": context}}
 
 
 def _space_lease(session_id, env):
@@ -89,6 +104,8 @@ def handle(raw: str, env) -> dict | None:
     if not isinstance(session_id, str) or not session_id or not isinstance(text, str):
         return None
     run, record, driving_lease = _driving_run(session_id)
+    if isinstance(run, dict):
+        return _held_context(run)
     entry = None
     origin = "typed"
     if run:

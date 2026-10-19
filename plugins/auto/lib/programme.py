@@ -24,6 +24,7 @@ run_record = load_lib_module("run_record")
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
+programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
 session_registry = load_lib_module("session_registry")
 driver_session = load_lib_module("driver_session")
@@ -39,6 +40,7 @@ APPROVAL_KINDS = ("rule_adopted",)
 _NAME_WORD = re.compile(r"[0-9a-z_\-]+")
 _NAME_JOINERS = re.compile(r"[_\-]")
 _NEGATIONS = ("not", "never", "no", "dont", "t")
+_OPERATION = {"id": None}
 
 
 class ProgrammeError(Exception):
@@ -215,6 +217,9 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
     if row is None:
         raise ProgrammeError(f"no prompt {prompt_id!r} in this programme's journal")
     payload = row.get("payload") or {}
+    if row.get("provenance") == programme_authority.LEGACY:
+        raise ProgrammeError(f"prompt {prompt_id!r} was imported from a legacy journal; its typed label "
+                             "is unverified, so it approves nothing new")
     if payload.get("origin") != "typed":
         raise ProgrammeError(f"prompt {prompt_id!r} is not typed (origin {payload.get('origin')!r})")
     if row.get("session_id") != record.get("driving_session_id"):
@@ -314,20 +319,31 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         seen["prompt"] = prompt
         seen["record"] = rec
 
-    run_record_core._with_locked_run_record(home, run_id, mutate)
-    prompt = seen["prompt"]
-    payload = dict(seen["payload"] or {})
-    if after is not None:
-        payload.update(after(payload) or {})
-    if callable(kind):
-        kind = kind(payload)
-    if prompt:
-        payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
-    if journal:
-        programme_journal.append(run_id, kind, seen["sid"], payload,
-                                 cites=[prompt["prompt_id"]] if prompt else None)
+    def compose(_, rec):
+        payload = dict(seen["payload"] or {})
+        seen["kind"] = kind(payload) if callable(kind) else kind
+        prompt = seen["prompt"]
+        if prompt:
+            payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
+        seen["full"] = payload
+        if not journal:
+            return None
+        return programme_journal.entry(seen["kind"], seen["sid"], payload,
+                                       cites=[prompt["prompt_id"]] if prompt else None)
+
+    out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"])
+    if out["replayed"]:
+        row = out["row"] or {}
+        _emit({"ok": True, "run": run_id, "kind": row.get("kind"), "replayed": True,
+               "revision": out["revision"], **(row.get("payload") or {})})
+        return 0
+    payload = seen["full"]
+    extra = (after(payload) or {}) if after is not None else {}
+    if extra:
+        payload.update(extra)
+        programme_journal.append(run_id, "effects_recorded", seen["sid"], dict(extra, kind=seen["kind"]))
     refresh_view(run_id, home, seen["record"])
-    _emit({"ok": True, "run": run_id, "kind": kind, **payload})
+    _emit({"ok": True, "run": run_id, "kind": seen["kind"], **payload})
     return 0
 
 
@@ -792,6 +808,34 @@ def _h_status(argv):
     return 0
 
 
+def _h_promote(argv):
+    _, opts = _parse(argv, values=("run",))
+    if not opts.get("run"):
+        raise ValueError("promote needs --run <id>")
+    report = load_lib_module("programme_import").promote(programme_home.check_run_id(opts["run"]))
+    _emit(dict(report, run=opts["run"]))
+    return 0 if report["status"] in ("promoted", "already_promoted") else 1
+
+
+def _h_reconcile_leases(argv):
+    _, opts = _parse(argv, values=("run",))
+    run_id = programme_home.check_run_id(opts.get("run") or _run_from_leases(driver_session.driving_session_id()))
+    _emit({"ok": True, "run": run_id, "leases": programme_home.reconcile_run_leases(run_id)})
+    return 0
+
+
+_VERBS["promote"] = _Verb(
+    _h_promote,
+    "--run <id>  (moves a legacy JSON programme into programme.db; prints the import report)",
+    rejects="a legacy record with secret-bearing or unclassifiable content; inputs that change while "
+    "the import runs; a record that is not a programme. A declined import leaves every input untouched.",
+)
+_VERBS["reconcile-leases"] = _Verb(
+    _h_reconcile_leases,
+    "[--run <id>]  (rewrites the run's leases from its committed remit and driving session)",
+    rejects="a run whose authority cannot be read; a space another programme holds.",
+)
+
 _VERBS["status"] = _Verb(
     _h_status,
     "[<run>|--run <id>] [--json]  (prints the working model: doing now, queue, watching, "
@@ -805,10 +849,27 @@ _ERRORS = (
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,
+    load_lib_module("programme_store").StoreError,
 )
 
 
+def _take_operation(argv) -> list:
+    argv = list(argv)
+    if "--op" in argv[1:]:
+        at = argv.index("--op", 1)
+        if at + 1 >= len(argv):
+            raise ValueError("--op needs an operation id")
+        _OPERATION["id"] = argv[at + 1]
+        del argv[at:at + 2]
+    return argv
+
+
 def _cli(argv) -> int:
+    try:
+        argv = _take_operation(argv)
+    except ValueError as exc:
+        sys.stderr.write(f"{PROG}: {exc}\n")
+        return 2
     return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
 
 

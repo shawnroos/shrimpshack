@@ -54,10 +54,10 @@ core = load_lib_module("run_record_core")
 args = sys.argv[2:]
 def rec_path(run):
     return core.run_record_path(ph.home_path(run), run)
-def load(run):
-    return json.load(open(rec_path(run)))
-def save(run, rec):
-    json.dump(rec, open(rec_path(run), "w"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+load = programme_records.load
+save = programme_records.save
 $(cat)
 PYEOF
 }
