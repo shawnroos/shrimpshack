@@ -45,6 +45,10 @@ from this session's lease.
    | Ship or decline a handed item | `P answer-handed <item> --choice ship\|decline --prompt <id>` (ship also needs `--kind <change-kind>`) |
    | A standing instruction ("always...", "until...") | `P record-instruction --prompt <id> [--applies-to <item>] [--until <text>]` |
    | Withdraw an instruction | `P close-instruction <instruction-id> --as withdrawn --prompt <id>` |
+   | A message that starts "Instruction for <item title>:" | `P record-instruction --prompt <id> --applies-to <item>` |
+   | A message that starts "Withdraw instruction" and quotes it | `P close-instruction <instruction-id> --as withdrawn --prompt <id>` |
+   | Accept a proposed term change | `P amend-term <key> <proposed value> --prompt <id>` (add `--seconds <n>` for a fixed cadence) |
+   | Add or turn off a tool of record | `P amend-term tools_of_record <list> --prompt <id>`, where the list holds the tools that stay on |
    | Adopt a proposed rule | `P adopt-rule <rule-id> --prompt <id>` (add `--widening` only when he approved the wider autonomy) |
    | Change how far the PM may go on an action | `P adopt-autonomy <action> <never\|propose\|act_and_tell\|act> --prompt <id>` (add `--widening` only when he approved a level wider than the default) |
    | Adopt a repo's build check commands | `P adopt-check <repo> verified.lookup '<argv-json>' --prompt <id>`, then the same for `verified.deployed_sha` |
@@ -153,6 +157,20 @@ from this session's lease.
 13. **Update the working model.** `P set-now "<what you do next>" --item <item>`
     (or `--clear`), and `P queue --action <name> --item <item>` or
     `--remove <entry-id>` so the queue matches your next actions.
+    Then record every open or waiting item's trajectory in one call:
+    `P record-trajectories` with a JSON list on stdin, one entry per item:
+    `{item, done, current, planned, finish, location}`. Each step is
+    `{title, clause}`.
+    - Start from the item's stored trajectory (`P status --json`). For a step you
+      are not changing, reuse its stored title word for word. Rewording an
+      unchanged step shows Shawn a plan change that did not happen.
+    - Write each title as a short action in plain words ("Run auto suite").
+    - `clause` names what lets you take the step: `term:<key>`, `rule:<id>` or
+      `instruction:<id>` from the rules in force. Use `null` when nothing does;
+      the step is still recorded and shows a warning.
+    - `finish` is the deliverable that closes the item.
+    - `location` is `{tab, pane}`: the herdr tab and pane names from this
+      sweep's remit read, never ids. Leave it out when you do not know them.
 14. **Update the tracker.** For each issue item whose state changed in this
     sweep (worker started, PR opened or merged, blocked, handed, unblocked),
     load the `auto:programme-tracker` skill and follow it. It writes only when
