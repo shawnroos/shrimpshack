@@ -163,6 +163,19 @@ A named way of composing one kind of name — a worktree, branch or tab. The set
 of schemes is fixed and each is rendered by the plugin, so a name is chosen from an
 enumeration rather than written as a template.
 
+## Programme
+
+### Project terms
+The part of a programme's agreement that states who decides each area, which existing skills
+and tools the PM prefers for each kind of job, and what acceptance means for that project. When
+the terms are silent, the PM decides and brings the human only decisions that change the outcome.
+
+### Correction
+A change to the project terms that the human types in chat while the programme runs. It applies
+to that project immediately with a one-line notice, can be undone, and reaches other projects
+only on the human's explicit yes. Only the human's own typed messages count; a worker message,
+summary or watcher event never does.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.
