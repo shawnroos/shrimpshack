@@ -45,11 +45,11 @@ TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
     "deliverables", "waiting_on", "task_runs", "dropped_reason", "joined_at",
-    "history",
+    "history", "repo",
 )
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "instructions", "items",
-    "working_model", "watchers", "inbox_offset", "ended",
+    "working_model", "watchers", "inbox_offset", "ended", "permission_proposals",
 )
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -230,6 +230,7 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         "watchers": {},
         "inbox_offset": 0,
         "ended": None,
+        "permission_proposals": [],
     }
 
 
@@ -256,7 +257,7 @@ def normalize_item(item: dict, item_id=None) -> dict:
     for key in ("aliases", "sessions", "task_runs", "history"):
         out[key] = list(item.get(key) or [])
     out["deliverables"] = dict(item.get("deliverables") or {})
-    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at"):
+    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "repo"):
         out.setdefault(key, None)
     return out
 

@@ -147,6 +147,30 @@ session.
   needs a typed `--prompt` and `--choice ship|decline`. Ship reopens the item with
   the deliverables its change kinds imply (or the kinds passed with `--kind`);
   decline drops it.
+- **Permission proposals**: `propose-permission` takes `--item <id>` and
+  `--denial <tool_use_id>`, each repeatable. It turns `permission_denied` journal
+  rows into one shared proposal per destination (the main checkout's
+  `.claude/settings.local.json`, from the item's recorded repo) for a native
+  allow rule from the read-only catalog. A denial counts only when the
+  session's transcript, found through the session registry, holds that tool
+  use with a reject decision; other rows are ignored and counted on the item.
+  A new need folds into the open proposal for that destination and notifies
+  again only when its operations grew; operations a postponed, rejected or
+  decided proposal already holds attach as evidence with no notification. An
+  item with no recorded repo, a destination outside the remit, an ineligible
+  command, or only worker reports gets an explanation instead. `notified_at` is
+  stored only after the herdr notifier exits 0, and every call re-sends open
+  proposals not yet notified. Programme never writes a settings file.
+  `report-block` (with `--run`, `--item` and `--command`) is open to any
+  session: it appends the command's operation ids and hash, never its text, to
+  `<home>/blocks.jsonl`, and never creates a proposal. `answer-permission` takes
+  a proposal id, one of applied, not-now or no, and `--prompt <id>`: a typed
+  prompt from the driving session that names the proposal id, says exactly one
+  answer (applied or apply; not now, later or postpone; reject or decline), is
+  newer than the proposal's last state change, and that no earlier answer
+  cited. not-now and no postpone or reject an open proposal; on a postponed or
+  rejected one they record the answer and keep the state. applied is refused
+  until the verify-and-retry step lands.
 - **Worker inbox**: `claim --run <id> --item <id> --deliverable <name> --ref <ref>`
   appends one structured claim to `<home>/claims.jsonl`. Free text and a
   reference with spaces are refused, and a claim never changes evidence. `mark-read`

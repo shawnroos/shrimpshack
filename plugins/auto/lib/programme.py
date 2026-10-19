@@ -179,6 +179,7 @@ def rules_in_force(record, journals=None) -> dict:
         "rejected_rules": [{"id": r["id"], "layer": r["layer"], "reason": r["reason"]}
                            for r in protocol["rejected"]],
         "instructions": active_instructions(programme),
+        "permission_proposals": programme_permission.in_force(programme),
     }
 
 
@@ -221,7 +222,7 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
     if row.get("session_id") != record.get("driving_session_id"):
         raise ProgrammeError(f"prompt {prompt_id!r} was not typed in the driving session")
     return {"prompt_id": prompt_id, "quote": payload.get("text") or "",
-            "text_hash": text_hash(payload.get("text"))}
+            "text_hash": text_hash(payload.get("text")), "at": row.get("at")}
 
 
 def _name_words(text) -> list:
@@ -391,8 +392,8 @@ def _h_describe(argv):
             "Programme write verbs run only in the programme's driving session "
             "(CLAUDE_CODE_SESSION_ID equals driving_session_id; agent_session_ids never "
             "count), revalidate under the run-record lock, refuse while the compact flag "
-            "is set (except `rules --ack` and `watcher-beat`), and journal. `claim` is open "
-            "to any session with --run <id>. Approval verbs need --prompt <id> "
+            "is set (except `rules --ack` and `watcher-beat`), and journal. `claim` and "
+            "`report-block` are open to any session with --run <id>. Approval verbs need --prompt <id> "
             "of a typed prompt and copy its text as the quote; a verb that approves a named "
             "target also needs the prompt text to name it. See "
             "docs/contracts/agent-tool-surface.md."
@@ -742,6 +743,9 @@ _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
 
 programme_sources = load_lib_module("programme_sources")
 _VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
+
+programme_permission = load_lib_module("programme_permission")
+_VERBS.update(programme_permission.build_verbs(sys.modules[__name__]))
 
 programme_view = load_lib_module("programme_view")
 VIEW_DIR = "views"

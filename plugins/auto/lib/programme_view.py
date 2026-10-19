@@ -22,6 +22,8 @@ VIEW_FORMAT = 1
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
+ASKING_STATES = ("open", "ineffective", "retry_unobserved")
+HOOK_KINDS = ("permission_denied", "permission_tool_ran", "blocked_settings_write")
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
@@ -95,6 +97,15 @@ def _tasks_now(owner, tasks_on):
     return f"now: {summary['now']} ({tally})" if summary["now"] else tally
 
 
+def _permission_block(block):
+    block = _dict(block)
+    if not block:
+        return None
+    return {"cause": block.get("cause"), "proposals": block.get("proposals") or [],
+            "unconfirmed": len(block.get("unconfirmed") or []), "reports": block.get("reports"),
+            "detail": programme_sanitize.wrap(block["detail"]) if block.get("detail") else None}
+
+
 def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict:
     owner = _dict(item.get("owner"))
     marks = []
@@ -120,6 +131,7 @@ def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict
         "question": handed.get("question") if effective == "handed" else None,
         "now": _tasks_now(owner, tasks_on) if effective not in programme_home.FINISHED_ITEM_STATES else None,
         "marks": marks,
+        "permission_block": _permission_block(item.get("permission_block")),
         "needs_shawn": stopped or (effective == "handed" and not handed.get("answered")),
     }
 
@@ -209,12 +221,27 @@ def _watching_row(w) -> dict:
     return _row(text, "text" if w["live"] else "warn")
 
 
+def _asking(block) -> list:
+    return [p for p in (_dict(p) for p in block.get("permission_proposals") or [])
+            if p.get("state") in ASKING_STATES or (p.get("state") == "resolved" and p.get("confirmed") is False)]
+
+
 def _decisions(block, items) -> list:
     out = [{"kind": "handed", "item": i["id"], "question": i["question"]}
            for i in items if i["effective_state"] == "handed" and i["needs_shawn"]]
     out += [{"kind": "stopped_unwatched", "item": i["id"],
              "question": "the PM stopped while this wait had no watcher"}
             for i in items if "stopped unwatched" in i["marks"]]
+    for proposal in _asking(block):
+        reason = next((e.get("reason") for e in reversed(proposal.get("evidence") or []) if e.get("reason")), None)
+        question = (f"{proposal.get('id')}: allow {', '.join(proposal.get('rules') or [])} in "
+                    f"{proposal.get('settings_file')} for {', '.join(proposal.get('items') or [])} "
+                    f"({proposal.get('state')}); answer applied, not now or reject {proposal.get('id')}")
+        if reason:
+            question += "; last denial " + programme_sanitize.wrap(reason, cap=120)
+        if proposal.get("explanation"):
+            question += "; " + programme_sanitize.wrap(proposal["explanation"], cap=120)
+        out.append({"kind": "permission", "item": None, "proposal": proposal.get("id"), "question": question})
     for rule in block.get("proposed_rules") or []:
         rule = _dict(rule)
         out.append({"kind": "proposed_rule", "item": None, "rule": rule.get("id"),
@@ -232,6 +259,8 @@ def _just_did(journal_entries) -> list:
         item = payload.get("item") or (payload.get("items") or [None])[0]
         bits = [f"{k}={payload[k]}" for k in SUMMARY_KEYS
                 if isinstance(payload.get(k), (str, int, float)) and not isinstance(payload.get(k), bool)]
+        if row.get("kind") in HOOK_KINDS:
+            bits = [programme_sanitize.wrap(b) for b in bits]
         doing = _dict(payload.get("doing"))
         if doing.get("text"):
             bits.insert(0, doing["text"])
@@ -252,7 +281,8 @@ def _rules(block, rules) -> dict:
     return {"agreement": {"accepted": _dict(block.get("agreement")).get("accepted"),
                           "terms": {k: {"value": _dict(t).get("value"), "set_by": _dict(t).get("set_by")}
                                     for k, t in sorted(terms.items())}},
-            "rules": [], "autonomy": [], "rejected_rules": [], "instructions": []}
+            "rules": [], "autonomy": [], "rejected_rules": [], "instructions": [],
+            "permission_proposals": []}
 
 
 def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> dict:
@@ -342,6 +372,12 @@ def _rule_text(rule) -> str:
     return text + (f"; caveat: {rule['caveat']}" if rule.get("caveat") else "")
 
 
+def _permission_text(p) -> str:
+    confirmed = ", not confirmed by Shawn" if p.get("confirmed") is False else ""
+    return (f"permission {p.get('id')}: {p.get('state')}{confirmed}, {', '.join(p.get('rules') or [])} in "
+            f"{p.get('settings_file')}, items {', '.join(p.get('items') or []) or 'none'}")
+
+
 def rule_texts(r) -> list:
     agreement = _dict(r.get("agreement"))
     accepted = _dict(agreement.get("accepted"))
@@ -351,6 +387,7 @@ def rule_texts(r) -> list:
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
     out += [(f"autonomy {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
             for e in r.get("autonomy") or []]
+    out += [(_permission_text(_dict(p)), "warn") for p in r.get("permission_proposals") or []]
     rejected = [str(_dict(rule).get("id")) for rule in r.get("rejected_rules") or []]
     if rejected:
         out.append((f"rejected rules: {len(rejected)} ({', '.join(rejected)})", "warn"))
@@ -367,6 +404,12 @@ def _item_lines(item) -> list:
     out.append(_row("    " + " · ".join(detail), "dim"))
     if item.get("now"):
         out.append(_row(f"    {item['now']}", "dim"))
+    block = item.get("permission_block")
+    if block:
+        bits = [f"permission: {block['cause']}"] + ([block["detail"]] if block.get("detail") else [])
+        if block.get("unconfirmed"):
+            bits.append(f"{block['unconfirmed']} unconfirmed denial rows ignored")
+        out.append(_row("    " + " · ".join(bits), "warn"))
     for d in item["deliverables"]:
         ref = f" {d['ref']}" if d.get("ref") else ""
         out.append(_row(f"    {d['name']}: {d['result']}{ref}", "dim"))
