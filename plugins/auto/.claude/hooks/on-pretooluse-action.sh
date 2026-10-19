@@ -64,10 +64,20 @@ if [ ! -t 0 ]; then
 fi
 
 # Outside a repo the checks are the driver-pane check, which denies any Bash
-# command naming a driver's pane however herdr is spelled, and the tracker guard on
-# Linear MCP calls, so no finer text prefilter here.
+# command naming a driver's pane however herdr is spelled, the tracker guard on
+# Linear MCP calls and the settings guard, so no finer text prefilter here.
+__cd_settings=0
+if [ "$__cd_any_lease" = 1 ] && [[ $__cd_stdin_json == *settings.local.json* ]]; then
+  __cd_settings=1
+fi
 if [ -z "$__cd_repo" ]; then
-  [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] || exit 0
+  [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
+    || [ "$__cd_settings" = 1 ] || exit 0
+fi
+# Edit and MultiEdit are matched only for the settings guard.
+__cd_edit='"tool_name"[[:space:]]*:[[:space:]]*"(Multi)?Edit"'
+if [ "$__cd_settings" = 0 ] && [[ $__cd_stdin_json =~ $__cd_edit ]]; then
+  exit 0
 fi
 
 # Hand off ALL decision logic to Python. `|| true` keeps the PROCESS exit 0

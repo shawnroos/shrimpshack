@@ -41,6 +41,13 @@ def _clean(value):
     return _CONTROL.sub("", value)[:FIELD_CAP] or None
 
 
+def _path(value):
+    if not isinstance(value, str) or not os.path.isabs(value) or len(value) > FIELD_CAP \
+            or _CONTROL.search(value):
+        return None
+    return value
+
+
 def sessions_dir() -> str:
     return os.path.join(programme_home.data_dir(), "sessions")
 
@@ -172,6 +179,7 @@ def record_session(hook_input: dict, env) -> dict | None:
         "workspace": _clean(workspace),
         "source": source,
         "cwd": _clean(hook_input.get("cwd")),
+        "transcript_path": _path(hook_input.get("transcript_path")),
         "interactive": not headless,
         "resolved": resolved,
     }

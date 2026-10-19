@@ -858,6 +858,79 @@ def tracker_write_denial(stdin_raw: str) -> dict | None:
     }}
 
 
+SETTINGS_FILE = os.path.join(".claude", "settings.local.json")
+_SETTINGS_TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
+_SETTINGS_TOKEN = re.compile(r"[^\s;&|<>()`]*\.claude/settings\.local\.json(?![\w.-])")
+
+
+def _resolved(path: str, cwd: str) -> str:
+    path = os.path.expanduser(path)
+    return os.path.realpath(path if os.path.isabs(path) else os.path.join(cwd, path))
+
+
+def _settings_target(tool_name, tool_input, cwd, destinations):
+    guarded = {os.path.realpath(os.path.join(d, SETTINGS_FILE)) for d in destinations}
+    if tool_name != "Bash":
+        path = tool_input.get("file_path")
+        hit = _resolved(path, cwd) if isinstance(path, str) else None
+        return hit if hit in guarded else None
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return None
+    text = _HIDING_CHARS.sub("", command)
+    tokens = _SETTINGS_TOKEN.findall(text)
+    for token in tokens:
+        if _resolved(token, cwd) in guarded:
+            return _resolved(token, cwd)
+    # A relative name after a cd elsewhere resolves against the wrong folder; best effort.
+    if any(not os.path.isabs(os.path.expanduser(t)) for t in tokens):
+        for dest in destinations:
+            if dest in text or os.path.realpath(dest) in text:
+                return os.path.realpath(os.path.join(dest, SETTINGS_FILE))
+    return None
+
+
+def settings_write_denial(stdin_raw: str) -> dict | None:
+    data = json.loads(stdin_raw) if stdin_raw else None
+    if not isinstance(data, dict) or data.get("tool_name") not in _SETTINGS_TOOLS:
+        return None
+    tool_name = data["tool_name"]
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    if "settings.local.json" not in json.dumps(tool_input):
+        return None
+    session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
+    events = load_lib_module("on-permission-event")
+    found = events.scope(session_id, os.environ)
+    if found is None:
+        return None
+    run_id, programme, item_ids = found
+    destinations = [p.get("destination") for p in events.proposals(programme)
+                    if isinstance(p.get("destination"), str) and os.path.isabs(p["destination"])]
+    if not destinations:
+        return None
+    cwd = data.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
+    target = _settings_target(tool_name, tool_input, cwd, destinations)
+    if target is None:
+        return None
+    try:
+        journal = load_lib_module("programme_journal")
+        payload = {"tool": tool_name, "path": target, "item_ids": item_ids}
+        if tool_name == "Bash":
+            payload["command"] = journal.redact(tool_input.get("command"))[:2000]
+        journal.append(run_id, "blocked_settings_write", session_id, payload)
+    except Exception:
+        pass
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            f"auto: this call names {target}, the settings file a permission proposal of "
+            f"programme {run_id!r} targets. Only Shawn applies permission rules; report the "
+            "block through the programme instead. This attempt is journaled."),
+    }}
+
+
 def _cli(argv) -> int:
     repo_root = argv[0] if argv else os.getcwd()
     stdin_raw = ""
@@ -875,6 +948,10 @@ def _cli(argv) -> int:
         sys.stdout.write("\n")
         return 0
     try:
+        settings_denial = settings_write_denial(stdin_raw)
+    except Exception:
+        settings_denial = None
+    try:
         driver_denial = driver_send_denial(stdin_raw)
     except Exception:
         driver_denial = None
@@ -885,7 +962,7 @@ def _cli(argv) -> int:
         # to a confirmed destructive match on a confirmed run, handled inside
         # decide(); an unrelated internal error must not brick the tool flow.
     if decision is None:
-        decision = driver_denial
+        decision = settings_denial or driver_denial
     if decision is not None:
         json.dump(decision, sys.stdout)
         sys.stdout.write("\n")
