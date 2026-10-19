@@ -21,6 +21,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 session_registry = load_lib_module("session_registry")
+programme_prompt_source = load_lib_module("programme_prompt_source")
 
 DATA_TAG = "auto-data"
 _REQUEST = re.compile(r"^\s*/auto:programme-(takeover|handover|end)(?=\s|$)")
@@ -37,7 +38,7 @@ def classify_origin(text: str, record: dict) -> str:
         prompt = watcher.get("prompt") if isinstance(watcher, dict) else None
         if wanted and _normalised(prompt) == wanted:
             return "cron"
-    return "typed"
+    return "unknown"
 
 
 def _driving_run(session_id):
@@ -63,7 +64,7 @@ def _space_lease(session_id, env):
     return lease
 
 
-def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease):
+def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease, source):
     lease = driving_lease or _space_lease(session_id, env)
     if lease is None:
         return
@@ -75,7 +76,7 @@ def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lea
         lease["run"], f"{verb}_request", session_id,
         {"verb": verb, "text": programme_journal.redact(text), "origin": origin,
          "space": programme_home.space_key(lease.get("server"), lease.get("workspace")),
-         "lease_status": status, "driving": driving},
+         "lease_status": status, "driving": driving, "source": source},
         cites=[prompt_id] if driving and prompt_id else None,
     )
 
@@ -88,17 +89,18 @@ def handle(raw: str, env) -> dict | None:
     text = data.get("prompt")
     if not isinstance(session_id, str) or not session_id or not isinstance(text, str):
         return None
+    source = programme_prompt_source.capture(data)
     run, record, driving_lease = _driving_run(session_id)
     entry = None
-    origin = "typed"
+    origin = "unknown"
     if run:
         origin = classify_origin(text, record)
-        entry = programme_journal.append_prompt(run, session_id, text, origin)
+        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
     request = _REQUEST.match(text)
     if request:
         try:
             _journal_request(request.group(1), session_id, text, env, origin,
-                             entry and entry["prompt_id"], driving_lease)
+                             entry and entry["prompt_id"], driving_lease, source)
         except Exception:
             pass
     if not entry:
