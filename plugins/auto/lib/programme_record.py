@@ -447,6 +447,10 @@ def _h_set_waiting(host, argv):
             item.update(state="open", waiting_on=None)
             _history(item, "wait_cleared")
             return {"item": key, "waiting_on": None}
+        held = (item.get("waiting_on") or {}).get("permission")
+        if held:
+            raise RecordError(f"item {key!r} waits on permission proposal {held}; settle-permissions "
+                              "reopens it, and a new wait would drop that link")
         spec = _wait_spec(opts, watcher)
         if watcher is not None:
             _upsert_watcher(programme, watcher, ids, item=key)

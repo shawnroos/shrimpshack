@@ -29,6 +29,7 @@ The following user row holds a `tool_result` block (`tool_use_id`, `is_error`, `
 | Ran, exit 0, approved by the classifier | `{"decision":"accept","source":"config","reasonType":"classifier"}` | `null` | `false` |
 | Refused by `dontAsk` mode | `{"decision":"reject","source":"config","reasonType":"mode"}` | `"permission-rule"` | `true` |
 | Refused by a deny rule | `{"decision":"reject","source":"config","reasonType":"subcommandResults"}` | `"permission-rule"` | `true` |
+| Refused by a PreToolUse hook (the settings guard, observed in the end-to-end run) | `{"decision":"reject","source":"hook","reasonType":"hook"}` | `"permission-rule"` | `true` |
 
 The refusal `content` begins `Permission to use Bash has been denied because Claude Code is running in don't ask mode.` `is_error` is `true` for both a refusal and a red-CI run, so it cannot tell them apart.
 
