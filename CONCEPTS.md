@@ -163,6 +163,11 @@ A named way of composing one kind of name — a worktree, branch or tab. The set
 of schemes is fixed and each is rendered by the plugin, so a name is chosen from an
 enumeration rather than written as a template.
 
+## Programme
+
+### Permission proposal
+A request for the human to apply a narrow native permission that resolves blocked read-only work. It does not grant permission itself. Programme protocol proposals instead concern completion rules and evidence requirements.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.
