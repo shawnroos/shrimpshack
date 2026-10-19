@@ -14,7 +14,6 @@ import json
 import os
 import secrets
 import sys
-import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -58,7 +57,7 @@ def _canonical(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _sha(value) -> str:
+def canonical_sha(value) -> str:
     return "sha256:" + hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
@@ -75,7 +74,7 @@ def operations(programme) -> dict:
 
 
 def request_digest(kind, item, target, request) -> str:
-    return _sha({"kind": kind, "item": item, "target": target, "request": request})
+    return canonical_sha({"kind": kind, "item": item, "target": target, "request": request})
 
 
 def unreconciled_admissions(programme) -> list:
@@ -102,7 +101,7 @@ def authority_reason(record, op_like) -> str | None:
     programme = (record or {}).get("programme") or {}
     if programme.get("ended"):
         return "the programme has ended, so no new external action is admitted"
-    if programme_artifacts.sealed(programme):
+    if programme_home.sealed(programme):
         return "the programme home is sealed"
     if record.get("driving_session_id") != op_like.get("owner_session"):
         return (f"the driving session is now {record.get('driving_session_id')}, not "
@@ -121,7 +120,7 @@ def artifact_holds(run_id, programme, item=None) -> dict:
             continue
         ref = entry.get("ref") or {}
         try:
-            programme_artifacts.read_object(run_id, programme_artifacts._ref_of(entry))
+            programme_artifacts.read_object(run_id, programme_artifacts.ref_of(entry))
         except programme_artifacts.ArtifactError as exc:
             holds.setdefault(entry.get("item") or "programme", []).append(
                 {"kind": "artifact_" + exc.code, "result": identity, "digest": ref.get("digest"),
@@ -129,16 +128,11 @@ def artifact_holds(run_id, programme, item=None) -> dict:
     return holds
 
 
-def _pause(run_id, point) -> None:
+def pause(run_id, point) -> None:
     if not run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_DISPATCH_PAUSE_" + point.upper()):
         return
-    resume = os.path.join(programme_home.home_path(run_id), RESUME_FILE)
-    print("paused:dispatch_" + point, flush=True)
-    for _ in range(600):
-        if os.path.exists(resume):
-            os.unlink(resume)
-            return
-        time.sleep(0.1)
+    run_record_core.test_pause("dispatch_" + point, os.path.join(programme_home.home_path(run_id), RESUME_FILE),
+                               consume=True)
 
 
 def _admission_refusal(run_id, programme, op, despite) -> str | None:
@@ -157,7 +151,7 @@ def admit(host, opts, run_id, home, *, kind, item, target, request, expect_epoch
     """Commits the admission before any external call; a replayed --op returns the existing one."""
     if kind not in KINDS:
         raise DispatchError(f"unknown operation kind {kind!r}")
-    _pause(run_id, "before_admission")
+    pause(run_id, "before_admission")
     record = run_record_core.read_run_record(home, run_id)
     # Checked before the commit, outside the record lock: a concurrent collect-result only adds objects.
     held = artifact_holds(run_id, (record or {}).get("programme") or {}, item).get(item)
@@ -192,7 +186,7 @@ def admit(host, opts, run_id, home, *, kind, item, target, request, expect_epoch
         record = run_record_core.read_run_record(home, run_id)
         op = operations((record or {}).get("programme") or {}).get(attempt)
         return dict(op or {"attempt": attempt}, replayed=True)
-    _pause(run_id, "after_admission")
+    pause(run_id, "after_admission")
     return dict(seen["op"], replayed=False)
 
 
@@ -203,7 +197,7 @@ def recheck(run_id, home, op) -> str | None:
     if reason is None:
         programme = programme_home.normalize_programme(record.get("programme") or {})
         reason = programme_context.unsafe_reason(programme, op["item"], ACTIONS[op["kind"]])
-    _pause(run_id, "before_invoke")
+    pause(run_id, "before_invoke")
     return reason
 
 
@@ -380,10 +374,11 @@ def _actions(programme) -> list:
         if item.get("state") in programme_home.FINISHED_ITEM_STATES:
             continue
         row = _capped({"state": item.get("state"), "title": item.get("title"), "owner": item.get("owner"),
-                       "waiting_on": item.get("waiting_on"), "question": item.get("question")},
+                       "waiting_on": item.get("waiting_on"),
+                       "question": (item.get("handed") or {}).get("question")},
                       ("title", "question"), f"item:{key}")
         row["open_deliverables"] = sorted(name for name, d in (item.get("deliverables") or {}).items()
-                                          if isinstance(d, dict) and d.get("state") != "confirmed")
+                                          if isinstance(d, dict) and d.get("result") != "confirmed")
         rows.append(row)
     return rows
 
@@ -408,7 +403,7 @@ def _pending(programme, status) -> list:
     rows = [dict(p, kind="context_pending") for p in status.get("pending") or []]
     if not (programme.get("agreement") or {}).get("accepted"):
         rows.append({"kind": "agreement_not_accepted"})
-    rows += [{"kind": "handed", "item": key, "question": _cap(item.get("question"))[0]}
+    rows += [{"kind": "handed", "item": key, "question": _cap((item.get("handed") or {}).get("question"))[0]}
              for key, item in sorted((programme.get("items") or {}).items()) if item.get("state") == "handed"]
     return rows
 
@@ -428,7 +423,7 @@ def packet(run_id, revision, record, *, objects=True) -> dict:
         "run": run_id, "revision": revision, "authority": programme_context.AUTHORITY_NOTE,
         "approves_nothing": True,
         "lifecycle": {"ended": programme.get("ended"), "driving_session_id": record.get("driving_session_id"),
-                      "owner_epoch": owner_epoch(programme), "sealed": programme_artifacts.sealed(programme)},
+                      "owner_epoch": owner_epoch(programme), "sealed": programme_home.sealed(programme)},
         "pending_decisions": _pending(programme, status),
         "decisions": _decision_rows(ctx), "requirements": _requirement_rows(ctx),
         "acceptance": status["requirements"], "blockers": status["blockers"],
@@ -438,7 +433,7 @@ def packet(run_id, revision, record, *, objects=True) -> dict:
         "uncertain_effects": unreconciled_admissions(programme),
         "holds": artifact_holds(run_id, programme) if objects else {"not_checked": True},
     }
-    body["packet_digest"] = _sha(body)
+    body["packet_digest"] = canonical_sha(body)
     return body
 
 
@@ -480,14 +475,14 @@ def lookup(record, ref) -> dict:
     return {"id": ref, "entry": found}
 
 
-def _run_of(host, opts) -> str:
+def run_of(host, opts) -> str:
     run_id = opts.get("run") or host._run_from_leases(load_lib_module("driver_session").driving_session_id())
     return programme_home.check_run_id(run_id)
 
 
 def recover_verb(host, argv) -> int:
     _, opts = host._parse(argv, values=("run", "get"), flags=("rebuild-projections",))
-    run_id = _run_of(host, opts)
+    run_id = run_of(host, opts)
     home = programme_home.home_path(run_id)
     state = programme_authority.outcome(run_id)
     if state["outcome"] in programme_authority.HOLDS:

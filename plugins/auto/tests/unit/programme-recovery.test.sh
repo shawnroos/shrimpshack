@@ -277,6 +277,23 @@ lacks "paused:" "$OUTH"
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 
+# A confirmed deliverable is not open work, and a handed item keeps the question Shawn was asked.
+RUN6="$(new_programme w6)"
+prog add-item linear:AI-61 --title "two deliverables" --run "$RUN6"
+prog add-item linear:AI-62 --title "needs Shawn" --run "$RUN6"
+prog hand-item linear:AI-62 --question "ship the linux path first?" --run "$RUN6"
+run_py "$RUN6" >/dev/null <<'EOF'
+def change(rec):
+    item = rec["programme"]["items"]["linear:AI-61"]
+    item["deliverables"] = {"merged": {"result": "confirmed"}, "tested": {"result": "unknown"}}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], change)
+EOF
+prog recover --run "$RUN6"
+it "the packet lists only the unconfirmed deliverable as open"
+check '["tested"]' "$(pyget "$OUT" '[a["open_deliverables"] for a in d["actions"] if a["id"] == "item:linear:AI-61"][0]')"
+it "the packet keeps the handed item's question"
+check "ship the linux path first?" "$(pyget "$OUT" '[p["question"] for p in d["pending_decisions"] if p.get("item") == "linear:AI-62"][0]')"
+
 echo ""
 echo "programme-recovery.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

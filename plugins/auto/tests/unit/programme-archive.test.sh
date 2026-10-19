@@ -449,6 +449,29 @@ check "0 no" "$CODE $([ -e "${HDB}-journal" ] && echo yes || echo no)"
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 
+# ── a foreign append absorbed by a refused write is absorbed once; the archive still seals ──
+FRUN="$(new_programme w11)"
+end_typed "$FRUN"
+printf '{"kind": "beat_note", "at": "2026-01-01T00:00:00Z", "session_id": null, "payload": {}}\n' \
+  >> "$(home_of "$FRUN")/journal.jsonl"
+prog release-resources --run "$FRUN" --watcher no-such-watcher --stopped
+it "release-resources refuses a watcher the programme does not owe"
+check 1 "$CODE"
+has "no owed watcher" "$OUT"
+foreign_events() {
+  run_py "$1" <<'EOF'
+print(sum(1 for e in load_lib_module("programme_authority").snapshot(args[0])["events"]
+          if e["kind"] == "foreign_write_absorbed"))
+EOF
+}
+it "the refused write still absorbed the foreign line, once"
+check 1 "$(foreign_events "$FRUN")"
+prog archive --run "$FRUN"
+it "the archive after a refused absorbing write seals at the first attempt"
+check "0 sealed" "$CODE $(pyget "$OUT" 'd.get("status")')"
+it "the foreign line was never absorbed a second time"
+check 1 "$(foreign_events "$FRUN")"
+
 echo
 echo "programme-archive.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

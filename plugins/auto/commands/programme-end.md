@@ -15,11 +15,12 @@ Run the dispatch line below:
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
 - Success: the leases are released and the run shows "ended" (apart from done).
   Ended is not archived: no new work starts, and the home keeps everything.
-  1. Run each `CronDelete <id>` line it prints, then record it with
-     `release-resources --run <run> --watcher <id> --stopped` (or `--denied`
-     if the tool refused).
-  2. Run each `TaskStop <id>` line it prints, record it the same way, then stop
-     any other watcher Monitor this session still runs.
+  1. Run each `CronDelete <task id>` line it prints, then record it with
+     `release-resources --run <run> --watcher <watcher id> --stopped` (or
+     `--denied` if the tool refused). Pass the watcher id the line names, not
+     the task id; an id the programme does not owe is refused.
+  2. Run each `TaskStop <task id>` line it prints, record it the same way, then
+     stop any other watcher Monitor this session still runs.
   3. Run `release-resources --run <run>`. It removes leftover lease files and
      checks watcher processes and worker sessions without stopping anything.
   4. Run `check-archive --run <run>`. Each failed check names its remedy: for

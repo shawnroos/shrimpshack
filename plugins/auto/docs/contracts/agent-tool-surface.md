@@ -121,8 +121,12 @@ session.
   by an auto that predates the database stays on its JSON files until `promote`
   imports it (`--run <id>`); a prompt imported that way approves nothing new.
   `reconcile-leases` rewrites a run's leases from its committed remit and driving
-  session. Any write verb takes `--op <id>`: a retry with the same id replays the
-  committed result instead of writing again.
+  session. Every write verb except `claim` and the verbs below takes `--op <id>`:
+  a retry with the same id replays the committed result instead of writing
+  again. `claim`, the lifecycle verbs (`start`, `takeover`, `handover`, `end`,
+  `expire`), `promote`, `reconcile-leases`, `reconcile-operations`,
+  `release-resources`, `create-successor` and `sweep` keep no operation id and
+  refuse `--op`.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
   value must be one of that term's options. Wording that fits no option is an
@@ -409,9 +413,9 @@ Every write verb:
    `dispose-action`, `archive`) also accept the session that ended the programme,
    and `create-successor` runs from the session that will drive the successor;
 2. refuses while the compact flag exists and prints the rules-in-force block,
-   except `rules --ack`, `claim`, `collect-result`, `watcher-beat`,
-   `reconcile-operations` (which settles admitted actions and starts none) and
-   the closure verbs, which never start work;
+   except `rules --ack`, `claim`, `collect-result`, `watcher-beat`, `beat`,
+   `tracker-synced --check`, `reconcile-operations` (which settles admitted
+   actions and starts none) and the closure verbs, which never start work;
 3. revalidates under the run-record lock, then journals after the write commits.
 
 The approval verbs (accepting the agreement, amending a term, recording an

@@ -59,16 +59,25 @@ from this session's lease.
    | Reopen a dropped item | `P reopen-item <item> --prompt <id>` |
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
+   | Accept a pending decision or requirement | `P accept-context <decision-or-requirement-id> --prompt <id>` |
+   | Lift a safety pause | `P lift-pause <pause-id> --prompt <id>` |
+   | Settle an uncertain action after end | `P dispose-action (--attempt <id>\|--resource <id>) --as abandoned_unknown\|accepted_unknown --prompt <id>` |
 
    The cited message must name what it approves, or the verb refuses it and
    lists the missing words: the item id or key (`AI-753`) for the item rows, the
    rule id for `adopt-rule`, the action and the level for `adopt-autonomy`, the
-   repo and the check key (`verified.lookup`) for `adopt-check`. A `--widening`
+   repo and the check key (`verified.lookup`) for `adopt-check`, the decision or
+   requirement id for `accept-context`, the pause id for `lift-pause`, the attempt
+   or resource for `dispose-action`. A `--widening`
    needs the word "widen" in his message too. When his message does not name the
    target, do not run the verb: ask him to confirm in words that name it, for
    example "adopt merge_around_gate at act, widen it", and cite that reply.
-   An answer that fits no row is an instruction: record it. `P describe` lists
-   every verb with its arguments and what it refuses.
+   An answer that fits no row is an instruction: record it. A scope he sets is a
+   decision (`P record-decision`), what must be true for an item to count is a
+   requirement (`P define-requirement`), and an item tied to a decision is
+   `P assign-item <item> --decision-id <id>`. A decision or requirement recorded
+   without his typed prompt waits for `accept-context`. `P describe` lists every verb with its arguments
+   and what it refuses.
    An answer that brings new work (a bug, a screenshot, a finding): rank it
    and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
 4. **Validate.** `P validate` re-checks confirmed evidence that has gone stale.

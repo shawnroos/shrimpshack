@@ -52,6 +52,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from typing import Callable
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -163,6 +164,20 @@ def _test_hatch_enabled(hatch_var: str) -> bool:
     )
 
 
+def test_pause(label: str, resume_path=None, *, consume=False, poll=0.1) -> None:
+    # No hatch check here: every caller fences on its own CLAUDE_AUTO_TEST_* var first.
+    print("paused:" + label, flush=True)
+    if resume_path is None:
+        time.sleep(60)
+        return
+    for _ in range(round(60 / poll)):
+        if os.path.exists(resume_path):
+            if consume:
+                os.unlink(resume_path)
+            return
+        time.sleep(poll)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Lazy-load helper (F3 / kieran-1 — dedup of 4 copy-paste sites).
 #
@@ -206,6 +221,10 @@ class RunRecordError(Exception):
 
 class RunRecordNotFound(RunRecordError):
     """Raised when a run-record for the given run-id does not exist."""
+
+
+class RoutedToAuthority(Exception):
+    """The programme home was promoted after the caller chose the JSON path."""
 
 
 class RunRecordExists(RunRecordError):
@@ -432,7 +451,7 @@ def _flock_run(lpath: str, body):
         lock_file.close()
 
 
-def _with_locked_run_record(repo_root: str, run_id: str, mutate):
+def _with_locked_run_record(repo_root: str, run_id: str, mutate, *, reroute=True):
     """Acquire flock, read the run-record, run ``mutate(run-record)``, atomic-write, release.
 
     The lock spans the WHOLE read-modify-write (the lost-update guard). The
@@ -445,11 +464,18 @@ def _with_locked_run_record(repo_root: str, run_id: str, mutate):
     """
     authority = _programme_authority(repo_root, run_id)
     if authority is not None:
+        if not reroute:
+            raise RoutedToAuthority(run_id)
         return authority.mutate(repo_root, run_id, mutate)
     path = run_record_path(repo_root, run_id)
     lpath = lock_path(repo_root, run_id)
 
     def body():
+        # promote holds this lock while it creates the store; a writer that routed before it must
+        # not write the export it leaves behind. The authority takes this lock itself, so re-route
+        # only after releasing it.
+        if _programme_authority(repo_root, run_id) is not None:
+            raise RoutedToAuthority(run_id)
         if not os.path.exists(path):
             raise RunRecordNotFound(f"no run_record for run-id {run_id!r} at {path}")
         run_record = _read_json(path)
@@ -457,7 +483,12 @@ def _with_locked_run_record(repo_root: str, run_id: str, mutate):
         _atomic_write(path, run_record)
         return result
 
-    return _flock_run(lpath, body)
+    try:
+        return _flock_run(lpath, body)
+    except RoutedToAuthority:
+        if not reroute:
+            raise
+    return _programme_authority(repo_root, run_id).mutate(repo_root, run_id, mutate)
 
 
 # ──────────────────────────────────────────────────────────────────────────

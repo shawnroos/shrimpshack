@@ -28,7 +28,7 @@ killbg() { [ -n "$BG" ] && { kill -9 "$BG" 2>/dev/null; wait "$BG" 2>/dev/null; 
 jget() { pyget "$1" "$2"; }
 lease_file() { printf '%s/programmes/leases/default.%s.json' "$CLAUDE_AUTO_DATA_DIR" "$1"; }
 
-cat > "${WORK}/ledger.py" <<'EOF'
+cat > "${WORK}/acked.py" <<'EOF'
 import hashlib, json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
@@ -72,8 +72,8 @@ elif cmd == "check":
 EOF
 
 # ack <run>: every event now in the store has been seen acknowledged by the test.
-ack() { "$PY" "${WORK}/ledger.py" "$AUTO_ROOT" ack "$1" "${WORK}/ledger-$1.json" >/dev/null; }
-intact() { "$PY" "${WORK}/ledger.py" "$AUTO_ROOT" check "$1" "${WORK}/ledger-$1.json" 2>&1; }
+ack() { "$PY" "${WORK}/acked.py" "$AUTO_ROOT" ack "$1" "${WORK}/acked-$1.json" >/dev/null; }
+intact() { "$PY" "${WORK}/acked.py" "$AUTO_ROOT" check "$1" "${WORK}/acked-$1.json" 2>&1; }
 
 # interrupt <pause-marker> "<hatch env>" <programme.py args...>: run the writer, kill it at the pause.
 INTERRUPTED=""

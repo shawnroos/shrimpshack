@@ -613,7 +613,7 @@ def _h_start_worker(host, argv):
                  "not_executed")
         raise host.ProgrammeError(f"start refused before spinoff ran: {reason}")
     started = launch_worker(spinoff, extra, op["target"]["session_id"])
-    programme_recovery._pause(run_id, "after_invoke")
+    programme_recovery.pause(run_id, "after_invoke")
     payload = dict(item=key, started=started["ok"], **{k: v for k, v in started.items() if k != "ok"})
     done = _settled(host, run_id, home, op, "worker_started" if started["ok"] else "worker_start_failed",
                     payload, started["outcome"], assign=_launch_assign(started, opts.get("session-name")))
@@ -695,7 +695,7 @@ def _h_prompt_item(host, argv):
         host, opts, run_id, home, kind="send", item=key,
         target={"pane": target["pane"], "terminal_id": owner.get("terminal_id"),
                 "session_id": owner.get("session_id")},
-        request={"text_digest": programme_recovery._sha(text)},
+        request={"text_digest": programme_recovery.canonical_sha(text)},
         expect_epoch=programme_recovery.owner_epoch(programme), despite=opts.get("despite") or ())
     if op["replayed"]:
         return _replay(host, run_id, op)
@@ -708,7 +708,7 @@ def _h_prompt_item(host, argv):
         _settled(host, run_id, home, op, "prompt_refused", payload, "not_executed")
         raise host.ProgrammeError(f"prompt refused: {reason}")
     sent = _herdr(["agent", "prompt", target["pane"], text])
-    programme_recovery._pause(run_id, "after_invoke")
+    programme_recovery.pause(run_id, "after_invoke")
     ok = sent["ran"] and sent["code"] == 0
     outcome = "completed" if ok else ("failed" if sent["ran"] else
                                       ("uncertain" if sent["timed_out"] else "not_executed"))

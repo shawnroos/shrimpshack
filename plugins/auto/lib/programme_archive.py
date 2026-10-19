@@ -28,8 +28,9 @@ run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 
-CLOSURE = "closure"
-ARCHIVE = "archive"
+CLOSURE = programme_home.CLOSURE
+ARCHIVE = programme_home.ARCHIVE
+sealed = programme_home.sealed
 ITEM_DISPOSITIONS = ("stopped_unfinished", "handed_over")
 UNCERTAIN_DISPOSITIONS = ("abandoned_unknown", "accepted_unknown")
 UNFINISHED = ("open", "waiting")
@@ -74,10 +75,6 @@ def pause(point) -> None:
             os.unlink(resume)
             return
         time.sleep(0.1)
-
-
-def sealed(programme) -> bool:
-    return bool(((programme or {}).get(ARCHIVE) or {}).get("sealed_at"))
 
 
 def _resource(kind, **fields) -> dict:
@@ -289,7 +286,7 @@ def _unreadable(run_id, programme) -> list:
     for section in ("results", "sources"):
         for identity, entry in sorted((retained.get(section) or {}).items()):
             try:
-                artifacts.read_object(run_id, artifacts._ref_of(entry))
+                artifacts.read_object(run_id, artifacts.ref_of(entry))
             except (artifacts.ArtifactError, load_lib_module("programme_store").StoreError) as exc:
                 failures.append({"id": identity, "reason": getattr(exc, "code", "invalid")})
     return failures

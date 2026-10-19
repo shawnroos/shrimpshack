@@ -40,6 +40,8 @@ LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer", "unavai
 HELD_LEASE_STATES = ("live", "orphaned", "expired", "unavailable")
 AUTHORITY_HOLDS = ("unsupported", "corrupt", "unavailable")
 COMPACT_FLAG = ".compact-flag"
+ARCHIVE = "archive"
+CLOSURE = "closure"
 WATCHER_KINDS = ("cron", "monitor")
 SWEEP_SOURCES = ("tracker", "tasks", "plans")
 TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
@@ -346,20 +348,33 @@ def _age_seconds(stamp, now) -> float | None:
     return None if when is None else (now - when).total_seconds()
 
 
+def sealed(programme) -> bool:
+    return bool(((programme or {}).get(ARCHIVE) or {}).get("sealed_at"))
+
+
 def lease_status(lease, now=None) -> str:
+    return lease_state(lease, now)[0]
+
+
+def lease_state(lease, now=None) -> tuple:
+    # (status, (record, hold)) when the status came from reading the run, else (status, None).
     if lease is None:
-        return "free"
+        return "free", None
     if lease.get("corrupt"):
-        return "orphaned"
+        return "orphaned", None
     if _newer(lease.get("programme_format")):
-        return "newer"
+        return "newer", None
     run = lease.get("run")
     try:
         if lease.get("home") != home_path(run):
-            return "orphaned"
+            return "orphaned", None
     except ProgrammeHomeError:
-        return "orphaned"
-    record, hold = read_programme(run)
+        return "orphaned", None
+    read = record, hold = read_programme(run)
+    return _status_of(record, hold, now), read
+
+
+def _status_of(record, hold, now) -> str:
     if hold is not None:
         return "unavailable"
     if record is None:
@@ -410,9 +425,10 @@ def driven_runs(session_id, now=None) -> list:
             run = lease.get("run")
             if any(hold["run"] == run for hold in found):
                 continue
-            if lease_status(lease, now) not in HELD_LEASE_STATES:
+            status, read = lease_state(lease, now)
+            if status not in HELD_LEASE_STATES:
                 continue
-            record, hold = read_programme(run)
+            record, hold = read or read_programme(run)
             if hold is not None:
                 found.append({"run": run, "home": home_path(run), "record": None, "hold": hold})
                 continue
@@ -594,8 +610,7 @@ def _republish(claim, server, workspace, stamp) -> None:
 def _test_pause(point) -> None:
     if not run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_LEASE_PAUSE_" + point.upper()):
         return
-    print("paused:lease_" + point, flush=True)
-    time.sleep(60)
+    run_record_core.test_pause("lease_" + point)
 
 
 def reconcile_run_leases(run_id: str) -> list:

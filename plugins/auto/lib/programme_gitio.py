@@ -117,23 +117,23 @@ def blob_oid(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
-def _lstat(path):
+def lstat(path):
     try:
         return os.lstat(path)
     except FileNotFoundError:
         return None
 
 
-def _inside(top: bytes, rel: bytes):
+def inside(top: bytes, rel: bytes):
     path = top
     parts = rel.split(b"/")
     for part in parts[:-1]:
         path = os.path.join(path, part)
-        st = _lstat(path)
+        st = lstat(path)
         if st is None or not stat.S_ISDIR(st.st_mode):
             return path, None
     path = os.path.join(path, parts[-1])
-    return path, _lstat(path)
+    return path, lstat(path)
 
 
 def read_file(path: bytes, st) -> bytes:
@@ -181,7 +181,7 @@ def disk_name(top: bytes, rel: bytes, cache) -> bytes:
 
 
 def worktree_entry(top: bytes, rel: bytes, cache=None) -> dict:
-    path, st = _inside(top, rel)
+    path, st = inside(top, rel)
     entry = {"p": rel.hex()}
     if st is not None and not stat.S_ISDIR(st.st_mode):
         disk = disk_name(top, rel, {} if cache is None else cache)
@@ -293,7 +293,7 @@ def unsupported_store(git, where) -> list:
     return problems
 
 
-def _head(git, where):
+def head_of(git, where):
     code, symref = git.call(where["top"], ["symbolic-ref", "-q", "HEAD"], ok=(0, 1))
     code_h, oid = git.call(where["top"], ["rev-parse", "-q", "--verify", "HEAD^{commit}"], ok=(0, 1))
     return {"symref": symref.decode().strip() if code == 0 else None,
@@ -352,7 +352,7 @@ def scan(path, *, extras=(), include_ignored=()) -> dict:
         inv = {"format": 1, "top": where["top"], "identity": identity(where), "problems": [],
                "quiescence": _locks(where["gitdir"], where["common"])}
         inv["problems"] += unsupported_store(git, where)
-        head = _head(git, where)
+        head = head_of(git, where)
         inv["head"] = head
         inv["tips"], inv["lost_reflog"] = _tips(git, where, head, extras)
         inv["index"] = parse_index(git.run(where["top"], ["ls-files", "-s", "-z"]))

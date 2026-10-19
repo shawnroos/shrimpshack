@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact code capture of a worker worktree and an independent restore proof (KTD9).
+"""Exact code capture of a worker worktree and an independent restore proof.
 
 A capture freezes the worktree's inventory, privacy-scans every object and byte it will
 retain, then publishes a self-contained git bundle, separate worktree bytes and a
@@ -20,7 +20,6 @@ import secrets
 import shutil
 import stat
 import sys
-import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -63,8 +62,7 @@ def _hatch(name) -> bool:
     return run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_PRESERVE_" + name)
 
 
-def _sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+_sha = programme_store.sha256_hex
 
 
 def admit_binary(data, *, values=None, provenance="worker_result", basis="code bytes scanned"):
@@ -131,12 +129,7 @@ def _source_lock(run_id, source_id, *, exclusive):
 def _pause(run_id, point) -> None:
     if not _hatch("PAUSE_" + point.upper()):
         return
-    resume = os.path.join(programme_home.home_path(run_id), RESUME_FILE)
-    print("paused:preserve_" + point, flush=True)
-    for _ in range(600):
-        if os.path.exists(resume):
-            return
-        time.sleep(0.1)
+    run_record_core.test_pause("preserve_" + point, os.path.join(programme_home.home_path(run_id), RESUME_FILE))
 
 
 def _code_block(programme) -> dict:
@@ -146,7 +139,7 @@ def _code_block(programme) -> dict:
 
 
 def entry_for(run_id, source_id) -> dict:
-    entry = _code_block(pa._current(run_id)).get(source_id)
+    entry = _code_block(pa.current(run_id)).get(source_id)
     if entry is None:
         raise PreserveError(f"no code capture for {source_id!r}", "missing")
     return entry
@@ -237,7 +230,7 @@ def _file_payloads(top, entries, values) -> dict:
         now = gitio.worktree_entry(root, bytes.fromhex(e["p"]), cache)
         if now != {k: v for k, v in e.items() if k not in ("set", "src")}:
             raise PreserveError("a worktree file changed during capture", "quiescence_uncertain")
-        path, st = gitio._inside(root, bytes.fromhex(e["p"]))
+        path, st = gitio.inside(root, bytes.fromhex(e["p"]))
         data = gitio.read_file(path, st)
         if _sha(data) != e["sha256"]:
             raise PreserveError("a worktree file changed during capture", "quiescence_uncertain")
@@ -319,7 +312,7 @@ def _record_failure(run_id, home, source_id, code) -> None:
         return failure
 
     try:
-        pa._commit(run_id, home, change, FAILED_KIND)
+        pa.commit(run_id, home, change, FAILED_KIND)
     except (pa.ArtifactError, run_record_core.RunRecordError) as exc:
         sys.stderr.write(f"programme preserve: the capture failure was not recorded: {exc}\n")
 
@@ -327,7 +320,7 @@ def _record_failure(run_id, home, source_id, code) -> None:
 def _replay(run_id, operation_id, request):
     if operation_id is None:
         return None
-    for entry in _code_block(pa._current(run_id)).values():
+    for entry in _code_block(pa.current(run_id)).values():
         if entry.get("operation_id") == operation_id:
             if [entry.get("top"), list(entry.get("extras") or []), list(entry.get("include_ignored") or [])] != request:
                 raise PreserveError(f"operation {operation_id} was saved with different input; nothing was "
@@ -338,20 +331,20 @@ def _replay(run_id, operation_id, request):
 
 def capture(run_id, path, *, extras=(), include_ignored=(), operation_id=None) -> dict:
     try:
-        home = pa._require_promoted(run_id)
+        home = pa.require_promoted(run_id)
     except pa.ArtifactError as exc:
         raise PreserveError(str(exc), exc.code)
     prior = _replay(run_id, operation_id, [os.path.realpath(path), list(extras), list(include_ignored)])
     if prior is not None:
         return prior
-    if pa.sealed(pa._current(run_id)):
+    if programme_home.sealed(pa.current(run_id)):
         raise PreserveError("the programme is sealed; its home takes no new writes", "sealed")
     top = os.path.realpath(path)
     source_id = source_key(top)
     with _source_lock(run_id, source_id, exclusive=True):
         try:
             with pa.publisher(run_id):
-                pa._check_open(pa._current(run_id))
+                pa.check_open(pa.current(run_id))
                 return _capture_locked(run_id, home, top, source_id, list(extras), list(include_ignored),
                                        operation_id)
         except (gitio.GitError, pa.ArtifactError) as exc:
@@ -386,7 +379,7 @@ def _capture_locked(run_id, home, top, source_id, extras, include_ignored, opera
         _code_block(programme)[source_id] = entry
         return _summary(entry)
 
-    out = pa._commit(run_id, home, change, CAPTURED_KIND, refs=tuple(all_refs), operation_id=operation_id,
+    out = pa.commit(run_id, home, change, CAPTURED_KIND, refs=tuple(all_refs), operation_id=operation_id,
                      provenance="worker_result")
     return dict(out, mismatches=report["mismatches"])
 
@@ -395,7 +388,7 @@ def _ensure_parent(dest: bytes, rel: bytes) -> bytes:
     path = dest
     for part in rel.split(b"/")[:-1]:
         path = os.path.join(path, part)
-        st = gitio._lstat(path)
+        st = gitio.lstat(path)
         if st is None:
             os.mkdir(path, 0o755)
         elif not stat.S_ISDIR(st.st_mode):
@@ -409,7 +402,7 @@ def _write_entry(path, entry, data) -> None:
         return
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        pa._write_all(fd, data)
+        pa.write_all(fd, data)
         os.fchmod(fd, 0o755 if entry.get("x") else 0o644)
     finally:
         os.close(fd)
@@ -505,7 +498,7 @@ def _compare(git, dest, inv) -> list:
                  if types.get(o, ("missing",))[0] != "commit"]
     problems += [["objects_missing", f"index {e[0]}"] for e in inv["index"]
                  if types.get(e[3], ("missing",))[0] != "blob"]
-    if gitio._head(git, {"top": dest}) != inv["head"]:
+    if gitio.head_of(git, {"top": dest}) != inv["head"]:
         problems.append(["head_mismatch", "HEAD"])
     restored = gitio.parse_index(git.run(dest, ["ls-files", "-s", "-z"]))
     if restored != inv["index"]:
@@ -577,7 +570,7 @@ def _source_reasons(entry) -> list:
 
 def cleanup_check(run_id, source_id) -> dict:
     """Whether the receipt still covers the source as it is now; never deletes anything."""
-    block = _code_block(pa._current(run_id))
+    block = _code_block(pa.current(run_id))
     entry = block.get(source_id)
     if entry is None:
         return {"allowed": False, "reasons": ["no_receipt"], "receipt_id": None, "generation": None}
@@ -601,11 +594,11 @@ def preserve_verb(host, argv) -> int:
     if not opts.get("source"):
         raise ValueError("preserve-code needs --source <worktree>")
     run_id, _, record = host._locate(opts)
-    # Not host._guard: preservation stays open after end (KTD10), so only the session is checked.
+    # Not host._guard: preservation stays open after end, so only the session is checked.
     sid = load_lib_module("driver_session").driving_session_id()
     if not load_lib_module("session_registry").caller_drives(record, sid):
         raise host.ProgrammeError("only the programme's driving session may run this verb")
-    if pa.sealed((record or {}).get("programme")):
+    if programme_home.sealed((record or {}).get("programme")):
         host._emit({"ok": False, "run": run_id, "kind": FAILED_KIND, "code": "sealed", "preserved": False})
         return 1
     try:

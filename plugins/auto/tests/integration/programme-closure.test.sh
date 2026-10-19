@@ -310,6 +310,20 @@ check "$VIEWB" "$(shasum -a 256 "$(home_of "$RUNV")/views/view.json")"
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 
+# ── a session closing an ended programme can still ask to take over another space's programme ──
+CRUN="$(new_programme w30 sess-closer)"
+end_typed "$CRUN" sess-closer
+ORUN="$(new_programme w31 sess-away)"
+TAKE_OUT="$(HERDR_WORKSPACE_ID=w31 prompt_hook sess-closer "/auto:programme-takeover")"
+it "the closing session's prompt is still journaled into the programme it is closing"
+has "this session is closing" "$TAKE_OUT"
+has "$CRUN" "$TAKE_OUT"
+it "its typed takeover request reaches the programme leased in its space"
+check "1" "$(run_py "$ORUN" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "takeover_request" and r["session_id"] == "sess-closer"))
+EOF
+)"
+
 echo
 echo "programme-closure.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

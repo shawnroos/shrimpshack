@@ -9,12 +9,10 @@ A legacy home (JSON only, never promoted) keeps the JSON path until
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import secrets
 import sys
-import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -36,6 +34,8 @@ CREATED_KIND = "programme_created"
 IMPORT_KIND = "legacy_import"
 FOREIGN_KIND = "foreign_write_absorbed"
 LEGACY = "legacy_import"
+FOREIGN = "foreign_write"
+UNVERIFIED = (LEGACY, FOREIGN)
 HISTORY = "history"
 OUTCOMES = ("absent", "legacy", "supported", "unsupported", "corrupt", "unavailable")
 HOLDS = ("unsupported", "corrupt", "unavailable")
@@ -59,8 +59,7 @@ def _journal():
     return load_lib_module("programme_journal")
 
 
-def _sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+_sha = programme_store.sha256_hex
 
 
 def home_for(repo_root, run_id):
@@ -151,8 +150,9 @@ def rows_of(events) -> tuple:
             if channel == "journal" and row.get("kind") == "prompts_pruned":
                 pruned.update((row.get("payload") or {}).get("prompt_ids") or [])
         elif channel == HISTORY:
-            journal.extend(dict(r, provenance=LEGACY) for r in payload.get("journal") or [])
-            claims.extend(dict(r, provenance=LEGACY) for r in payload.get("claims") or [])
+            stamp = FOREIGN if event.get("kind") == FOREIGN_KIND else LEGACY
+            journal.extend(dict(r, provenance=stamp) for r in payload.get("journal") or [])
+            claims.extend(dict(r, provenance=stamp) for r in payload.get("claims") or [])
             if isinstance(payload.get("row"), dict):
                 journal.append(payload["row"])
     journal = [r for r in journal if not (r.get("kind") == "prompt" and r.get("prompt_id") in pruned)]
@@ -247,7 +247,7 @@ def _legacy_write(home, run_id, change, compose) -> dict:
         seen["record"] = record
         return change(record)
 
-    result = run_record_core._with_locked_run_record(home, run_id, tracked)
+    result = run_record_core._with_locked_run_record(home, run_id, tracked, reroute=False)
     row = compose(result, seen["record"]) if compose else None
     if row is not None:
         _journal().append_row(run_id, row)
@@ -257,14 +257,17 @@ def _legacy_write(home, run_id, change, compose) -> dict:
 def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
           payload_refs=(), base_revision=None, seal=None) -> dict:
     if not promoted(home, run_id):
-        return _legacy_write(home, run_id, change, compose)
+        try:
+            return _legacy_write(home, run_id, change, compose)
+        except run_record_core.RoutedToAuthority:
+            pass
 
-    def body():
+    def body(absorbed):
         with _open(run_id) as store:
             if operation_id is not None and _guarded(run_id, lambda: store.outcome(operation_id)):
                 return _replayed(store, run_id, operation_id)
             _refuse_sealed(store, run_id)
-            absorb_foreign(store, home, run_id)
+            absorbed.append(absorb_foreign(store, home, run_id))
             head = _guarded(run_id, lambda: programme_store.head(store))
             record = _record_of(run_id, head["state"])
             result = change(record)
@@ -281,7 +284,19 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
         return {"result": result, "row": row, "replayed": receipt["replayed"],
                 "revision": receipt["revision"]}
 
-    return _locked(home, run_id, body)
+    return _locked(home, run_id, lambda: _export_absorbed(home, run_id, body))
+
+
+def _export_absorbed(home, run_id, body):
+    # An absorb commits on its own; unless the exports record it, every later write absorbs the
+    # same foreign rows again and an archive pinned to its capture revision never seals.
+    absorbed = []
+    try:
+        return body(absorbed)
+    except BaseException:
+        if any(absorbed):
+            export(home, run_id)
+        raise
 
 
 def mutate(home, run_id, change):
@@ -291,23 +306,23 @@ def mutate(home, run_id, change):
 def append_row(run_id, row, *, channel="journal", provenance="derived", guard=None):
     home = programme_home.home_path(run_id)
 
-    def body():
+    def body(absorbed):
         with _open(run_id) as store:
             _refuse_sealed(store, run_id)
-            absorb_foreign(store, home, run_id)
+            absorbed.append(absorb_foreign(store, home, run_id))
             head = _guarded(run_id, lambda: programme_store.head(store))
             current = _record_of(run_id, head["state"])
             if guard is not None:
                 guard(current)
             built = row(rows_of(_guarded(run_id, store.read)["events"])[0]) if callable(row) else row
-            if built is None:
-                return None
-            commit(store, run_id, _new_op("a"), head["revision"], head["state"],
-                   _row_event(built, channel), provenance)
-        export(home, run_id)
+            if built is not None:
+                commit(store, run_id, _new_op("a"), head["revision"], head["state"],
+                       _row_event(built, channel), provenance)
+        if built is not None or any(absorbed):
+            export(home, run_id)
         return built
 
-    return _locked(home, run_id, body)
+    return _locked(home, run_id, lambda: _export_absorbed(home, run_id, body))
 
 
 def create(home, run_id, record) -> dict:
@@ -348,20 +363,15 @@ def _file_meta(path):
     return {"digest": _sha(data), "size": len(data)}
 
 
-def _sealed_record(record) -> bool:
-    return bool(((record.get("programme") or {}).get("archive") or {}).get("sealed_at"))
-
-
 def _test_pause(point) -> None:
     if run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_EXPORT_PAUSE_" + point.upper()):
-        print("paused:export_" + point, flush=True)
-        time.sleep(60)
+        run_record_core.test_pause("export_" + point)
 
 
 def export(home, run_id, *, journal_held=False, final=False) -> bool:
     try:
         snap = snapshot(run_id)
-        if _sealed_record(snap["record"]) and not final:
+        if programme_home.sealed(snap["record"].get("programme")) and not final:
             return False
         files = _render(home, run_id, snap)
 
@@ -457,14 +467,14 @@ def _foreign_findings(home, manifest, revision):
     return found
 
 
-def absorb_foreign(store, home, run_id) -> None:
+def absorb_foreign(store, home, run_id) -> bool:
     manifest = _read_manifest(home)
     if manifest is None or store.sealed is not None:
-        return
+        return False
     head = _guarded(run_id, lambda: programme_store.head(store))
     found = _journal_locked(home, lambda: _foreign_findings(home, manifest, head["revision"]))
     if not (found["journal"] or found["claims"] or found["gaps"]):
-        return
+        return False
     summary = {"kind": FOREIGN_KIND, "at": run_record_core.now_iso(), "session_id": None,
                "payload": {"gaps": found["gaps"],
                            "absorbed": {"journal": len(found["journal"]), "claims": len(found["claims"])}}}
@@ -479,3 +489,4 @@ def absorb_foreign(store, home, run_id) -> None:
     commit(store, run_id, _new_op("f"), head["revision"], head["state"], event, LEGACY)
     sys.stderr.write(f"programme authority: {run_id}: an obsolete writer changed its exports; "
                      f"{len(found['gaps'])} change(s) recorded as {FOREIGN_KIND}\n")
+    return True

@@ -400,10 +400,6 @@ def _terse_reason_for(blocking) -> str:
     )
 
 
-def _inbox_size(home: str) -> int:
-    return load_lib_module("programme_journal").claims_count(os.path.basename(os.path.normpath(home)))
-
-
 def _held_status(hold) -> dict:
     return {"may_stop": False, "reasons": [{"kind": "authority_" + hold["outcome"]}],
             "unwatched_waits": [], "hold": hold}
@@ -424,7 +420,8 @@ def _driven_programmes(session_id, now) -> list:
             found.append(dict(hold, status=_held_status(hold["hold"])))
             continue
         try:
-            status = programme_predicate.compute(hold["record"], now, _inbox_size(hold["home"]))
+            status = programme_predicate.compute(hold["record"], now,
+                                              load_lib_module("programme_journal").claims_count(hold["run"]))
             if any(isinstance(r, dict) and r.get("kind") == "corrupt_record"
                    for r in status.get("reasons") or []):
                 continue

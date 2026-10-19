@@ -530,6 +530,29 @@ prog no-such-verb
 check 2 "$CODE"
 has "describe" "$OUT"
 
+it "claim refuses --op instead of silently writing a second claim"
+prog claim --run prog-x --item linear:AI-1 --deliverable merged --ref pr-1 --op claim-1
+check 2 "$CODE"
+has "claim takes no --op" "$OUT"
+it "a lifecycle verb that keeps no operation id refuses --op too"
+prog end --op end-1
+check 2 "$CODE"
+has "end takes no --op" "$OUT"
+
+it "describe names every compact-flag exemption the surface doc names"
+CONTRACT="$("$PY" -c 'import json,sys; print(json.load(sys.stdin)["contract"])' <<< "$DESC" 2>&1)"
+MISSING=""
+for exempt in "rules --ack" claim collect-result watcher-beat beat reconcile-operations release-resources \
+              dispose-item dispose-action archive "tracker-synced --check"; do
+  case "$CONTRACT" in *"\`${exempt}\`"*) ;; *) MISSING+="${exempt}; " ;; esac
+done
+check "" "$MISSING"
+it "describe documents --op as a global flag and names the verbs that refuse it"
+check "true true true" "$("$PY" -c '
+import json, sys
+op = json.load(sys.stdin).get("global_flags", {}).get("--op", "")
+print(str("replay" in op).lower(), str("`claim`" in op).lower(), str("`release-resources`" in op).lower())' <<< "$DESC" 2>&1)"
+
 # ── The PM's sweep instructions (U8): store-backed reads, restored context, three kinds of open work ──
 SKILL="${AUTO_ROOT}/skills/programme-sweep/SKILL.md"
 SEQ="${AUTO_ROOT}/skills/programme-sweep/references/sequencing.md"

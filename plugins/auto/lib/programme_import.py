@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -190,23 +189,12 @@ def _admission(plan):
 def _pause_after_freeze(home) -> None:
     if not run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_IMPORT_PAUSE_AFTER_FREEZE"):
         return
-    print("paused:after_freeze", flush=True)
     resume = os.path.join(home, RESUME_FILE)
-    deadline = time.monotonic() + 60
-    while not os.path.exists(resume) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    run_record_core.test_pause("after_freeze", resume, poll=0.05)
     try:
         os.unlink(resume)
     except FileNotFoundError:
         pass
-
-
-def _fsync_dir(path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 def _write_marker(home, import_id) -> None:
@@ -217,7 +205,7 @@ def _write_marker(home, import_id) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    _fsync_dir(home)
+    programme_store.fsync_dir(home)
 
 
 def _marker_id(home):
@@ -244,7 +232,7 @@ def _discard_partial(home, run_id) -> None:
         except FileNotFoundError:
             pass
     os.unlink(os.path.join(home, programme_authority.IMPORT_MARKER))
-    _fsync_dir(home)
+    programme_store.fsync_dir(home)
 
 
 def _set_aside(home, run_id, inventory) -> list:
@@ -261,8 +249,8 @@ def _set_aside(home, run_id, inventory) -> list:
         aside = f"{path}.imported-{inventory.import_id[4:16]}"
         os.replace(path, aside)
         kept.append(os.path.basename(aside))
-    _fsync_dir(home)
-    _fsync_dir(os.path.dirname(run_record_core.run_record_path(home, run_id)))
+    programme_store.fsync_dir(home)
+    programme_store.fsync_dir(os.path.dirname(run_record_core.run_record_path(home, run_id)))
     return kept
 
 
@@ -278,7 +266,7 @@ def _finish(home, run_id, import_id, status) -> dict:
     inventory, revision = _inventory_of(run_id, import_id)
     if os.path.lexists(os.path.join(home, programme_authority.IMPORT_MARKER)):
         os.unlink(os.path.join(home, programme_authority.IMPORT_MARKER))
-        _fsync_dir(home)
+        programme_store.fsync_dir(home)
     kept = _set_aside(home, run_id, inventory)
     programme_authority.export(home, run_id, journal_held=True)
     return {"status": status, "import_id": import_id, "revision": revision, "kept_aside": kept}

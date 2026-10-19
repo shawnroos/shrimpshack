@@ -28,8 +28,10 @@ The tests prove these results when a process is killed at named points
 - A write that did not finish leaves no part of itself. A retry with the same
   `--op <id>` returns the first result and writes nothing twice. A different
   request under an `--op` that is already saved refuses and changes nothing.
-- `claim` takes no `--op`. A claim retried after a lost response adds a second,
-  identical claim row. A claim approves nothing, so the PM sees it twice.
+- `claim` takes no `--op` and refuses one, as do the other verbs that keep no
+  operation id (listed in agent-tool-surface.md). A claim retried after a lost
+  response adds a second, identical claim row. A claim approves nothing, so the
+  PM sees it twice.
 - A worker launch or a pane prompt is recorded before it runs and settled after.
   If the process stops between the two, the action stays "uncertain". A retry
   on the same item refuses until `reconcile-operations` settles it, or the PM

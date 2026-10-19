@@ -12,13 +12,11 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import hashlib
 import os
 import re
 import secrets
 import stat
 import sys
-import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -59,8 +57,7 @@ def _hatch(name) -> bool:
     return run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_ARTIFACT_" + name)
 
 
-def _sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+_sha = programme_store.sha256_hex
 
 
 def area(run_id) -> str:
@@ -74,23 +71,15 @@ def object_path(run_id, digest) -> str:
 def _fsync_dir(path) -> None:
     if _hatch("FAIL_DIR_SYNC"):
         raise OSError("directory sync failed (test hatch)")
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    programme_store.fsync_dir(path)
 
 
-def _require_promoted(run_id) -> str:
+def require_promoted(run_id) -> str:
     home = programme_home.home_path(run_id)
     if not programme_authority.promoted(home, run_id):
         raise ArtifactError(f"programme {run_id} is not promoted; run `programme.sh promote` first",
                             "not_promoted")
     return home
-
-
-def sealed(programme) -> bool:
-    return bool(((programme or {}).get("archive") or {}).get("sealed_at"))
 
 
 @contextlib.contextmanager
@@ -144,7 +133,7 @@ def _refuse_admission(admission) -> None:
         raise ArtifactError(f"privacy admission is {admission.decision}; no bytes were retained", code)
 
 
-def _write_all(fd, data) -> None:
+def write_all(fd, data) -> None:
     if _hatch("SHORT_WRITE"):
         data = data[:max(len(data) - 1, 0)]
     view = memoryview(data)
@@ -193,12 +182,7 @@ def _existing(final, ref) -> None:
 def _pause(run_id, point) -> None:
     if not _hatch("PAUSE_" + point.upper()):
         return
-    resume = os.path.join(programme_home.home_path(run_id), RESUME_FILE)
-    print("paused:artifact_" + point, flush=True)
-    for _ in range(600):
-        if os.path.exists(resume):
-            return
-        time.sleep(0.1)
+    run_record_core.test_pause("artifact_" + point, os.path.join(programme_home.home_path(run_id), RESUME_FILE))
 
 
 def _stage(run_id, data) -> str:
@@ -206,7 +190,7 @@ def _stage(run_id, data) -> str:
     path = os.path.join(staging, f"{secrets.token_hex(8)}.part")
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        _write_all(fd, data)
+        write_all(fd, data)
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -270,7 +254,7 @@ def read_object(run_id, ref) -> bytes:
     return _read_back(object_path(run_id, ref.digest), ref)
 
 
-def _ref_of(entry):
+def ref_of(entry):
     ref = entry.get("ref") or {}
     return programme_store.PayloadRef(ref.get("digest"), ref.get("size"), ref.get("media_type"))
 
@@ -353,22 +337,22 @@ def _item_key(programme, item_id):
     raise ArtifactError(f"no item {item_id!r} in this programme", "unknown_item")
 
 
-def _check_open(programme) -> None:
-    if sealed(programme):
+def check_open(programme) -> None:
+    if programme_home.sealed(programme):
         raise ArtifactError("the programme is sealed; its home takes no new writes", "sealed")
 
 
-def _current(run_id) -> dict:
+def current(run_id) -> dict:
     record = programme_authority.read_record(run_id)
     return programme_home.normalize_programme(record.get("programme") or {})
 
 
-def _commit(run_id, home, change, kind, *, refs=(), operation_id=None, provenance="derived"):
+def commit(run_id, home, change, kind, *, refs=(), operation_id=None, provenance="derived"):
     seen = {}
 
     def mutate(record):
         record["programme"] = programme_home.normalize_programme(record.get("programme") or {})
-        _check_open(record["programme"])
+        check_open(record["programme"])
         seen["payload"] = change(record["programme"])
 
     def compose(_, record):
@@ -394,21 +378,21 @@ def _record_failure(run_id, home, identity, item, attempt, code) -> None:
         return entry
 
     try:
-        _commit(run_id, home, change, FAILED_KIND)
+        commit(run_id, home, change, FAILED_KIND)
     except (ArtifactError, run_record_core.RunRecordError) as exc:
         sys.stderr.write(f"programme artifacts: the collection failure was not recorded: {exc}\n")
 
 
 def collect_result(run_id, *, item, attempt, source, root, media_type="text/plain",
                    expect_digest=None, session_id=None, operation_id=None) -> dict:
-    home = _require_promoted(run_id)
+    home = require_promoted(run_id)
     if not isinstance(attempt, str) or not _ATTEMPT_RE.fullmatch(attempt):
         raise ArtifactError("--attempt must be a short token", "invalid_source")
     _relative(source)
-    key = _item_key(_current(run_id), item)
+    key = _item_key(current(run_id), item)
     identity = f"result:{key}/{attempt}/{source}"
     with publisher(run_id):
-        _check_open(_current(run_id))
+        check_open(current(run_id))
         try:
             data = read_source(root, source)
             if expect_digest is not None and _sha(data) != expect_digest:
@@ -431,7 +415,7 @@ def collect_result(run_id, *, item, attempt, source, root, media_type="text/plai
             results[identity] = entry
             return {k: entry[k] for k in ("identity", "item", "attempt", "source", "ref", "generation")}
 
-        return _commit(run_id, home, change, COLLECTED_KIND, refs=(ref,), operation_id=operation_id,
+        return commit(run_id, home, change, COLLECTED_KIND, refs=(ref,), operation_id=operation_id,
                        provenance="worker_result")
 
 
@@ -444,11 +428,11 @@ def _prompt_extract(row) -> bytes:
 
 
 def retain_prompt(run_id, prompt_id, *, operation_id=None) -> dict:
-    home = _require_promoted(run_id)
+    home = require_promoted(run_id)
     identity = f"source:prompt:{prompt_id}"
     journal = load_lib_module("programme_journal")
     with publisher(run_id):
-        _check_open(_current(run_id))
+        check_open(current(run_id))
         try:
             row = journal.find_prompt(run_id, prompt_id)
             if row is None:
@@ -468,7 +452,7 @@ def retain_prompt(run_id, prompt_id, *, operation_id=None) -> dict:
             _retained(programme)["sources"][identity] = entry
             return {k: entry[k] for k in ("identity", "ref", "recorded_origin", "verification")}
 
-        return _commit(run_id, home, change, RETAINED_KIND, refs=(ref,), operation_id=operation_id)
+        return commit(run_id, home, change, RETAINED_KIND, refs=(ref,), operation_id=operation_id)
 
 
 def _entry(programme, identity):
@@ -480,14 +464,14 @@ def _entry(programme, identity):
 
 
 def restore(run_id, identity) -> dict:
-    entry = _entry(_current(run_id), identity)
-    data = read_object(run_id, _ref_of(entry))
+    entry = _entry(current(run_id), identity)
+    data = read_object(run_id, ref_of(entry))
     return {"identity": identity, "bytes": data, "ref": entry["ref"], "authorizes": False,
             "verification": NOT_VERIFIED, "recorded_origin": entry.get("recorded_origin")}
 
 
 def verify_origin(run_id, identity) -> dict:
-    _entry(_current(run_id), identity)
+    _entry(current(run_id), identity)
     return {"ok": False, "identity": identity, "reason": NOT_VERIFIED}
 
 
@@ -503,13 +487,13 @@ def _claims_for(run_id, key) -> int:
 
 
 def freeze_inventory(run_id, *, owner, required, operation_id=None) -> dict:
-    home = _require_promoted(run_id)
+    home = require_promoted(run_id)
     required = list(required)
     if not required or len(set(required)) != len(required) \
             or not all(isinstance(i, str) and i.startswith(("result:", "source:", "code:")) for i in required):
         raise ArtifactError("an inventory names unique result:, source: or code: identities",
                             "invalid_inventory")
-    key = _item_key(_current(run_id), owner)
+    key = _item_key(current(run_id), owner)
 
     def change(programme):
         claims = _claims_for(run_id, key)
@@ -520,7 +504,7 @@ def freeze_inventory(run_id, *, owner, required, operation_id=None) -> dict:
         return {"inventory_id": inventory_id, "owner": key, "required": required,
                 "claims_generation": claims}
 
-    return _commit(run_id, home, change, INVENTORY_KIND, operation_id=operation_id)
+    return commit(run_id, home, change, INVENTORY_KIND, operation_id=operation_id)
 
 
 def _failure_status(failures, identity):
@@ -536,7 +520,7 @@ def _code_status(run_id, programme, identity) -> dict:
         return {"identity": identity, "status": "unavailable", "reason": "no complete code capture"}
     try:
         for ref in [entry[k] for k in ("bundle", "inventory", "manifest")] + list(entry.get("files") or []):
-            read_object(run_id, _ref_of({"ref": ref}))
+            read_object(run_id, ref_of({"ref": ref}))
     except (ArtifactError, programme_store.StoreError, KeyError) as exc:
         return {"identity": identity, "status": "unavailable", "reason": getattr(exc, "code", "invalid")}
     return {"identity": identity, "status": "captured", "digest": entry["bundle"]["digest"]}
@@ -550,7 +534,7 @@ def _status(run_id, programme, identity) -> dict:
     if entry is None:
         return {"identity": identity, "status": _failure_status(block["failures"], identity)}
     try:
-        read_object(run_id, _ref_of(entry))
+        read_object(run_id, ref_of(entry))
     except (ArtifactError, programme_store.StoreError) as exc:
         return {"identity": identity, "status": "unavailable", "reason": getattr(exc, "code", "invalid")}
     return {"identity": identity, "status": "captured", "digest": entry["ref"]["digest"]}
@@ -569,8 +553,8 @@ def _evaluate(run_id, programme, inventory) -> dict:
 
 
 def check_preservation(run_id, inventory_id, *, operation_id=None) -> dict:
-    home = _require_promoted(run_id)
-    programme = _current(run_id)
+    home = require_promoted(run_id)
+    programme = current(run_id)
     if inventory_id not in _retained(programme)["inventories"]:
         raise ArtifactError(f"no inventory {inventory_id!r}", "invalid_inventory")
     prior = _retained(programme)["receipts"].get(inventory_id)
@@ -588,11 +572,11 @@ def check_preservation(run_id, inventory_id, *, operation_id=None) -> dict:
         receipts[inventory_id] = receipt
         return receipt
 
-    return _commit(run_id, home, change, RECEIPT_KIND, operation_id=operation_id)
+    return commit(run_id, home, change, RECEIPT_KIND, operation_id=operation_id)
 
 
 def cleanup_allowed(run_id, inventory_id) -> dict:
-    programme = _current(run_id)
+    programme = current(run_id)
     block = _retained(programme)
     inventory = block["inventories"].get(inventory_id)
     if inventory is None:
@@ -609,7 +593,7 @@ def cleanup_allowed(run_id, inventory_id) -> dict:
 
 def protected_prompts(run_id) -> set:
     """Prompt ids that pruning must keep: required by an inventory and not readable when retained."""
-    programme = _current(run_id)
+    programme = current(run_id)
     block = _retained(programme)
     keep = set()
     for inventory in block["inventories"].values():

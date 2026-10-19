@@ -736,10 +736,13 @@ def _driven_programme(session_id):
     if not session_id:
         return None
     programme_home = load_lib_module("programme_home")
-    runs = {lease.get("run") for lease in programme_home.leases_for_session(session_id)
-            if programme_home.lease_status(lease) in programme_home.HELD_LEASE_STATES}
+    runs = {}
+    for lease in programme_home.leases_for_session(session_id):
+        status, read = programme_home.lease_state(lease)
+        if status in programme_home.HELD_LEASE_STATES and runs.get(lease.get("run")) is None:
+            runs[lease.get("run")] = read
     for run_id in sorted(r for r in runs if isinstance(r, str)):
-        record, hold = programme_home.read_programme(run_id)
+        record, hold = runs[run_id] or programme_home.read_programme(run_id)
         if hold is not None:
             return run_id, None
         programme = record.get("programme") if isinstance(record, dict) else None

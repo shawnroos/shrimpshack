@@ -31,7 +31,6 @@ END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
 MOVABLE_STATES = ("live", "orphaned")
 CONSUMING_KINDS = ("taken_over", "handed_over", "programme_ended")
-LEGACY = "legacy_import"
 REMIT_CAPS = {"spaces": 8, "repos": 20, "teams": 10, "projects": 20, "initiatives": 10}
 REMIT_INPUT_CAP = 1 << 16
 REMIT_NAME_CAP = 100
@@ -105,10 +104,11 @@ def _request_ref(row) -> dict:
 
 def _requests(run, verb, sid) -> list:
     rows = programme_journal.read(run)
+    unverified = programme_authority().UNVERIFIED
     used = [(r.get("payload") or {}).get("request") for r in rows if r.get("kind") in CONSUMING_KINDS]
     return [r for r in rows
             if r.get("kind") == f"{verb}_request" and r.get("session_id") == sid
-            and r.get("provenance") != LEGACY
+            and r.get("provenance") not in unverified
             and (r.get("payload") or {}).get("origin") == "typed" and _request_ref(r) not in used]
 
 
@@ -117,7 +117,7 @@ def _cited_typed(run, request, sid) -> bool:
     if not (request.get("payload") or {}).get("driving") or not cites:
         return False
     row = programme_journal.find_prompt(run, cites[0])
-    return bool(row) and row.get("session_id") == sid and row.get("provenance") != LEGACY \
+    return bool(row) and row.get("session_id") == sid and row.get("provenance") not in programme_authority().UNVERIFIED \
         and (row.get("payload") or {}).get("origin") == "typed"
 
 
@@ -126,11 +126,17 @@ def _journal(run, kind, sid, payload, cites=None) -> None:
         programme_journal.append(run, kind, sid, payload, cites=cites)
 
 
-def _cleanup_lines(ended) -> None:
+def _cleanup_lines(ended, run) -> None:
+    watchers = ((programme_home._read_record(run) or {}).get("programme") or {}).get("watchers") or {}
+    owner = {str(w.get("task_id")): wid for wid, w in sorted(watchers.items()) if isinstance(w, dict)}
+
+    def then(task_id):
+        return f"  (then release-resources --watcher {owner[task_id]})" if task_id in owner else ""
+
     for task_id in ended.get("cron_task_ids") or []:
-        sys.stdout.write(f"Remove the cadence fallback: CronDelete {task_id}\n")
+        sys.stdout.write(f"Remove the cadence fallback: CronDelete {task_id}{then(task_id)}\n")
     for task_id in ended.get("monitor_task_ids") or []:
-        sys.stdout.write(f"Stop the watcher Monitor: TaskStop {task_id}\n")
+        sys.stdout.write(f"Stop the watcher Monitor: TaskStop {task_id}{then(task_id)}\n")
     for pid in ended.get("process_ids") or []:
         sys.stdout.write(f"Stop watcher process {pid} if it is still running.\n")
 
@@ -143,7 +149,7 @@ def _refuse(host, run, verb, sid, exc):
     if exc.ended is not None:
         if os.path.isdir(programme_home.home_path(run)):
             host.refresh_view(run, programme_home.home_path(run))
-        _cleanup_lines(exc.ended)
+        _cleanup_lines(exc.ended, run)
     raise host.ProgrammeError(exc.reason)
 
 
@@ -349,8 +355,8 @@ def _h_end(host, argv):
         _refuse(host, run, "end", sid, exc)
     _finish(host, run, "programme_ended", sid, out, cites=cites, journal=False)
     sys.stdout.write(f"Programme {run} ended.\n")
-    _cleanup_lines(out)
-    sys.stdout.write(f"Then record each stop: release-resources --run {run} (add --watcher <id> --stopped "
+    _cleanup_lines(out, run)
+    sys.stdout.write(f"Then record each stop: release-resources --run {run} (add --watcher <watcher id> --stopped "
                      f"after each CronDelete or TaskStop), and check-archive --run {run} before archive.\n")
     return 0
 

@@ -9,7 +9,6 @@ context digest the flag recorded; a newer decision context refuses it.
 
 from __future__ import annotations
 
-import datetime
 import hashlib
 import json
 import os
@@ -138,12 +137,8 @@ def render_context(run_id, record, revision=None) -> str:
     )
 
 
-def _now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def mark(home, session_id, trigger, digest) -> None:
-    body = json.dumps({"at": _now(), "session_id": session_id, "trigger": trigger, "context_digest": digest})
+    body = json.dumps({"at": run_record_core.now_iso(), "session_id": session_id, "trigger": trigger, "context_digest": digest})
     flag = os.path.join(home, programme_home.COMPACT_FLAG)
     fd = os.open(flag, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
@@ -185,7 +180,7 @@ def closing_lines(session_id) -> list:
         if hold is not None:
             out.append(f"auto: ended programme {run} cannot be read ({hold['outcome']}); tell Shawn.")
             continue
-        if not programme.get("ended") or ((programme.get("archive") or {}).get("sealed_at")):
+        if not programme.get("ended") or programme_home.sealed(programme):
             continue
         out.append(f"auto: programme {run} has ended and is not archived. Start no workers and re-arm no "
                    f"watchers for it. Run `programme.sh check-archive --run {run}`, then `archive --run {run}` "
@@ -235,7 +230,7 @@ def unleased_lines(session_id) -> list:
 
 def inbox_verb(host, argv) -> int:
     _, opts = host._parse(argv, values=("run",), flags=("all",))
-    run_id = programme_recovery._run_of(host, opts)
+    run_id = programme_recovery.run_of(host, opts)
     home = programme_home.home_path(run_id)
     if programme_authority.promoted(home, run_id):
         snap = programme_authority.snapshot(run_id)

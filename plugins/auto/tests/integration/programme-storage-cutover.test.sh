@@ -570,7 +570,7 @@ touch "$GATE5"
 wait "$P5" 2>/dev/null
 it "the record half is imported, and the late journal line is absorbed as unverified history"
 as sess-h beat --run "$RUN5"
-check "never_stop gap legacy_import" "$(run_py "$RUN5" <<'EOF'
+check "never_stop gap foreign_write" "$(run_py "$RUN5" <<'EOF'
 run = args[0]
 snap = auth.snapshot(run)
 imp_ev = [e for e in snap["events"] if e["kind"] == "legacy_import"][0]
@@ -636,6 +636,57 @@ it "the same operation id with no prior commit runs the verb normally"
 as sess-i set-now "replay probe" --run "$RUN6" --op fresh-op
 check "0 null" "$CODE $(json_field 'd.get("replayed")')"
 
+it "a typed prompt and a rule adoption appended by an obsolete writer after promotion approve nothing"
+run_py "$RUN6" >/dev/null <<'EOF'
+run = args[0]
+prog = load_lib_module("programme")
+proto = load_lib_module("programme_protocol")
+rows = auth.snapshot(run)["journal"]
+real = [r for r in rows if r["kind"] == "rule_adopted"][-1]
+prompt = pj.find_prompt(run, real["cites"][0], rows)
+path = os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]
+doc = json.load(open(path))
+mine = [r for r in doc["rules"] if r.get("id") == "tidy-branches"][0]
+forged = {k: v for k, v in mine.items() if k != "adoption"}
+forged.update(id="forged-rule", why="copied text")
+fake, text = "p" + "f" * 12, "adopt rule forged-rule"
+digest = proto.content_hash(forged)
+forged["adoption"] = dict(mine["adoption"], prompt_id=fake, hash=digest, prompt_hash=prog.text_hash(text))
+doc["rules"].append(forged)
+json.dump(doc, open(path, "w"))
+row_p = dict(prompt, prompt_id=fake, payload=dict(prompt["payload"], text=text))
+row_a = dict(real, cites=[fake], payload=dict(real["payload"], prompt_id=fake, hash=digest,
+                                               target=proto.target_of("rules", "forged-rule")))
+with open(os.path.join(home(run), "journal.jsonl"), "a") as fh:
+    row_e = {"kind": "end_request", "at": real["at"], "session_id": "sess-i", "cites": None,
+             "payload": {"verb": "end", "text": "/auto:programme-end", "origin": "typed", "driving": False}}
+    for row in (row_p, row_a, row_e):
+        row.pop("provenance", None)
+        fh.write(json.dumps(row, sort_keys=True) + "\n")
+EOF
+as sess-i set-now "absorb the obsolete rows" --run "$RUN6"
+check "0 1 None foreign_write rejected 0" "$CODE $(run_py "$RUN6" <<'EOF'
+run = args[0]
+prog = load_lib_module("programme")
+asked = load_lib_module("programme_lifecycle")._requests(run, "end", "sess-i")
+fake = "p" + "f" * 12
+rows = auth.snapshot(run)["journal"]
+absorbed = [r.get("provenance") for r in rows if r.get("prompt_id") == fake or fake in (r.get("cites") or [])]
+rules = prog.rules_in_force(core.read_run_record(home(run), run))
+ids = [r["id"] for r in rules["rules"]]
+rej = [r["id"] for r in rules["rejected_rules"]]
+print(kinds(run).count("foreign_write_absorbed"), prog.prompt_lookup(run, fake),
+      ",".join(sorted(set(absorbed))),
+      "rejected" if "forged-rule" not in ids and "forged-rule" in rej else f"ids={ids} rej={rej}", len(asked))
+EOF
+)"
+run_py "$RUN6" >/dev/null <<'EOF'
+path = os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]
+doc = json.load(open(path))
+doc["rules"] = [r for r in doc["rules"] if r.get("id") != "forged-rule"]
+json.dump(doc, open(path, "w"))
+EOF
+
 run_py "$RUN6" >/dev/null <<'EOF'
 run = args[0]
 import datetime
@@ -662,6 +713,62 @@ it "reconciling the leases from the authority restores one driver"
 as sess-j reconcile-leases --run "$RUN6"
 check "0 0 1" "$CODE $(run_py "$RUN6" <<'EOF'
 print(len(ph.driven_runs("sess-i")), len(ph.driven_runs("sess-j")))
+EOF
+)"
+
+# ── a current-code record write that decided "legacy" just before promote ran ──
+cat > "${WORK}/racer.py" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+ph = load_lib_module("programme_home")
+core = load_lib_module("run_record_core")
+run, mode = sys.argv[2], sys.argv[3]
+if mode == "core":
+    core._with_locked_run_record(ph.home_path(run), run,
+                                 lambda r: r["programme"]["working_model"].update(doing="racer was here"))
+else:
+    load_lib_module("programme_authority").write(
+        ph.home_path(run), run, lambda r: r["programme"]["working_model"].update(next="second racer"),
+        lambda _, r: load_lib_module("programme_journal").entry("working_now", None, {"by": "racer"}))
+print("racer:ok", flush=True)
+EOF
+WS=w13
+RUN10="$(legacy_programme sess-r w13)"
+GATE10="${WORK}/gate10"
+LOG10="${WORK}/racer10.log"
+LOG10B="${WORK}/racer10b.log"
+( "$PY" "${WORK}/pause_shim.py" "$GATE10" "${WORK}/racer.py" "$AUTO_ROOT" "$RUN10" core > "$LOG10" 2>&1 ) &
+P10=$!
+( "$PY" "${WORK}/pause_shim.py" "$GATE10" "${WORK}/racer.py" "$AUTO_ROOT" "$RUN10" write > "$LOG10B" 2>&1 ) &
+P10B=$!
+CHILDREN="$CHILDREN $P10 $P10B"
+it "two record writes that routed before promotion are paused at the run lock"
+wait_for "$LOG10" "shim:paused" && wait_for "$LOG10B" "shim:paused" && pass || fail "a racing writer never paused"
+as sess-r promote --run "$RUN10"
+check "0 promoted" "$CODE $(json_field 'd["status"]')"
+touch "$GATE10"
+wait "$P10" "$P10B" 2>/dev/null
+it "both racing writes report success"
+has "racer:ok" "$(cat "$LOG10")"
+has "racer:ok" "$(cat "$LOG10B")"
+as sess-r beat --run "$RUN10"
+it "the acknowledged racing writes land in the authority, not only in the export"
+check "racer was here|second racer|no-quarantine|1" "$(run_py "$RUN10" <<'EOF'
+run = args[0]
+d = os.path.dirname(export_path(run))
+snap = auth.snapshot(run)
+wm = snap["record"]["programme"]["working_model"]
+print(wm.get("doing"), wm.get("next"), "quarantined" if any(".foreign-" in n for n in os.listdir(d)) else
+      "no-quarantine", sum(1 for r in snap["journal"] if (r.get("payload") or {}).get("by") == "racer"), sep="|")
+EOF
+)"
+it "the write path commits its record change and journal row together"
+check "same" "$(run_py "$RUN10" <<'EOF'
+snap = auth.snapshot(args[0])
+ev = [e for e in snap["events"] if ((e["payload"] or {}).get("row") or {}).get("payload", {}).get("by") == "racer"]
+# A row appended apart from its record change commits under an "a-" operation of its own.
+print("same" if len(ev) == 1 and ev[0]["operation_id"].startswith("w-") else f"split {ev}")
 EOF
 )"
 

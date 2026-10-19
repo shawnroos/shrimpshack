@@ -31,7 +31,6 @@ driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
 programme_context = load_lib_module("programme_context")
 
-CLAIMS_NAME = programme_journal.CLAIMS_NAME
 SOURCES = ("herdr", "tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
 CHOICES = ("ship", "decline")
@@ -542,10 +541,6 @@ def _h_answer_handed(host, argv):
     return host._write(opts, change, "handed_answered", prompt_id=opts.get("prompt"), needs_prompt=True)
 
 
-def claims_path(home) -> str:
-    return os.path.join(home, CLAIMS_NAME)
-
-
 def claims_count(home) -> int:
     return programme_journal.claims_count(os.path.basename(os.path.normpath(home)))
 
@@ -590,7 +585,7 @@ def _h_mark_read(host, argv):
         raise ValueError("--offset must be a whole number")
 
     def change(programme, prompt, rec):
-        size = claims_count(programme_home.home_path(rec["run_id"]))
+        size = programme_journal.claims_count(rec["run_id"])
         target = size if offset is None else int(offset)
         before = programme.get("inbox_offset") or 0
         if target > size or target < before:

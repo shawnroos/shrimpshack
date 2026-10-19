@@ -615,8 +615,8 @@ SPECS = (
      "a check on a deliverable the protocol does not require of the item; an unknown item or decision; a "
      "prompt that is not typed or does not name the id. Without a prompt the revision waits for accept-context."),
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
-     "no pending revision; a prompt that is not typed, was imported from a legacy journal, or does not name "
-     "the id and every target the revision adds."),
+     "no pending revision; a prompt that is not typed, came from a legacy journal or an obsolete writer, or "
+     "does not name the id and every target the revision adds."),
     ("assign-item", _h_assign_item, "<item-id> --decision-id <id> [--run <id>]",
      "an item outside the scope of the decision's revision in force (compared by canonical id, so a merge "
      "never widens it); a target only a pending revision adds."),

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import collections
 import dataclasses
-import datetime
 import hashlib
 import json
 import os
@@ -137,8 +136,8 @@ def digest_of(value) -> str:
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
-def _now_iso() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _hatch(name: str) -> bool:
@@ -147,8 +146,7 @@ def _hatch(name: str) -> bool:
 
 def _fault_pause(point: str) -> None:
     if _hatch("PAUSE_" + point.upper()):
-        print("paused:" + point, flush=True)
-        time.sleep(60)
+        run_record_core.test_pause(point)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,7 +168,7 @@ class PayloadRef:
 
 
 def payload_ref_for(data: bytes, media_type: str) -> PayloadRef:
-    return PayloadRef(hashlib.sha256(data).hexdigest(), len(data), media_type)
+    return PayloadRef(sha256_hex(data), len(data), media_type)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -203,10 +201,8 @@ def _strings(value):
 
 
 def _secret_values(journal, secrets_path):
-    path = os.path.expanduser(secrets_path or os.environ.get(journal.SECRETS_ENV)
-                              or journal.DEFAULT_SECRETS_FILE)
     try:
-        assignments = journal.secret_assignments(path)
+        assignments = journal.secret_assignments(secrets_path)
     except FileNotFoundError:
         return []
     except (OSError, UnicodeDecodeError):
@@ -246,7 +242,7 @@ def admit(subject, *, provenance: str, basis: str, secrets_path=None) -> Admissi
     values = _secret_values(journal, secrets_path)
     if values is None:
         return Admission("uncertain", subject_digest, provenance, basis, ("secrets file unreadable",))
-    if any(_secret_bearing(journal, text, values) for text in strings):
+    if any(_secret_bearing(journal, text, values) for text in set(strings)):
         return Admission("prohibited", subject_digest, provenance, basis, ("secret-bearing content",))
     return Admission("admitted", subject_digest, provenance, basis)
 
@@ -299,7 +295,7 @@ class ImportInventory:
 def inventory_entry(identity, data, *, parse_result, provenance) -> InventoryEntry:
     if data is None:
         return InventoryEntry(identity, None, None, parse_result, provenance)
-    return InventoryEntry(identity, hashlib.sha256(data).hexdigest(), len(data), parse_result, provenance)
+    return InventoryEntry(identity, sha256_hex(data), len(data), parse_result, provenance)
 
 
 def _inventory_id(entries) -> str:
@@ -399,7 +395,7 @@ def _validate_schema(conn) -> None:
         raise StoreCorrupt("programme database has no authority row")
 
 
-def _fsync_dir(path: str) -> None:
+def fsync_dir(path: str) -> None:
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
@@ -431,7 +427,7 @@ def create(run_id: str) -> "Store":
         conn, pragmas = _connect(path, "rw")
         store = Store(run_id, path, conn, pragmas)
         store._transact(lambda: _initialize(conn, run_id), write=True)
-        _fsync_dir(os.path.dirname(path))
+        fsync_dir(os.path.dirname(path))
         return store
     except BaseException:
         if conn is not None:
@@ -688,7 +684,7 @@ def _initialize(conn, run_id) -> None:
         conn.execute(statement)
     conn.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", [
         ("schema_version", str(SCHEMA_VERSION)), ("run_id", run_id),
-        ("created_at", _now_iso())])
+        ("created_at", run_record_core.now_iso())])
     conn.execute("INSERT INTO authority (id, revision, state) VALUES (1, 0, '{}')")
 
 
@@ -707,7 +703,7 @@ def _apply(conn, operation_id, digest, base_revision, state, event, provenance, 
     revision = current + 1
     outcome = {"operation_id": operation_id, "digest": digest, "base_revision": base_revision,
                "revision": revision, "payload_refs": [r.digest for r in refs],
-               "committed_at": _now_iso()}
+               "committed_at": run_record_core.now_iso()}
     conn.execute("INSERT INTO operations (operation_id, digest, base_revision, revision, outcome)"
                  " VALUES (?, ?, ?, ?, ?)",
                  (operation_id, digest, base_revision, revision, canonical(outcome)))

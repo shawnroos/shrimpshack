@@ -144,7 +144,7 @@
 #                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_authority, programme_protocol, session_registry,
-#                          driver_session, verb_cli, programme_resume; programme_store,
+#                          driver_session, verb_cli; programme_resume, programme_store,
 #                          programme_import [lazy];
 #                          then, after its verb table is built: programme_record,
 #                          programme_evidence, programme_sources, programme_view,
