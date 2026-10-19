@@ -262,6 +262,12 @@ def normalize_item(item: dict, item_id=None) -> dict:
     return out
 
 
+def session_ids(item) -> list:
+    sids = [(item.get("owner") or {}).get("session_id")]
+    sids += [s.get("session_id") for s in item.get("sessions") or [] if isinstance(s, dict)]
+    return [s for s in dict.fromkeys(sids) if isinstance(s, str) and s]
+
+
 def normalize_programme(block: dict) -> dict:
     if not isinstance(block, dict):
         raise ProgrammeHomeError(f"programme block must be a dict: {block!r}")

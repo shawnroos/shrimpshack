@@ -206,6 +206,8 @@ def _segment(tokens):
 
 
 def eligibility(command):
+    if isinstance(command, str) and len(command) > COMMAND_CAP:
+        return {"eligible": False, "kind": "unknown_scope", "subject": f"longer than {COMMAND_CAP} characters"}
     try:
         calls, rendered = [], []
         for operator, tokens in _split(command):
@@ -214,7 +216,8 @@ def eligibility(command):
                 calls.append(call)
             if operator:
                 rendered.append(operator)
-            rendered.append(call["normalized"] if call else " ".join(tokens))
+            # A built-in keeps only its command word: its arguments can hold secrets and no rule covers them.
+            rendered.append(call["normalized"] if call else tokens[0])
     except _Refused as refusal:
         return {"eligible": False, "kind": refusal.kind, "subject": refusal.subject}
     if not calls:

@@ -560,7 +560,10 @@ GUARDED_CALLS=(
   "Write|{\"file_path\": \"${SETTINGS}\", \"content\": \"{}\"}"
   "Write|{\"file_path\": \".claude/settings.local.json\", \"content\": \"{}\"}"
   "Bash|{\"command\": \"echo '{}' > .claude/settings.local.json\"}"
+  "Write|{\"file_path\": \"${DEST}/.claude/SETTINGS.local.json\", \"content\": \"{}\"}"
+  "Bash|{\"command\": \"echo x >> \\\"\$GUARD_ROOT/.claude/settings.local.json\\\"\"}"
 )
+export GUARD_ROOT="$DEST"
 
 it "with a proposal for the repository, an owner's Edit, MultiEdit, Write and echo into its settings.local.json are refused and journaled"
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"open\", \"destination\": \"${DEST}\"}]"

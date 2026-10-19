@@ -263,9 +263,10 @@ has "permission perm-1: open" "$OUT"
 has "linear:AI-4" "$OUT"
 edit 'rec["driving_session_id"] = "sess-pm"'
 
-it "the view lists perm-1 as a decision for Shawn"
+it "the view lists perm-1 as a decision for Shawn, with the layer that refused it"
 prog status --run "$RUN"
 has "perm-1" "$OUT"
+has "last refused by" "$OUT"
 
 # ---- what counts as a refusal ----
 it "a refusal in a session not on the item is never read"
@@ -309,6 +310,42 @@ deny sess-w32 tu-early "gh pr checks 21" classifier reject 600
 prog add-item linear:AI-32 --title "late joiner" --session sess-w32 --repo "$MAIN"
 prog propose-permission --item linear:AI-32
 check '0 false' "$CODE $(field '"linear:AI-32" in props["perm-1"]["items"]')"
+
+it "a built-in segment's arguments never reach evidence"
+deny sess-w1 tu-secret "gh pr checks 12 && grep ghp_abcdefghijklmnopqrstuvwxyz0123456789 .env"
+prog propose-permission --item linear:AI-1
+check '"gh pr checks 12 && grep"' "$(field '[e["command"] for e in props["perm-1"]["evidence"] if e["tool_use_id"] == "tu-secret"][0]')"
+
+it "a transcript over the read cap leaves the cursor in place and says it was not read"
+check "None True 7" "$(run_py <<'EOF'
+perm = load_lib_module("programme_permission")
+path = session("sess-cap")
+tx("sess-cap", "tu-cap", "gh pr checks 9", "reject", "mode")
+item = {"sessions": [{"session_id": "sess-cap", "at": "2000-01-01T00:00:00Z"}], "permission_scan": {"sess-cap": 7}}
+perm.transcript.TRANSCRIPT_CAP = 10
+uses, why = perm._refusals(item, "sess-cap")
+print(uses, "unreadable" in why, item["permission_scan"]["sess-cap"])
+EOF
+)"
+
+it "a half-written last line is read again next time, not skipped"
+check "1 True True" "$(run_py <<'EOF'
+perm = load_lib_module("programme_permission")
+path = tx("sess-half", "tu-h1", "gh pr checks 9", "reject", "mode")
+partial = os.path.getsize(path)
+row = '{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tu-h2", "name": "Bash", "input": {"command": "gh pr checks 10"}}]}}'
+with open(path, "a") as fh:
+    fh.write(row[:40])
+item = {"sessions": [{"session_id": "sess-half", "at": "2000-01-01T00:00:00Z"}]}
+first, _ = perm._refusals(item, "sess-half")
+stopped = item["permission_scan"]["sess-half"] == partial
+with open(path, "a") as fh:
+    fh.write(row[40:] + "\n" + json.dumps({"type": "user", "timestamp": stamp(), "permissionDecision": {"decision": "reject", "reasonType": "mode"},
+                                 "message": {"content": [{"type": "tool_result", "tool_use_id": "tu-h2"}]}}) + "\n")
+second, _ = perm._refusals(item, "sess-half")
+print(len(first), stopped, [u["tool_use_id"] for u in second] == ["tu-h2"])
+EOF
+)"
 
 it "evidence keeps the layer and reasonType, never the refusal text"
 check '["classifier", "classifier", false]' \
@@ -454,6 +491,11 @@ it "an item with no recorded repo gets an explanation and no proposal"
 deny sess-w30 tu-30 "gh pr checks 1"
 prog propose-permission --item linear:AI-30
 check '0 3 "no_repo"' "$CODE $(field 'len(props)') $(field 'items["linear:AI-30"]["permission_block"]["cause"]')"
+
+it "after the repo is recorded, the same refusal is read again and reaches a proposal"
+prog add-item linear:AI-30 --repo "$MAIN2"
+prog propose-permission --item linear:AI-30
+check '0 true "decided"' "$CODE $(field '"linear:AI-30" in props["perm-2"]["items"]') $(field 'items["linear:AI-30"]["permission_block"]["cause"]')"
 
 it "a remit repo whose .git file points at a common dir outside the remit is refused as a destination"
 prog add-item linear:AI-40 --title "rewritten" --session sess-w40 --repo "$MAIN3"

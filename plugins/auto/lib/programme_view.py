@@ -233,7 +233,8 @@ def _decisions(block, items) -> list:
              "question": "the PM stopped while this wait had no watcher"}
             for i in items if "stopped unwatched" in i["marks"]]
     for proposal in _asking(block):
-        reason = next((e.get("reason") for e in reversed(proposal.get("evidence") or []) if e.get("reason")), None)
+        last = _dict((proposal.get("evidence") or [None])[-1])
+        reason = f"{last.get('layer')} (reasonType {last.get('reason_type')})" if last.get("layer") else None
         question = (f"{proposal.get('id')}: allow {', '.join(proposal.get('rules') or [])} in "
                     f"{proposal.get('settings_file')} for {', '.join(proposal.get('items') or [])} "
                     f"({proposal.get('state')}); " + (
@@ -243,7 +244,7 @@ def _decisions(block, items) -> list:
         if covering.get("rule"):
             question += "; covered by " + programme_sanitize.wrap(f"{covering['rule']} in {covering.get('source')}")
         if reason:
-            question += "; last denial " + programme_sanitize.wrap(reason, cap=120)
+            question += "; last refused by " + programme_sanitize.wrap(reason, cap=120)
         if proposal.get("explanation"):
             question += "; " + programme_sanitize.wrap(proposal["explanation"], cap=120)
         out.append({"kind": "permission", "item": None, "proposal": proposal.get("id"), "question": question})

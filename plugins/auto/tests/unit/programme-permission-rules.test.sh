@@ -69,7 +69,7 @@ it "gh pr checks with no number is eligible with no target"
 check "ok|pr_checks|gh pr checks|pr_checks=None" "$(elig 'gh pr checks')"
 
 it "gh pr checks 12 | head -5 is eligible because head is built-in read-only"
-check "ok|pr_checks|gh pr checks 12 | head -5|pr_checks=12" "$(elig 'gh pr checks 12 | head -5')"
+check "ok|pr_checks|gh pr checks 12 | head|pr_checks=12" "$(elig 'gh pr checks 12 | head -5')"
 
 it "two catalog reads chained give both operation ids"
 check "ok|pr_checks,pr_view|gh pr view 3 && gh pr checks 3|pr_view=3;pr_checks=3" "$(elig 'gh pr view 3 && gh pr checks 3')"
@@ -133,7 +133,7 @@ it "an escape control character makes a command ineligible"
 check "no|unknown_scope|control character" "$(elig "$(printf 'gh pr checks 12\033[2K')")"
 
 it "a newline splits subcommands like ;"
-check "ok|pr_checks|gh pr checks 1 ; wc -l|pr_checks=1" "$(elig "$(printf 'gh pr checks 1\nwc -l')")"
+check "ok|pr_checks|gh pr checks 1 ; wc|pr_checks=1" "$(elig "$(printf 'gh pr checks 1\nwc -l')")"
 
 it "a non-string or empty command is ineligible"
 check "no|unknown_scope|empty command" "$(elig '')"

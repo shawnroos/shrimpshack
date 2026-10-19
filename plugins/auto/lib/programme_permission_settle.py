@@ -239,7 +239,10 @@ def _observe_retry(programme, proposal, journal, snap) -> dict:
     path = transcript.path_for(res["session_id"])
     if path is None:
         return dict(base, pending=f"no registry transcript for session {res['session_id']}")
-    matches = [u for u in transcript.tool_uses(path, res.get("transcript_offset") or 0) if _hits(u["command"], res)]
+    found = transcript.tool_uses(path, res.get("transcript_offset") or 0)
+    if found is None:
+        return dict(base, pending=f"the transcript for session {res['session_id']} is unreadable or over the read cap")
+    matches = [u for u in found[0] if _hits(u["command"], res)]
     decided = next((u for u in matches if u["ruling"]), None)
     if decided and decided["ruling"] == "accept":
         return dict(base, state=state.RESOLVED, confirmed=True, tool_use_id=decided["tool_use_id"],
@@ -269,7 +272,7 @@ def _observe_open(proposal) -> dict | None:
         last[entry.get("session_id")] = entry.get("tool_use_id")
     for sid, tool_use_id in last.items():
         path = transcript.path_for(sid)
-        uses = transcript.tool_uses(path) if path else []
+        uses = (transcript.tool_uses(path) or ([], 0))[0] if path else []
         start = next((i for i in range(len(uses) - 1, -1, -1) if uses[i]["tool_use_id"] == tool_use_id), None)
         if start is None:
             continue
@@ -363,7 +366,7 @@ def _h_settle_permissions(host, argv):
 
 _SPECS = (
     ("settle-permissions", _h_settle_permissions, "[--run <id>]",
-     "any session but the driving one; an ended programme. Settles a retrying proposal only from the "
+     "refused from any session but the driving one, or for an ended programme. Settles a retrying proposal only from the "
      "reserved session's transcript after the reservation, for the reserved operation and target; an idle "
      "owner after the retry was sent gives retry_unobserved. Resolves an open proposal unconfirmed when an "
      "affected session's transcript shows every operation ran. Never retries."),

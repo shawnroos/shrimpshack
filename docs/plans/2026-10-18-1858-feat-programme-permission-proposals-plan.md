@@ -430,6 +430,8 @@ flowchart TB
 
 ### U2. Denial and execution capture hooks
 
+> Revised 2026-10-19 (KTD1): the PermissionDenied and PostToolUse hooks were removed. Refusals are read from transcripts by `propose-permission`; this unit's lasting parts are the registry `transcript_path` and the settings guard, now `lib/programme_settings_guard.py`.
+
 - **Goal:** Runtime-written journal rows for auto-mode denials and for `gh` executions while a proposal is unresolved, from in-scope sessions only, and a guard that keeps workers out of settings files.
 - **Requirements:** R1, R3, R4, R8; KTD1, KTD6, KTD9.
 - **Dependencies:** U7.
@@ -475,6 +477,8 @@ flowchart TB
 - **Verification:** `programme-hooks.test.sh` passes with the new cases, and no existing hook case changes outcome.
 
 ### U3. Proposal record and verbs
+
+> Revised 2026-10-19 (KTD1): `--denial`, transcript confirmation of journal rows, `report-block` and `blocks.jsonl` were removed. `propose-permission [--item <id>]...` reads the item sessions' transcripts directly; a named item with no readable refusal gets the unknown-cause explanation.
 
 - **Goal:** One shared, typed-answerable proposal per key, linked to every affected item, visible after compaction and handover.
 - **Requirements:** R3, R4, R5, R6, R7, R10, R11; KTD2, KTD4, KTD7.
@@ -529,6 +533,8 @@ flowchart TB
 - **Verification:** the new unit test file passes, `doc-fence-agent-tool-surface.test.sh` passes, and existing `programme-verbs` and `programme-items` tests still pass.
 
 ### U4. Verify, single retry, and settlement
+
+> Revised 2026-10-19 (KTD1): settlement reads the reserved session's transcript, not `permission_tool_ran` or `permission_denied` rows, which no longer exist. State moves read one table, `lib/programme_permission_state.py`.
 
 - **Goal:** After typed confirmation, Programme checks effective scope, retries once, and records a specific outcome without looping.
 - **Requirements:** R8, R9, R10, R11; KTD5, KTD6.

@@ -36,12 +36,6 @@ CHOICE_WORDS = {
 }
 
 
-def _sessions(item) -> list:
-    sids = [(item.get("owner") or {}).get("session_id")]
-    sids += [s.get("session_id") for s in item.get("sessions") or [] if isinstance(s, dict)]
-    return [s for s in dict.fromkeys(sids) if isinstance(s, str) and s]
-
-
 def _joined(item, sid):
     times = [run_record_core.parse_iso(s.get("at")) for s in item.get("sessions") or []
              if isinstance(s, dict) and s.get("session_id") == sid]
@@ -49,20 +43,23 @@ def _joined(item, sid):
 
 
 def _refusals(item, sid):
-    """Rejected Bash uses in sid's transcript since the item's scan cursor, or None when unreadable.
+    """(rejected Bash uses since the item's scan cursor, why unread); uses is None when nothing was read.
 
     Only uses ruled after sid joined the item count, so a session's earlier history is never replayed.
     """
     path, joined = transcript.path_for(sid), _joined(item, sid)
     end = transcript.size(path) if path else None
     if end is None or joined is None:
-        return None
+        return None, "no transcript in the session registry"
     cursor = item.setdefault("permission_scan", {})
     start = cursor.get(sid, 0) if cursor.get(sid, 0) <= end else 0
-    uses = transcript.tool_uses(path, start)
+    found = transcript.tool_uses(path, start)
+    if found is None:
+        return None, f"its transcript is unreadable or grew by more than {transcript.TRANSCRIPT_CAP} bytes"
+    uses, read_to = found
     # A use still waiting for its result row is read again next time.
-    cursor[sid] = min((u["offset"] for u in uses if not u["answered"]), default=end)
-    return [u for u in uses if u["ruling"] == "reject" and u["at"] and u["at"] >= joined]
+    cursor[sid] = min((u["offset"] for u in uses if not u["answered"]), default=read_to)
+    return [u for u in uses if u["ruling"] == "reject" and u["at"] and u["at"] >= joined], None
 
 
 def _new_proposal(programme, ops, dest) -> dict:
@@ -153,7 +150,7 @@ def _propose_one(programme, key, sid, use) -> list:
         return []
     dest = _destination(programme, key)
     if dest is None:
-        return []
+        return None
     evidence = {"tool_use_id": use["tool_use_id"], "session_id": sid,
                 "at": use["at"].strftime("%Y-%m-%dT%H:%M:%SZ"), "operations": verdict["operations"],
                 "command": verdict["normalized"], "layer": layer, "reason_type": use["reason_type"],
@@ -168,17 +165,23 @@ def _propose_one(programme, key, sid, use) -> list:
 
 def _scan(programme, key, named) -> list:
     item, touched, unread, found = programme["items"][key], [], [], 0
-    for sid in _sessions(item):
-        uses = _refusals(item, sid)
+    for sid in programme_home.session_ids(item):
+        uses, why = _refusals(item, sid)
         if uses is None:
-            unread.append(sid)
+            unread.append(f"{sid}: {why}")
+            if not named and "registry" not in why:
+                state.note(item, "unknown_cause", f"session {sid}: {why}; its refusals were not read")
             continue
         found += len(uses)
         for use in uses:
-            touched += _propose_one(programme, key, sid, use)
+            ids = _propose_one(programme, key, sid, use)
+            if ids is None:
+                # A missing repo or destination can be fixed; read this refusal again after it is.
+                item["permission_scan"][sid] = min(item["permission_scan"][sid], use["offset"])
+                continue
+            touched += ids
     if named and not found and not (item.get("permission_block") or {}).get("proposals"):
-        why = (f"no transcript in the session registry for {', '.join(unread)}" if unread
-               else "no refusal in its sessions' transcripts")
+        why = f"unread ({'; '.join(unread)})" if unread else "no refusal in its sessions' transcripts"
         state.note(item, "unknown_cause", f"reported blocked, but {why}; the denying layer is unknown")
     return touched
 
@@ -296,7 +299,7 @@ def in_force(programme) -> list:
 
 _SPECS = (
     ("propose-permission", _h_propose_permission, "[--item <id>]... [--run <id>]",
-     "any session but the driving one. Reads the owner's and listed sessions' transcripts (paths from the "
+     "refused from any session but the driving one. Reads the owner's and listed sessions' transcripts (paths from the "
      "session registry) for refusals ruled after each session joined the item; with no --item, every "
      "unfinished item. A mode or classifier refusal of an eligible read becomes a proposal; a deny rule, a "
      "hook, an unknown layer, an item with no recorded repo, a destination outside the remit, or an "

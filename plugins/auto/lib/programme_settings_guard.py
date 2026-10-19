@@ -24,7 +24,7 @@ rules = load_lib_module("programme_permission_rules")
 
 SETTINGS_FILE = rules.DESTINATION_FILE
 _TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
-_TOKEN = re.compile(r"[^\s;&|<>()`]*\.claude/settings\.local\.json(?![\w.-])")
+_TOKEN = re.compile(r"[^\s;&|<>()`]*\.claude/settings\.local\.json(?![\w.-])", re.IGNORECASE)
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
 
 
@@ -48,9 +48,7 @@ def _item_ids(programme, session_id) -> list:
     for item_id, item in sorted((programme.get("items") or {}).items()):
         if not isinstance(item, dict) or item.get("state") in programme_home.FINISHED_ITEM_STATES:
             continue
-        sids = [(item.get("owner") or {}).get("session_id")]
-        sids += [s.get("session_id") for s in item.get("sessions") or [] if isinstance(s, dict)]
-        if session_id in sids:
+        if session_id in programme_home.session_ids(item):
             found.append(item_id)
     return found
 
@@ -70,29 +68,35 @@ def scope(session_id, env):
     return (run_id, programme, item_ids) if driven or item_ids else None
 
 
+def _expanded(path: str) -> str:
+    return os.path.expanduser(os.path.expandvars(path))
+
+
 def _resolved(path: str, cwd: str) -> str:
-    path = os.path.expanduser(path)
+    path = _expanded(path)
     return os.path.realpath(path if os.path.isabs(path) else os.path.join(cwd, path))
 
 
 def _target(tool_name, tool_input, cwd, destinations):
-    guarded = {os.path.realpath(os.path.join(d, SETTINGS_FILE)) for d in destinations}
+    # Casefolded: the macOS file system is case-insensitive, so .claude/Settings.local.json is the same file.
+    guarded = {os.path.realpath(os.path.join(d, SETTINGS_FILE)).casefold() for d in destinations}
     if tool_name != "Bash":
         path = tool_input.get("file_path")
         hit = _resolved(path, cwd) if isinstance(path, str) else None
-        return hit if hit in guarded else None
+        return hit if hit and hit.casefold() in guarded else None
     command = tool_input.get("command")
     if not isinstance(command, str):
         return None
     text = _HIDING_CHARS.sub("", command)
     tokens = _TOKEN.findall(text)
     for token in tokens:
-        if _resolved(token, cwd) in guarded:
+        if _resolved(token, cwd).casefold() in guarded:
             return _resolved(token, cwd)
     # A relative name after a cd elsewhere resolves against the wrong folder; best effort.
-    if any(not os.path.isabs(os.path.expanduser(t)) for t in tokens):
+    if any(not os.path.isabs(_expanded(t)) for t in tokens):
+        folded = _expanded(text).casefold()
         for dest in destinations:
-            if dest in text or os.path.realpath(dest) in text:
+            if dest.casefold() in folded or os.path.realpath(dest).casefold() in folded:
                 return os.path.realpath(os.path.join(dest, SETTINGS_FILE))
     return None
 
@@ -103,7 +107,7 @@ def denial(stdin_raw: str) -> dict | None:
         return None
     tool_name = data["tool_name"]
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    if "settings.local.json" not in json.dumps(tool_input):
+    if "settings.local.json" not in json.dumps(tool_input).casefold():
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
     found = scope(session_id, os.environ)
@@ -132,6 +136,6 @@ def denial(stdin_raw: str) -> dict | None:
         "permissionDecision": "deny",
         "permissionDecisionReason": (
             f"auto: this call names {target}, the settings file a permission proposal of "
-            f"programme {run_id!r} targets. Only Shawn applies permission rules; report the "
-            "block through the programme instead. This attempt is journaled."),
+            f"programme {run_id!r} targets. Only Shawn applies permission rules; continue the "
+            "work that does not need this. This attempt is journaled."),
     }}

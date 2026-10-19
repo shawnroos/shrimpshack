@@ -67,9 +67,12 @@ fi
 # command naming a driver's pane however herdr is spelled, the tracker guard on
 # Linear MCP calls and the settings guard, so no finer text prefilter here.
 __cd_settings=0
+# Case-insensitive: the macOS file system treats Settings.local.json as the same file.
+shopt -s nocasematch
 if [ "$__cd_any_lease" = 1 ] && [[ $__cd_stdin_json == *settings.local.json* ]]; then
   __cd_settings=1
 fi
+shopt -u nocasematch
 if [ -z "$__cd_repo" ]; then
   [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
     || [ "$__cd_settings" = 1 ] || exit 0

@@ -130,6 +130,10 @@ from this session's lease.
    - When a worker tells you it is blocked:
      `P propose-permission --item <id>`. If no refusal is found, the item gets an
      explanation that the denying layer is unknown; it never makes a proposal.
+   - An item's latest permission explanation shows on its line in `P status`,
+     and proposals that need Shawn are listed under Decisions for Shawn. When
+     an explanation names something only Shawn can change (a deny rule, a hook,
+     managed settings), tell him in one line.
    - When `P answer-permission ... applied` in step 3 returned a `retry_text`,
      send it once, exactly as returned: `P prompt-item <retry_item> "<retry_text>"`.
      The same text is in that answer's `permission_verified` line. Never send it
@@ -139,8 +143,9 @@ from this session's lease.
      retry_unobserved. A `pending` line saying the retry was not sent means
      the `prompt-item` above is still due.
    - `propose-permission` sets the item waiting on Shawn for that proposal.
-     Never run `set-waiting` on such an item: it drops the proposal link, and
-     settlement can then not return the item to open.
+     `set-waiting` refuses such an item. `set-waiting --clear` releases it and
+     drops the proposal link, so settlement can no longer return it to open; use
+     it only when Shawn says the item goes on without the read.
    - Never pass your own `check-deliverable` or `gh` result to a blocked worker
      as a stand-in for the blocked read, and never tell a worker to split the
      command or run it another way. Both route the blocked read around Shawn.

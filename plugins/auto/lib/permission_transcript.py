@@ -48,15 +48,20 @@ def size(path):
         return None
 
 
-def rows(path, start=0) -> list:
-    """(byte offset, row) pairs from start; nothing when the rest of the file is over the cap."""
+def rows(path, start=0):
+    """(byte offset, row) pairs from start, and the offset just past the last complete line.
+
+    None when the rest of the file is over the cap, so a caller never mistakes it for a transcript with no rows.
+    """
     with open(path, "rb") as fh:
         fh.seek(start)
         data = fh.read(TRANSCRIPT_CAP + 1)
     if len(data) > TRANSCRIPT_CAP:
-        return []
+        return None
     out, at = [], start
     for line in data.splitlines(keepends=True):
+        if not line.endswith(b"\n"):
+            break
         try:
             row = json.loads(line)
         except ValueError:
@@ -64,7 +69,7 @@ def rows(path, start=0) -> list:
         if isinstance(row, dict):
             out.append((at, row))
         at += len(line)
-    return out
+    return out, at
 
 
 def _blocks(row, kind) -> list:
@@ -95,13 +100,16 @@ def layer(use) -> str:
     return LAYERS.get(use.get("reason_type"), "unknown")
 
 
-def tool_uses(path, offset=0) -> list:
+def tool_uses(path, offset=0):
     try:
         found = rows(path, offset)
     except OSError:
-        return []
+        return None
+    if found is None:
+        return None
+    pairs, read_to = found
     uses, order = {}, []
-    for pos, row in found:
+    for pos, row in pairs:
         if row.get("type") == "assistant":
             for block in _blocks(row, "tool_use"):
                 command = (block.get("input") or {}).get("command")
@@ -116,4 +124,4 @@ def tool_uses(path, offset=0) -> list:
                 use = uses.get(block.get("tool_use_id"))
                 if use is not None:
                     use.update(ruling, answered=True)
-    return [uses[i] for i in order]
+    return [uses[i] for i in order], read_to

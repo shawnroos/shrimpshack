@@ -449,8 +449,8 @@ def _h_set_waiting(host, argv):
             return {"item": key, "waiting_on": None}
         held = (item.get("waiting_on") or {}).get("permission")
         if held:
-            raise RecordError(f"item {key!r} waits on permission proposal {held}; settle-permissions "
-                              "reopens it, and a new wait would drop that link")
+            raise RecordError(f"item {key!r} waits on permission proposal {held}; a new wait would drop that "
+                              "link. Shawn's typed answer or settle-permissions moves it; --clear releases it")
         spec = _wait_spec(opts, watcher)
         if watcher is not None:
             _upsert_watcher(programme, watcher, ids, item=key)
