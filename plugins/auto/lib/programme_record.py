@@ -563,6 +563,7 @@ def _h_claim(host, argv):
     programme = programme_home.normalize_programme(record.get("programme") or {})
     if programme.get("ended"):
         raise RecordError("the programme has ended")
+    load_lib_module("programme_archive").pause("claim")
     key = _resolve(programme, item_id)
     deliverable = opts["deliverable"]
     if deliverable not in (programme["items"][key].get("deliverables") or {}):

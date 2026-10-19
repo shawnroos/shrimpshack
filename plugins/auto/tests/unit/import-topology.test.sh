@@ -84,7 +84,7 @@
 #   verb_cli             → (nothing)                           leaf
 #   programme_sanitize   → (nothing)                           leaf
 #   programme_home       → run_record_core; phase-grammar [lazy], programme_authority [lazy],
-#                          _bootstrap [lazy]
+#                          _bootstrap [lazy], programme_archive [lazy]
 #                          The end path writes through programme_authority, loaded lazily,
 #                          so programme_authority → programme_home closes no import-time cycle.
 #   programme_predicate  → run_record_core, programme_home, programme_context; phase-grammar [lazy]
@@ -130,6 +130,12 @@
 #                          programme_sanitize, programme_record, programme_context, programme_exec,
 #                          programme_tracker, programme_tasks, programme_plans,
 #                          programme_recovery, session_registry; driver_session [lazy]
+#   programme_archive    → run_record_core, programme_home, programme_journal;
+#                          programme_authority, programme_artifacts, programme_store,
+#                          programme_context, programme_recovery, programme_preserve,
+#                          programme_sources, driver_session [lazy]. programme_home (end),
+#                          programme_record (claim) and programme reach it lazily or after
+#                          their verb table, so it closes no import-time cycle.
 #   programme_view       → programme_home, programme_predicate, programme_sanitize,
 #                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
@@ -137,7 +143,7 @@
 #                          driver_session, verb_cli; programme_store, programme_import [lazy];
 #                          then, after its verb table is built: programme_record,
 #                          programme_evidence, programme_sources, programme_view,
-#                          programme_lifecycle
+#                          programme_lifecycle, programme_archive
 #                          Those five receive `programme` as a `host` argument and never
 #                          load it back.
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
@@ -454,7 +460,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
            programme_store.py programme_authority.py programme_import.py \
            programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
-           programme_recovery.py; do
+           programme_recovery.py programme_archive.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -474,7 +480,7 @@ done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
 for _host in programme_record programme_evidence programme_sources programme_view \
-             programme-watch run_record_evidence programme_lifecycle; do
+             programme-watch run_record_evidence programme_lifecycle programme_archive; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
@@ -522,6 +528,13 @@ it "programme_journal, programme_record and programme_evidence load programme_ar
 if grep -qE '^[a-z_]+ = load_lib_module\("programme_artifacts"\)' "$LIB/programme_journal.py" \
    "$LIB/programme_record.py" "$LIB/programme_evidence.py"; then
   fail "a module-top load of programme_artifacts closes an import-time cycle (it loads the journal)"
+else
+  pass
+fi
+
+it "programme_home and programme_record load programme_archive only lazily"
+if grep -qE '^[a-z_]+ = load_lib_module\("programme_archive"\)' "$LIB/programme_home.py" "$LIB/programme_record.py"; then
+  fail "programme_archive loads programme_home and programme_journal at its top; a module-top load back closes a cycle"
 else
   pass
 fi

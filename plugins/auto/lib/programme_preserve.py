@@ -341,6 +341,8 @@ def capture(run_id, path, *, extras=(), include_ignored=(), operation_id=None) -
     prior = _replay(run_id, operation_id)
     if prior is not None:
         return prior
+    if pa.sealed(pa._current(run_id)):
+        raise PreserveError("the programme is sealed; its home takes no new writes", "sealed")
     top = os.path.realpath(path)
     source_id = source_key(top)
     with _source_lock(run_id, source_id, exclusive=True):
@@ -600,6 +602,9 @@ def preserve_verb(host, argv) -> int:
     sid = load_lib_module("driver_session").driving_session_id()
     if not load_lib_module("session_registry").caller_drives(record, sid):
         raise host.ProgrammeError("only the programme's driving session may run this verb")
+    if pa.sealed((record or {}).get("programme")):
+        host._emit({"ok": False, "run": run_id, "kind": FAILED_KIND, "code": "sealed", "preserved": False})
+        return 1
     try:
         if opts.get("check"):
             out = cleanup_check(run_id, source_key(os.path.realpath(opts["source"])))

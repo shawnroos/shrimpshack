@@ -54,6 +54,36 @@ def _driving_run(session_id):
     return held, None, None
 
 
+def _closing_runs(session_id) -> list:
+    # After end the leases are gone, but the driving session (or the one that ended it) still
+    # types the approvals its closure needs; a sealed archive takes nothing.
+    found = []
+    for run in programme_home.closing_runs(session_id):
+        record, hold = programme_home.read_programme(run)
+        programme = (record or {}).get("programme") or {}
+        if hold is not None or not programme.get("ended") or (programme.get("archive") or {}).get("sealed_at"):
+            continue
+        if session_id in (record.get("driving_session_id"), (programme.get("closure") or {}).get("ended_by")):
+            found.append((run, record))
+    return found
+
+
+def _closing_context(session_id, text, closing) -> dict | None:
+    journaled = []
+    for run, record in closing:
+        origin = classify_origin(text, record)
+        entry = programme_journal.append_prompt(run, session_id, text, origin)
+        journaled.append({"run": run, "prompt_id": entry["prompt_id"], "origin": origin})
+    context = (
+        f"<{DATA_TAG}>\n"
+        "auto journaled this prompt into each ended programme this session is closing. Cite the "
+        "prompt_id for that run in its closure verbs.\n"
+        f"{json.dumps(journaled, sort_keys=True)}\n"
+        f"</{DATA_TAG}>"
+    )
+    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": context}}
+
+
 def _held_context(held) -> dict:
     context = (
         f"<{DATA_TAG}>\n"
@@ -106,6 +136,10 @@ def handle(raw: str, env) -> dict | None:
     run, record, driving_lease = _driving_run(session_id)
     if isinstance(run, dict):
         return _held_context(run)
+    if run is None:
+        closing = _closing_runs(session_id)
+        if closing:
+            return _closing_context(session_id, text, closing)
     entry = None
     origin = "typed"
     if run:

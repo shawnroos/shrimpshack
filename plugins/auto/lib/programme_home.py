@@ -465,6 +465,39 @@ def _release_leases(run_id: str) -> None:
                 pass
 
 
+def closing_dir() -> str:
+    return os.path.join(programmes_dir(), "closing")
+
+
+def write_closing(run_id: str, sessions) -> None:
+    sessions = sorted({s for s in sessions if isinstance(s, str) and s})
+    if not sessions:
+        return
+    folder = _ensure_dir(closing_dir())
+
+    def write(fh):
+        json.dump({"run": run_id, "sessions": sessions}, fh, sort_keys=True)
+        fh.write("\n")
+
+    atomic_write(_contained(os.path.join(folder, check_run_id(run_id) + ".json")), write, ".closing.")
+
+
+def closing_runs(session_id) -> list:
+    """Runs whose closing entry names this session: ended programmes it may still approve dispositions for."""
+    try:
+        names = sorted(os.listdir(closing_dir()))
+    except (OSError, ProgrammeHomeError):
+        return []
+    runs = []
+    for name in names:
+        if name.startswith(".") or not name.endswith(".json"):
+            continue
+        entry = read_lease(os.path.join(closing_dir(), name))
+        if entry and not entry.get("corrupt") and session_id in (entry.get("sessions") or []):
+            runs.append(entry.get("run"))
+    return runs
+
+
 def _end_locked(run_id: str, reason: str, now_iso: str, event=None) -> None:
     record, hold = read_programme(run_id)
     if hold is not None:
@@ -472,13 +505,22 @@ def _end_locked(run_id: str, reason: str, now_iso: str, event=None) -> None:
     if record is not None:
         home = home_path(run_id)
         phase_key = load_lib_module("phase-grammar").LOOP_PHASE_KEY
+        archive = load_lib_module("programme_archive")
+        leases = [key for key, lease in iter_leases() if lease and lease.get("run") == run_id]
+        ended_by = (event or {}).get("session_id")
 
         def mutate(rec):
             rec[phase_key] = "done"
             rec.setdefault("programme", {})["ended"] = {"at": now_iso, "reason": reason}
+            archive.open_closure(rec, leases, ended_by, now_iso)
 
         load_lib_module("programme_authority").write(
             home, run_id, mutate, (lambda _result, _rec: event) if event else None)
+        write_closing(run_id, [record.get("driving_session_id"), ended_by])
+        archive.pause("after_end_commit")
+        _release_leases(run_id)
+        archive.settle_leases(run_id)
+        return
     _release_leases(run_id)
 
 
@@ -577,7 +619,7 @@ def _mint_run_id(now) -> str:
     return f"prog-{now.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
 
 
-def create_programme(spaces, session_id, *, run_id=None, now=None) -> dict:
+def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=None) -> dict:
     if not isinstance(session_id, str) or not session_id:
         raise ProgrammeHomeError("a programme needs its driving session id")
     parsed = []
@@ -613,9 +655,12 @@ def create_programme(spaces, session_id, *, run_id=None, now=None) -> dict:
         if os.path.exists(home):
             raise ProgrammeHomeError(f"programme home already exists: {home}")
         _ensure_dir(home)
+        block = new_programme_block(parsed, stamp)
+        if predecessor is not None:
+            block["predecessor"] = dict(predecessor)
         run_record_core.init_run_record(
             home, run_id, backend="native", steps=[], loop_phase="work",
-            run_kind="programme", programme=new_programme_block(parsed, stamp),
+            run_kind="programme", programme=block,
             driving_session_id=session_id,
         )
         for server, workspace in parsed:

@@ -221,6 +221,29 @@ session.
   a hold and exits 1; a missing retained result holds its item and refuses
   dispatch for it. `--rebuild-projections` rewrites only the exports and the
   view. The packet is context, never approval.
+- **End, archive and successor**: `end` commits the stop fence together with
+  what the programme still owes (its leases, watchers and worker sessions); new
+  work, late claims and old watchers' beats refuse from then on. The closure
+  verbs run in the driving session or the session that ended it, with `--run`:
+  `release-resources` removes leftover lease files, probes watcher process ids
+  and worker sessions without stopping anything, and records a receipt for each
+  (`--watcher <id> --stopped|--denied` reports a TaskStop or CronDelete); a live
+  or unreadable one stays unconfirmed. `dispose-item` records how unfinished work
+  stopped (`stopped_unfinished` or `handed_over`) and confirms no requirement.
+  `dispose-action --attempt <id>|--resource <id>` records a human's acceptance of
+  an uncertainty from a typed prompt that names it (`origin_verified` false); the
+  action is never recorded as completed. After end the prompt hook still journals
+  prompts typed in the closing session into each unsealed programme it closes.
+  `check-archive` (read-only) lists the named checks with their remedies, or the
+  sealed manifest. `archive` checks one capture revision, publishes a candidate
+  manifest, then seals in one commit on that revision while every home writer is
+  held out; any failed check leaves the programme ended and unarchived, and a
+  write after the capture supersedes the candidate. A retry returns the one seal.
+  A sealed home is read-only: every write, export, view refresh, prune and import
+  refuses, and reads use a read-only connection; a sealed database with an
+  interrupted journal is a hold that is never repaired in place. `create-successor
+  <run>` starts a new programme linked to the sealed manifest; its agreement waits
+  for acceptance and the archive is never written. Nothing deletes retained data.
 - **Working model and sources**: `set-now` records what the PM is doing now;
   `queue` adds a next action (a worker start is action start_worker with
   `--item`) or removes one; `record-tested-build` stores the tested build's
@@ -370,10 +393,13 @@ Every write verb:
    the exception: any session may call it, and it names the programme with
    `--run`; `collect-result` is open to any session in the same way;
    `recover --rebuild-projections` rewrites only exports and the view, from any
-   session;
+   session; the closure verbs (`release-resources`, `dispose-item`,
+   `dispose-action`, `archive`) also accept the session that ended the programme,
+   and `create-successor` runs from the session that will drive the successor;
 2. refuses while the compact flag exists and prints the rules-in-force block,
-   except `rules --ack`, `claim`, `collect-result`, `watcher-beat` and
-   `reconcile-operations` (which settles admitted actions and starts none);
+   except `rules --ack`, `claim`, `collect-result`, `watcher-beat`,
+   `reconcile-operations` (which settles admitted actions and starts none) and
+   the closure verbs, which never start work;
 3. revalidates under the run-record lock, then journals after the write commits.
 
 The approval verbs (accepting the agreement, amending a term, recording an

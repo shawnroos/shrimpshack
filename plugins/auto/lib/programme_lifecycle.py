@@ -340,6 +340,8 @@ def _h_end(host, argv):
     _finish(host, run, "programme_ended", sid, out, cites=cites, journal=False)
     sys.stdout.write(f"Programme {run} ended.\n")
     _cleanup_lines(out)
+    sys.stdout.write(f"Then record each stop: release-resources --run {run} (add --watcher <id> --stopped "
+                     f"after each CronDelete or TaskStop), and check-archive --run {run} before archive.\n")
     return 0
 
 

@@ -104,6 +104,12 @@ KINDS = (
     "operation_admitted",
     "operation_settled",
     "operation_uncertain",
+    "resources_reconciled",
+    "item_disposed",
+    "uncertainty_accepted",
+    "archive_check_failed",
+    "programme_archived",
+    "successor_created",
 )
 
 _TOKEN_PATTERNS = [
@@ -244,11 +250,11 @@ def claims_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), CLAIMS_NAME)
 
 
-def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived") -> dict:
+def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None) -> dict:
     if isinstance(row, dict) and row.get("kind") == "prompt" and provenance != "derived":
         raise JournalError(f"a {provenance} copy is never journaled as a prompt; it approves nothing")
     if _promoted(run_id):
-        return _authority().append_row(run_id, row, channel=channel, provenance=provenance)
+        return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard)
     path = claims_path(run_id) if channel == "claims" else journal_path(run_id)
     _locked(path, lambda: _write_line(path, row))
     return row
@@ -258,9 +264,14 @@ def append(run_id: str, kind: str, session_id, payload=None, *, cites=None, now=
     return append_row(run_id, entry(kind, session_id, payload, cites=cites, now=now))
 
 
+def _refuse_after_end(record) -> None:
+    if ((record or {}).get("programme") or {}).get("ended"):
+        raise JournalError("the programme has ended; a late claim is not recorded")
+
+
 def append_claim(run_id: str, session_id, payload) -> dict:
     return append_row(run_id, entry("claim", session_id, payload), channel="claims",
-                      provenance="worker_result")
+                      provenance="worker_result", guard=_refuse_after_end)
 
 
 def append_prompt(run_id: str, session_id, text: str, origin: str, now=None) -> dict:
@@ -387,7 +398,12 @@ def _cli(argv) -> int:
     prune.add_argument("--run", required=True)
     args = parser.parse_args(argv)
     if args.verb == "prune":
-        print(json.dumps({"removed": prune_uncited_prompts(args.run)}))
+        try:
+            removed = prune_uncited_prompts(args.run)
+        except (JournalError, run_record_core.RunRecordError) as exc:
+            sys.stderr.write(f"programme_journal: {exc}\n")
+            return 1
+        print(json.dumps({"removed": removed}))
     return 0
 
 

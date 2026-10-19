@@ -16,8 +16,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import sys
+import tempfile
 import time
 import urllib.parse
 
@@ -41,6 +43,8 @@ PROVENANCE_CLASSES = (
 )
 PARSE_RESULTS = ("parsed", "unparseable", "missing")
 MAX_OPERATION_ID = 256
+SEAL_KEY = "sealed"
+RECOVERY_REQUIRED = "recovery required"
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _MEDIA_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*$")
@@ -115,6 +119,10 @@ class PayloadConflict(StoreError):
 
 class InventoryInvalid(StoreError):
     code = "inventory_invalid"
+
+
+class StoreSealed(StoreError):
+    code = "sealed"
 
 
 def canonical(value) -> str:
@@ -436,6 +444,66 @@ def create(run_id: str) -> "Store":
         raise
 
 
+def _seal_row(conn):
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (SEAL_KEY,)).fetchone()
+    return None if row is None else json.loads(row[0])
+
+
+def _seal_after_rollback(path: str):
+    # A hot journal on an archive must never be rolled back in place, so the rollback runs on a
+    # private copy only to learn whether the state it restores is sealed. The database is copied
+    # before the journal: SQLite journals a page before it overwrites it in the database.
+    scratch = tempfile.mkdtemp(prefix="auto-seal-probe-")
+    try:
+        copy = os.path.join(scratch, DB_NAME)
+        shutil.copyfile(path, copy)
+        try:
+            shutil.copyfile(path + "-journal", copy + "-journal")
+        except FileNotFoundError:
+            pass
+        conn = sqlite3.connect("file:" + urllib.parse.quote(copy) + "?mode=rw", uri=True,
+                               isolation_level=None)
+        try:
+            return _seal_row(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise StoreUnavailable(f"{RECOVERY_REQUIRED}: cannot tell whether the journal belongs to a sealed "
+                               f"archive ({exc}); nothing was repaired")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _sealed_reader(run_id, path):
+    if os.path.lexists(path + "-journal"):
+        if _seal_after_rollback(path) is not None:
+            raise StoreUnavailable(f"{RECOVERY_REQUIRED}: the sealed archive has an interrupted journal; "
+                                   "it stays read-only and nothing was repaired")
+        return None
+    try:
+        conn = sqlite3.connect("file:" + urllib.parse.quote(path) + "?mode=ro", uri=True,
+                               isolation_level=None, timeout=BUSY_TIMEOUT_MS / 1000)
+    except sqlite3.Error as exc:
+        raise _classify(exc, "opening the programme database")
+    try:
+        seal = _seal_row(conn)
+    except sqlite3.Error:
+        conn.close()
+        if os.path.lexists(path + "-journal"):
+            return _sealed_reader(run_id, path)
+        return None
+    if seal is None:
+        conn.close()
+        return None
+    try:
+        store = Store(run_id, path, conn, _apply_pragmas(conn), seal=seal)
+        store._transact(lambda: _validate_schema(conn))
+    except BaseException:
+        conn.close()
+        raise
+    return store
+
+
 def open_store(run_id: str) -> "Store":
     path = os.path.join(_home(run_id), DB_NAME)
     try:
@@ -444,6 +512,9 @@ def open_store(run_id: str) -> "Store":
         raise StoreAbsent(f"no programme database in {os.path.dirname(path)}")
     except OSError as exc:
         raise StoreUnavailable(f"programme database unreadable: {exc}")
+    sealed = _sealed_reader(run_id, path)
+    if sealed is not None:
+        return sealed
     conn, pragmas = _connect(path, "rw")
     store = Store(run_id, path, conn, pragmas)
     try:
@@ -478,11 +549,21 @@ def _check_request(operation_id, base_revision, event) -> dict:
     return {"kind": event["kind"], "payload": dict(event.get("payload") or {})}
 
 
+def _sealed_replay(store, operation_id, digest) -> dict:
+    prior = store.outcome(operation_id)
+    if prior is None:
+        raise StoreSealed("the programme is sealed; its archive takes no new commits")
+    if prior.get("digest") != digest:
+        raise OperationConflict(f"operation {operation_id} was saved with different input")
+    return dict(prior, replayed=True)
+
+
 class Store:
-    def __init__(self, run_id, path, conn, pragmas):
+    def __init__(self, run_id, path, conn, pragmas, seal=None):
         self.run_id = run_id
         self.path = path
         self.pragmas = dict(pragmas)
+        self.sealed = seal
         self._conn = conn
 
     def __enter__(self):
@@ -542,17 +623,19 @@ class Store:
     def read(self) -> dict:
         return self._transact(lambda: _read(self._db()))
 
-    def commit(self, operation_id, *, base_revision, state, event, admission, payload_refs=()) -> dict:
+    def commit(self, operation_id, *, base_revision, state, event, admission, payload_refs=(), seal=None):
         event = _check_request(operation_id, base_revision, event)
         refs = tuple(payload_refs)
         if not all(isinstance(ref, PayloadRef) for ref in refs):
             raise StoreError("payload references must be PayloadRef", "invalid_reference")
         subject = commit_subject(state, event, refs)
         _require_admitted(admission, subject)
-        request = {"base_revision": base_revision, "subject": subject}
+        request = {"base_revision": base_revision, "subject": subject, **({"seal": seal} if seal else {})}
+        if self.sealed is not None:
+            return _sealed_replay(self, operation_id, digest_of(request))
         replayed, outcome = self._transact(
-            lambda: _apply(self._db(), operation_id, digest_of(request), base_revision, state,
-                           event, admission.provenance, refs), write=True, faults=True)
+            lambda: _apply_sealing(self._db(), operation_id, digest_of(request), base_revision, state,
+                                   event, admission.provenance, refs, seal), write=True, faults=True)
         if not replayed:
             _fault_pause("after_commit")
         return dict(outcome, replayed=replayed)
@@ -585,6 +668,14 @@ class Store:
                 "ok": not (integrity or foreign or references)}
 
 
+def _apply_sealing(conn, operation_id, digest, base_revision, state, event, provenance, refs, seal):
+    replayed, outcome = _apply(conn, operation_id, digest, base_revision, state, event, provenance, refs)
+    if seal is not None and not replayed:
+        conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)",
+                     (SEAL_KEY, canonical(dict(seal, revision=outcome["revision"]))))
+    return replayed, outcome
+
+
 def head(store) -> dict:
     def body():
         revision, state = store._db().execute("SELECT revision, state FROM authority WHERE id = 1").fetchone()
@@ -608,6 +699,8 @@ def _apply(conn, operation_id, digest, base_revision, state, event, provenance, 
         if prior[0] != digest:
             raise OperationConflict(f"operation {operation_id} was saved with different input")
         return True, json.loads(prior[1])
+    if _seal_row(conn) is not None:
+        raise StoreSealed("the programme is sealed; its archive takes no new commits")
     current = conn.execute("SELECT revision FROM authority WHERE id = 1").fetchone()[0]
     if current != base_revision:
         raise StaleRevision(f"base revision {base_revision} is stale; authority is at {current}")

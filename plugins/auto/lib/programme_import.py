@@ -328,11 +328,25 @@ def _promote_locked(home, run_id) -> dict:
     return _finish(home, run_id, inventory.import_id, "promoted")
 
 
+def _sealed(home, run_id):
+    if os.path.lexists(os.path.join(home, programme_authority.IMPORT_MARKER)) \
+            or not os.path.lexists(programme_store.db_path(run_id)):
+        return None
+    try:
+        return programme_authority.sealed_info(run_id)
+    except programme_authority.AuthorityError:
+        return None
+
+
 def promote(run_id) -> dict:
     run_id = programme_home.check_run_id(run_id)
     home = programme_home.home_path(run_id)
     if not os.path.isdir(home):
         raise programme_home.ProgrammeHomeError(f"no programme home for {run_id}")
+    sealed = _sealed(home, run_id)
+    if sealed is not None:
+        return {"status": "already_promoted", "import_id": None, "revision": sealed.get("revision"),
+                "kept_aside": [], "sealed": True}
     lock = run_record_core.lock_path(home, run_id)
     journal_lock = os.path.join(home, load_lib_module("programme_journal").LOCK_NAME)
 

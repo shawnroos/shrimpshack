@@ -782,9 +782,23 @@ def _write_view(home, view) -> str:
     return path
 
 
+def _refresh_promoted(run_id, home) -> None:
+    # Under the run-record lock, which the archive seal holds through its commit: a view written
+    # here either lands before the seal or sees it and writes nothing.
+    record = programme_authority.read_record(run_id)
+    if ((record.get("programme") or {}).get("archive") or {}).get("sealed_at"):
+        return
+    view = build_view(run_id, home, record)
+    load_lib_module("programme_archive").pause("view")
+    _write_view(home, view)
+
+
 def refresh_view(run_id, home, record=None) -> None:
     # The record write has already committed; a view failure must not report the verb as failed.
     try:
+        if programme_authority.promoted(home, run_id):
+            programme_authority._locked(home, run_id, lambda: _refresh_promoted(run_id, home))
+            return
         if record is None:
             record = run_record_core.read_run_record(home, run_id)
         _write_view(home, build_view(run_id, home, record))
@@ -875,6 +889,7 @@ def _cli(argv) -> int:
 
 programme_lifecycle = load_lib_module("programme_lifecycle")
 _VERBS.update(programme_lifecycle.build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

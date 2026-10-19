@@ -506,8 +506,9 @@ def freeze_inventory(run_id, *, owner, required, operation_id=None) -> dict:
     home = _require_promoted(run_id)
     required = list(required)
     if not required or len(set(required)) != len(required) \
-            or not all(isinstance(i, str) and i.startswith(("result:", "source:")) for i in required):
-        raise ArtifactError("an inventory names unique result: or source: identities", "invalid_inventory")
+            or not all(isinstance(i, str) and i.startswith(("result:", "source:", "code:")) for i in required):
+        raise ArtifactError("an inventory names unique result:, source: or code: identities",
+                            "invalid_inventory")
     key = _item_key(_current(run_id), owner)
 
     def change(programme):
@@ -529,7 +530,21 @@ def _failure_status(failures, identity):
     return {"prohibited": "prohibited", "unsupported": "unsupported"}.get(codes[-1], "unavailable")
 
 
+def _code_status(run_id, programme, identity) -> dict:
+    entry = (programme.get("retained") or {}).get("code", {}).get(identity)
+    if not isinstance(entry, dict) or entry.get("status") != "complete":
+        return {"identity": identity, "status": "unavailable", "reason": "no complete code capture"}
+    try:
+        for ref in [entry[k] for k in ("bundle", "inventory", "manifest")] + list(entry.get("files") or []):
+            read_object(run_id, _ref_of({"ref": ref}))
+    except (ArtifactError, programme_store.StoreError, KeyError) as exc:
+        return {"identity": identity, "status": "unavailable", "reason": getattr(exc, "code", "invalid")}
+    return {"identity": identity, "status": "captured", "digest": entry["bundle"]["digest"]}
+
+
 def _status(run_id, programme, identity) -> dict:
+    if identity.startswith("code:"):
+        return _code_status(run_id, programme, identity)
     block = _retained(programme)
     entry = block["results"].get(identity) or block["sources"].get(identity)
     if entry is None:

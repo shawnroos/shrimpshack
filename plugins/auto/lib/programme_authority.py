@@ -187,12 +187,24 @@ def _new_op(prefix) -> str:
     return f"{prefix}-{secrets.token_hex(8)}"
 
 
-def commit(store, run_id, operation_id, base, state, event, provenance, payload_refs=()) -> dict:
+def commit(store, run_id, operation_id, base, state, event, provenance, payload_refs=(), seal=None) -> dict:
     subject = programme_store.commit_subject(state, event, payload_refs)
     admission = programme_store.admit(subject, provenance=provenance, basis="programme write")
     return _guarded(run_id, lambda: store.commit(operation_id, base_revision=base, state=state,
                                                  event=event, admission=admission,
-                                                 payload_refs=payload_refs))
+                                                 payload_refs=payload_refs, seal=seal))
+
+
+def _refuse_sealed(store, run_id) -> None:
+    if store.sealed is not None:
+        raise AuthorityError(f"programme {run_id} is archived (sealed at revision "
+                             f"{store.sealed.get('revision')}); its home is read-only", "sealed")
+
+
+def sealed_info(run_id):
+    """The seal row of an archived programme, or None; a held authority raises AuthorityHold."""
+    with _open(run_id) as store:
+        return store.sealed
 
 
 def _locked(home, run_id, body):
@@ -225,15 +237,16 @@ def _legacy_write(home, run_id, change, compose) -> dict:
 
 
 def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
-          payload_refs=()) -> dict:
+          payload_refs=(), base_revision=None, seal=None) -> dict:
     if not promoted(home, run_id):
         return _legacy_write(home, run_id, change, compose)
 
     def body():
         with _open(run_id) as store:
-            absorb_foreign(store, home, run_id)
             if operation_id is not None and _guarded(run_id, lambda: store.outcome(operation_id)):
                 return _replayed(store, run_id, operation_id)
+            _refuse_sealed(store, run_id)
+            absorb_foreign(store, home, run_id)
             head = _guarded(run_id, lambda: programme_store.head(store))
             record = _record_of(run_id, head["state"])
             result = change(record)
@@ -241,9 +254,10 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             run_record_core._prepare_for_write(record)
             event = _row_event(row, "journal") if row is not None else \
                 {"kind": RECORD_KIND, "payload": {"channel": "none"}}
-            receipt = commit(store, run_id, operation_id or _new_op("w"), head["revision"], record,
-                             event, provenance, payload_refs)
-        export(home, run_id)
+            base = head["revision"] if base_revision is None else base_revision
+            receipt = commit(store, run_id, operation_id or _new_op("w"), base, record,
+                             event, provenance, payload_refs, seal)
+        export(home, run_id, final=seal is not None)
         return {"result": result, "row": row, "replayed": receipt["replayed"],
                 "revision": receipt["revision"]}
 
@@ -254,14 +268,17 @@ def mutate(home, run_id, change):
     return write(home, run_id, change)["result"]
 
 
-def append_row(run_id, row, *, channel="journal", provenance="derived"):
+def append_row(run_id, row, *, channel="journal", provenance="derived", guard=None):
     home = programme_home.home_path(run_id)
 
     def body():
         with _open(run_id) as store:
+            _refuse_sealed(store, run_id)
             absorb_foreign(store, home, run_id)
             head = _guarded(run_id, lambda: programme_store.head(store))
-            _record_of(run_id, head["state"])
+            current = _record_of(run_id, head["state"])
+            if guard is not None:
+                guard(current)
             built = row(rows_of(_guarded(run_id, store.read)["events"])[0]) if callable(row) else row
             if built is None:
                 return None
@@ -311,9 +328,15 @@ def _file_meta(path):
     return {"digest": _sha(data), "size": len(data)}
 
 
-def export(home, run_id, *, journal_held=False) -> bool:
+def _sealed_record(record) -> bool:
+    return bool(((record.get("programme") or {}).get("archive") or {}).get("sealed_at"))
+
+
+def export(home, run_id, *, journal_held=False, final=False) -> bool:
     try:
         snap = snapshot(run_id)
+        if _sealed_record(snap["record"]) and not final:
+            return False
         files = _render(home, run_id, snap)
 
         def body():
@@ -409,7 +432,7 @@ def _foreign_findings(home, manifest, revision):
 
 def absorb_foreign(store, home, run_id) -> None:
     manifest = _read_manifest(home)
-    if manifest is None:
+    if manifest is None or store.sealed is not None:
         return
     head = _guarded(run_id, lambda: programme_store.head(store))
     found = _journal_locked(home, lambda: _foreign_findings(home, manifest, head["revision"]))
