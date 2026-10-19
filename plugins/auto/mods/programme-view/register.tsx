@@ -1,4 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { readWork } from './band.tsx'
+import type { BandEntry, BandProps, BandSelection } from './band.tsx'
+import { getSelection, onSelect, select, viewedKey } from './selection.ts'
 
 const PANE = 'programme-view'
 const VIEW_FORMAT = 2
@@ -16,6 +19,8 @@ type Found =
 
 let polling = false
 let lastStamp: string | undefined
+let band: BandProps | undefined
+let selectionWired = false
 
 async function dataDir($: EngineInterface): Promise<string> {
   const override = await $.env.get('CLAUDE_AUTO_DATA_DIR')
@@ -99,6 +104,36 @@ async function openView($: EngineInterface): Promise<{ text: string }> {
   return { text: 'Programme view opened.' }
 }
 
+async function readBandWork($: EngineInterface): Promise<BandEntry[]> {
+  const homes = await leaseHomes($)
+  if (homes.length !== 1) return []
+  const text = await $.fs.read(`${homes[0]}/views/view.json`).catch(() => undefined)
+  if (text === undefined) return []
+  try {
+    const view = JSON.parse(text)
+    return view?.view_format === VIEW_FORMAT ? readWork(view.work) : []
+  } catch {
+    return []
+  }
+}
+
+async function markChanged($: EngineInterface, work: BandEntry[]): Promise<BandEntry[]> {
+  return Promise.all(
+    work.map(async entry => {
+      if (entry.changeHash === null) return entry
+      const viewed = await $.store.get(viewedKey(entry.id)).catch(() => undefined)
+      return { ...entry, marked: viewed !== entry.changeHash }
+    }),
+  )
+}
+
+function readPick(data: unknown, work: BandEntry[]): Required<BandSelection> | undefined {
+  const picked = (data as { select?: { item?: unknown; step?: unknown } } | null)?.select
+  const entry = work.find(w => w.id === picked?.item)
+  if (!entry || typeof picked?.step !== 'number' || !Number.isInteger(picked.step)) return undefined
+  return { item: entry.id, step: Math.min(Math.max(0, picked.step), Math.max(0, entry.steps.length - 1)) }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -143,5 +178,33 @@ export const register: Register = on => {
         <Text dimColor>view built {found.generatedAt}</Text>
       </Box>
     )
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (!polling || e.surface !== 'terminal' || e.props.hasSurvey) return next(e)
+    const work = await markChanged($, await readBandWork($).catch(() => []))
+    if (work.length === 0) return next(e)
+    if (!selectionWired) {
+      selectionWired = true
+      onSelect(() => void $.ui.invalidate('ui.render'))
+    }
+    band = { work, columns: e.props.bodyColumns, maxLines: Math.max(1, Math.min(2, e.props.maxRows)), selection: getSelection() }
+    const { Client } = $.ui.resolve(e)
+    return <Client key="band" module="./band-keys.tsx" props={band} width={e.props.bodyColumns} />
+  })
+
+  on('ui.message', async ($, e, next) => {
+    if (e.element !== 'band' || !band) return next(e)
+    const picked = readPick(e.data, band.work)
+    if (!picked) return next(e)
+    const entry = band.work.find(w => w.id === picked.item)
+    if (entry?.changeHash) await $.store.set(viewedKey(picked.item), entry.changeHash)
+    band = {
+      ...band,
+      selection: picked,
+      work: band.work.map(w => (w.id === picked.item ? { ...w, marked: false } : w)),
+    }
+    select(picked)
+    return { props: band }
   })
 }
