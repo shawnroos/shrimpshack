@@ -83,7 +83,7 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
      --project-term "<area>=<text>" --source "Shawn at startup"`. Show the
      screen again and ask again: `accept-agreement` refuses a prompt older than
      the last proposal or project-term edit.
-   - Turning sources off or on: `programme.sh amend-term sources <list>
+   - Turning sources off or on: `programme.sh amend-term tools_of_record <list>
      --prompt <id>`, where the list holds the sources that stay on, comma
      separated (`tracker,tasks`), or `none`. His reply must name each source
      that changes. A source turned off is never read or watched and never

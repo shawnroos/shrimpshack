@@ -556,6 +556,7 @@ def _h_set_remit(host, argv):
         programme["remit"] = dict(before, **after)
         term = programme["agreement"]["terms"]["remit"]
         term.update(set_by="shawn" if prompt else "proposal", set_at=_stamp())
+        host.programme_proposals.settle_remit(term, changes)
         if prompt:
             term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
         out = {"remit": after,
@@ -566,7 +567,8 @@ def _h_set_remit(host, argv):
         return out
 
     return programme_home._with_leases_lock(
-        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt")))
+        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"),
+                            verb="set-remit", target="remit"))
 
 
 _SPECS = (

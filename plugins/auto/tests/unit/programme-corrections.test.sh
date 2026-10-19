@@ -98,6 +98,22 @@ print(hashlib.sha256("\n".join(out).encode()).hexdigest())
 EOF
 }
 
+# A refused approval appends one approval_refused row and changes nothing else it governs.
+governed() {
+  "$PY" - "$AUTO_ROOT" "$RUN" <<'EOF'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+ph = load_lib_module("programme_home")
+core = load_lib_module("run_record_core")
+pj = load_lib_module("programme_journal")
+run = sys.argv[2]
+rec = core.read_run_record(ph.home_path(run), run)
+rows = [r for r in pj.read(run) if r.get("kind") != "approval_refused"]
+print(hashlib.sha256(json.dumps([rec, rows], sort_keys=True, default=str).encode()).hexdigest())
+EOF
+}
+
 OUT=""
 CODE=0
 prog() {
@@ -135,14 +151,14 @@ EOF
 
 refused_unchanged() {
   local want="$1"; shift
-  local before after
-  before="$(state_hash)"
+  local before after count
+  before="$(governed)"; count="$(journal_count approval_refused)"
   prog_on "$@"
-  after="$(state_hash)"
-  if [ "$CODE" = 1 ] && [ "$before" = "$after" ]; then
+  after="$(governed)"
+  if [ "$CODE" = 1 ] && [ "$before" = "$after" ] && [ "$(journal_count approval_refused)" = "$((count + 1))" ]; then
     case "$OUT" in *"$want"*) pass ;; *) fail "expected [$want] in [$OUT]" ;; esac
   else
-    fail "code [$CODE] changed [$([ "$before" = "$after" ] && echo no || echo yes)] out [$OUT]"
+    fail "code [$CODE] changed [$([ "$before" = "$after" ] && echo no || echo yes)] refusals [$count -> $(journal_count approval_refused)] out [$OUT]"
   fi
 }
 

@@ -869,7 +869,7 @@ def _h_recover(host, argv):
 _SPECS = (
     ("sweep", _h_sweep, "[--record-sources] [--run <id>]",
      "--record-sources from any session but the driving one. Without it, sweep writes nothing. "
-     "A source the agreement's sources term turns off is not read and reports state off."),
+     "A source the agreement's tools_of_record term turns off is not read and reports state off."),
     ("start-worker", _h_start_worker,
      "<item> [--session-name <name>] [--despite <attempt>]... [--decision <id>]... "
      "[--restriction <text> --source <source>]... [--run <id>] -- <spinoff arguments>",

@@ -671,10 +671,12 @@ keys and keeps unknown ones.
 |-----|-------|
 | `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
 | `created_at` | `<iso>` |
-| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, autonomy, cadence, sources}, project_terms?, corrections?}`. `contract_version` is the contract stamp (today `1`), written only by `accept-agreement`; an agreement without it keeps the rule that every product question goes to Shawn |
+| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, autonomy, cadence, tools_of_record}, project_terms?, corrections?}`. `contract_version` is the contract stamp (today `1`), written only by `accept-agreement`; an agreement without it keeps the rule that every product question goes to Shawn |
 | `agreement.project_terms[]` | `{id: "t"+6hex, area, value, source, set_by: proposal\|shawn\|carried_over, at, reserved, history: [{value, set_by, at, source, prompt_id}], prompt_id?, quote?, origin?, carried?}`. A term pre-filled by `set-remit` from the carry-over store has `set_by: carried_over`, `origin` (the store key it came from: a GitHub owner/name, a repo path, or `all`) and `carried` (the store entry id). Free-text terms outside the fixed `terms` map, so `normalize_programme` never back-fills them: a record without the key reads as `[]` and keeps no key. `reserved` marks an area Shawn keeps for himself. `history` holds each value an after-acceptance amendment replaced, oldest first; a before-acceptance edit keeps none |
 | `agreement.corrections[]` | `{id: "c"+6hex, at, kind, anchor, to: pm\|worker\|shawn, previous: pm\|worker\|shawn\|null, prompt_id, quote, pm_reading, choices_before, undone: null \| {at, prompt_id, quote}}`. Written by `correct-term`, oldest first; `undo-correction` fills `undone`. `kind` comes from the anchor (an ask id or a choice id) and is one of the correctable kinds. The owner of a kind is the `to` of the latest entry for it with `undone` null; with none, the contract default applies and `previous` is null. `quote` is the typed prompt's journal text; `pm_reading` is the PM's reading of it. `choices_before` is the length of `decisions[]` at correction time, so undo can list the choices recorded after it. A record without the key reads as `[]` |
-| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
+| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `tools_of_record` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off), and may add `option_descriptions: {<tool>: <text>}` for a tool added through a proposal. A record without the term reads as all three on. A record whose terms still hold the older `sources` term reads it as `tools_of_record`: its `value`, `set_by`, `set_at`, `why`, `prompt_id` and `quote` are copied on the next read or write and `sources` is dropped. Any term may add `term.proposal` and `term.notes` (below). |
+| `agreement.terms.<key>.proposal` | `{value, extras, at, origin: pm\|ui, state: pending\|accepted\|superseded, settled_at?}`. At most one per term; `propose-term` replaces it and `clear-proposal` removes it. `extras` holds `seconds` or `until`, `add` (a remit space `server.workspace`, or a tool) and `description` (a tool's). `amend-term` and `set-remit` set `state` from `pending` to `accepted` when the new value matches, else `superseded`. A refused approval is journaled, never stored here. The rules in force drop it. |
+| `agreement.terms.<key>.notes` | `[{text, at, origin}]`, at most 20; `note-term` adds one and `note-term --clear` removes the key |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
 | `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the scoped, revisioned decision records live under `context.decisions` and are written by `record-decision`. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
@@ -682,8 +684,9 @@ keys and keeps unknown ones.
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
 | `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
-| `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `sources` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
+| `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `tools_of_record` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
 | `recorded_issues` | `{provider: "linear-mcp", at, dropped, issues: {"<key>": {title, state, state_type, state_id, url, project: {id, name} \| null, initiatives: [{id, name}] \| null, source: "linear-mcp"}}}`, written by `record-issues` from the PM's MCP read. It claims the tracker provider only when no other provider has it available. `state_type` is one of triage, backlog, unstarted, started, completed, canceled, or null; `state_id` is a UUID or null. The tracker guard reads it to resolve state names and ids; the recorded check never reads it |
+| `trajectory_sweeps` | `[<iso>]`, at most two: the times of the previous and latest `record-trajectories` call that stored a trajectory. The view reads the gap between them. A record without it reads as `[]` |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -710,10 +713,11 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
+| `trajectory` | `null \| {done: [step], current: step \| null, planned: [step], finish, location: {tab, pane} \| null, recorded_at, session_id, hash}`, written by `record-trajectories`. A step is `{title, clause, note?}`; `clause` is `term:<key>`, `rule:<id>`, `instruction:<id>` or null, and an unknown clause is stored as null with `note: "unknown_clause"`. `hash` covers the done, current and planned titles in order, trimmed, case-folded and with spaces collapsed. `session_id` is the driving session that recorded it. A record without it reads as null |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
 | `task_runs[]` | `{repo, run_id}` |
 | `dropped_reason` | string or `null` |
-| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `started`, `start_failed`, `reopened` |
+| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `trajectory_changed`, `started`, `start_failed`, `reopened` |
 
 ### 10.6 Journal and claims
 
@@ -728,18 +732,20 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
-`blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
-`rule_adopted`, `rules_acked`, `stopped_unwatched`, `item_added`, `item_updated`,
+`blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
+`term_amended`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
+`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
-`taken_over`, `handed_over`, `programme_ended`, `request_refused`,
+`taken_over`, `handed_over`, `programme_ended`, `request_refused`, `approval_refused`,
 `permission_proposed`, `permission_answered`, `permission_verified`,
 `permission_settled`, `blocked_settings_write`.
 
+- `trajectory_changed {item, old_hash, new_hash}`: one row per item whose step path changed under the same
+  driving session. A first recording, a recording under a new driving session and an unchanged path write no row.
 - `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
   (a list of decision ids) and `restrictions` (a list of `{text, source}`).
 - Lifecycle payloads: `programme_started {home, leases, session}`;
@@ -750,6 +756,15 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   An expired programme found by `end`, `expire` or `takeover` journals `programme_ended`
   with reason `agreement_unaccepted` and `request: null`; `takeover` also journals its
   `request_refused`, rebuilds the view and prints the CronDelete and TaskStop lines.
+- `rules_loaded {source}` is journaled by SessionStart each time it injects the rules in force into
+  the driving session. `reread_requested {origin}` is a request for the PM to re-read them; the
+  last re-read is the newest `rules_acked` or `rules_loaded` row.
+- `term_proposed {term, value, extras, origin}`, `proposal_cleared {term, origin}` and
+  `term_noted {term, note, origin}` (or `{term, cleared: true, origin}`) are journaled by
+  `propose-term`, `clear-proposal` and `note-term`. `origin` is `pm` or `ui`, a display label only.
+- `approval_refused {verb, target, refused_prompt_id, reason}` is journaled when an approval verb's
+  cited prompt is refused after the session guard passed. The run record is unchanged. The prompt id
+  sits under its own key so a refused prompt can still be pruned.
 - `blocked_driver_send` carries `{verb, target, pane_id, command}`. `verb` is the
   parsed herdr verb (for example `agent prompt`), or null when the command was denied
   only because its text names the driver's pane; `target` is then the pane id or
@@ -843,7 +858,7 @@ session took the programme over by handover). It does not repeat the block.
 ### 10.8 Read model
 
 `<home>/views/view.json` is a display copy rebuilt after every programme write:
-`{view_format: 1, run, generated_at, model, rows}`. `model` holds
+`{view_format: 3, run, generated_at, model, work, contract, reread, rows}`. `model` holds
 `programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`, plus the
@@ -862,6 +877,42 @@ item carries `now`: its owner session's in-progress task and how many tasks are
 done, read from the tasks source while it is on. `rows` is
 `[{style: title|head|text|dim|warn, text}]`; `status` prints the rows and the mod
 draws them, so both show the same text. Nothing reads it to decide anything.
+
+`work[]` has one entry per item whose stored state is open or waiting and whose
+evidence is not complete: waiting items first, then items with a `trajectory_changed`
+row, then by `joined_at`. Each entry is `{id, title, state, joined_at, location,
+session_id, no_plan, steps[], finish, recorded_at, age_seconds, fade_after_seconds,
+faded, hash, change_hash, changed_since_first, watch}`. `location` is the
+trajectory's tab and pane names joined by " › ", never a herdr code; `session_id` is
+the owner's session. `no_plan` is true when the item has no trajectory yet. Each step
+is `{kind: done|current|waiting|planned, title, clause, clause_label, no_clause, note}`;
+`clause_label` is "no clause" when `clause` is null. `fade_after_seconds` is twice
+the cadence seconds under fixed cadence, or twice the gap between the two
+`trajectory_sweeps` under on-change cadence, never under 1800; with fewer than two
+sweeps it is 1800. `change_hash` is the newest `trajectory_changed` `new_hash`; the
+mod compares it with the hash it stored when Shawn viewed the item, so the model holds
+no viewed state. `watch` is null for open items; for waiting items it is
+`{state: watcher_live|retry_never_started|reporter_only|nothing_watching}`, checked in
+that order, with `interval_seconds` (cron watchers, the cadence) or
+`beat_age_seconds` on a live watcher and `reporter` on `reporter_only`.
+
+`contract` is `{accepted, terms[], instructions[]}`, built from the record so it can
+show proposals. Each term is `{key, label, value, value_text, description, binding:
+code|guidance|none, reliant_steps, set_by, set_at, why, notes[], proposal, options[]}`.
+`reliant_steps` counts current and planned steps of `work` entries whose clause is
+`term:<key>`. `options[]` is `{name, description, active}` for exactly the term's
+`options`; descriptions come from `TERM_GUIDE`, then `option_descriptions`, else
+"no description" (also used for a term outside the guide). `proposal` is the stored
+`{value, extras, at, origin, state, settled_at}`; a pending proposal reads
+`state: "refused"` with `reason` and `refused_at` when the newest `approval_refused`
+row whose `target` is the term key is newer than `proposal.at`. Each instruction is
+`{id, quote, applies_to, scope: own|inherited, until, at, reliant_steps}` for the
+active instructions in `rules_in_force`; `own` means it applies to an item.
+
+`reread` is `{last_at, changed_since[], requested, requested_at}`: `last_at` is the
+newest `rules_acked` or `rules_loaded` row, `changed_since` the term keys whose
+`set_at` is newer than it, and `requested` is true while a `reread_requested` row is
+newer than it. `rows` gains a "Work" section listing each `work` entry's current step.
 
 ### 10.9 Stop hook state
 

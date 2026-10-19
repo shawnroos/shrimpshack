@@ -50,7 +50,7 @@ TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
     "deliverables", "waiting_on", "task_runs", "dropped_reason", "joined_at",
-    "history", "repo",
+    "history", "trajectory", "repo",
 )
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "instructions", "decisions", "items",
@@ -199,13 +199,75 @@ def default_terms(now_iso: str) -> dict:
         "cadence": term("cadence", ("on_change", "fixed"), "on_change",
                         seconds=DEFAULT_CADENCE_SECONDS, eval_budget_usd_per_day=25,
                         quiet_hours=None),
-        "sources": term("sources", SWEEP_SOURCES, list(SWEEP_SOURCES)),
+        "tools_of_record": term("tools_of_record", SWEEP_SOURCES, list(SWEEP_SOURCES)),
     }
+
+
+TERM_GUIDE = {
+    "remit": {
+        "editor": "space",
+        "binding": "code",
+        "description": "Which herdr spaces, repos and tracker scope the PM looks after.",
+        "options": {
+            "space": "One herdr space.",
+            "tabs": "Only some tabs inside a herdr space.",
+            "spaces": "Several herdr spaces.",
+        },
+    },
+    "stop_rule": {
+        "editor": "until",
+        "binding": "code",
+        "description": "When the PM may stop sweeping and end its turn.",
+        "options": {
+            "nothing_it_can_act_on": "Stop when nothing is left that the PM can act on.",
+            "only_when_done": "Stop only when every item is done.",
+            "until_time": "Keep going until a set time, then stop.",
+            "never_stop": "Never stop on its own.",
+        },
+    },
+    "autonomy": {
+        "editor": "choice",
+        "binding": "none",
+        "description": "How far the PM may act without asking Shawn first.",
+        "options": {
+            "protocol": "The protocol rules decide, action by action.",
+        },
+    },
+    "cadence": {
+        "editor": "interval",
+        "binding": "code",
+        "description": "How often the PM sweeps the programme.",
+        "options": {
+            "on_change": "Sweep when something changes.",
+            "fixed": "Sweep on a fixed interval.",
+        },
+    },
+    "tools_of_record": {
+        "editor": "checklist",
+        "binding": "code",
+        "description": "Which tools the PM reads to learn the state of the work.",
+        "options": {
+            "tracker": "The issue tracker.",
+            "tasks": "Each session's task list.",
+            "plans": "Plan files in the remit's repos.",
+        },
+    },
+}
+
+_OLD_TOOLS_KEY = "sources"
+_RENAMED_FIELDS = ("value", "set_by", "set_at", "why", "prompt_id", "quote")
+
+
+def _tools_term(terms):
+    for key in ("tools_of_record", _OLD_TOOLS_KEY):
+        if isinstance(terms.get(key), dict):
+            return terms[key]
+    return {}
 
 
 def enabled_sources(programme) -> set:
     terms = ((programme or {}).get("agreement") or {}).get("terms") or {}
-    value = (terms.get("sources") or {}).get("value") if isinstance(terms.get("sources"), dict) else None
+    value = _tools_term(terms).get("value")
     if not isinstance(value, list):
         return set(SWEEP_SOURCES)
     return {name for name in value if name in SWEEP_SOURCES}
@@ -268,7 +330,7 @@ def normalize_item(item: dict, item_id=None) -> dict:
     for key in ("aliases", "sessions", "task_runs", "history"):
         out[key] = list(item.get(key) or [])
     out["deliverables"] = dict(item.get("deliverables") or {})
-    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "repo"):
+    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "trajectory", "repo"):
         out.setdefault(key, None)
     return out
 
@@ -289,11 +351,17 @@ def normalize_programme(block: dict) -> dict:
     agreement = dict(out["agreement"] or {})
     agreement.setdefault("accepted", None)
     terms = dict(agreement.get("terms") or {})
+    old = terms.pop(_OLD_TOOLS_KEY, None)
+    if isinstance(old, dict) and "tools_of_record" not in terms:
+        renamed = dict(base["agreement"]["terms"]["tools_of_record"])
+        renamed.update({k: old[k] for k in _RENAMED_FIELDS if k in old})
+        terms["tools_of_record"] = renamed
     for key, term in base["agreement"]["terms"].items():
         terms.setdefault(key, term)
     agreement["terms"] = terms
     out["agreement"] = agreement
     out["items"] = {k: normalize_item(v, k) for k, v in (out["items"] or {}).items()}
+    out["trajectory_sweeps"] = list(out.get("trajectory_sweeps") or [])
     remit = dict(out["remit"] or {})
     remit.setdefault("spaces", [])
     remit.setdefault("tabs", [])

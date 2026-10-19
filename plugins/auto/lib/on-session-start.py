@@ -89,10 +89,11 @@ def _stdin_payload() -> str:
 
 def programme_context(stdin_raw) -> list:
     pre_compact = load_lib_module("on-pre-compact")
-    sid = pre_compact.main_thread_session(pre_compact.hook_input(stdin_raw))
+    data = pre_compact.hook_input(stdin_raw)
+    sid = pre_compact.main_thread_session(data)
     if not sid:
         return []
-    blocks = [_restore(hold) for hold in pre_compact.driven_programmes(sid)]
+    blocks = [_restore(hold, sid, data.get("source")) for hold in pre_compact.driven_programmes(sid)]
     resume = load_lib_module("programme_resume")
     # Read-only: an ended or unleased programme is surfaced, never acted for.
     for reader in (resume.closing_lines, resume.unleased_lines):
@@ -103,9 +104,14 @@ def programme_context(stdin_raw) -> list:
     return blocks
 
 
-def _restore(hold) -> str:
+def _restore(hold, sid, source) -> str:
     if hold.get("hold"):
         return _held_block(hold["run"], hold["hold"])
+    # Journaled before rendering: the row moves the store revision, and the block must name the latest one.
+    try:
+        load_lib_module("programme_journal").append(hold["run"], "rules_loaded", sid, {"source": source})
+    except Exception:
+        pass  # rel-001: a lost row only ages "last re-read"; the restore still runs.
     try:
         return load_lib_module("programme").render_restore(hold["run"])
     except Exception as exc:

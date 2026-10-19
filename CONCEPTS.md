@@ -217,6 +217,25 @@ summary or watcher event never does.
 ### Permission proposal
 A request for the human to apply a narrow native permission that resolves blocked read-only work. It does not grant permission itself. Programme protocol proposals instead concern completion rules and evidence requirements.
 
+### Trajectory
+A work item's path as the PM sees it at one sweep: steps done, the current step, the planned
+steps and the finish. It belongs to the work item, not the session doing it, and the PM
+rewrites it every sweep, so a changed plan is a recorded difference rather than a surprise.
+
+A trajectory records when the PM wrote it, and it fades once it is older than about two
+expected sweep gaps. Its age belongs to the moment it is shown, not the moment it was
+written: a display must measure it against the current clock, because one that fixes it at
+write time freezes exactly when the PM stops sweeping, and shows stalled work as fresh.
+
+### Clause
+The part of the agreement a step relies on: a term, an adopted protocol rule or an active
+instruction. A step with no clause is allowed and shown as such; it is a warning, never a
+block.
+
+### Tools of record
+The programme-wide set of tools where work and evidence live and that the PM checks each
+sweep. It replaces the agreement's "sources" term.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.

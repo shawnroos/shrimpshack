@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import secrets
 import sys
 
@@ -29,6 +28,9 @@ programme_protocol = load_lib_module("programme_protocol")
 session_registry = load_lib_module("session_registry")
 driver_session = load_lib_module("driver_session")
 verb_cli = load_lib_module("verb_cli")
+programme_naming = load_lib_module("programme_naming")
+programme_proposals = load_lib_module("programme_proposals")
+programme_trajectory = load_lib_module("programme_trajectory")
 
 _Verb = run_record._Verb
 
@@ -37,13 +39,15 @@ RULES_TAG = "auto-rules"
 INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
 APPROVAL_KINDS = ("rule_adopted",)
-_NAME_WORD = re.compile(r"[0-9a-z_\-]+")
-_NAME_JOINERS = re.compile(r"[_\-]")
-_NEGATIONS = ("not", "never", "no", "dont", "t")
 _OPERATION = {"id": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
                "reconcile-operations", "release-resources", "create-successor", "sweep")
+
+
+_name_words, _squash, _runs, _affirmed, _NEGATIONS = (
+    programme_naming.name_words, programme_naming.squash, programme_naming.runs, programme_naming.affirmed,
+    programme_naming.NEGATIONS)
 
 
 class ProgrammeError(Exception):
@@ -162,7 +166,7 @@ def active_instructions(programme) -> list:
 def _terms_view(agreement) -> dict:
     view = {}
     for key, term in sorted((agreement.get("terms") or {}).items()):
-        view[key] = {k: v for k, v in term.items() if k not in ("key", "options", "default")}
+        view[key] = {k: v for k, v in term.items() if k not in ("key", "options", "default", "proposal")}
         view[key]["options"] = term.get("options")
     return view
 
@@ -252,55 +256,8 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
             "text_hash": text_hash(payload.get("text")), "at": row.get("at"), "origin_verified": True}
 
 
-def _name_words(text) -> list:
-    words = (_NAME_JOINERS.sub("", w) for w in _NAME_WORD.findall(str(text or "").casefold()))
-    return [w for w in words if w]
-
-
-def _squash(text) -> str:
-    return "".join(_name_words(text))
-
-
-def _runs(words, name) -> list:
-    runs = []
-    for start in range(len(words)):
-        joined = ""
-        for end in range(start, len(words)):
-            joined += words[end]
-            if joined == name:
-                runs.append((start, end))
-            if not name.startswith(joined) or joined == name:
-                break
-    return runs
-
-
-def _affirmed(words, start) -> bool:
-    return start == 0 or words[start - 1] not in _NEGATIONS
-
-
-def _levels_named(words) -> set:
-    found, used = set(), set()
-    for level in sorted(programme_home.AUTONOMY_LEVELS, key=lambda lv: -len(_squash(lv))):
-        for start, end in _runs(words, _squash(level)):
-            span = set(range(start, end + 1))
-            if span & used:
-                continue
-            used |= span
-            if _affirmed(words, start):
-                found.add(level)
-    return found
-
-
 def require_named(prompt, *needs) -> None:
-    if not prompt:
-        return
-    words = _name_words(programme_journal.redact(prompt["quote"]))
-    levels = _levels_named(words)
-    missing = []
-    for need in needs:
-        options = [o for o in (need if isinstance(need, (list, tuple)) else (need,)) if _squash(o)]
-        if options and not any(_named(words, levels, o) for o in options):
-            missing.append(" or ".join(repr(o) for o in options))
+    missing = programme_naming.missing(programme_journal.redact(prompt["quote"]), needs) if prompt else []
     if missing:
         raise ProgrammeError(
             f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
@@ -309,20 +266,12 @@ def require_named(prompt, *needs) -> None:
 
 
 def require_sources_named(prompt, before, after) -> None:
-    # A source is turned off in words like "no plans", so a negated name still counts here.
-    changed = sorted(set(before) ^ set(after))
-    words = set(_name_words(programme_journal.redact(prompt["quote"]))) if prompt else set()
-    missing = [name for name in changed if name not in words]
-    if prompt and missing:
+    quote = programme_journal.redact(prompt["quote"]) if prompt else ""
+    missing = programme_naming.missing_sources(quote, before, after) if prompt else []
+    if missing:
         raise ProgrammeError(
             f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
             f"contain {' and '.join(repr(n) for n in missing)}")
-
-
-def _named(words, levels, option) -> bool:
-    if option in programme_home.AUTONOMY_LEVELS:
-        return option in levels
-    return any(_affirmed(words, start) for start, _ in _runs(words, _squash(option)))
 
 
 def _widen_word(opts) -> tuple:
@@ -330,13 +279,14 @@ def _widen_word(opts) -> tuple:
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None):
+           journal=True, after=None, verb=None, target=None, beat=True):
     run_id, home, _ = _locate(opts)
     seen = {}
 
     def mutate(rec):
         seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt)
-        rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
+        if beat:
+            rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
         prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
@@ -355,7 +305,12 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         return programme_journal.entry(seen["kind"], seen["sid"], payload,
                                        cites=[prompt["prompt_id"]] if prompt else None)
 
-    out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"])
+    try:
+        out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"])
+    except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError) as exc:
+        if (needs_prompt or prompt_id) and "sid" in seen:
+            _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
+        raise
     if out["replayed"]:
         row = out["row"] or {}
         _emit({"ok": True, "run": run_id, "kind": row.get("kind"), "replayed": True,
@@ -369,6 +324,17 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
     refresh_view(run_id, home, seen["record"])
     _emit({"ok": True, "run": run_id, "kind": seen["kind"], **payload})
     return 0
+
+
+def _journal_refusal(run_id, home, sid, verb, target, prompt_id, exc) -> None:
+    # The verb must still fail with its own error; a journal failure here only costs the "refused" display.
+    try:
+        programme_journal.append(run_id, "approval_refused", sid,
+                                 {"verb": verb, "target": target, "refused_prompt_id": prompt_id,
+                                  "reason": str(exc)})
+        refresh_view(run_id, home)
+    except Exception as err:
+        sys.stderr.write(f"{PROG}: could not journal the refusal: {err}\n")
 
 
 def _emit(obj) -> None:
@@ -397,7 +363,7 @@ def _source_list(term, value) -> list:
 
 
 def _check_value(term, value, extra):
-    if term.get("key") == "sources":
+    if term.get("key") == "tools_of_record":
         return _source_list(term, value)
     if value not in (term.get("options") or []):
         raise ProgrammeError(
@@ -525,7 +491,8 @@ def _h_accept_agreement(argv):
         return {"terms": {k: t.get("value") for k, t in programme["agreement"]["terms"].items()},
                 "decision_id": decision["id"], "contract_version": version}
 
-    return _write(opts, change, "agreement_accepted", prompt_id=opts["prompt"], needs_prompt=True)
+    return _write(opts, change, "agreement_accepted", prompt_id=opts["prompt"], needs_prompt=True,
+                  verb="accept-agreement", target="agreement")
 
 
 def _h_amend_term(argv):
@@ -536,14 +503,17 @@ def _h_amend_term(argv):
 
     def change(programme, prompt, rec):
         term = _term(programme, key)
-        checked = _check_value(term, value, opts)
-        if key == "sources":
+        checked = programme_proposals.check_amend(sys.modules[__name__], term, value, opts)
+        if key == "tools_of_record":
             require_sources_named(prompt, term.get("value") or [], checked)
         else:
             require_named(prompt, key, value)
-        return _set_term(term, checked, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
+        out = _set_term(term, checked, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
+        programme_proposals.settle_amend(term, checked)
+        return out
 
-    return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True)
+    return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True,
+                  verb="amend-term", target=key)
 
 
 def _h_record_instruction(argv):
@@ -559,14 +529,16 @@ def _h_record_instruction(argv):
         programme["instructions"].append(entry)
         return {"instruction": entry["id"], "applies_to": target, "until": entry["until"]}
 
-    return _write(opts, change, "instruction_recorded", prompt_id=opts.get("prompt"), needs_prompt=True)
+    return _write(opts, change, "instruction_recorded", prompt_id=opts.get("prompt"), needs_prompt=True,
+                  verb="record-instruction", target="instruction")
 
 
 def _h_close_instruction(argv):
-    positional, opts = _parse(argv, values=("run", "prompt", "as", "why"))
+    positional, opts = _parse(argv, values=("run", "prompt", "as", "why", "origin"))
     if len(positional) != 1 or opts.get("as") not in INSTRUCTION_ENDINGS:
         raise ValueError("usage: close-instruction <id> --as fulfilled|withdrawn")
     withdrawn = opts["as"] == "withdrawn"
+    origin = programme_proposals.origin_of(opts)
     if not withdrawn and not opts.get("why"):
         raise ValueError("close-instruction --as fulfilled needs --why")
 
@@ -577,10 +549,11 @@ def _h_close_instruction(argv):
         hits[0]["state"] = opts["as"]
         hits[0]["closed"] = {"at": _now(), "why": opts.get("why"),
                              "prompt_id": prompt and prompt["prompt_id"]}
-        return {"instruction": positional[0], "as": opts["as"], "why": opts.get("why")}
+        return {"instruction": positional[0], "as": opts["as"], "why": opts.get("why"),
+                "origin": origin}
 
     return _write(opts, change, "instruction_closed", prompt_id=opts.get("prompt"),
-                  needs_prompt=withdrawn)
+                  needs_prompt=withdrawn, beat=withdrawn, verb="close-instruction", target=positional[0])
 
 
 def _h_propose_rule(argv):
@@ -769,8 +742,8 @@ _VERBS = {
         "<key> <value> --prompt <id> [--why <text>] [--until <iso>] [--seconds <n>] [--run <id>]",
         rejects="a value outside the term's options (use record-instruction); a prompt that is "
         "not typed or does not name the term key and the value; until_time without --until. "
-        "The sources term takes a comma list of tracker, tasks and plans, or none; its prompt must "
-        "name each source it turns on or off.",
+        "The tools_of_record term takes a comma list of its tools, or none; its prompt must name each tool "
+        "it turns on or off. Settles a pending proposal: accepted when the value matches it, else superseded.",
     ),
     "record-instruction": _Verb(
         _h_record_instruction,
@@ -779,7 +752,7 @@ _VERBS = {
     ),
     "close-instruction": _Verb(
         _h_close_instruction,
-        "<id> --as fulfilled|withdrawn [--prompt <id>] [--why <text>] [--run <id>]",
+        "<id> --as fulfilled|withdrawn [--prompt <id>] [--why <text>] [--origin pm|ui] [--run <id>]",
         rejects="withdrawn without a typed --prompt; fulfilled without --why; an inactive id.",
     ),
     "propose-rule": _Verb(
@@ -826,6 +799,8 @@ _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
 programme_sources = load_lib_module("programme_sources")
 _VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
 
+_VERBS.update(programme_trajectory.build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_proposals.build_verbs(sys.modules[__name__]))
 programme_permission = load_lib_module("programme_permission")
 _VERBS.update(programme_permission.build_verbs(sys.modules[__name__]))
 

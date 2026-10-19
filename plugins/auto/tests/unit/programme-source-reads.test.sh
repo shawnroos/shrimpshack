@@ -226,7 +226,7 @@ set_sources() {
 ph = load_lib_module("programme_home")
 core = load_lib_module("run_record_core")
 def change(rec):
-    rec["programme"]["agreement"]["terms"]["sources"]["value"] = json.loads(args[1])
+    rec["programme"]["agreement"]["terms"]["tools_of_record"]["value"] = json.loads(args[1])
 core._with_locked_run_record(ph.home_path(args[0]), args[0], change)
 EOF
 }
@@ -244,8 +244,8 @@ print(" ".join(sorted(r["kind"] + ":" + str(r.get("system")) for r in load_lib_m
 EOF
 }
 
-it "the sources term defaults to tracker, tasks and plans"
-check '["tracker", "tasks", "plans"]' "$(field 'prog["agreement"]["terms"]["sources"]["value"]')"
+it "the tools_of_record term defaults to tracker, tasks and plans"
+check '["tracker", "tasks", "plans"]' "$(field 'prog["agreement"]["terms"]["tools_of_record"]["value"]')"
 
 : > "$CALLS"
 prog sweep
@@ -279,36 +279,36 @@ prog add-item linear:AI-901 --title "Crop rework" --pane w2:p30 --session sess-w
 it "an item row shows the owner's in-progress task as a now line"
 has "now: Fixing the crop bounds (1/3 tasks done)" "$("$PY" "$PROG" status --run "$RUN" 2>&1)"
 
-it "propose-agreement takes a sources list and stores it in the canonical order"
-prog propose-agreement --term "sources=plans,tracker"
-check '["tracker", "plans"]' "$(field 'prog["agreement"]["terms"]["sources"]["value"]')"
-it "the rules block renders the sources as words"
-has "sources: tracker, plans" "$("$PY" "$PROG" rules --run "$RUN" 2>&1)"
+it "propose-agreement takes a tools_of_record list and stores it in the canonical order"
+prog propose-agreement --term "tools_of_record=plans,tracker"
+check '["tracker", "plans"]' "$(field 'prog["agreement"]["terms"]["tools_of_record"]["value"]')"
+it "the rules block renders the tools of record as words"
+has "tools_of_record: tracker, plans" "$("$PY" "$PROG" rules --run "$RUN" 2>&1)"
 it "a source name outside the three is refused"
-prog propose-agreement --term "sources=tracker,board"
+prog propose-agreement --term "tools_of_record=tracker,board"
 check 1 "$CODE"
 it "an empty part is refused"
-prog propose-agreement --term "sources=tracker,,plans"
+prog propose-agreement --term "tools_of_record=tracker,,plans"
 check 1 "$CODE"
-prog propose-agreement --term "sources=tracker,tasks,plans"
+prog propose-agreement --term "tools_of_record=tracker,tasks,plans"
 P_ACCEPT="$(typed_prompt "yes, accept")"
 prog accept-agreement --prompt "$P_ACCEPT"
 
-it "amend-term sources turns a source off when the typed prompt names it"
+it "amend-term tools_of_record turns a source off when the typed prompt names it"
 P_OFF="$(typed_prompt "please stop watching plans, no plans for this one")"
-prog amend-term sources tracker,tasks --prompt "$P_OFF"
-check '0 ["tracker", "tasks"]' "$CODE $(field 'prog["agreement"]["terms"]["sources"]["value"]')"
-it "amend-term sources refuses a prompt that does not name the source it changes"
+prog amend-term tools_of_record tracker,tasks --prompt "$P_OFF"
+check '0 ["tracker", "tasks"]' "$CODE $(field 'prog["agreement"]["terms"]["tools_of_record"]["value"]')"
+it "amend-term tools_of_record refuses a prompt that does not name the source it changes"
 P_VAGUE="$(typed_prompt "turn that thing off")"
-prog amend-term sources tracker --prompt "$P_VAGUE"
+prog amend-term tools_of_record tracker --prompt "$P_VAGUE"
 check 1 "$CODE"
 has "'tasks'" "$OUT"
-it "amend-term sources none turns every source off"
+it "amend-term tools_of_record none turns every source off"
 P_NONE="$(typed_prompt "turn off tracker, tasks and plans")"
-prog amend-term sources none --prompt "$P_NONE"
-check '0 []' "$CODE $(field 'prog["agreement"]["terms"]["sources"]["value"]')"
+prog amend-term tools_of_record none --prompt "$P_NONE"
+check '0 []' "$CODE $(field 'prog["agreement"]["terms"]["tools_of_record"]["value"]')"
 it "the rules block says none"
-has "sources: none" "$("$PY" "$PROG" rules --run "$RUN" 2>&1)"
+has "tools_of_record: none" "$("$PY" "$PROG" rules --run "$RUN" 2>&1)"
 
 set_sources '["tasks", "plans"]'
 : > "$CALLS"

@@ -21,9 +21,10 @@ programme_predicate = load_lib_module("programme_predicate")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
 programme_terms = load_lib_module("programme_terms")
+programme_view_work = load_lib_module("programme_view_work")
 session_registry = load_lib_module("session_registry")
 
-VIEW_FORMAT = 1
+VIEW_FORMAT = 3
 VIEW_DIR = "views"
 VIEW_NAME = "view.json"
 JUST_DID_LIMIT = 8
@@ -429,8 +430,12 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
         "terms": _terms(block, journal_entries or []),
     }
     model = _clean(model)
-    return {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
-            "model": model, "rows": rows(model)}
+    parts = _clean(programme_view_work.build(record, block, journal_entries, now,
+                                             model["rules_in_force"].get("instructions")))
+    view = {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
+            "model": model, **parts}
+    view["rows"] = rows(model, parts["work"])
+    return view
 
 
 def _lifecycle(block) -> dict:
@@ -628,7 +633,7 @@ def _acceptance_lines(acceptance) -> list:
     return out
 
 
-def rows(model) -> list:
+def rows(model, work=None) -> list:
     out = [_header(model["programme"])]
     _section(out, "Remit", [_row(f"  {text}") for text in remit_texts(model.get("remit"))], "none")
     doing = model["doing_now"]
@@ -659,6 +664,9 @@ def rows(model) -> list:
     _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in rules_texts(model["rules_in_force"])],
              "none")
     _section(out, "Items", [line for item in model["items"] for line in _item_lines(item)], "no items")
+    if work is not None:
+        _section(out, "Work", [_row(f"  {text}", style) for text, style in programme_view_work.work_texts(work)],
+                 "no open work")
     return out
 
 

@@ -135,11 +135,24 @@ session.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
   value must be one of that term's options. Wording that fits no option is an
-  instruction. The sources term holds the sweep sources that stay on: a comma
+  instruction. The tools_of_record term holds the sweep sources that stay on: a comma
   list of tracker, tasks and plans (default all three), or none. Its amend needs
   a typed prompt that names each source it turns on or off ("no plans" counts).
   A source turned off is never read by the sweep, never watched, and never holds
-  the stop.
+  the stop. A record from older code reads its old name for this term as
+  `tools_of_record`.
+- **Term proposals and notes**: `propose-term` stores one proposal on a term
+  (with --seconds for a fixed cadence, --add server.workspace for a new remit
+  space, or --add with --description for a new tool of record). It needs no prompt
+  and never changes the value; a new proposal replaces the old one.
+  `clear-proposal` removes it. `note-term` adds a note for Shawn, and its --clear
+  removes the notes. These three are allowed while the compact flag is set, never
+  count as a beat, and take --origin ui as a display label. `amend-term` and
+  `set-remit` settle a pending proposal: accepted when the new value matches it,
+  else superseded. The rules in force never carry a proposal.
+- **Re-read requests**: `request-reread` asks the PM to re-read the rules in force
+  at its next sweep. It needs no prompt, leaves the compact flag as it is, never
+  counts as a beat, and takes --origin ui as a display label.
 - **Project terms**: `propose-agreement --project-term "<area>=<text>"` (or
   `--reserved-term` for an area Shawn keeps for himself) adds a free-text project
   term with `--source <evidence>`; a term without `--source` is refused, and so is
@@ -211,7 +224,8 @@ session.
   ending: once `end` releases the lease, the programme takes no more prompts.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
-  fulfilled (needs `--why`) or withdrawn (needs `--prompt`).
+  fulfilled (needs `--why`) or withdrawn (needs `--prompt`). Closing as fulfilled
+  never counts as a beat, and takes --origin ui as a display label.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
   proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
   an adoption record (machine, run, prompt id, redacted quote, prompt hash, content
@@ -434,6 +448,17 @@ session.
   fail; the watcher never reads through the MCP, and a sweep that cannot read
   the tracker leaves a linear-mcp tracker available. The recorded check never
   reads `recorded_issues`.
+- **Trajectories**: `record-trajectories` reads a JSON list on stdin, one entry per
+  open item: `{item, done, current, planned, finish, location}`, where a step is
+  `{title, clause}` and a clause is `term:<key>`, `rule:<id>`, `instruction:<id>`
+  or null. It stores each entry on the item as its trajectory and moves
+  `trajectory_sweeps` to the previous and latest call times. A clause that is not
+  in the rules in force is stored as null with an `unknown_clause` note, never
+  refused. An entry for an unknown, done, handed or dropped item is skipped with a
+  reason and the rest are stored; input over 1 MB is refused whole, and `[]`
+  writes nothing. Only an item whose step path changed under the same driving
+  session gets a `trajectory_changed` journal row; moving the current step to
+  done is not a change, and neither is a first recording.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)
@@ -470,7 +495,7 @@ session.
   issue ids they name; file count and bytes per plan are capped. It prints
   panes, issues, tasks, plans, proposals and a state with a reason for each
   source; a source that could not be read gives no list, never an empty one,
-  and a source the sources term turns off reports state off and is not read. A
+  and a source the tools_of_record term turns off reports state off and is not read. A
   pane's owner is the snapshot's reported agent session first, then a registry
   line for the same pane and terminal. Issues are found in the tracker's pane
   bindings and the pane's branch, title, label and registry name, and last in
@@ -550,7 +575,7 @@ session.
   plans-changed or source-available), naming the source. Tasks (a status or
   count change in a remit session's list) and plans (a new or edited plan file
   in a remit repo) are local reads and always watched; --tracker polls the
-  tracker providers that need no token. A source the sources term turns off is
+  tracker providers that need no token. A source the tools_of_record term turns off is
   never polled. It exits 0 after printing; it prints "source-unavailable <name> <reason>" once and keeps
   polling. Item mode `programme-watch.sh [--run <id>] --item <id> -- <argv>`
   beats that item's watcher while the command runs, then prints

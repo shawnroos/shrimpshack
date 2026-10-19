@@ -11,6 +11,11 @@ when every unfinished item waits on someone else and each wait is covered:
 | A checker that returned unknown twice | a retry watcher | the queued `arm_retry_watcher` entry; arm it, then remove the entry |
 | A permission Shawn must apply | Shawn | `propose-permission` records the wait itself, with the proposal id; never `set-waiting` it. `settle-permissions` returns the item to open when the blocked read runs |
 
+The programme view shows each waiting step in one of four states: a live
+watcher, a named reporter only, a retry that never started (an
+`arm_retry_watcher` entry not yet armed), or nothing watching. Only the first
+two cover a wait.
+
 A watcher counts as live only while its heartbeat is newer than the cadence
 term. A watcher whose Monitor expired stops beating, so the wait turns
 unwatched and the Stop hook holds the PM until it is re-armed.

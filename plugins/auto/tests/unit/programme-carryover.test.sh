@@ -108,6 +108,32 @@ print(hashlib.sha256("\n".join(sorted(out)).encode()).hexdigest())
 EOF
 }
 
+# A refused approval appends one approval_refused row and changes nothing else it governs.
+governed() {
+  "$PY" - "$AUTO_ROOT" "$1" "${STORE:-}" <<'EOF'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+ph = load_lib_module("programme_home")
+core = load_lib_module("run_record_core")
+pj = load_lib_module("programme_journal")
+run, store = sys.argv[2], sys.argv[3]
+rec = core.read_run_record(ph.home_path(run), run)
+rows = [r for r in pj.read(run) if r.get("kind") != "approval_refused"]
+kept = open(store, "rb").read().hex() if store and os.path.exists(store) else "none"
+print(hashlib.sha256(json.dumps([rec, rows, kept], sort_keys=True, default=str).encode()).hexdigest())
+EOF
+}
+
+refusals() {
+  "$PY" - "$AUTO_ROOT" "$1" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+print(sum(1 for r in load_lib_module("programme_journal").read(sys.argv[2]) if r.get("kind") == "approval_refused"))
+EOF
+}
+
 OUT=""
 CODE=0
 prog() {
@@ -191,17 +217,30 @@ prog promote-correction --run "$RUN_A" --prompt "$P_ALL_OFF" "$C1"
 if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "corrections are not on yet" "$OUT"; else fail "code $CODE out $OUT"; fi
 
 it "keep-corrections with an unknown correction refuses and writes nothing"
-BEFORE="$(hashes)"
+BEFORE="$(governed "$RUN_A")"; COUNT="$(refusals "$RUN_A")"
 prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP_OFF" c000000
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "no active correction 'c000000'" "$OUT"; else fail "code $CODE out $OUT"; fi
+if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(governed "$RUN_A")" ] && [ "$(refusals "$RUN_A")" = "$((COUNT + 1))" ]; then
+  has "no active correction 'c000000'" "$OUT"
+else
+  fail "code $CODE out $OUT"
+fi
 
 it "keep-corrections citing a prompt older than the correction refuses and writes nothing"
-BEFORE="$(hashes)"
+BEFORE="$(governed "$RUN_A")"; COUNT="$(refusals "$RUN_A")"
 prog_on keep-corrections --run "$RUN_A" --prompt "$P_BEFORE" "$C1"
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "is not later than the correction's prompt" "$OUT"; else fail "code $CODE out $OUT"; fi
+if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(governed "$RUN_A")" ] && [ "$(refusals "$RUN_A")" = "$((COUNT + 1))" ]; then
+  has "is not later than the correction's prompt" "$OUT"
+else
+  fail "code $CODE out $OUT"
+fi
 it "keep-corrections citing a later prompt that does not name the correction refuses and writes nothing"
+BEFORE="$(governed "$RUN_A")"; COUNT="$(refusals "$RUN_A")"
 prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP_OFF" "$C1"
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "does not name what it approves" "$OUT"; else fail "code $CODE out $OUT"; fi
+if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(governed "$RUN_A")" ] && [ "$(refusals "$RUN_A")" = "$((COUNT + 1))" ]; then
+  has "does not name what it approves" "$OUT"
+else
+  fail "code $CODE out $OUT"
+fi
 
 it "AE9: Shawn keeps one of the two corrections for this project"
 P_KEEP="$(prompt "$RUN_A" typed "keep ${C1} for this project")"
@@ -285,10 +324,14 @@ C4="$(correct "$RUN_C" linear:C-2 optimisation_depth worker "workers decide how 
 
 refused() {
   local want="$1"; shift
-  local before
-  before="$(hashes)"
+  local before count
+  before="$(governed "$RUN_C")"; count="$(refusals "$RUN_C")"
   prog_on "$@"
-  if [ "$CODE" = 1 ] && [ "$before" = "$(hashes)" ]; then has "$want" "$OUT"; else fail "code $CODE out $OUT"; fi
+  if [ "$CODE" = 1 ] && [ "$before" = "$(governed "$RUN_C")" ] && [ "$(refusals "$RUN_C")" = "$((count + 1))" ]; then
+    has "$want" "$OUT"
+  else
+    fail "code $CODE out $OUT"
+  fi
 }
 
 it "promote-correction without all projects in the prompt refuses and writes nothing"

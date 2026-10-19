@@ -140,8 +140,12 @@
 #                          programme_recovery; programme_journal [lazy]. It takes
 #                          `programme` as a host argument for the inbox verb and never
 #                          loads it, nor programme_sources or programme_lifecycle.
+#   programme_trajectory → run_record_core, programme_home, programme_journal,
+#                          programme_sanitize, programme_record, driver_session
 #   programme_view       → programme_home, programme_permission_rules, programme_predicate,
-#                          programme_sanitize, programme_tasks, session_registry
+#                          programme_sanitize, programme_tasks, programme_terms, session_registry,
+#                          programme_view_work
+#   programme_view_work  → programme_home, programme_predicate
 #   permission_transcript → programme_sanitize, session_registry
 #   programme_permission_state → run_record_core, programme_record, programme_permission_rules
 #   programme_permission_settle → run_record_core, programme_home, programme_journal,
@@ -159,10 +163,12 @@
 #                          driver_session, verb_cli; programme_resume, programme_store,
 #                          programme_import [lazy];
 #                          then, after its verb table is built: programme_record,
-#                          programme_evidence, programme_sources, programme_view,
-#                          programme_lifecycle, programme_archive
-#                          Those five receive `programme` as a `host` argument and never
+#                          programme_evidence, programme_sources, programme_terms, programme_proposals,
+#                          programme_trajectory, programme_view, programme_lifecycle, programme_archive
+#                          Those eight receive `programme` as a `host` argument and never
 #                          load it back.
+#   programme_proposals  → programme_home, programme_sanitize
+#   programme_naming     → programme_home
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
 #                          session_registry, driver_session, programme_sanitize,
 #                          programme_resume [lazy] (handover flags the new driver's restore)
@@ -498,7 +504,9 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
            programme_store.py programme_authority.py programme_import.py \
            programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
-           programme_recovery.py programme_archive.py programme_resume.py; do
+           programme_recovery.py programme_archive.py programme_resume.py \
+           programme_terms.py programme_proposals.py programme_trajectory.py programme_view_work.py \
+           programme_naming.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -517,9 +525,9 @@ for _hook in on-user-prompt.sh on-pre-compact.sh; do
 done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
-for _host in programme_record programme_evidence programme_sources programme_view \
+for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
              programme-watch run_record_evidence programme_lifecycle programme_archive \
-             programme_resume; do
+             programme_resume programme_terms programme_proposals programme_view_work programme_naming; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
@@ -626,6 +634,14 @@ if loads_sibling "programme_view.py" "programme_record"; then
   fail "programme_view.py must not load programme_record — the caller passes rules and inbox size"
 else
   pass
+fi
+
+it "programme_view_work.py loads only programme_home and programme_predicate"
+_extra="$(grep -oE 'load_lib_module\("[a-z_]+"\)' "$LIB/programme_view_work.py" | grep -vE '"(programme_home|programme_predicate)"')"
+if [ -z "$_extra" ] && loads_sibling "programme_view_work.py" "programme_home"; then
+  pass
+else
+  fail "programme_view_work.py must stay a pure read over the record and journal it is handed; extra loads: ${_extra}"
 fi
 
 it "programme-watch.py does NOT load programme_sources"

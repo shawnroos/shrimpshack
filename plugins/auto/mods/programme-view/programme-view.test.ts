@@ -7,7 +7,7 @@ const HOME = `${DATA}/programmes/prog-1`
 const VIEW = `${HOME}/views/view.json`
 const LEASES = `${DATA}/programmes/leases`
 
-function viewText(rows: { style: string; text: string }[], format = 1) {
+function viewText(rows: { style: string; text: string }[], format = 3) {
   return JSON.stringify({ view_format: format, run: 'prog-1', generated_at: '2026-10-07T00:00:00Z', model: {}, rows })
 }
 
@@ -93,4 +93,17 @@ test('a lease whose home does not match its run is ignored', async ($, on) => {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   const ran = await $.command.run({ command: 'programme-view' } as never)
   expect(ran.text).toContain('drives no auto programme')
+})
+
+test('a format-1 view from before the upgrade still shows its rows until the next write rebuilds it', async ($, on) => {
+  mock.clock(on)
+  world(on, {
+    [`${LEASES}/default__w2.json`]: JSON.stringify({ session_id: 'sess-pm', run: 'prog-1', home: HOME }),
+    [VIEW]: viewText([{ style: 'text', text: 'old row' }], 1),
+  }, {})
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'programme-view' } as never)
+  const pane = await mountPane($)
+  expect(await pane.find({ type: 'Text', text: 'old row' })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /view format/ })).toBeUndefined()
 })

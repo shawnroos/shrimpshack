@@ -350,6 +350,286 @@ has "tasks: not read yet" "$OUT"
 it "the view never says board"
 lacks "board" "$OUT"
 
+WORK_OUT="$(run_py <<'EOF'
+import datetime
+pv = load_lib_module("programme_view")
+prog = load_lib_module("programme")
+NOW = datetime.datetime(2026, 10, 19, 10, 0, 0, tzinfo=datetime.timezone.utc)
+def ago(seconds):
+    return (NOW - datetime.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+def step(title, clause=None):
+    return {"title": title, "clause": clause}
+def traj(recorded_at, done=(), current=None, planned=(), finish="PR merged", location=None, h="h0"):
+    return {"done": list(done), "current": current, "planned": list(planned), "finish": finish,
+            "location": location, "recorded_at": recorded_at, "session_id": "sess-pm", "hash": h}
+def rec(items=(), cadence="on_change", seconds=3600, sweeps=None):
+    block = ph.new_programme_block([("local", "w2")], "2026-10-19T08:00:00Z")
+    block["agreement"]["terms"]["cadence"].update(value=cadence, seconds=seconds)
+    block["items"] = {i["id"]: i for i in items}
+    if sweeps is not None:
+        block["trajectory_sweeps"] = sweeps
+    return {"run_id": "prog-x", "programme": block}
+def item(key, state="open", joined="2026-10-19T08:00:00Z", trajectory=None, waiting_on=None, owner=None):
+    i = ph.new_item(key, f"title {key}", state=state, now_iso=joined)
+    i["trajectory"] = trajectory
+    i["waiting_on"] = waiting_on
+    if owner:
+        i["owner"].update(owner)
+    return i
+def row(kind, at, **payload):
+    return {"kind": kind, "at": at, "session_id": "sess-pm", "payload": payload}
+def view(r, journal=(), rules=None):
+    return pv.build(r, list(journal), NOW, rules=rules)
+def work(v):
+    return {w["id"]: w for w in v["work"]}
+def out(name, value):
+    print(f"{name}={value}")
+
+v = view(rec([item("t:a", trajectory=traj(ago(2400)))], cadence="fixed", seconds=900))
+w = work(v)["t:a"]
+out("fixed900", f"{w['age_seconds']} {w['faded']}")
+
+v = view(rec([item("t:a", trajectory=traj(ago(1500)))], sweeps=[ago(2400), ago(1800)]))
+w = work(v)["t:a"]
+out("onchange10", f"{w['fade_after_seconds']} {w['faded']}")
+
+v = view(rec([item("t:a", trajectory=traj(ago(4200))), item("t:b", trajectory=traj(ago(4860)))],
+             sweeps=[ago(7200), ago(4800)]))
+out("onchange40", f"{work(v)['t:a']['faded']} {work(v)['t:b']['faded']} {work(v)['t:a']['fade_after_seconds']}")
+
+v = view(rec([item("t:a", trajectory=traj(ago(1500)))], cadence="fixed", seconds=600))
+w = work(v)["t:a"]
+out("fixed600", f"{w['fade_after_seconds']} {w['faded']}")
+
+v = view(rec([item("t:a", trajectory=traj(ago(2000)))], sweeps=[ago(2000)]))
+w = work(v)["t:a"]
+out("onesweep", f"{w['fade_after_seconds']} {w['faded']}")
+
+v = view(rec([item("t:a")]))
+w = work(v)["t:a"]
+out("noplan", f"{w['no_plan']} {w['steps']} {w['age_seconds']} {w['faded']}")
+
+def proposal_view(refusal_at, target="cadence"):
+    r = rec()
+    r["programme"]["agreement"]["terms"]["cadence"]["proposal"] = {
+        "value": "fixed", "extras": {"seconds": 900}, "at": "2026-10-19T09:00:00Z", "origin": "ui", "state": "pending"}
+    j = [row("approval_refused", refusal_at, verb="amend-term", target=target, refused_prompt_id="p1",
+             reason="prompt p1 was not typed by Shawn")]
+    return {t["key"]: t for t in view(r, j)["contract"]["terms"]}["cadence"]["proposal"]
+p = proposal_view("2026-10-19T09:05:00Z")
+out("refused_newer", f"{p['state']}|{p.get('reason')}")
+out("refused_older", proposal_view("2026-10-19T08:55:00Z")["state"])
+out("refused_other_term", proposal_view("2026-10-19T09:05:00Z", target="stop_rule")["state"])
+
+r = rec([item("t:a")])
+r["programme"]["agreement"]["terms"]["cadence"]["proposal"] = {
+    "value": "fixed", "extras": {}, "at": "2026-10-19T09:00:00Z", "origin": "pm", "state": "superseded"}
+p = {t["key"]: t for t in view(r)["contract"]["terms"]}["cadence"]["proposal"]
+out("superseded_kept", p["state"])
+
+waiting = {"who": "ci", "watcher": None, "reporter": "worker-1"}
+v = view(rec([item("t:w", state="waiting", trajectory=traj(ago(60)), waiting_on=waiting)]))
+out("reporter_only", work(v)["t:w"]["watch"]["state"])
+
+r = rec([item("t:w", state="waiting", trajectory=traj(ago(60)),
+              waiting_on={"who": "system", "watcher": "t-w", "reporter": None})])
+r["programme"]["watchers"] = {"t-w": {"item": "t:w", "retry": {"deliverable": "merged"}, "last_beat_at": None}}
+out("retry", work(view(r))["t:w"]["watch"]["state"])
+
+r = rec([item("t:w", state="waiting", trajectory=traj(ago(60)),
+              waiting_on={"who": "ci", "watcher": "cad", "reporter": "worker-1"})], seconds=900)
+r["programme"]["watchers"] = {"cad": {"kind": "cron", "task_id": "c1", "prompt": "/sweep", "last_beat_at": ago(100)}}
+watch = work(view(r))["t:w"]["watch"]
+out("cron_live", f"{watch['state']} {watch.get('interval_seconds')}")
+
+r = rec([item("t:w", state="waiting", trajectory=traj(ago(60)),
+              waiting_on={"who": "ci", "watcher": "mon", "reporter": None})], seconds=900)
+r["programme"]["watchers"] = {"mon": {"kind": "monitor", "task_id": "m1", "last_beat_at": ago(120)}}
+watch = work(view(r))["t:w"]["watch"]
+out("monitor_live", f"{watch['state']} {watch.get('interval_seconds')} {watch.get('beat_age_seconds')}")
+
+r = rec([item("t:w", state="waiting", trajectory=traj(ago(60)),
+              waiting_on={"who": "ci", "watcher": "mon", "reporter": None})], seconds=900)
+r["programme"]["watchers"] = {"mon": {"kind": "monitor", "task_id": "m1", "last_beat_at": ago(5000)}}
+out("stale_watcher", work(view(r))["t:w"]["watch"]["state"])
+
+v = view(rec([item("t:w", state="waiting", trajectory=traj(ago(60)), waiting_on={"who": "ci"})]))
+out("nothing", work(v)["t:w"]["watch"]["state"])
+v = view(rec([item("t:a", trajectory=traj(ago(60)))]))
+out("open_watch", work(v)["t:a"]["watch"])
+
+v = view(rec([item("t:d", state="done"), item("t:h", state="handed"), item("t:x", state="dropped"),
+              item("t:a")]))
+out("finished_absent", " ".join(w["id"] for w in v["work"]))
+
+items = [item("t:old", joined="2026-10-19T07:00:00Z", trajectory=traj(ago(60), h="ho")),
+         item("t:chg", joined="2026-10-19T08:30:00Z", trajectory=traj(ago(60), h="hc")),
+         item("t:new", joined="2026-10-19T09:00:00Z"),
+         item("t:w", state="waiting", joined="2026-10-19T09:30:00Z", waiting_on={"who": "ci"})]
+j = [row("trajectory_changed", ago(600), item="t:chg", old_hash="hb", new_hash="hx"),
+     row("trajectory_changed", ago(300), item="t:chg", old_hash="hx", new_hash="hc")]
+v = view(rec(items), j)
+out("order", " ".join(w["id"] for w in v["work"]))
+w = work(v)
+out("changed", f"{w['t:chg']['changed_since_first']} {w['t:chg']['change_hash']} {w['t:chg']['hash']} "
+               f"{w['t:old']['changed_since_first']} {w['t:old']['change_hash']}")
+
+c = "term:cadence"
+items = [item("t:a", trajectory=traj(ago(60), done=[step("old", c), step("older", c)], current=step("now", c),
+                                     planned=[step("next", c), step("free"), step("i", "instruction:i1")])),
+         item("t:w", state="waiting", waiting_on={"who": "ci"},
+              trajectory=traj(ago(60), current=step("wait", c), planned=[step("then", "term:remit")])),
+         item("t:d", state="done", trajectory=traj(ago(60), current=step("gone", c)))]
+r = rec(items)
+r["programme"]["instructions"] = [
+    {"id": "i1", "quote": "keep PRs small", "applies_to": "t:a", "state": "active", "at": ago(900)},
+    {"id": "i2", "quote": "no force pushes", "applies_to": None, "state": "active", "at": ago(900)},
+    {"id": "i3", "quote": "old", "applies_to": None, "state": "closed", "at": ago(900)}]
+v = view(r, rules=prog.rules_in_force(r, {}))
+terms = {t["key"]: t for t in v["contract"]["terms"]}
+out("reliant", f"{terms['cadence']['reliant_steps']} {terms['remit']['reliant_steps']} {terms['stop_rule']['reliant_steps']}")
+ins = {i["id"]: i for i in v["contract"]["instructions"]}
+out("instructions", " ".join(sorted(ins)) + f" | {ins['i1']['scope']} {ins['i1']['reliant_steps']} {ins['i1']['quote']}"
+                    f" | {ins['i2']['scope']} {ins['i2']['applies_to']} {ins['i2']['reliant_steps']}")
+w = work(v)["t:a"]
+out("steps", " ".join(f"{s['kind']}:{s['clause_label']}" for s in w["steps"]))
+out("no_clause", f"{[s for s in w['steps'] if s['title'] == 'free'][0]['no_clause']}")
+out("waiting_glyph", work(v)["t:w"]["steps"][0]["kind"])
+out("finish", w["finish"])
+
+r = rec()
+tools = r["programme"]["agreement"]["terms"]["tools_of_record"]
+tools["options"] = tools["options"] + ["sentry", "jira"]
+tools["option_descriptions"] = {"sentry": "Error reports from Sentry."}
+tools["value"] = ["tracker", "sentry"]
+r["programme"]["agreement"]["terms"]["mystery"] = {"key": "mystery", "options": ["a"], "value": "a",
+                                                    "set_by": "default", "set_at": "2026-10-19T08:00:00Z"}
+terms = {t["key"]: t for t in view(r)["contract"]["terms"]}
+opts = {o["name"]: o for o in terms["tools_of_record"]["options"]}
+out("option_desc", f"{opts['sentry']['description']}|{opts['jira']['description']}|{opts['tracker']['description']}")
+out("option_active", " ".join(n for n, o in opts.items() if o["active"]))
+out("option_names", " ".join(opts))
+out("mystery", f"{terms['mystery']['description']}|{terms['mystery']['binding']}|{terms['mystery']['options'][0]['description']}")
+out("cadence_meta", f"{terms['cadence']['binding']}|{terms['cadence']['description']}|{terms['cadence']['label']}|{terms['cadence']['value_text']}")
+active = [o["name"] for o in terms["cadence"]["options"] if o["active"]]
+out("cadence_active", " ".join(active))
+out("editors", " ".join(f"{k}:{t['editor']}" for k, t in terms.items()))
+
+r = rec()
+cad = r["programme"]["agreement"]["terms"]["cadence"]
+cad.update(set_at="2026-10-19T09:30:00Z", set_by="shawn", why="slower")
+cad["notes"] = [{"text": "try hourly next week", "at": "2026-10-19T09:31:00Z", "origin": "ui"}]
+j = [row("rules_loaded", "2026-10-19T09:10:00Z", source="startup")]
+v = view(r, j)
+out("reread", f"{v['reread']['last_at']}|{' '.join(v['reread']['changed_since'])}|{v['reread']['requested']}")
+terms = {t["key"]: t for t in v["contract"]["terms"]}
+out("term_facts", f"{terms['cadence']['set_by']}|{terms['cadence']['why']}|{terms['cadence']['notes'][0]['text']}")
+v = view(r, j + [row("reread_requested", "2026-10-19T09:40:00Z", origin="ui")])
+out("reread_requested", v["reread"]["requested"])
+v = view(r, j + [row("reread_requested", "2026-10-19T09:40:00Z", origin="ui"),
+                 row("rules_acked", "2026-10-19T09:45:00Z")])
+out("reread_after_ack", f"{v['reread']['last_at']}|{v['reread']['changed_since']}|{v['reread']['requested']}")
+
+v = view(rec([item("t:a", owner={"pane": "w2:p7", "session_id": "sess-worker"},
+                   trajectory=traj(ago(60), current=step("Write view test", c), location={"tab": "auto", "pane": "tests"}))]))
+w = work(v)["t:a"]
+out("location", f"{w['location']}|{w['session_id']}")
+out("work_json", json.dumps(v["work"]))
+out("rows_text", pv.render_text(v).replace("\n", " ¶ "))
+
+v = view({"run_id": "prog-empty", "programme": {}})
+out("empty", f"{v['work']}|{len(v['contract']['terms'])}|{v['contract']['instructions']}|{v['reread']['last_at']}|{v['view_format']}")
+v = view({})
+out("no_block", f"{v['work']}|{v['reread']['requested']}")
+EOF
+)"
+got() { printf '%s\n' "$WORK_OUT" | sed -n "s/^$1=//p"; }
+
+it "fixed cadence 900s: a trajectory recorded 2400s ago reads 2400s old and faded (AE2)"
+check "2400 True" "$(got fixed900)"
+it "on-change cadence, sweeps 10 minutes apart: the 30-minute floor applies, 25 minutes is not faded"
+check "1800 False" "$(got onchange10)"
+it "on-change cadence, sweeps 40 minutes apart: 70 minutes is not faded, 81 minutes is"
+check "False True 4800" "$(got onchange40)"
+it "fixed cadence of 10 minutes: the threshold is the 30-minute floor, not 20 minutes"
+check "1800 False" "$(got fixed600)"
+it "only one sweep recorded: the 30-minute floor applies"
+check "1800 True" "$(got onesweep)"
+it "an open item with no trajectory is in work with no plan yet"
+check "True [] None False" "$(got noplan)"
+it "a refusal newer than the pending proposal renders refused with its reason"
+check "refused|prompt p1 was not typed by Shawn" "$(got refused_newer)"
+it "a refusal older than the proposal leaves it pending"
+check "pending" "$(got refused_older)"
+it "a refusal for another term leaves the proposal pending"
+check "pending" "$(got refused_other_term)"
+it "a settled proposal keeps its stored state"
+check "superseded" "$(got superseded_kept)"
+it "a wait with a named reporter and no watcher reads reporter_only (AE6)"
+check "reporter_only" "$(got reporter_only)"
+it "a retry watcher with no process and no beat reads retry_never_started"
+check "retry_never_started" "$(got retry)"
+it "a cron watcher with a fresh beat reads watcher_live with the cadence interval"
+check "watcher_live 900" "$(got cron_live)"
+it "a live monitor watcher shows the last beat's age, not an interval"
+check "watcher_live None 120" "$(got monitor_live)"
+it "a stale watcher with no reporter reads nothing_watching"
+check "nothing_watching" "$(got stale_watcher)"
+it "a wait with no reporter and no watcher reads nothing_watching"
+check "nothing_watching" "$(got nothing)"
+it "an open item carries no watch state"
+check "None" "$(got open_watch)"
+it "done, handed and dropped items are absent from work"
+check "t:a" "$(got finished_absent)"
+it "work orders waiting first, then plan-changed, then join time"
+check "t:w t:chg t:old t:new" "$(got order)"
+it "a changed item carries the newest change hash beside its trajectory hash"
+check "True hc hc False None" "$(got changed)"
+it "reliant counts take current and planned steps of open and waiting items, not done steps"
+check "3 1 0" "$(got reliant)"
+it "instructions show quote, own or inherited scope and reliant steps; closed ones are absent"
+check "i1 i2 | own 1 keep PRs small | inherited programme 0" "$(got instructions)"
+it "steps carry their glyph kind and clause label"
+check "done:cadence done:cadence current:cadence planned:cadence planned:no clause planned:instruction i1" "$(got steps)"
+it "a step with no clause is flagged no_clause"
+check "True" "$(got no_clause)"
+it "a waiting item's current step uses the waiting glyph"
+check "waiting" "$(got waiting_glyph)"
+it "a work entry carries its finish"
+check "PR merged" "$(got finish)"
+it "option descriptions come from the guide, then the term, else no description"
+check "Error reports from Sentry.|no description|The issue tracker." "$(got option_desc)"
+it "a multi-select term marks every chosen option active"
+check "tracker sentry" "$(got option_active)"
+it "options are exactly the ones the term defines"
+check "tracker tasks plans sentry jira" "$(got option_names)"
+it "a term outside the guide reads no description and binding none"
+check "no description|none|no description" "$(got mystery)"
+it "a term carries binding, description, label and value text"
+check "code|How often the PM sweeps the programme.|cadence|on_change, seconds 3600" "$(got cadence_meta)"
+it "the active option is marked"
+check "on_change" "$(got cadence_active)"
+it "each term names how the contract view edits it; a term outside the guide is a plain choice"
+check "remit:space stop_rule:until autonomy:choice cadence:interval tools_of_record:checklist mystery:choice" "$(got editors)"
+it "reread: rules loaded at 09:10 and cadence set at 09:30 give changed since cadence"
+check "2026-10-19T09:10:00Z|cadence|False" "$(got reread)"
+it "a term carries who set it, why and its notes"
+check "shawn|slower|try hourly next week" "$(got term_facts)"
+it "a re-read request newer than the last re-read shows as requested"
+check "True" "$(got reread_requested)"
+it "an ack after the request clears it and resets changed since"
+check "2026-10-19T09:45:00Z|[]|False" "$(got reread_after_ack)"
+it "location is the stored tab and pane names, and the session is the owner's"
+check "auto › tests|sess-worker" "$(got location)"
+it "no herdr pane code reaches a work entry"
+lacks "w2:p7" "$(got work_json)"
+it "the text rows carry a Work section with the current step"
+has "Work ¶   title t:a: Write view test" "$(got rows_text)"
+it "a record with no trajectories gives empty work, full contract terms and an empty reread"
+check "[]|5|[]|None|3" "$(got empty)"
+it "a record with no programme block still builds"
+check "[]|False" "$(got no_block)"
+
 TERMS_RUN="$(new_run w10)"
 TERMS_HOME="${CLAUDE_AUTO_DATA_DIR}/programmes/${TERMS_RUN}"
 run_py "$TERMS_RUN" <<'EOF' >/dev/null
@@ -491,7 +771,9 @@ FORMAT="$(run_py <<'EOF'
 print(load_lib_module("programme_view").VIEW_FORMAT)
 EOF
 )"
-has "const VIEW_FORMAT = ${FORMAT}" "$(cat "${MOD}/register.tsx")"
+has "const VIEW_FORMAT = ${FORMAT}" "$(cat "${MOD}/view.ts")"
+it "the view ships as format 3"
+check "3" "$FORMAT"
 
 it "the mod is declared in the plugin's hooks file"
 check "../../mods/programme-view/register.tsx" "$("$PY" -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["modules"]))' "${AUTO_ROOT}/.claude/hooks/hooks.json")"

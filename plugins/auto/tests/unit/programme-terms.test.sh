@@ -136,7 +136,7 @@ check '[["crop defaults", "PM picks the crop default", "repo README and prior ru
 it "the project term gets an id of t and six hex digits"
 check true "$(field 'bool(__import__("re").fullmatch(r"t[0-9a-f]{6}", prog["agreement"]["project_terms"][0]["id"]))')"
 it "project terms live outside the fixed terms map"
-check '["autonomy", "cadence", "remit", "sources", "stop_rule"]' "$(field 'sorted(prog["agreement"]["terms"])')"
+check '["autonomy", "cadence", "remit", "stop_rule", "tools_of_record"]' "$(field 'sorted(prog["agreement"]["terms"])')"
 it "agreement_proposed carries the project terms and their source"
 has '"source": "repo README and prior run 0912"' "$(journal_last agreement_proposed)"
 has '"area": "crop defaults"' "$(journal_last agreement_proposed)"
@@ -429,8 +429,8 @@ agreement: accepted 2026-10-01T00:00:00Z
 autonomy: protocol
 cadence: on_change, seconds 3600
 remit: space
-sources: tracker, tasks, plans
 stop_rule: nothing_it_can_act_on
+tools_of_record: tracker, tasks, plans
 rule evals-or-docs: act, requires merged, recorded
 rule fix-only: act, requires merged, verified, recorded; caveat: Use this only when the change stops broken behaviour and adds nothing new.
 rule flagged-code: act, requires merged, flagged, verified, recorded; caveat: A prod flag stays off until Shawn says otherwise.

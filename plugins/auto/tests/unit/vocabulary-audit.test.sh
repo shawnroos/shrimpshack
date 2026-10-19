@@ -83,6 +83,13 @@ fail() {
 # unit          unit             U7
 # recipe        recipe           U8
 # ledger        ledger           U9
+# sources       sources          programme-sessions U5 → tools_of_record
+#
+# `sources` stays `pending` on purpose: the word also names the programme's
+# source-availability block (`programme["sources"]`, `set-source`,
+# `--record-sources`), which is not renamed, so `regex_for_term` cannot tell the
+# retired agreement term from live code. tests/unit/programme-terms.test.sh polices
+# the term's key spellings instead.
 TERM_STATUS="\
 orchestrator=done
 emitter=done
@@ -91,7 +98,8 @@ tick=done
 seam=done
 unit=done
 recipe=done
-ledger=done"
+ledger=done
+sources=pending"
 
 # ─── SCAN SCOPE ─────────────────────────────────────────────────────────────
 # Every tree a USER or an AGENT reads. Once a term is `done`, none of them may
