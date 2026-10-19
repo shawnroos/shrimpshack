@@ -477,7 +477,7 @@ it "watcher-beat refuses an overlong --prompt"
 "$PY" "$PROG" watcher-beat cron --prompt "$(printf 'a%.0s' $(seq 1 4001))" --run "$RUN" > /dev/null 2>&1
 check 2 "$?"
 it "a prompt equal to the stored cron prompt after collapsing whitespace has origin cron"
-check "cron typed" "$(run_py "$RUN" <<'EOF'
+check "cron unknown" "$(run_py "$RUN" <<'EOF'
 oup = load_lib_module("on-user-prompt")
 rec = record(args[0])
 print(oup.classify_origin("wake up and sweep the space", rec), oup.classify_origin("wake up and sweep", rec))
