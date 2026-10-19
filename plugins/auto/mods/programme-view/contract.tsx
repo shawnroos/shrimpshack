@@ -128,7 +128,7 @@ function day(iso: string | null): string {
 }
 
 export function ContractView(ui: Ui, props: ContractProps): RenderElement {
-  const { Box, Button, Input, Select, Text } = ui
+  const { Box, Button, Input, Text } = ui
   const { contract, reread, openTerm, focusedRow, itemTitles, selectedItem, armed, drafts, editing, status, spaces } = props
   const { onToggle, onOption, act } = props
   const out: RenderElement[] = []
@@ -165,21 +165,17 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
       )
     }
     if (term.key === 'remit') {
-      if (spaces.length === 0) {
-        line(`${term.key}:spaces`, <Text dimColor>{'        No herdr spaces are listed for the remit'}</Text>)
-      } else {
-        line(
-          `${term.key}:spaces`,
-          pad(8),
-          <Select
-            key="custom:remit:space"
-            label="Add a herdr space: "
-            options={spaces.map(space => ({ value: space }))}
-            {...(draft?.space ? { value: draft.space } : {})}
-            onSelect={value => act.space(term, value)}
-          />,
-        )
-      }
+      line(
+        `${term.key}:spaces`,
+        pad(8),
+        <Input
+          key="custom:remit:space"
+          label="Add a herdr space (server.workspace): "
+          placeholder={spaces[0] ?? 'default.w2'}
+          value={draft?.space ?? ''}
+          onSubmit={text => act.space(term, text.trim())}
+        />,
+      )
     }
     if (term.key !== 'tools_of_record') return
     line(`${term.key}:add`, pad(8), <Button key="custom:tools:add" label="Add a tool…" plain onPress={() => act.addTool(term)} />)

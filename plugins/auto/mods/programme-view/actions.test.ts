@@ -222,18 +222,15 @@ test('ticking two tools and adding "sentry" with a description, then p, runs one
   ])
 })
 
-test('remit offers the herdr spaces the PM lists for the remit and proposes the picked one', async ($, on) => {
-  const model = { remit: { spaces: [{ server: 'default', workspace: 'w2' }, { server: 'default', workspace: 'w3' }] } }
+test('remit takes any herdr space by name, including one outside the remit, and proposes it', async ($, on) => {
+  const model = { remit: { spaces: [{ server: 'default', workspace: 'w2' }] } }
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ model }) })
   const calls = verbs(on)
   const pane = await contractPane($)
   await press(pane, 'term:remit')
-  const picker = await findNode(pane, one => one.type === 'Select' && one.props?.key === 'custom:remit:space')
-  expect((picker?.props?.options as { value: string }[]).map(option => option.value)).toEqual(['default.w2', 'default.w3'])
-  await pane.select({ key: 'custom:remit:space', value: 'default.w3' })
-  await settle()
+  await type(pane, 'custom:remit:space', 'default.w9')
   await press(pane, 'act:propose')
-  expect(calls.map(call => call.argv.slice(1))).toEqual([['propose-term', 'remit', '--add', 'default.w3', '--origin', 'ui']])
+  expect(calls.map(call => call.argv.slice(1))).toEqual([['propose-term', 'remit', '--add', 'default.w9', '--origin', 'ui']])
 })
 
 test('the action keys are drawn only while the pane is focused, with their hotkeys', async ($, on) => {

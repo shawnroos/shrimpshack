@@ -24,10 +24,7 @@ test('no action in the pane submits, suggests or fills a prompt', async ($, on) 
     await press(`term:${key}`)
     await press(`option:${key}:${pick}`)
     if (key === 'cadence') await type('custom:cadence:minutes', '15')
-    if (key === 'remit') {
-      await pane.select({ key: 'custom:remit:space', value: 'default.w3' })
-      await settle()
-    }
+    if (key === 'remit') await type('custom:remit:space', 'default.w3')
     if (key === 'tools_of_record') {
       await press('custom:tools:add')
       await type('custom:tools:name', 'sentry')
