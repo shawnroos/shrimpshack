@@ -32,7 +32,9 @@ from this session's lease.
 
 1. **Beat and expire.** `P beat`. If it refuses because the programme ended,
    stop. `P expire` ends a programme whose agreement was never accepted; if it
-   prints `"ended": true`, tell Shawn in one line and stop.
+   prints `"ended": true`, tell Shawn in one line and stop. If the journal has a
+   `reread_requested` row newer than your last `rules_acked` or `rules_loaded`
+   row, run `P rules --ack` and read the rules it prints.
 2. **Prune prompts.** `"${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}" "${CLAUDE_PLUGIN_ROOT}/lib/programme_journal.py" prune --run <run>`.
    The run id is the `run` field of `P status --json`.
 3. **Apply Shawn's typed answers.** For each message Shawn typed since the last

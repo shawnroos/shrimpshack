@@ -326,6 +326,24 @@ has "compacted" "$OUT"
 check '"active"' "$(field 'prog["instructions"][-1]["state"]')"
 rm -f "${HOME_DIR}/.compact-flag"
 
+touch "${HOME_DIR}/.compact-flag"
+it "request-reread succeeds while the compact flag is set and journals reread_requested"
+prog request-reread --origin ui
+check 0 "$CODE"
+GOT="$(run_py "$RUN" <<'PY'
+rows = [r for r in pj.read(args[0]) if r["kind"] == "reread_requested"]
+print(len(rows), rows[-1]["payload"].get("origin") if rows else None)
+PY
+)"
+check "1 ui" "$GOT"
+it "request-reread leaves the compact flag in place"
+check yes "$([ -f "${HOME_DIR}/.compact-flag" ] && echo yes || echo no)"
+rm -f "${HOME_DIR}/.compact-flag"
+it "request-reread does not move loop.last_beat_at"
+edit 'rec.setdefault("loop", {})["last_beat_at"] = "2026-01-01T00:00:00Z"'
+prog request-reread
+check '"2026-01-01T00:00:00Z"' "$(raw_field 'rec["loop"]["last_beat_at"]')"
+
 it "a stranger session cannot propose, note or clear"
 CLAUDE_CODE_SESSION_ID="sess-other" prog note-term remit "hi" --run "$RUN"
 check 1 "$CODE"

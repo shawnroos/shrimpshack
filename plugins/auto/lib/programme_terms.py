@@ -202,6 +202,12 @@ def _h_note_term(host, argv):
     return _ui_write(host, opts, change, "term_noted")
 
 
+def _h_request_reread(host, argv):
+    _, opts = host._parse(argv, values=("run", "origin"))
+    origin = _origin(opts)
+    return _ui_write(host, opts, lambda programme, prompt, rec: {"origin": origin}, "reread_requested")
+
+
 _SPECS = (
     ("propose-term", _h_propose_term,
      "<key> [<value>] [--seconds <n>] [--until <iso>] [--add <tool|server.workspace>] "
@@ -211,6 +217,9 @@ _SPECS = (
      "proposal replaces the old one. Allowed while the compact flag is set; never counts as a beat."),
     ("clear-proposal", _h_clear_proposal, "<key> [--origin pm|ui] [--run <id>]",
      "a term with no proposal. Allowed while the compact flag is set; never counts as a beat."),
+    ("request-reread", _h_request_reread, "[--origin pm|ui] [--run <id>]",
+     "nothing; asks the PM to re-read the rules in force at its next sweep. Leaves the compact flag "
+     "as it is. Allowed while the compact flag is set; never counts as a beat."),
     ("note-term", _h_note_term, "<key> <text> | <key> --clear [--origin pm|ui] [--run <id>]",
      f"empty text; more than {NOTES_MAX} notes on one term. Allowed while the compact flag is set; "
      "never counts as a beat."),

@@ -726,7 +726,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
 `term_amended`, `term_proposed`, `term_noted`, `proposal_cleared`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
-`rule_adopted`, `rules_acked`, `stopped_unwatched`, `item_added`, `item_updated`,
+`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
@@ -744,6 +744,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   An expired programme found by `end`, `expire` or `takeover` journals `programme_ended`
   with reason `agreement_unaccepted` and `request: null`; `takeover` also journals its
   `request_refused`, rebuilds the view and prints the CronDelete and TaskStop lines.
+- `rules_loaded {source}` is journaled by SessionStart each time it injects the rules in force into
+  the driving session. `reread_requested {origin}` is a request for the PM to re-read them; the
+  last re-read is the newest `rules_acked` or `rules_loaded` row.
 - `term_proposed {term, value, extras, origin}`, `proposal_cleared {term, origin}` and
   `term_noted {term, note, origin}` (or `{term, cleared: true, origin}`) are journaled by
   `propose-term`, `clear-proposal` and `note-term`. `origin` is `pm` or `ui`, a display label only.

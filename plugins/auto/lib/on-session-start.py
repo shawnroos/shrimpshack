@@ -86,12 +86,21 @@ def _stdin_payload() -> str:
 
 def programme_context(stdin_raw) -> list:
     pre_compact = load_lib_module("on-pre-compact")
-    holds = pre_compact.driven_programmes(
-        pre_compact.main_thread_session(pre_compact.hook_input(stdin_raw)))
+    data = pre_compact.hook_input(stdin_raw)
+    sid = pre_compact.main_thread_session(data)
+    holds = pre_compact.driven_programmes(sid)
     if not holds:
         return []
     programme = load_lib_module("programme")
-    return [programme.render_rules(hold["record"]) for hold in holds]
+    journal = load_lib_module("programme_journal")
+    blocks = []
+    for hold in holds:
+        blocks.append(programme.render_rules(hold["record"]))
+        try:
+            journal.append(hold["run"], "rules_loaded", sid, {"source": data.get("source")})
+        except Exception:
+            pass  # rel-001: the block is already rendered; a lost row only ages "last re-read".
+    return blocks
 
 
 def _cli(argv) -> int:

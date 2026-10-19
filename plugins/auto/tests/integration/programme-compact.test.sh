@@ -192,6 +192,18 @@ has "\"don't fix other teams' breaks\" (applies to programme)" "$CTX"
 it "the block is readable lines, not a JSON dump"
 lacks '{"' "$CTX"
 
+it "the driving session's SessionStart journals rules_loaded"
+check 1 "$(run_py "$RUN" <<'PY'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "rules_loaded"))
+PY
+)"
+it "a non-driving session's SessionStart journals no rules_loaded"
+session_start '{"session_id":"sess-stranger","source":"startup"}' >/dev/null
+check 1 "$(run_py "$RUN" <<'PY'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "rules_loaded"))
+PY
+)"
+
 it "the driving session gets the block at a resumed session start too"
 has "don't fix other teams' breaks" "$(context_of "$(session_start '{"session_id":"sess-pm","source":"resume"}')")"
 

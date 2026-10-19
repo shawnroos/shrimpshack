@@ -57,6 +57,8 @@ KINDS = (
     "rule_proposed",
     "rule_adopted",
     "rules_acked",
+    "rules_loaded",
+    "reread_requested",
     "stopped_unwatched",
     "item_added",
     "item_updated",

@@ -118,6 +118,9 @@ session.
   count as a beat, and take --origin ui as a display label. `amend-term` and
   `set-remit` settle a pending proposal: accepted when the new value matches it,
   else superseded. The rules in force never carry a proposal.
+- **Re-read requests**: `request-reread` asks the PM to re-read the rules in force
+  at its next sweep. It needs no prompt, leaves the compact flag as it is, never
+  counts as a beat, and takes --origin ui as a display label.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`).
