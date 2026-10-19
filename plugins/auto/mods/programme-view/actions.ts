@@ -33,7 +33,7 @@ export async function runVerb($: EngineInterface, argv: string[]): Promise<Outco
   return { ok: true, message: stdout.trim() }
 }
 
-const UI = ['--origin', 'ui']
+export const UI_ORIGIN_ARGS = ['--origin', 'ui']
 
 export function toolsOf(term: Term, draft?: Draft): string[] {
   return draft?.tools ?? (Array.isArray(term.value) ? term.value.map(String) : [])
@@ -48,11 +48,11 @@ export function proposeArgv(term: Term, draft: Draft | undefined): string[] | st
     const list = name && !tools.includes(name) ? [...tools, name] : tools
     if (!draft?.tools && !name) return 'tick or add a tool first'
     const add = name ? ['--add', name, '--description', draft?.add?.description ?? ''] : []
-    return ['propose-term', key, list.join(',') || 'none', ...add, ...UI]
+    return ['propose-term', key, list.join(',') || 'none', ...add, ...UI_ORIGIN_ARGS]
   }
-  if (key === 'remit' && draft?.space) return ['propose-term', key, '--add', draft.space, ...UI]
-  if (key === 'cadence' && draft?.minutes) return ['propose-term', key, 'fixed', '--seconds', String(draft.minutes * 60), ...UI]
-  if (draft?.option) return ['propose-term', key, draft.option, ...UI]
+  if (key === 'remit' && draft?.space) return ['propose-term', key, '--add', draft.space, ...UI_ORIGIN_ARGS]
+  if (key === 'cadence' && draft?.minutes) return ['propose-term', key, 'fixed', '--seconds', String(draft.minutes * 60), ...UI_ORIGIN_ARGS]
+  if (draft?.option) return ['propose-term', key, draft.option, ...UI_ORIGIN_ARGS]
   return 'pick an option first'
 }
 
@@ -74,7 +74,7 @@ function interval(seconds: number): string {
 function reply(term: Term, value: unknown, extras: Record<string, unknown>): string {
   const label = words(term.key)
   if (term.key === 'tools_of_record') {
-    const before = Array.isArray(term.value) ? term.value.map(String) : []
+    const before = toolsOf(term)
     const after = Array.isArray(value) ? value.map(String) : []
     const dropped = before.filter(tool => !after.includes(tool))
     const verb = after.some(tool => !before.includes(tool)) ? 'widen' : 'amend'

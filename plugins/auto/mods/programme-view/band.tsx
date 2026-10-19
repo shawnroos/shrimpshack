@@ -1,4 +1,5 @@
 import type { ClientElements } from 'claude-code'
+import { COLOR as PALETTE_COLOR, GLYPH as PALETTE_GLYPH } from './palette'
 import { duration } from './tree'
 
 export type StepKind = 'done' | 'current' | 'waiting' | 'planned'
@@ -23,18 +24,18 @@ export type Hit = { line: number; x0: number; x1: number; item: string; step: nu
 export type BandLayout = { lines: Span[][]; hits: Hit[]; shown: string[]; more: number }
 
 export const GLYPH = {
-  done: '',
-  planned: '',
-  current: '',
-  waiting: '\u{F051F}',
-  goal: '',
-  pane: '',
-  changed: '',
-  capLeft: '',
-  capRight: '',
+  done: PALETTE_GLYPH.done,
+  planned: PALETTE_GLYPH.planned,
+  current: PALETTE_GLYPH.current,
+  waiting: PALETTE_GLYPH.waiting,
+  goal: PALETTE_GLYPH.finish,
+  pane: PALETTE_GLYPH.pane,
+  changed: PALETTE_GLYPH.changed,
+  capLeft: '\uE0B6',
+  capRight: '\uE0B4',
 }
 
-const COLOR = { done: 'success', active: 'claude', next: 'suggestion', marked: 'warning' }
+const COLOR = { done: PALETTE_COLOR.done, active: PALETTE_COLOR.current, next: PALETTE_COLOR.next, marked: PALETTE_COLOR.changed }
 const TITLE_COLUMNS = 24
 const LOCATION_COLUMNS = 32
 const SHORTEN_OVER = 8
