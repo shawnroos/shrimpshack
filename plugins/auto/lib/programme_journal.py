@@ -82,6 +82,7 @@ KINDS = (
     "handed_over",
     "programme_ended",
     "request_refused",
+    "approval_refused",
 )
 
 _TOKEN_PATTERNS = [

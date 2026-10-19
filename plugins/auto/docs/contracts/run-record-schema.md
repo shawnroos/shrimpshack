@@ -728,7 +728,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
-`taken_over`, `handed_over`, `programme_ended`, `request_refused`.
+`taken_over`, `handed_over`, `programme_ended`, `request_refused`, `approval_refused`.
 
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`;
@@ -738,6 +738,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   An expired programme found by `end`, `expire` or `takeover` journals `programme_ended`
   with reason `agreement_unaccepted` and `request: null`; `takeover` also journals its
   `request_refused`, rebuilds the view and prints the CronDelete and TaskStop lines.
+- `approval_refused {verb, target, refused_prompt_id, reason}` is journaled when an approval verb's
+  cited prompt is refused after the session guard passed. The run record is unchanged. The prompt id
+  sits under its own key so a refused prompt can still be pruned.
 - `blocked_driver_send` carries `{verb, target, pane_id, command}`. `verb` is the
   parsed herdr verb (for example `agent prompt`), or null when the command was denied
   only because its text names the driver's pane; `target` is then the pane id or

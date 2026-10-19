@@ -302,7 +302,7 @@ def _widen_word(opts) -> tuple:
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None):
+           journal=True, after=None, verb=None, target=None):
     run_id, home, _ = _locate(opts)
     seen = {}
 
@@ -315,7 +315,12 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         seen["prompt"] = prompt
         seen["record"] = rec
 
-    run_record_core._with_locked_run_record(home, run_id, mutate)
+    try:
+        run_record_core._with_locked_run_record(home, run_id, mutate)
+    except (ProgrammeError, ValueError) as exc:
+        if (needs_prompt or prompt_id) and "sid" in seen:
+            _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
+        raise
     prompt = seen["prompt"]
     payload = dict(seen["payload"] or {})
     if after is not None:
@@ -330,6 +335,17 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
     refresh_view(run_id, home, seen["record"])
     _emit({"ok": True, "run": run_id, "kind": kind, **payload})
     return 0
+
+
+def _journal_refusal(run_id, home, sid, verb, target, prompt_id, exc) -> None:
+    # The verb must still fail with its own error; a journal failure here only costs the "refused" display.
+    try:
+        programme_journal.append(run_id, "approval_refused", sid,
+                                 {"verb": verb, "target": target, "refused_prompt_id": prompt_id,
+                                  "reason": str(exc)})
+        refresh_view(run_id, home)
+    except Exception as err:
+        sys.stderr.write(f"{PROG}: could not journal the refusal: {err}\n")
 
 
 def _emit(obj) -> None:
@@ -457,7 +473,8 @@ def _h_accept_agreement(argv):
                                               "quote": prompt["quote"]}
         return {"terms": {k: t.get("value") for k, t in programme["agreement"]["terms"].items()}}
 
-    return _write(opts, change, "agreement_accepted", prompt_id=opts["prompt"], needs_prompt=True)
+    return _write(opts, change, "agreement_accepted", prompt_id=opts["prompt"], needs_prompt=True,
+                  verb="accept-agreement", target="agreement")
 
 
 def _h_amend_term(argv):
@@ -475,7 +492,8 @@ def _h_amend_term(argv):
             require_named(prompt, key, value)
         return _set_term(term, checked, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
 
-    return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True)
+    return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True,
+                  verb="amend-term", target=key)
 
 
 def _h_record_instruction(argv):
@@ -491,7 +509,8 @@ def _h_record_instruction(argv):
         programme["instructions"].append(entry)
         return {"instruction": entry["id"], "applies_to": target, "until": entry["until"]}
 
-    return _write(opts, change, "instruction_recorded", prompt_id=opts.get("prompt"), needs_prompt=True)
+    return _write(opts, change, "instruction_recorded", prompt_id=opts.get("prompt"), needs_prompt=True,
+                  verb="record-instruction", target="instruction")
 
 
 def _h_close_instruction(argv):
@@ -512,7 +531,7 @@ def _h_close_instruction(argv):
         return {"instruction": positional[0], "as": opts["as"], "why": opts.get("why")}
 
     return _write(opts, change, "instruction_closed", prompt_id=opts.get("prompt"),
-                  needs_prompt=withdrawn)
+                  needs_prompt=withdrawn, verb="close-instruction", target=positional[0])
 
 
 def _h_propose_rule(argv):

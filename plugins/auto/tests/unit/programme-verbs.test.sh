@@ -531,6 +531,52 @@ CLAUDE_CODE_SESSION_ID="sess-nobody" prog rules
 check 1 "$CODE"
 has "--run" "$OUT"
 
+refusals() {
+  run_py "$RUN" <<'EOF'
+rows = [r["payload"] for r in pj.read(args[0]) if r["kind"] == "approval_refused"]
+print(json.dumps([[p.get("verb"), p.get("target"), p.get("refused_prompt_id"), p.get("reason")] for p in rows]))
+EOF
+}
+
+P_CRON="$(prompt cron 'wake up and sweep the space again')"
+CADENCE_BEFORE="$(field 'prog["agreement"]["terms"]["cadence"]')"
+it "amend-term citing a cron prompt journals one approval_refused row naming the term"
+prog amend-term cadence fixed --seconds 900 --prompt "$P_CRON"
+check 1 "$CODE"
+GOT="$(run_py "$RUN" "$P_CRON" <<'EOF'
+run, pid = args
+rows = [r["payload"] for r in pj.read(run) if r["kind"] == "approval_refused"]
+p = rows[-1]
+print("|".join([p["verb"], p["target"], p["refused_prompt_id"], str("typed" in p["reason"])]))
+EOF
+)"
+check "amend-term|cadence|${P_CRON}|True" "$GOT"
+it "the refused amend leaves the cadence unchanged"
+check "$CADENCE_BEFORE" "$(field 'prog["agreement"]["terms"]["cadence"]')"
+
+it "a refusal from a stranger session journals nothing"
+COUNT_BEFORE="$(refusals)"
+CLAUDE_CODE_SESSION_ID="sess-stranger" prog amend-term cadence fixed --seconds 900 --prompt "$P_CRON" --run "$RUN"
+check 1 "$CODE"
+check "$COUNT_BEFORE" "$(refusals)"
+
+it "record-instruction citing a cron prompt journals a refusal for the instruction"
+prog record-instruction --prompt "$P_CRON"
+check 1 "$CODE"
+has '"record-instruction", "instruction"' "$(refusals)"
+
+it "accept-agreement citing an unknown prompt journals a not-found refusal"
+prog accept-agreement --prompt p0f0f0f
+check 1 "$CODE"
+has '"accept-agreement", "agreement", "p0f0f0f", "no prompt' "$(refusals)"
+
+it "a successful approval journals no refusal"
+COUNT_BEFORE="$(refusals)"
+P_CAD="$(prompt typed 'cadence fixed please')"
+prog amend-term cadence fixed --seconds 900 --prompt "$P_CAD"
+check 0 "$CODE"
+check "$COUNT_BEFORE" "$(refusals)"
+
 it "an unknown verb exits 2 and points at describe"
 prog no-such-verb
 check 2 "$CODE"

@@ -520,7 +520,8 @@ def _h_set_remit(host, argv):
                 "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
 
     return programme_home._with_leases_lock(
-        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt")))
+        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"),
+                            verb="set-remit", target="remit"))
 
 
 _SPECS = (
