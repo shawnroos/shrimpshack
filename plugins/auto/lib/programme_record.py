@@ -573,6 +573,10 @@ def _h_claim(host, argv):
     return 0
 
 
+def _h_collect_result(host, argv):
+    return load_lib_module("programme_artifacts").collect_verb(host, argv)
+
+
 def _h_mark_read(host, argv):
     _, opts = host._parse(argv, values=("run", "offset"))
     offset = opts.get("offset")
@@ -818,6 +822,12 @@ _SPECS = (
     ("claim", _h_claim, "--run <id> --item <id> --deliverable <name> --ref <reference>",
      "free text; a reference with spaces; an unknown item or a deliverable the item does not "
      "require; an ended programme. Open to any session and exempt from the compact flag."),
+    ("collect-result", _h_collect_result,
+     "--item <id> --attempt <token> --source <relative path> --root <dir> [--media-type <type>] "
+     "[--digest <sha256>] [--run <id>]",
+     "a source outside --root, through a symlink, missing, unreadable, not a regular file or over "
+     "8 MB; secret-bearing or non-text content; a digest mismatch; a sealed programme. A refusal "
+     "is recorded and retains no bytes. Open to any session; a retained result approves nothing."),
     ("mark-read", _h_mark_read, "[--offset <n>] [--run <id>]",
      "an offset past the inbox or behind the current read offset."),
     ("set-now", _h_set_now, "<text> [--item <id>] [--run <id>] | --clear",

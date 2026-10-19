@@ -85,6 +85,11 @@ KINDS = (
     "effects_recorded",
     "legacy_imported",
     "foreign_write_absorbed",
+    "result_collected",
+    "result_collection_failed",
+    "source_retained",
+    "inventory_frozen",
+    "preservation_checked",
 )
 
 _TOKEN_PATTERNS = [
@@ -226,6 +231,8 @@ def claims_path(run_id: str) -> str:
 
 
 def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived") -> dict:
+    if isinstance(row, dict) and row.get("kind") == "prompt" and provenance != "derived":
+        raise JournalError(f"a {provenance} copy is never journaled as a prompt; it approves nothing")
     if _promoted(run_id):
         return _authority().append_row(run_id, row, channel=channel, provenance=provenance)
     path = claims_path(run_id) if channel == "claims" else journal_path(run_id)
@@ -320,7 +327,9 @@ def _prunable(rows, now, max_age_seconds) -> list:
 
 def _prune_promoted(run_id, now, max_age_seconds) -> int:
     def row(rows):
-        dropped = [r.get("prompt_id") for r in _prunable(rows, now, max_age_seconds)]
+        keep = load_lib_module("programme_artifacts").protected_prompts(run_id)
+        dropped = [r.get("prompt_id") for r in _prunable(rows, now, max_age_seconds)
+                   if r.get("prompt_id") not in keep]
         if not dropped:
             return None
         return entry("prompts_pruned", None, {"removed": len(dropped), "prompt_ids": dropped}, now=now)

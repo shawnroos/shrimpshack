@@ -187,11 +187,12 @@ def _new_op(prefix) -> str:
     return f"{prefix}-{secrets.token_hex(8)}"
 
 
-def commit(store, run_id, operation_id, base, state, event, provenance) -> dict:
-    subject = programme_store.commit_subject(state, event)
+def commit(store, run_id, operation_id, base, state, event, provenance, payload_refs=()) -> dict:
+    subject = programme_store.commit_subject(state, event, payload_refs)
     admission = programme_store.admit(subject, provenance=provenance, basis="programme write")
     return _guarded(run_id, lambda: store.commit(operation_id, base_revision=base, state=state,
-                                                 event=event, admission=admission))
+                                                 event=event, admission=admission,
+                                                 payload_refs=payload_refs))
 
 
 def _locked(home, run_id, body):
@@ -223,7 +224,8 @@ def _legacy_write(home, run_id, change, compose) -> dict:
     return {"result": result, "row": row, "replayed": False, "revision": None}
 
 
-def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived") -> dict:
+def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
+          payload_refs=()) -> dict:
     if not promoted(home, run_id):
         return _legacy_write(home, run_id, change, compose)
 
@@ -240,7 +242,7 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             event = _row_event(row, "journal") if row is not None else \
                 {"kind": RECORD_KIND, "payload": {"channel": "none"}}
             receipt = commit(store, run_id, operation_id or _new_op("w"), head["revision"], record,
-                             event, provenance)
+                             event, provenance, payload_refs)
         export(home, run_id)
         return {"result": result, "row": row, "replayed": receipt["replayed"],
                 "revision": receipt["revision"]}

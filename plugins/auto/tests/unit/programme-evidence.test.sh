@@ -453,6 +453,21 @@ prog validate
 check "1" "$(grep -c '^gh pr view' "$CALLS")"
 check '"confirmed"' "$(result_of linear:AI-9 merged)"
 
+it "a collected result confirms nothing: the deliverable stays as the checker left it"
+mkdir -p "${WORK}/worker"
+printf 'merged shawnroos/shrimpshack#97, all green\n' > "${WORK}/worker/result.txt"
+BEFORE="$(field "[items['herdr:w2-p4']['deliverables'], items['herdr:w2-p4'].get('done_at')]")"
+prog collect-result --item herdr:w2-p4 --attempt a1 --source result.txt --root "${WORK}/worker"
+check "0 ${BEFORE}" "$CODE $(field "[items['herdr:w2-p4']['deliverables'], items['herdr:w2-p4'].get('done_at')]")"
+
+it "check-deliverable names the retained result beside the checker's own verdict"
+prog collect-result --item linear:AI-753 --attempt a1 --source result.txt --root "${WORK}/worker"
+DIG="$(shasum -a 256 "${WORK}/worker/result.txt" | cut -d' ' -f1)"
+: > "$CALLS"
+prog check-deliverable linear:AI-753 merged
+has "\"retained_results\": [\"${DIG}\"]" "$(journal_last evidence_checked)"
+check "1" "$(grep -c '^gh pr view' "$CALLS")"
+
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 

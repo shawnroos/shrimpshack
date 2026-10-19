@@ -739,7 +739,11 @@ def _h_check_deliverable(host, argv):
                         _context(host, programme, key, deliverable, repo))
 
     def change(programme, prompt, rec):
-        return _store(programme, run_id, _resolve(programme, key), deliverable, ref, verdict)
+        out = _store(programme, run_id, _resolve(programme, key), deliverable, ref, verdict)
+        retained = load_lib_module("programme_artifacts").retained_for_item(programme, out["item"])
+        if retained:
+            out["retained_results"] = retained
+        return out
 
     return host._write(dict(opts, run=run_id), change, "evidence_checked")
 

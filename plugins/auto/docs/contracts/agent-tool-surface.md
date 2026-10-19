@@ -162,6 +162,14 @@ session.
   commits one structured claim, exported to `<home>/claims.jsonl`. Free text and a
   reference with spaces are refused, and a claim never changes evidence. `mark-read`
   moves the programme's inbox read offset to the claim count, or to `--offset`.
+- **Retained results**: `collect-result --item <id> --attempt <token> --source <path>
+  --root <dir>` copies one text result into the home's immutable object area and
+  commits its digest, so the result stays readable after the worker's source is
+  removed. The source must be a regular file inside `--root`, not reached through
+  a symlink, at most 8 MB, and pass privacy admission before any byte is written.
+  A refusal is recorded with its code and retains nothing. It works after `end`
+  and refuses once the home is sealed. A retained result or source copy is never
+  approval and never changes evidence.
 - **Working model and sources**: `set-now` records what the PM is doing now;
   `queue` adds a next action (a worker start is action start_worker with
   `--item`) or removes one; `record-tested-build` stores the tested build's
@@ -309,9 +317,9 @@ Every write verb:
 1. runs only in the driving session: `CLAUDE_CODE_SESSION_ID` must equal the
    record's `driving_session_id`; `agent_session_ids` never count. `claim` is
    the exception: any session may call it, and it names the programme with
-   `--run`;
+   `--run`; `collect-result` is open to any session in the same way;
 2. refuses while the compact flag exists and prints the rules-in-force block,
-   except `rules --ack`, `claim` and `watcher-beat`;
+   except `rules --ack`, `claim`, `collect-result` and `watcher-beat`;
 3. revalidates under the run-record lock, then journals after the write commits.
 
 The approval verbs (accepting the agreement, amending a term, recording an
