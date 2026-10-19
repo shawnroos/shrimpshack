@@ -99,7 +99,12 @@ session.
   model into `<home>/views/view.json` (mode 0600), which the programme-view mod
   draws. A failed rebuild prints `view refresh failed` on stderr and never fails
   the write. `claim` writes only `claims.jsonl`, so a new claim shows at the next
-  write or `status`.
+  write or `status`. With `--terms` (or the bare word terms, as
+  `/auto:programme-status terms` sends it) it prints only the terms page: project
+  terms and active corrections, each decision under the term it used (silent ones
+  under "no term"), and the 20 most recent term changes with their source and
+  redacted quote; `--json` then emits `{run, generated_at, terms, rows}`. Viewing
+  never counts as approval.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
   value must be one of that term's options. Wording that fits no option is an

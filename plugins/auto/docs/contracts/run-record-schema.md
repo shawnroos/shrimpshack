@@ -821,7 +821,13 @@ adds to its reason: "Rules in force were reloaded after compaction; run
 `{view_format: 1, run, generated_at, model, rows}`. `model` holds
 `programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
-`decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`.
+`decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`, plus the
+additive `terms`: `contract_version`; `project_terms[] {id, area, value, reserved,
+source, set_by}`; active `corrections[] {id, kind, to, previous, prompt_id, quote,
+pm_reading}` with the quote redacted; `by_term[] {term, label, decisions[]}`, where
+`term` null is "no term"; `changes[] {at, kind, term, text, source, prompt_id,
+quote}`, newest first and at most 20, built from project_term_edited,
+project_term_amended, term_corrected and correction_undone; and `changes_total`.
 `rules_in_force` holds `agreement`, `rules[] {id, layer, autonomy, requires, caveat,
 adopted_on}`, `autonomy[] {action, level, layer, adopted_on}` (entries not from the
 plugin layer), `rejected_rules[]` and `instructions[]`; an `adopted_on` machine shows
