@@ -7,7 +7,7 @@ const HOME = `${DATA}/programmes/prog-1`
 const VIEW = `${HOME}/views/view.json`
 const LEASES = `${DATA}/programmes/leases`
 
-function viewText(rows: { style: string; text: string }[], format = 2) {
+function viewText(rows: { style: string; text: string }[], format = 3) {
   return JSON.stringify({ view_format: format, run: 'prog-1', generated_at: '2026-10-07T00:00:00Z', model: {}, rows })
 }
 

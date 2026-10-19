@@ -3,7 +3,7 @@ import type { EngineInterface } from 'claude-code'
 import type { Contract, Reread } from './contract'
 import { viewedKey } from './selection'
 
-const VIEW_FORMAT = 2
+const VIEW_FORMAT = 3
 const DEFAULT_DATA_DIR = '/.claude/plugins/data/auto-shrimpshack'
 const ROW_CAP = 2000
 const STEP_KINDS = new Set<string>(['done', 'current', 'waiting', 'planned'])

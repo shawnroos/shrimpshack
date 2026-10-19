@@ -126,7 +126,7 @@ export function defaultTerms() {
 
 export function viewText(
   parts: { work?: unknown[]; contract?: unknown; reread?: unknown; rows?: unknown[]; model?: unknown } = {},
-  format = 2,
+  format = 3,
 ) {
   return JSON.stringify({
     view_format: format,

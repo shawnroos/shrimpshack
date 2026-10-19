@@ -804,7 +804,7 @@ adds to its reason: "Rules in force were reloaded after compaction; run
 ### 10.8 Read model
 
 `<home>/views/view.json` is a display copy rebuilt after every programme write:
-`{view_format: 2, run, generated_at, model, work, contract, reread, rows}`. `model` holds
+`{view_format: 3, run, generated_at, model, work, contract, reread, rows}`. `model` holds
 `programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`.

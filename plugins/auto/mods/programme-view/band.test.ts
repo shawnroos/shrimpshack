@@ -43,7 +43,7 @@ function entries(raw: unknown[]): WorkItem[] {
 function world(on: On, work: unknown[], store: Record<string, unknown> = {}) {
   const files: Record<string, string> = {
     [LEASE]: JSON.stringify({ session_id: 'sess-pm', run: 'prog-1', home: HOME }),
-    [VIEW]: JSON.stringify({ view_format: 2, run: 'prog-1', generated_at: '2026-10-19T00:00:00Z', model: {}, rows: [], work }),
+    [VIEW]: JSON.stringify({ view_format: 3, run: 'prog-1', generated_at: '2026-10-19T00:00:00Z', model: {}, rows: [], work }),
   }
   mock.env(on, { CLAUDE_AUTO_DATA_DIR: DATA })
   mock.clock(on)

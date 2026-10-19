@@ -228,6 +228,14 @@ prog amend-term cadence fixed --seconds 900 --prompt "$P_900"
 check 0 "$CODE"
 check '[900, "accepted"]' "$(field "[${T}[\"cadence\"][\"seconds\"], ${T}[\"cadence\"][\"proposal\"][\"state\"]]")"
 
+it "a stop time proposed from the view is accepted by the reply the view tells Shawn to type"
+prog propose-term stop_rule until_time --until 2026-10-20T18:00:00Z --origin ui
+check 0 "$CODE"
+P_UNTIL="$(prompt typed 'amend stop rule to until time until 2026-10-20T18:00:00Z')"
+prog amend-term stop_rule until_time --until 2026-10-20T18:00:00Z --prompt "$P_UNTIL"
+check 0 "$CODE"
+check '["until_time", "2026-10-20T18:00:00Z", "accepted"]' "$(field "[${T}[\"stop_rule\"][\"value\"], ${T}[\"stop_rule\"][\"until\"], ${T}[\"stop_rule\"][\"proposal\"][\"state\"]]")"
+
 it "clear-proposal removes the proposal and journals proposal_cleared"
 prog propose-term stop_rule only_when_done
 prog clear-proposal stop_rule --origin ui

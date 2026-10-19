@@ -88,10 +88,11 @@ function valueText(value: unknown): string {
 }
 
 function proposalValue(proposal: Proposal): string {
-  const seconds = (proposal.extras as { seconds?: unknown } | undefined)?.seconds
-  if (typeof seconds !== 'number') return valueText(proposal.value)
-  const every = seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`
-  return `${valueText(proposal.value)} every ${every}`
+  const { seconds, until } = proposal.extras ?? {}
+  const parts = [valueText(proposal.value)]
+  if (typeof seconds === 'number') parts.push(`every ${seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`}`)
+  if (typeof until === 'string') parts.push(`until ${until}`)
+  return parts.join(' ')
 }
 
 function proposalText(proposal: Proposal): string {

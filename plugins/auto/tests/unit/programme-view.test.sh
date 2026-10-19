@@ -584,7 +584,7 @@ lacks "w2:p7" "$(got work_json)"
 it "the text rows carry a Work section with the current step"
 has "Work ¶   title t:a: Write view test" "$(got rows_text)"
 it "a record with no trajectories gives empty work, full contract terms and an empty reread"
-check "[]|5|[]|None|2" "$(got empty)"
+check "[]|5|[]|None|3" "$(got empty)"
 it "a record with no programme block still builds"
 check "[]|False" "$(got no_block)"
 
@@ -594,8 +594,8 @@ print(load_lib_module("programme_view").VIEW_FORMAT)
 EOF
 )"
 has "const VIEW_FORMAT = ${FORMAT}" "$(cat "${MOD}/view.ts")"
-it "the view ships as format 2"
-check "2" "$FORMAT"
+it "the view ships as format 3"
+check "3" "$FORMAT"
 
 it "the mod is declared in the plugin's hooks file"
 check "../../mods/programme-view/register.tsx" "$("$PY" -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["modules"]))' "${AUTO_ROOT}/.claude/hooks/hooks.json")"

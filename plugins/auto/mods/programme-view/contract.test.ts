@@ -182,3 +182,17 @@ test('a fixed-cadence proposal names its interval, and action labels carry no do
   const reread = await findNode(pane, one => one.type === 'Button' && one.props?.key === 'act:reread')
   expect(reread?.props?.label).toBe('ask the PM to re-read the rules')
 })
+
+test('a stop-time proposal names its time in the row and in the reply to type', async ($, on) => {
+  const terms = contractPart().terms.map(one => ({ ...one }))
+  const at = terms.findIndex(one => one.key === 'stop_rule')
+  const extras = { until: '2026-10-20T18:00:00Z' }
+  terms[at] = term('stop_rule', { proposal: { value: 'until_time', extras, at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'pending' } })
+  world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
+  const pane = await contractPane($)
+  expect((await lines(pane)).find(line => line.includes('stop rule '))).toContain('proposed: until_time until 2026-10-20T18:00:00Z')
+  await pane.press({ key: 'term:stop_rule' })
+  await settle()
+  const drawn = await lines(pane)
+  expect(drawn.some(line => line.includes('amend stop rule to until time until 2026-10-20T18:00:00Z'))).toBe(true)
+})

@@ -19,7 +19,7 @@ programme_tasks = load_lib_module("programme_tasks")
 programme_view_work = load_lib_module("programme_view_work")
 session_registry = load_lib_module("session_registry")
 
-VIEW_FORMAT = 2
+VIEW_FORMAT = 3
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
