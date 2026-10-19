@@ -8,12 +8,13 @@
 set -uo pipefail
 
 __cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
-__cd_any=0
-for __cd_f in "${__cd_leases}"/*.json; do
-  [ -e "$__cd_f" ] && __cd_any=1
-  break
+# An ended programme keeps a closing entry so its closure approvals are still journaled.
+__cd_closing="${__cd_leases%/leases}/closing"
+__cd_files=()
+for __cd_f in "${__cd_leases}"/*.json "${__cd_closing}"/*.json; do
+  [ -e "$__cd_f" ] && __cd_files+=("$__cd_f")
 done
-[ "$__cd_any" = 1 ] || exit 0
+[ "${#__cd_files[@]}" -gt 0 ] || exit 0
 
 PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -33,7 +34,7 @@ __cd_named=1
 __cd_after_sid="${__cd_stdin_json#*\"session_id\"}"
 if [[ $__cd_stdin_json != *\\u* && $__cd_after_sid != *\"session_id\"* \
       && $__cd_stdin_json =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]+)\" ]]; then
-  grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_leases}"/*.json
+  grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_files[@]}"
   [ $? = 1 ] && __cd_named=0
 fi
 # Takeover, handover and end requests are journaled from any session.

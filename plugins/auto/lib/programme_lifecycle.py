@@ -104,9 +104,12 @@ def _request_ref(row) -> dict:
 
 def _requests(run, verb, sid) -> list:
     rows = programme_journal.read(run)
-    used = [(r.get("payload") or {}).get("request") for r in rows if r.get("kind") in CONSUMING_KINDS]
+    unverified = programme_authority().UNVERIFIED
+    used = [(r.get("payload") or {}).get("request") for r in rows
+            if r.get("kind") in CONSUMING_KINDS and r.get("provenance") not in unverified]
     return [r for r in rows
             if r.get("kind") == f"{verb}_request" and r.get("session_id") == sid
+            and r.get("provenance") not in unverified
             and programme_journal.prompt_origin(r) == "typed" and _request_ref(r) not in used]
 
 
@@ -115,7 +118,8 @@ def _cited_typed(run, request, sid) -> bool:
     if not (request.get("payload") or {}).get("driving") or not cites:
         return False
     row = programme_journal.find_prompt(run, cites[0])
-    return bool(row) and row.get("session_id") == sid and programme_journal.prompt_origin(row) == "typed"
+    return bool(row) and row.get("session_id") == sid and row.get("provenance") not in programme_authority().UNVERIFIED \
+        and programme_journal.prompt_origin(row) == "typed"
 
 
 def _journal(run, kind, sid, payload, cites=None) -> None:
@@ -123,11 +127,17 @@ def _journal(run, kind, sid, payload, cites=None) -> None:
         programme_journal.append(run, kind, sid, payload, cites=cites)
 
 
-def _cleanup_lines(ended) -> None:
+def _cleanup_lines(ended, run) -> None:
+    watchers = ((programme_home._read_record(run) or {}).get("programme") or {}).get("watchers") or {}
+    owner = {str(w.get("task_id")): wid for wid, w in sorted(watchers.items()) if isinstance(w, dict)}
+
+    def then(task_id):
+        return f"  (then release-resources --watcher {owner[task_id]})" if task_id in owner else ""
+
     for task_id in ended.get("cron_task_ids") or []:
-        sys.stdout.write(f"Remove the cadence fallback: CronDelete {task_id}\n")
+        sys.stdout.write(f"Remove the cadence fallback: CronDelete {task_id}{then(task_id)}\n")
     for task_id in ended.get("monitor_task_ids") or []:
-        sys.stdout.write(f"Stop the watcher Monitor: TaskStop {task_id}\n")
+        sys.stdout.write(f"Stop the watcher Monitor: TaskStop {task_id}{then(task_id)}\n")
     for pid in ended.get("process_ids") or []:
         sys.stdout.write(f"Stop watcher process {pid} if it is still running.\n")
 
@@ -140,26 +150,39 @@ def _refuse(host, run, verb, sid, exc):
     if exc.ended is not None:
         if os.path.isdir(programme_home.home_path(run)):
             host.refresh_view(run, programme_home.home_path(run))
-        _cleanup_lines(exc.ended)
+        _cleanup_lines(exc.ended, run)
     raise host.ProgrammeError(exc.reason)
 
 
-def _move(run, new_sid) -> dict:
+def _move(run, new_sid, kind, sid, extra, cites=None) -> dict:
     home = programme_home.home_path(run)
+    leases = _run_leases(run)
     seen = {}
 
     def mutate(rec):
-        seen["from"] = rec.get("driving_session_id")
+        seen["moved"] = {"from_session": rec.get("driving_session_id"), "to_session": new_sid,
+                         "leases": [key for key, _ in leases]}
         rec["driving_session_id"] = new_sid
+        programme = rec.setdefault("programme", {})
+        programme["owner_epoch"] = int(programme.get("owner_epoch") or 0) + 1
         rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
+        seen["moved"].update(extra(seen["moved"], rec))
 
-    run_record_core._with_locked_run_record(home, run, mutate)
-    keys = []
-    for key, lease in _run_leases(run):
+    def compose(_, rec):
+        payload = dict(seen["moved"])
+        if cites:
+            payload["prompt_id"] = cites[0]
+        return programme_journal.entry(kind, sid, payload, cites=cites)
+
+    programme_authority().write(home, run, mutate, compose)
+    for _, lease in leases:
         programme_home._write_lease(lease["server"], lease["workspace"], run, lease["home"], new_sid,
                                     lease.get("created_at") or _stamp())
-        keys.append(key)
-    return {"from_session": seen["from"], "to_session": new_sid, "leases": keys}
+    return seen["moved"]
+
+
+def programme_authority():
+    return load_lib_module("programme_authority")
 
 
 def _rearm_list(record) -> dict:
@@ -174,8 +197,9 @@ def _locked(body):
     return programme_home._with_leases_lock(body)
 
 
-def _finish(host, run, kind, sid, payload, cites=None) -> None:
-    _journal(run, kind, sid, payload, cites=cites)
+def _finish(host, run, kind, sid, payload, cites=None, journal=True) -> None:
+    if journal:
+        _journal(run, kind, sid, payload, cites=cites)
     host.refresh_view(run, programme_home.home_path(run))
     host._emit(dict({"ok": True, "run": run, "kind": kind}, **payload))
 
@@ -217,19 +241,16 @@ def _h_takeover(host, argv):
         if not asked:
             raise _Refused("no typed takeover request from this session while the lease was orphaned; "
                            "Shawn types /auto:programme-takeover in this session first", status)
-        moved = _move(run, sid)
-        moved["request"] = _request_ref(asked[-1])
-        moved["request_text"] = (asked[-1].get("payload") or {}).get("text")
-        return moved
+        return _move(run, sid, "taken_over", sid,
+                     lambda moved, rec: dict(_rearm_list(rec), request=_request_ref(asked[-1]),
+                                             request_text=(asked[-1].get("payload") or {}).get("text")))
 
     try:
         moved = _locked(body)
     except _Refused as exc:
         _refuse(host, run, "takeover", sid, exc)
-    record = programme_home._read_record(run) or {}
-    moved.update(_rearm_list(record))
-    _finish(host, run, "taken_over", sid, moved)
-    sys.stdout.write(host.render_rules(record))
+    _finish(host, run, "taken_over", sid, moved, journal=False)
+    sys.stdout.write(host.render_restore(run))
     sys.stdout.write("Re-arm the remit watcher, the cron fallback and every watcher listed above "
                      "from this session; the old session's watchers can no longer beat.\n")
     return 0
@@ -257,19 +278,28 @@ def _h_handover(host, argv):
                  and target in str((r.get("payload") or {}).get("text") or "").split()]
         if not asked:
             raise _Refused(f"no typed /auto:programme-handover {target} in the driving session", status)
-        moved = _move(run, target)
-        moved["request"] = _request_ref(asked[-1])
-        moved["cites"] = list(asked[-1]["cites"])
-        return moved
+        cites = list(asked[-1]["cites"])
+        moved = _move(run, target, "handed_over", sid,
+                      lambda moved, rec: {"request": _request_ref(asked[-1])}, cites=cites)
+        return dict(moved, prompt_id=cites[0])
 
     try:
         moved = _locked(body)
     except _Refused as exc:
         _refuse(host, run, "handover", sid, exc)
-    cites = moved.pop("cites")
-    moved["prompt_id"] = cites[0]
-    _finish(host, run, "handed_over", sid, moved, cites=cites)
+    _finish(host, run, "handed_over", sid, moved, journal=False)
+    _flag_for_successor(run, target)
     return 0
+
+
+def _flag_for_successor(run, target) -> None:
+    # The new driver never saw this programme's context; its first write waits for an ack of it.
+    resume = load_lib_module("programme_resume")
+    try:
+        record, _ = resume.head(run)
+        resume.mark(programme_home.home_path(run), target, "handover", resume.context_digest(run, record))
+    except Exception as exc:
+        sys.stderr.write(f"programme.py: handover could not flag the restore for {target}: {exc}\n")
 
 
 def _end_request(run, sid, status):
@@ -313,18 +343,22 @@ def _h_end(host, argv):
         else:
             reason, request = END_REASON, _end_request(run, sid, status)
         out = _watcher_ids(programme_home._read_record(run) or {})
-        programme_home._end_locked(run, reason, _stamp())
         out.update(reason=reason, why=opts.get("why"), lease_status=status,
                    request=request and _request_ref(request))
-        return out, (request or {}).get("cites")
+        cites = (request or {}).get("cites")
+        programme_home._end_locked(run, reason, _stamp(),
+                                   programme_journal.entry("programme_ended", sid, out, cites=cites))
+        return out, cites
 
     try:
         out, cites = _locked(body)
     except _Refused as exc:
         _refuse(host, run, "end", sid, exc)
-    _finish(host, run, "programme_ended", sid, out, cites=cites)
+    _finish(host, run, "programme_ended", sid, out, cites=cites, journal=False)
     sys.stdout.write(f"Programme {run} ended.\n")
-    _cleanup_lines(out)
+    _cleanup_lines(out, run)
+    sys.stdout.write(f"Then record each stop: release-resources --run {run} (add --watcher <watcher id> --stopped "
+                     f"after each CronDelete or TaskStop), and check-archive --run {run} before archive.\n")
     return 0
 
 
@@ -338,16 +372,16 @@ def _h_expire(host, argv):
         status = _fresh_status(lease)
         if status != "expired":
             return status, None
-        out = _watcher_ids(programme_home._read_record(run) or {})
-        programme_home._end_locked(run, EXPIRED_REASON, _stamp())
+        out = dict(_watcher_ids(programme_home._read_record(run) or {}), reason=EXPIRED_REASON, ended=True)
+        programme_home._end_locked(run, EXPIRED_REASON, _stamp(),
+                                   programme_journal.entry("programme_ended", sid, out))
         return status, out
 
     status, out = _locked(body)
     if out is None:
         host._emit({"ok": True, "run": run, "ended": False, "lease_status": status})
         return 0
-    out.update(reason=EXPIRED_REASON, ended=True)
-    _finish(host, run, "programme_ended", sid, out)
+    _finish(host, run, "programme_ended", sid, out, journal=False)
     return 0
 
 

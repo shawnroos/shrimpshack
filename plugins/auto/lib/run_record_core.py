@@ -52,6 +52,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from typing import Callable
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -163,6 +164,20 @@ def _test_hatch_enabled(hatch_var: str) -> bool:
     )
 
 
+def test_pause(label: str, resume_path=None, *, consume=False, poll=0.1) -> None:
+    # No hatch check here: every caller fences on its own CLAUDE_AUTO_TEST_* var first.
+    print("paused:" + label, flush=True)
+    if resume_path is None:
+        time.sleep(60)
+        return
+    for _ in range(round(60 / poll)):
+        if os.path.exists(resume_path):
+            if consume:
+                os.unlink(resume_path)
+            return
+        time.sleep(poll)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Lazy-load helper (F3 / kieran-1 — dedup of 4 copy-paste sites).
 #
@@ -206,6 +221,10 @@ class RunRecordError(Exception):
 
 class RunRecordNotFound(RunRecordError):
     """Raised when a run-record for the given run-id does not exist."""
+
+
+class RoutedToAuthority(Exception):
+    """The programme home was promoted after the caller chose the JSON path."""
 
 
 class RunRecordExists(RunRecordError):
@@ -317,17 +336,7 @@ def parse_iso(value):
 # Atomic write — the I-1 chokepoint. EVERY write goes through here.
 
 
-def _atomic_write(path: str, run_record: dict) -> None:
-    """Recompute the predicate, then atomically persist the run-record.
-
-    This is the ONLY serialization path. It ALWAYS recomputes
-    ``exit_predicate_result`` immediately before writing (I-1), unless the
-    test-only ``CLAUDE_AUTO_TEST_NO_RECOMPUTE`` hatch is set (which exists
-    purely to prove the I-1 test goes RED without the recompute).
-
-    Atomic = mkstemp + fchmod(0o600) + os.rename. A crash mid-write leaves the
-    prior file intact and a stray tmp (no half-written run-record).
-    """
+def _prepare_for_write(run_record: dict) -> None:
     if not _test_hatch_enabled("CLAUDE_AUTO_TEST_NO_RECOMPUTE"):
         # Predicate evaluator lives in lib/run_record_predicate.py (U16). Reach it via
         # the deferred, cycle-safe lazy-load (same idiom as iteration /
@@ -349,6 +358,20 @@ def _atomic_write(path: str, run_record: dict) -> None:
     # reader (see format_compat's docstring).
     run_record["format"] = _lazy_load("format_compat").FORMAT_VERSION
 
+
+def _atomic_write(path: str, run_record: dict) -> None:
+    """Recompute the predicate, then atomically persist the run-record.
+
+    This is the ONLY JSON serialization path. It ALWAYS recomputes
+    ``exit_predicate_result`` immediately before writing (I-1), through
+    ``_prepare_for_write``, which a promoted programme's store commit also calls,
+    unless the test-only ``CLAUDE_AUTO_TEST_NO_RECOMPUTE`` hatch is set (which
+    exists purely to prove the I-1 test goes RED without the recompute).
+
+    Atomic = mkstemp + fchmod(0o600) + os.rename. A crash mid-write leaves the
+    prior file intact and a stray tmp (no half-written run-record).
+    """
+    _prepare_for_write(run_record)
     target_dir = os.path.dirname(path) or "."
     os.makedirs(target_dir, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".run_record.", suffix=".json", dir=target_dir)
@@ -428,7 +451,7 @@ def _flock_run(lpath: str, body):
         lock_file.close()
 
 
-def _with_locked_run_record(repo_root: str, run_id: str, mutate):
+def _with_locked_run_record(repo_root: str, run_id: str, mutate, *, reroute=True):
     """Acquire flock, read the run-record, run ``mutate(run-record)``, atomic-write, release.
 
     The lock spans the WHOLE read-modify-write (the lost-update guard). The
@@ -439,10 +462,20 @@ def _with_locked_run_record(repo_root: str, run_id: str, mutate):
     ``mutate`` receives the freshly-read run-record dict, mutates it in place, and
     may return a value, which this function returns.
     """
+    authority = _programme_authority(repo_root, run_id)
+    if authority is not None:
+        if not reroute:
+            raise RoutedToAuthority(run_id)
+        return authority.mutate(repo_root, run_id, mutate)
     path = run_record_path(repo_root, run_id)
     lpath = lock_path(repo_root, run_id)
 
     def body():
+        # promote holds this lock while it creates the store; a writer that routed before it must
+        # not write the export it leaves behind. The authority takes this lock itself, so re-route
+        # only after releasing it.
+        if _programme_authority(repo_root, run_id) is not None:
+            raise RoutedToAuthority(run_id)
         if not os.path.exists(path):
             raise RunRecordNotFound(f"no run_record for run-id {run_id!r} at {path}")
         run_record = _read_json(path)
@@ -450,7 +483,12 @@ def _with_locked_run_record(repo_root: str, run_id: str, mutate):
         _atomic_write(path, run_record)
         return result
 
-    return _flock_run(lpath, body)
+    try:
+        return _flock_run(lpath, body)
+    except RoutedToAuthority:
+        if not reroute:
+            raise
+    return _programme_authority(repo_root, run_id).mutate(repo_root, run_id, mutate)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -682,7 +720,7 @@ def init_run_record(
             "loop": {"driver": "self", "last_beat_at": now_iso()},
         }
         run_record.update(kind_fields)
-        _atomic_write(path, run_record)
+        _write_new(repo_root, path, run_record)
         return run_record
 
     return _flock_run(lpath, body)
@@ -705,6 +743,24 @@ def _run_kind_fields(kind, programme, steps, loop_phase) -> dict:
         raise RunRecordError(f"programme must be a dict: {programme!r}")
     return {"run_kind": "programme", "programme_format": PROGRAMME_FORMAT,
             "programme": programme}
+
+
+def _programme_authority(repo_root: str, run_id: str):
+    # Task runs never sit in a folder named programmes, so they never load the store.
+    if os.path.basename(os.path.dirname(os.path.abspath(repo_root))) != "programmes":
+        return None
+    authority = _lazy_load("programme_authority")
+    return authority if authority.routes(repo_root, run_id) else None
+
+
+def _write_new(repo_root: str, path: str, run_record: dict) -> None:
+    if run_kind(run_record) == "programme" \
+            and os.path.basename(os.path.dirname(os.path.abspath(repo_root))) == "programmes":
+        authority = _lazy_load("programme_authority")
+        if authority.home_for(repo_root, run_record["run_id"]):
+            authority.create(repo_root, run_record["run_id"], run_record)
+            return
+    _atomic_write(path, run_record)
 
 
 def run_kind(run_record: dict) -> str:
@@ -785,6 +841,9 @@ def read_run_record(repo_root: str, run_id: str) -> dict:
     is why the engine's hot read paths (the Stop hook, status, converge) read
     lock-free: they cannot contend with a slow writer.
     """
+    authority = _programme_authority(repo_root, run_id)
+    if authority is not None:
+        return authority.read_record(run_id)
     path = run_record_path(repo_root, run_id)
     if not os.path.exists(path):
         raise RunRecordNotFound(f"no run_record for run-id {run_id!r} at {path}")

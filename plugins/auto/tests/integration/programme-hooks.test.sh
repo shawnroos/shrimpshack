@@ -198,9 +198,8 @@ print(r["payload"]["text"])
 EOF
 )"
 check "the key is [redacted] ok" "$OUT"
-if grep -q "fixture-value-9f8e7d" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl"; then
-  it "the secret value never reaches the journal file"; fail "secret found in journal"
-fi
+it "the secret value never reaches the journal file or the authority"
+if grep -rqa "fixture-value-9f8e7d" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}"; then fail "secret found in the programme home"; else pass; fi
 
 it "a prompt matching an armed cron prompt is classified cron"
 run_py "$RUN" <<'EOF' >/dev/null
@@ -393,7 +392,7 @@ if [ -e "${WORK}/python-ran" ]; then pass; else fail "python did not run"; fi
 
 it "the journaled command is redacted"
 action_hook sess-worker 'herdr pane send-text w2:p31 fixture-value-9f8e7d' >/dev/null
-if grep -q "fixture-value-9f8e7d" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl"; then fail "secret in journal"; else pass; fi
+if grep -rqa "fixture-value-9f8e7d" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}"; then fail "secret in the programme home"; else pass; fi
 
 it "a bare pane suffix is denied only from the driver's workspace"
 OUT1="$(ACTION_WS=w2 action_hook sess-worker 'herdr agent prompt p31 go')"

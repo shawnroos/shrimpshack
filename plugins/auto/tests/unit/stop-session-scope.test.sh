@@ -55,10 +55,10 @@ def iso(minutes_ago=0):
     return (NOW - datetime.timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 def rec_path(run):
     return os.path.join(ph.home_path(run), ".claude", "auto", run + ".json")
-def load(run):
-    return json.load(open(rec_path(run)))
-def save(run, rec):
-    json.dump(rec, open(rec_path(run), "w"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+load = programme_records.load
+save = programme_records.save
 def waiting(item_id, reporter=None, watcher=None):
     it = ph.new_item(item_id, item_id, state="waiting", now_iso=iso(30))
     it["matched_rule"] = "r1"
@@ -174,17 +174,27 @@ W_RUN="$(make_programme w3 sess-pm2 watched)"
 check "allow" "$(verdict "$(stop_py "" sess-pm2)")"
 
 it "the watched PM's re-fire journals nothing"
-check "0" "$( [ -f "${CLAUDE_AUTO_DATA_DIR}/programmes/${W_RUN}/journal.jsonl" ] && grep -c stopped_unwatched "${CLAUDE_AUTO_DATA_DIR}/programmes/${W_RUN}/journal.jsonl" || echo 0)"
+check "0" "$(cat "${CLAUDE_AUTO_DATA_DIR}/programmes/${W_RUN}/journal.jsonl" 2>/dev/null | grep -c stopped_unwatched)"
 
 it "an unread claim in the home's inbox holds the watched PM"
-printf '{"claim":1}\n' > "${CLAUDE_AUTO_DATA_DIR}/programmes/${W_RUN}/claims.jsonl"
+prog "$W_RUN" <<'EOF' >/dev/null
+load_lib_module("programme_journal").append_claim(args[0], "sess-w", {"item": "linear:AI-8", "deliverable": "merged", "ref": "pr-1"})
+EOF
 check "block" "$(verdict "$(stop_py "" sess-pm2)")"
-rm -f "${CLAUDE_AUTO_DATA_DIR}/programmes/${W_RUN}/claims.jsonl"
 
-it "a malformed programme home never blocks"
+it "a malformed record export is ignored: the authority still decides"
 M_RUN="$(make_programme w4 sess-pm3 unwatched)"
 printf '{ not json' > "${CLAUDE_AUTO_DATA_DIR}/programmes/${M_RUN}/.claude/auto/${M_RUN}.json"
-check "allow" "$(verdict "$(stop_py "" sess-pm3)")"
+check "block" "$(verdict "$(stop_py "" sess-pm3)")"
+
+it "a corrupt programme authority blocks once and names the hold instead of passing as free"
+printf 'not a database' > "${CLAUDE_AUTO_DATA_DIR}/programmes/${M_RUN}/programme.db"
+HELD="$(stop_py "" sess-pm3)"
+check "block" "$(verdict "$HELD")"
+check "names-hold" "$(case "$HELD" in *"authority is corrupt"*) echo names-hold ;; *) echo "$HELD" ;; esac)"
+
+it "the held programme's re-fire is allowed, so a hold never traps the session"
+check "allow" "$(verdict "$(stop_py "" sess-pm3 1)")"
 
 it "a programme block that is not a dict never blocks"
 C_RUN="$(make_programme w5 sess-pm4 unwatched)"

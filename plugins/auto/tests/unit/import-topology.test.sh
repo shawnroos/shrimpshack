@@ -74,20 +74,42 @@
 #   iteration         → verification [lazy]
 #   run_record_predicate → programme_predicate [lazy, via _lazy_load]
 #   run_record (facade)  → run_record_evidence (in addition to the list above)
-#   _bootstrap           → programme_home [lazy] (programme_home imports _bootstrap at top)
+#   _bootstrap           → programme_home [lazy] (programme_home imports _bootstrap at top),
+#                          programme_authority [lazy]
+#   run_record_core      → programme_authority [lazy, via _lazy_load] (programme homes only)
+#   run_record (facade)  → programme_authority [lazy] (the offline downgrade refusal)
 #
 # Programme runs. This family builds on run_record_core directly, not on the facade:
 # a programme record has no steps, so the facade's step verbs never apply to it.
 #   verb_cli             → (nothing)                           leaf
 #   programme_sanitize   → (nothing)                           leaf
-#   programme_home       → run_record_core; run_record [lazy], phase-grammar [lazy]
-#                          The lazy facade load sits inside the end path only, so the
-#                          chain run_record → run_record_evidence → … → programme_home
-#                          closes no import-time cycle.
-#   programme_predicate  → run_record_core, programme_home; phase-grammar [lazy]
+#   programme_home       → run_record_core; phase-grammar [lazy], programme_authority [lazy],
+#                          _bootstrap [lazy], programme_archive [lazy]
+#                          The end path writes through programme_authority, loaded lazily,
+#                          so programme_authority → programme_home closes no import-time cycle.
+#   programme_predicate  → run_record_core, programme_home, programme_context; phase-grammar [lazy]
+#   programme_context    → run_record_core, programme_home, programme_sanitize
+#                          (pure over the programme block: the predicate loads it on every
+#                          record write; its verb handlers get programme_record passed in)
 #   programme_protocol   → programme_home                      (never programme_journal:
 #                          the prompt lookup is passed in by the caller)
-#   programme_journal    → run_record_core, programme_home
+#   programme_journal    → run_record_core, programme_home; programme_authority,
+#                          programme_artifacts [lazy]
+#   programme_store      → run_record_core, programme_home; programme_journal [lazy]
+#   programme_authority  → run_record_core, programme_home, programme_store;
+#                          programme_journal [lazy], format_compat [lazy, via _lazy_load]
+#                          run_record_core, _bootstrap, programme_home, programme_journal and
+#                          run_record reach it lazily, so it closes no import-time cycle.
+#   programme_import     → run_record_core, programme_home, programme_store,
+#                          programme_authority; programme_journal [lazy]
+#   programme_artifacts  → run_record_core, programme_home, programme_store,
+#                          programme_authority; programme_journal, driver_session [lazy]
+#                          programme_journal, programme_record and programme_evidence
+#                          reach it lazily, so it closes no import-time cycle.
+#   programme_gitio      → programme_store
+#   programme_preserve   → run_record_core, programme_home, programme_store,
+#                          programme_artifacts, programme_gitio; driver_session,
+#                          session_registry [lazy]. programme_record reaches it lazily.
 #   session_registry     → run_record_core, programme_home, driver_session
 #   programme_exec       → programme_sanitize
 #   programme_tracker    → programme_exec, programme_journal, programme_sanitize
@@ -95,25 +117,43 @@
 #   programme_plans      → programme_exec, programme_sanitize, programme_tracker
 #   programme_record     → run_record_core, programme_home, programme_journal,
 #                          programme_protocol, programme_sanitize, driver_session,
-#                          programme_tracker
+#                          programme_tracker, programme_context; programme_artifacts, programme_preserve [lazy]
 #   programme_evidence   → run_record_core, programme_home, programme_journal,
 #                          programme_predicate, programme_record, programme_sanitize,
-#                          programme_protocol, driver_session, verification
+#                          programme_protocol, driver_session, verification;
+#                          programme_artifacts [lazy]
+#   programme_recovery   → run_record_core, programme_home, programme_journal,
+#                          programme_authority, programme_context, programme_artifacts;
+#                          driver_session [lazy]. Live herdr reads are passed in by
+#                          programme_sources, so it never loads programme_sources.
 #   programme_sources    → run_record_core, programme_home, programme_journal,
-#                          programme_sanitize, programme_record, programme_exec,
+#                          programme_sanitize, programme_record, programme_context, programme_exec,
 #                          programme_tracker, programme_tasks, programme_plans,
-#                          session_registry
+#                          programme_recovery, session_registry; driver_session [lazy]
+#   programme_archive    → run_record_core, programme_home, programme_journal;
+#                          programme_authority, programme_artifacts, programme_store,
+#                          programme_context, programme_recovery, programme_preserve,
+#                          programme_sources, driver_session [lazy]. programme_home (end),
+#                          programme_record (claim) and programme reach it lazily or after
+#                          their verb table, so it closes no import-time cycle.
+#   programme_resume     → run_record_core, programme_home, programme_authority,
+#                          programme_recovery; programme_journal [lazy]. It takes
+#                          `programme` as a host argument for the inbox verb and never
+#                          loads it, nor programme_sources or programme_lifecycle.
 #   programme_view       → programme_home, programme_predicate, programme_sanitize,
 #                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
-#                          programme_protocol, session_registry, driver_session, verb_cli;
+#                          programme_authority, programme_protocol, session_registry,
+#                          driver_session, verb_cli; programme_resume, programme_store,
+#                          programme_import [lazy];
 #                          then, after its verb table is built: programme_record,
 #                          programme_evidence, programme_sources, programme_view,
-#                          programme_lifecycle
+#                          programme_lifecycle, programme_archive
 #                          Those five receive `programme` as a `host` argument and never
 #                          load it back.
-#   programme_lifecycle  → run_record_core, programme_home, programme_journal,
-#                          session_registry, driver_session, programme_sanitize
+#   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
+#                          session_registry, driver_session, programme_sanitize,
+#                          programme_resume [lazy] (handover flags the new driver's restore)
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
 #                          programme_record, programme_sanitize, programme_tracker,
 #                          programme_tasks, programme_plans, driver_session
@@ -122,8 +162,10 @@
 #                          programme_journal [lazy], programme_sanitize [lazy],
 #                          programme_evidence [lazy]
 #   on-user-prompt       → programme_home, programme_journal, session_registry
-#   on-pre-compact       → programme_home [lazy]
-#   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy]
+#   on-pre-compact       → programme_home [lazy], programme_resume [lazy]
+#   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy],
+#                          programme_resume [lazy]
+#   on-stop              → programme_resume [lazy] (reads the compact flag's trigger)
 #   on-stop              → phase-grammar; programme_home [lazy], programme_predicate [lazy],
 #                          programme_journal [lazy], programme [lazy]
 #   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
@@ -423,7 +465,10 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme.py programme.sh verb_cli.py programme_record.py programme_sanitize.py \
            programme_evidence.py programme_sources.py programme-watch.py programme-watch.sh \
            programme_view.py run_record_evidence.py programme_lifecycle.py \
-           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py; do
+           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
+           programme_store.py programme_authority.py programme_import.py \
+           programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
+           programme_recovery.py programme_archive.py programme_resume.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -443,7 +488,8 @@ done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
 for _host in programme_record programme_evidence programme_sources programme_view \
-             programme-watch run_record_evidence programme_lifecycle; do
+             programme-watch run_record_evidence programme_lifecycle programme_archive \
+             programme_resume; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
@@ -452,10 +498,69 @@ for _host in programme_record programme_evidence programme_sources programme_vie
   fi
 done
 
+it "programme_resume.py loads no verb module (it is loaded by programme at import time)"
+if loads_sibling "programme_resume.py" "programme_sources" \
+   || loads_sibling "programme_resume.py" "programme_lifecycle" \
+   || loads_sibling "programme_resume.py" "programme_record" \
+   || loads_sibling "programme_resume.py" "programme_archive"; then
+  fail "programme_resume.py must not load a verb module — programme loads it before its verb table"
+else
+  pass
+fi
+
 it "programme_evidence.py and run_record_evidence.py do NOT load the run_record facade"
 if loads_sibling "programme_evidence.py" "run_record" \
    || loads_sibling "run_record_evidence.py" "run_record"; then
   fail "the facade loads run_record_evidence, which reaches programme_evidence — a facade load from either closes a cycle"
+else
+  pass
+fi
+
+for _low in programme_store programme_authority programme_import programme_artifacts \
+            programme_gitio programme_preserve programme_recovery; do
+  it "${_low}.py does NOT load programme or a programme verb module"
+  if loads_sibling "${_low}.py" "programme" || loads_sibling "${_low}.py" "programme_record" \
+     || loads_sibling "${_low}.py" "programme_lifecycle"; then
+    fail "${_low}.py sits below the verb modules; loading one closes a cycle"
+  else
+    pass
+  fi
+done
+
+it "programme_recovery.py does NOT load programme_sources (the sources verbs load it)"
+if loads_sibling "programme_recovery.py" "programme_sources"; then
+  fail "programme_recovery.py loading programme_sources closes a cycle; take live reads as callables"
+else
+  pass
+fi
+
+it "programme_journal.py and programme_store.py load each other only lazily"
+if grep -qE '^[a-z_]+ = load_lib_module\("programme_(authority|store)"\)' "$LIB/programme_journal.py" \
+   || grep -qE '^[a-z_]+ = load_lib_module\("programme_journal"\)' "$LIB/programme_store.py" \
+   || grep -qE '^[a-z_]+ = load_lib_module\("programme_journal"\)' "$LIB/programme_authority.py"; then
+  fail "a module-top load between the journal and the store closes an import-time cycle"
+else
+  pass
+fi
+
+it "programme_journal, programme_record and programme_evidence load programme_artifacts only lazily"
+if grep -qE '^[a-z_]+ = load_lib_module\("programme_artifacts"\)' "$LIB/programme_journal.py" \
+   "$LIB/programme_record.py" "$LIB/programme_evidence.py"; then
+  fail "a module-top load of programme_artifacts closes an import-time cycle (it loads the journal)"
+else
+  pass
+fi
+
+it "programme_home and programme_record load programme_archive only lazily"
+if grep -qE '^[a-z_]+ = load_lib_module\("programme_archive"\)' "$LIB/programme_home.py" "$LIB/programme_record.py"; then
+  fail "programme_archive loads programme_home and programme_journal at its top; a module-top load back closes a cycle"
+else
+  pass
+fi
+
+it "programme_record loads programme_preserve only lazily"
+if grep -qE '^[a-z_]+ = load_lib_module\("programme_preserve"\)' "$LIB/programme_record.py"; then
+  fail "a module-top load of programme_preserve from programme_record pulls git capture into every verb"
 else
   pass
 fi
@@ -472,6 +577,16 @@ if loads_sibling "programme_predicate.py" "programme_protocol" \
    || loads_sibling "programme_predicate.py" "programme_journal" \
    || loads_sibling "programme_predicate.py" "run_record_predicate"; then
   fail "programme_predicate.py must stay pure over the record — run_record_predicate loads it, and every record write calls it"
+else
+  pass
+fi
+
+it "programme_context.py loads no programme, verb, journal or protocol module"
+if loads_sibling "programme_context.py" "programme" || loads_sibling "programme_context.py" "programme_record" \
+   || loads_sibling "programme_context.py" "programme_journal" \
+   || loads_sibling "programme_context.py" "programme_protocol" \
+   || loads_sibling "programme_context.py" "programme_predicate"; then
+  fail "programme_context.py must stay pure — the predicate loads it, and programme_record passes itself in"
 else
   pass
 fi

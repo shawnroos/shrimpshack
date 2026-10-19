@@ -476,6 +476,10 @@ def match(protocol: dict, change_kinds) -> dict:
     }
 
 
+def obliges(item: dict, deliverable: str) -> bool:
+    return deliverable in DELIVERABLES and deliverable in ((item or {}).get("deliverables") or {})
+
+
 def proposed_rules(record) -> list:
     block = (record or {}).get("programme") or {}
     rules = block.get("proposed_rules")

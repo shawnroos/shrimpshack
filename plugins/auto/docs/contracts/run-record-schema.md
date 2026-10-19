@@ -780,11 +780,16 @@ Task runs keep a journal too: `<repo>/.claude/auto/journal/<run slug>.jsonl`, on
 ### 10.7 Compaction flag
 
 The PreCompact hook writes `<home>/.compact-flag` (0600) for each programme the
-compacting session drives, with body `{at, session_id, trigger}`. Its presence is
-the signal: write verbs refuse and print the rules in force until
-`programme.py rules --ack` deletes it (`watcher-beat` is exempt), and the Stop hook
+compacting session drives, with body `{at, session_id, trigger, context_digest}`.
+`handover` writes the same flag for the new driving session with trigger
+`handover`. Its presence is the signal: write verbs refuse and print the rules in
+force and the restored context until `programme.py rules --ack` deletes it
+(`watcher-beat` is exempt). An ack whose context digest (given with `--context`,
+or else the flag's) differs from the committed decision context refuses, prints
+the current block and rewrites the flag with the current digest. The Stop hook
 adds to its reason: "Rules in force were reloaded after compaction; run
-`programme.sh rules --ack` before your next write." It does not repeat the block.
+`programme.sh rules --ack` before your next write." (after a handover it says the
+session took the programme over by handover). It does not repeat the block.
 
 ### 10.8 Read model
 

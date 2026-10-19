@@ -179,6 +179,38 @@ it "pruning keeps the file 0600"
 OUT="$(stat -f '%Lp' "${HOME_DIR}/journal.jsonl")"
 check "600" "$OUT"
 
+it "a restored or imported copy is never journaled as a prompt (it would read as typed)"
+OUT="$(run_py "$RUN" <<'EOF'
+out = []
+for provenance in ("restored", "legacy_import", "worker_result"):
+    row = pj.entry("prompt", "sess-pm", {"text": "copy", "origin": "typed"}, prompt_id="pcopy" + provenance[:3])
+    try:
+        pj.append_row(args[0], row, provenance=provenance)
+        out.append("ACCEPTED")
+    except pj.JournalError:
+        out.append("REFUSED")
+print(*out, pj.find_prompt(args[0], "pcopyres") is None)
+EOF
+)"
+check "REFUSED REFUSED REFUSED True" "$OUT"
+
+it "pruning keeps an old uncited prompt that a preservation inventory still requires"
+CLAUDE_CODE_SESSION_ID=sess-pm "$PY" "${AUTO_ROOT}/lib/programme.py" add-item linear:J-1 --run "$RUN" >/dev/null 2>&1
+OUT="$(run_py "$RUN" <<'EOF'
+import datetime
+pa = load_lib_module("programme_artifacts")
+run = args[0]
+old = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+held = pj.append_prompt(run, "sess-pm", "held", "typed", now=old)
+loose = pj.append_prompt(run, "sess-pm", "loose", "typed", now=old)
+pa.freeze_inventory(run, owner="linear:J-1", required=["source:prompt:" + held["prompt_id"]])
+pj.prune_uncited_prompts(run)
+ids = {r.get("prompt_id") for r in pj.read(run)}
+print(held["prompt_id"] in ids, loose["prompt_id"] in ids)
+EOF
+)"
+check "True False" "$OUT"
+
 it "reading a run with no journal returns an empty list"
 OUT="$(run_py <<'EOF'
 r = ph.create_programme(["w9"], "sess-other")["run"]

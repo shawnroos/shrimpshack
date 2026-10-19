@@ -1195,6 +1195,25 @@ CLAUDE_AUTO_REPO="$REPO" "$PY" "$RUN_RECORD_PY" describe "describe-overlay" >/de
 fp_after="$(ov_fp "$ovpath")"
 assert_eq "$fp_before" "$fp_after"
 
+it "a task run in a folder named programmes stays a JSON record and never loads the programme authority"
+routed="$("$PY" - "$AUTO_ROOT" "$(mktemp -d -t rr-programmes.XXXXXX)" <<'PYEOF' 2>&1
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+core = load_lib_module("run_record_core")
+repo = os.path.join(sys.argv[2], "programmes", "task-p")
+os.makedirs(repo)
+os.environ["CLAUDE_AUTO_DATA_DIR"] = os.path.join(sys.argv[2], "data")
+core.init_run_record(repo, "task-p", backend="native", steps=[{"id": "s1"}], loop_phase="work")
+core._with_locked_run_record(repo, "task-p", lambda r: None)
+rec = core.read_run_record(repo, "task-p")
+raw = json.load(open(core.run_record_path(repo, "task-p")))
+print(rec == raw, os.path.exists(os.path.join(repo, "programme.db")),
+      any(n.startswith(".export") for n in os.listdir(repo)))
+PYEOF
+)"
+assert_eq "True False False" "$routed"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "run-record.test.sh: ${PASS} passed, ${FAIL} failed"

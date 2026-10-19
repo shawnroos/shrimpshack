@@ -36,14 +36,9 @@ PYEOF
 edit_record() {
   run_py "$1" "$2" <<'EOF'
 run, expr = args
-core = load_lib_module("run_record_core")
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 print("edited")
 EOF
 }
