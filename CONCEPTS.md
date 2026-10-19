@@ -163,6 +163,22 @@ A named way of composing one kind of name — a worktree, branch or tab. The set
 of schemes is fixed and each is rendered by the plugin, so a name is chosen from an
 enumeration rather than written as a template.
 
+## Auto programmes
+
+### Trajectory
+A work item's path as the PM sees it at one sweep: steps done, the current step, the planned
+steps and the finish. It belongs to the work item, not the session doing it, and the PM
+rewrites it every sweep, so a changed plan is a recorded difference rather than a surprise.
+
+### Clause
+The part of the agreement a step relies on: a term, an adopted protocol rule or an active
+instruction. A step with no clause is allowed and shown as such; it is a warning, never a
+block.
+
+### Tools of record
+The programme-wide set of tools where work and evidence live and that the PM checks each
+sweep. It replaces the agreement's "sources" term.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.
