@@ -912,6 +912,8 @@ def _take_operation(argv) -> list:
             raise ValueError("--op needs an operation id")
         _OPERATION["id"] = argv[at + 1]
         del argv[at:at + 2]
+        request = hashlib.sha256(json.dumps(argv, ensure_ascii=False).encode("utf-8")).hexdigest()
+        programme_authority.bind_request(_OPERATION["id"], request)
     return argv
 
 

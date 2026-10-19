@@ -16,6 +16,7 @@ import re
 import secrets
 import sys
 import tempfile
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -590,6 +591,13 @@ def _republish(claim, server, workspace, stamp) -> None:
                  lease.get("created_at") or stamp)
 
 
+def _test_pause(point) -> None:
+    if not run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_LEASE_PAUSE_" + point.upper()):
+        return
+    print("paused:lease_" + point, flush=True)
+    time.sleep(60)
+
+
 def reconcile_run_leases(run_id: str) -> list:
     check_run_id(run_id)
 
@@ -610,6 +618,7 @@ def reconcile_run_leases(run_id: str) -> list:
                 _write_lease(server, workspace, run_id, home, sid,
                              (lease or {}).get("created_at") or _iso(_now()))
                 written.append(key)
+                _test_pause("after_write")
         return written
 
     return _with_leases_lock(body)

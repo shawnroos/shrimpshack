@@ -324,11 +324,14 @@ def _record_failure(run_id, home, source_id, code) -> None:
         sys.stderr.write(f"programme preserve: the capture failure was not recorded: {exc}\n")
 
 
-def _replay(run_id, operation_id):
+def _replay(run_id, operation_id, request):
     if operation_id is None:
         return None
     for entry in _code_block(pa._current(run_id)).values():
         if entry.get("operation_id") == operation_id:
+            if [entry.get("top"), list(entry.get("extras") or []), list(entry.get("include_ignored") or [])] != request:
+                raise PreserveError(f"operation {operation_id} was saved with different input; nothing was "
+                                    "captured. Use a new --op for a different request", "operation_conflict")
             return dict(_summary(entry), replayed=True, revision=None, mismatches=[])
     return None
 
@@ -338,7 +341,7 @@ def capture(run_id, path, *, extras=(), include_ignored=(), operation_id=None) -
         home = pa._require_promoted(run_id)
     except pa.ArtifactError as exc:
         raise PreserveError(str(exc), exc.code)
-    prior = _replay(run_id, operation_id)
+    prior = _replay(run_id, operation_id, [os.path.realpath(path), list(extras), list(include_ignored)])
     if prior is not None:
         return prior
     if pa.sealed(pa._current(run_id)):

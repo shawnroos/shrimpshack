@@ -14,6 +14,7 @@ import json
 import os
 import secrets
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -28,6 +29,7 @@ TAG = "projection_of_revision"
 MANIFEST = ".exports.json"
 IMPORT_MARKER = ".import-in-progress"
 JOURNAL_EXPORT = "journal.jsonl"
+_REQUESTS = {}
 CLAIMS_EXPORT = "claims.jsonl"
 RECORD_KIND = "record_updated"
 CREATED_KIND = "programme_created"
@@ -221,9 +223,19 @@ def _journal_locked(home, body):
     return run_record_core._flock_run(os.path.join(home, _journal().LOCK_NAME), body)
 
 
+def bind_request(operation_id, request_digest) -> None:
+    _REQUESTS[operation_id] = request_digest
+
+
 def _replayed(store, run_id, operation_id) -> dict:
     data = _guarded(run_id, store.read)
     hits = [e for e in data["events"] if e["operation_id"] == operation_id]
+    saved = (hits[0]["payload"] or {}).get("request") if hits else None
+    asked = _REQUESTS.get(operation_id)
+    # Rows saved before requests were bound carry no digest; they replay as before.
+    if saved is not None and asked is not None and saved != asked:
+        raise AuthorityError(f"operation {operation_id} was saved with different input; nothing was "
+                             "changed. Use a new --op for a different request", "operation_conflict")
     row = (hits[0]["payload"] or {}).get("row") if hits else None
     return {"result": None, "row": row, "replayed": True, "revision": hits[0]["revision"] if hits else None}
 
@@ -260,6 +272,8 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             run_record_core._prepare_for_write(record)
             event = _row_event(row, "journal") if row is not None else \
                 {"kind": RECORD_KIND, "payload": {"channel": "none"}}
+            if _REQUESTS.get(operation_id) is not None:
+                event["payload"]["request"] = _REQUESTS[operation_id]
             base = head["revision"] if base_revision is None else base_revision
             receipt = commit(store, run_id, operation_id or _new_op("w"), base, record,
                              event, provenance, payload_refs, seal)
@@ -338,6 +352,12 @@ def _sealed_record(record) -> bool:
     return bool(((record.get("programme") or {}).get("archive") or {}).get("sealed_at"))
 
 
+def _test_pause(point) -> None:
+    if run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_EXPORT_PAUSE_" + point.upper()):
+        print("paused:export_" + point, flush=True)
+        time.sleep(60)
+
+
 def export(home, run_id, *, journal_held=False, final=False) -> bool:
     try:
         snap = snapshot(run_id)
@@ -357,6 +377,7 @@ def export(home, run_id, *, journal_held=False, final=False) -> bool:
             _write_text(os.path.join(home, MANIFEST), json.dumps(manifest, sort_keys=True) + "\n")
             for path, text in files.items():
                 _write_text(path, text)
+                _test_pause("midway")
 
         if journal_held:
             body()

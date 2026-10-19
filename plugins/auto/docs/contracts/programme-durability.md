@@ -26,7 +26,10 @@ The tests prove these results when a process is killed at named points
 
 - A write that returned success is in the database after a restart.
 - A write that did not finish leaves no part of itself. A retry with the same
-  `--op <id>` returns the first result and writes nothing twice.
+  `--op <id>` returns the first result and writes nothing twice. A different
+  request under an `--op` that is already saved refuses and changes nothing.
+- `claim` takes no `--op`. A claim retried after a lost response adds a second,
+  identical claim row. A claim approves nothing, so the PM sees it twice.
 - A worker launch or a pane prompt is recorded before it runs and settled after.
   If the process stops between the two, the action stays "uncertain". A retry
   on the same item refuses until `reconcile-operations` settles it, or the PM
@@ -39,6 +42,14 @@ The tests prove these results when a process is killed at named points
 - A sealed archive is read-only. Every write, export, view refresh, prune and
   import refuses. A database with an unfinished SQLite journal after the seal is
   a hold; nothing repairs it in place.
+
+`tests/integration/programme-durability.test.sh` kills a real `programme.py`
+process at each of these points and then checks, from a new process, that
+every revision the test saw acknowledged is still in the database, byte for
+byte: payload sync, transaction commit (before and after), export refresh
+(not started and half written), import promotion, lease reconciliation,
+dispatch, capture verification, end and sealing. Section 8 records the Mac
+these tests ran on.
 
 ### Process kill and power loss are different
 
@@ -154,3 +165,41 @@ A programme made before this version keeps its JSON files until
    cannot classify and leaves every input untouched.
 
 Imported prompts carry `provenance: legacy_import` and approve nothing new.
+
+## 8. Target Mac capability
+
+Recorded on 2026-10-19 from a real `programme.db` that `create_programme`
+made under a test data folder. The commands were read-only.
+
+| Item | Value |
+| --- | --- |
+| Machine | Apple silicon (arm64), macOS 27.0.1 (build 26A434) |
+| Python | `/usr/bin/python3` is the Command Line Tools shim; it runs Python 3.9.6 |
+| SQLite | library 3.54.0 (Python `sqlite3` module 2.6.0); compile options include `DEFAULT_CKPTFULLFSYNC`, `DEFAULT_SYNCHRONOUS=2`, `THREADSAFE=2` |
+| PRAGMA read back from the store | `journal_mode=delete`, `synchronous=3` (EXTRA), `fullfsync=1`, `checkpoint_fullfsync=1`, `foreign_keys=1`, `busy_timeout=5000`, `page_size=4096` |
+| Filesystem | the test data folder and the default data folder `~/.claude/plugins/data/auto-shrimpshack` are both on `/dev/disk3s5` (`/System/Volumes/Data`): APFS, local, journaled, internal solid-state disk |
+
+### What the tests prove on this Mac
+
+- **Process kill (verified).** SIGKILL at each point in section 2 loses no
+  acknowledged revision and leaves no partial commit. A store whose PRAGMA
+  readback is weaker than the table above refuses to write
+  (`CLAUDE_AUTO_TEST_STORE_WEAK_SYNC`). A failed commit returns no receipt
+  (`CLAUDE_AUTO_TEST_STORE_FAIL_COMMIT`). A failed directory sync is not
+  acknowledged as collected (`CLAUDE_AUTO_TEST_ARTIFACT_FAIL_DIR_SYNC`).
+- **Negative controls (verified).** The same test reruns three sections on a
+  copy of the plugin with one protection removed: the record and its event
+  in separate commits, the dispatch fence, and capture verification. Each copy
+  fails the named assertions, and the unpatched copy passes.
+
+### What the tests do not prove
+
+- **Power loss and drive flush (not verified).** `synchronous=EXTRA` with
+  `fullfsync=1` makes SQLite call `F_FULLFSYNC` on this Mac. No test cut
+  power or observed the drive cache, so the claim that an acknowledged write
+  survives power loss rests on APFS and the drive honouring `F_FULLFSYNC`.
+- **Other filesystems (not verified).** Network volumes, external disks and
+  non-APFS volumes were not tested. A data folder there is outside this record.
+- **A crash right after the seal.** The sealed database is correct, but the
+  exports and view stay at the revision before the seal; nothing rebuilds them.
+
