@@ -678,6 +678,7 @@ keys and keeps unknown ones.
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
 | `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the scoped, revisioned decision records live under `context.decisions` and are written by `record-decision`. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
+| `permission_proposals[]` | `{id: "perm-"+n, destination, settings_file, operations, rules, reach, exclusions, key: {operations, destination}, items, evidence, state, created_at, changed_at, notified_at, answers, explanation, confirmed, verified?, reservation?, attempts?, pending_answer?, outcome?, covering?, redenied_at?}`. A separate list from `proposed_rules`. `state` is open, postponed, rejected, retrying, resolved, ineffective or retry_unobserved. `propose-permission` adds and folds entries, `answer-permission` and `settle-permissions` move them. Fields, states and rules: programme-permission-proposals.md |
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
 | `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
@@ -692,6 +693,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 |-----|-------|
 | `id` | `[a-z][a-z0-9_-]*:<key>`, max 128 characters, e.g. `linear:AI-753`, `herdr:<ws>/<pane>` |
 | `title`, `joined_at` | string, `<iso>` |
+| `repo` | a `remit.repos[].path`, or null. `add-item --repo` sets it only when the path matches a remit repo; it names where a permission proposal for the item goes |
 | `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped`, `decided` (`FINISHED_ITEM_STATES` are the last four; `CLOSED_ITEM_STATES` are `handed`, `dropped` and `decided`, which a verb sets). No verb sets `done`; the predicate derives it. `log-decision` sets `decided` on a product question when the agreement carries the contract stamp |
 | `aliases` | other ids that resolve to this item |
 | `owner` | `{pane, terminal_id, session_id}` |
@@ -701,7 +703,9 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `deliverables` | `{"<name>": entry}`, names from `DELIVERABLES` (`merged`, `flagged`, `verified`, `released`, `recorded`); a new entry is `{result: "unknown"}` |
 | deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
-| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, serves?, evidence?, unblocks_when?, safety?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. A blocker written by `set-waiting` carries `serves`, `evidence` and `unblocks_when`, or `safety: true` for a safety or data-loss pause; one written before these fields has none, and the view says so |
+| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, serves?, evidence?, unblocks_when?, safety?, permission?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. A blocker written by `set-waiting` carries `serves`, `evidence` and `unblocks_when`, or `safety: true` for a safety or data-loss pause; one written before these fields has none, and the view says so `propose-permission` writes `{who: shawn, reporter: shawn, watcher: null, permission: <perm-id>}`; `settle-permissions` clears it when that proposal resolves. `set-waiting` refuses a new wait while `permission` is set; `--clear` releases it |
+| `permission_block` | `{cause, detail, at, proposals}`: the item's latest permission explanation, written by the permission verbs |
+| `permission_scan` | `{<session id>: byte offset}`: how far `propose-permission` has read each session's transcript for this item |
 | `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
 | `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
@@ -732,7 +736,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
-`taken_over`, `handed_over`, `programme_ended`, `request_refused`.
+`taken_over`, `handed_over`, `programme_ended`, `request_refused`,
+`permission_proposed`, `permission_answered`, `permission_verified`,
+`permission_settled`, `blocked_settings_write`.
 
 - `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
   (a list of decision ids) and `restrictions` (a list of `{text, source}`).
@@ -796,6 +802,20 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   of the Stop hook; readers dedupe by item.
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
   PR head. No verb writes it yet.
+- Permission lines (programme-permission-proposals.md gives the full rules):
+  - No journal line records a refusal. `propose-permission` reads refusals from
+    the item sessions' transcripts.
+  - `permission_proposed {items, proposals, notify}`. `notify` maps each
+    proposal id the call tried to notify to the notifier's exit status.
+  - `permission_answered {proposal, choice, state, from, deferred?, noop?}` and
+    `permission_verified`, the same plus `{verify, reservation, retry_item,
+    retry_text}` for an applied answer that ran the verify. Both carry
+    `prompt_id`, `quote` and `cites`.
+  - `permission_settled {settled, pending}`, written only when at least one
+    proposal changed state.
+  - `blocked_settings_write {tool, path, item_ids, command?}`, written by the
+    PreToolUse hook when it refuses a call that names a proposal's
+    `.claude/settings.local.json`.
 
 `<home>/claims.jsonl` is the worker inbox. Each line has the journal line shape with
 kind `claim`, `session_id` = the worker, payload `{item, deliverable, ref}`. Inbox

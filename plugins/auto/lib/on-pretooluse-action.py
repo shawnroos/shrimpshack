@@ -882,6 +882,10 @@ def _cli(argv) -> int:
         sys.stdout.write("\n")
         return 0
     try:
+        settings_denial = load_lib_module("programme_settings_guard").denial(stdin_raw)
+    except Exception:
+        settings_denial = None
+    try:
         driver_denial = driver_send_denial(stdin_raw)
     except Exception:
         driver_denial = None
@@ -892,7 +896,7 @@ def _cli(argv) -> int:
         # to a confirmed destructive match on a confirmed run, handled inside
         # decide(); an unrelated internal error must not brick the tool flow.
     if decision is None:
-        decision = driver_denial
+        decision = settings_denial or driver_denial
     if decision is not None:
         json.dump(decision, sys.stdout)
         sys.stdout.write("\n")

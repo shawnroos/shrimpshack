@@ -703,7 +703,11 @@ def _store(programme, run_id, key, deliverable, ref, verdict) -> dict:
     if verdict["result"] != "confirmed":
         item["done_at"] = None
         out["claim"] = "unconfirmed"
-    if verdict["result"] == "unknown" and entry["unknown_streak"] >= UNKNOWNS_BEFORE_WAIT \
+    held = [p.get("id") for p in programme.get("permission_proposals") or []
+            if isinstance(p, dict) and p.get("state") != "resolved" and key in (p.get("items") or [])]
+    if held and verdict["result"] == "unknown":
+        out["permission_hold"] = held
+    elif verdict["result"] == "unknown" and entry["unknown_streak"] >= UNKNOWNS_BEFORE_WAIT \
             and item.get("state") in programme_record.WAITABLE_STATES:
         out["waiting_on"] = _wait_on_system(programme, run_id, key, item, deliverable)
     elif verdict["result"] != "unknown":

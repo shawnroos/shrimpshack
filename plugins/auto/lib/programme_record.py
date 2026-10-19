@@ -145,6 +145,24 @@ def _set_owner(item, opts) -> bool:
     return True
 
 
+def _remit_repo(programme, path):
+    if not path:
+        return None
+    real = os.path.realpath(path)
+    for entry in programme["remit"].get("repos") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) \
+                and os.path.realpath(entry["path"]) == real:
+            return entry["path"]
+    return None
+
+
+def _set_repo(item, programme, path) -> None:
+    repo = _remit_repo(programme, path)
+    if repo and item.get("repo") != repo:
+        item["repo"] = repo
+        _history(item, "repo", repo=repo)
+
+
 def _h_add_item(host, argv):
     positional, opts = host._parse(
         argv, values=("run", "title", "repo", "pane", "terminal-id", "session", "session-name"),
@@ -166,6 +184,8 @@ def _h_add_item(host, argv):
             item = programme_home.new_item(item_id, title or "", now_iso=_now())
             payload = dict({"item": item_id, "title": item["title"]}, **_apply_match(item, protocol, kinds))
             payload["owner_changed"] = _set_owner(item, opts)
+            _set_repo(item, programme, opts.get("repo"))
+            payload["repo"] = item["repo"]
             _history(item, "added")
             programme["items"][item_id] = item
             return payload
@@ -179,6 +199,8 @@ def _h_add_item(host, argv):
         if kinds:
             payload.update(_apply_match(item, protocol, kinds))
         payload["owner_changed"] = _set_owner(item, opts)
+        _set_repo(item, programme, opts.get("repo"))
+        payload["repo"] = item.get("repo")
         _history(item, "updated")
         return payload
 
@@ -197,7 +219,7 @@ def _rewrite_refs(programme, old_ids, new_id) -> None:
     for watcher in (programme.get("watchers") or {}).values():
         if isinstance(watcher, dict) and watcher.get("item") in olds:
             watcher["item"] = new_id
-    for rule in programme.get("proposed_rules") or []:
+    for rule in (programme.get("proposed_rules") or []) + (programme.get("permission_proposals") or []):
         if isinstance(rule, dict) and isinstance(rule.get("items"), list):
             rule["items"] = list(dict.fromkeys(new_id if i in olds else i for i in rule["items"]))
     for entry in programme.get("instructions") or []:
@@ -243,7 +265,7 @@ def _merge_into(programme, src_id, dst_id) -> None:
         dst[key] = list(dict.fromkeys((dst.get(key) or []) + (src.get(key) or [])))
     if not any(dst["owner"].values()):
         dst["owner"] = src["owner"]
-    for key in ("title", "waiting_on", "tested_build"):
+    for key in ("title", "waiting_on", "tested_build", "repo"):
         if not dst.get(key) and src.get(key):
             dst[key] = src[key]
     dst["history"].extend(src["history"])
@@ -446,6 +468,10 @@ def _h_set_waiting(host, argv):
             item.update(state="open", waiting_on=None)
             _history(item, "wait_cleared")
             return {"item": key, "waiting_on": None}
+        held = (item.get("waiting_on") or {}).get("permission")
+        if held:
+            raise RecordError(f"item {key!r} waits on permission proposal {held}; a new wait would drop that "
+                              "link. Shawn's typed answer or settle-permissions moves it; --clear releases it")
         spec = _wait_spec(opts, watcher, blocker)
         if watcher is not None:
             _upsert_watcher(programme, watcher, ids, item=key)
@@ -843,7 +869,8 @@ _SPECS = (
      "<source:key> [--title <text>] [--kind <change-kind>]... [--repo <path>] [--pane <id>] "
      "[--terminal-id <id>] [--session <id>] [--session-name <name>] [--run <id>]",
      "an id that is not source:key or holds '..', spaces or control text; an unknown change kind; "
-     "a handed or dropped item."),
+     "a handed or dropped item. --repo also stores the item's repository when it matches a remit "
+     "repo path; any other --repo only selects the protocol."),
     ("alias-item", _h_alias_item, "<old-id> <new-id> [--run <id>]",
      "an unknown old id; ids that are already one item. An existing new id merges the two."),
     ("merge-item", _h_merge_item, "<from-id> <into-id> [--run <id>]",

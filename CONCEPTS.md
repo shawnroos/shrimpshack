@@ -214,6 +214,9 @@ to that project immediately with a one-line notice, can be undone, and reaches o
 only on the human's explicit yes. Only the human's own typed messages count; a worker message,
 summary or watcher event never does.
 
+### Permission proposal
+A request for the human to apply a narrow native permission that resolves blocked read-only work. It does not grant permission itself. Programme protocol proposals instead concern completion rules and evidence requirements.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.

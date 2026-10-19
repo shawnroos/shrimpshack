@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import sys
 
@@ -13,6 +14,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_permission_rules = load_lib_module("programme_permission_rules")
 programme_journal = load_lib_module("programme_journal")
 programme_decisions = load_lib_module("programme_decisions")
 programme_predicate = load_lib_module("programme_predicate")
@@ -22,9 +24,12 @@ programme_terms = load_lib_module("programme_terms")
 session_registry = load_lib_module("session_registry")
 
 VIEW_FORMAT = 1
+VIEW_DIR = "views"
+VIEW_NAME = "view.json"
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
+HOOK_KINDS = ("blocked_settings_write",)
 TERM_CHANGES_LIMIT = 20
 TERM_CHANGE_KINDS = (programme_terms.EDITED, programme_terms.AMENDED,
                      programme_terms.CORRECTED, programme_terms.UNDONE)
@@ -34,6 +39,22 @@ SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "res
 
 def _dict(value) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def view_path(home) -> str:
+    return os.path.join(home, VIEW_DIR, VIEW_NAME)
+
+
+def write_view(home, view) -> str:
+    folder = programme_home._ensure_dir(os.path.join(home, VIEW_DIR))
+    path = os.path.join(folder, VIEW_NAME)
+
+    def write(fh):
+        json.dump(view, fh, indent=1, sort_keys=True)
+        fh.write("\n")
+
+    programme_home.atomic_write(path, write, ".view.", folder)
+    return path
 
 
 def _iso(now) -> str:
@@ -101,6 +122,14 @@ def _tasks_now(owner, tasks_on):
     return f"now: {summary['now']} ({tally})" if summary["now"] else tally
 
 
+def _permission_block(block):
+    block = _dict(block)
+    if not block:
+        return None
+    return {"cause": block.get("cause"), "proposals": block.get("proposals") or [],
+            "detail": programme_sanitize.wrap(block["detail"]) if block.get("detail") else None}
+
+
 def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict:
     owner = _dict(item.get("owner"))
     marks = []
@@ -130,6 +159,7 @@ def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict
         "restrictions": [{"text": _dict(r).get("text"), "source": _dict(r).get("source")}
                          for r in item.get("restrictions") or []],
         "marks": marks,
+        "permission_block": _permission_block(item.get("permission_block")),
         "needs_shawn": stopped or (effective == "handed" and not handed.get("answered")),
     }
 
@@ -219,6 +249,12 @@ def _watching_row(w) -> dict:
     return _row(text, "text" if w["live"] else "warn")
 
 
+def _asking(block) -> list:
+    return [p for p in (_dict(p) for p in block.get("permission_proposals") or [])
+            if p.get("state") in programme_permission_rules.ASKING_STATES
+            or programme_permission_rules.needs_eyes(p)]
+
+
 def _context_decisions(acceptance) -> list:
     acceptance = _dict(acceptance)
     out = []
@@ -242,6 +278,22 @@ def _decisions(block, items) -> list:
     out += [{"kind": "stopped_unwatched", "item": i["id"],
              "question": "the PM stopped while this wait had no watcher"}
             for i in items if "stopped unwatched" in i["marks"]]
+    for proposal in _asking(block):
+        last = _dict((proposal.get("evidence") or [None])[-1])
+        reason = f"{last.get('layer')} (reasonType {last.get('reason_type')})" if last.get("layer") else None
+        question = (f"{proposal.get('id')}: allow {', '.join(proposal.get('rules') or [])} in "
+                    f"{proposal.get('settings_file')} for {', '.join(proposal.get('items') or [])} "
+                    f"({proposal.get('state')}); " + (
+                        "no answer needed; check the rule is still in place" if proposal.get("state") == "resolved"
+                        else f"answer applied, not now or reject {proposal.get('id')}"))
+        covering = _dict(proposal.get("covering"))
+        if covering.get("rule"):
+            question += "; covered by " + programme_sanitize.wrap(f"{covering['rule']} in {covering.get('source')}")
+        if reason:
+            question += "; last refused by " + programme_sanitize.wrap(reason, cap=120)
+        if proposal.get("explanation"):
+            question += "; " + programme_sanitize.wrap(proposal["explanation"], cap=120)
+        out.append({"kind": "permission", "item": None, "proposal": proposal.get("id"), "question": question})
     for rule in block.get("proposed_rules") or []:
         rule = _dict(rule)
         out.append({"kind": "proposed_rule", "item": None, "rule": rule.get("id"),
@@ -259,6 +311,8 @@ def _just_did(journal_entries) -> list:
         item = payload.get("item") or (payload.get("items") or [None])[0]
         bits = [f"{k}={payload[k]}" for k in SUMMARY_KEYS
                 if isinstance(payload.get(k), (str, int, float)) and not isinstance(payload.get(k), bool)]
+        if row.get("kind") in HOOK_KINDS:
+            bits = [programme_sanitize.wrap(b) for b in bits]
         doing = _dict(payload.get("doing"))
         if doing.get("text"):
             bits.insert(0, doing["text"])
@@ -279,7 +333,8 @@ def _rules(block, rules) -> dict:
     return {"agreement": {"accepted": _dict(block.get("agreement")).get("accepted"),
                           "terms": {k: {"value": _dict(t).get("value"), "set_by": _dict(t).get("set_by")}
                                     for k, t in sorted(terms.items())}},
-            "rules": [], "autonomy": [], "rejected_rules": [], "instructions": []}
+            "rules": [], "autonomy": [], "rejected_rules": [], "instructions": [],
+            "permission_proposals": []}
 
 
 def _change_text(kind, p) -> tuple:
@@ -471,6 +526,12 @@ def _rule_text(rule) -> str:
     return text + (f"; caveat: {rule['caveat']}" if rule.get("caveat") else "")
 
 
+def _permission_text(p) -> str:
+    confirmed = ", not confirmed by Shawn" if p.get("confirmed") is False else ""
+    return (f"permission {p.get('id')}: {p.get('state')}{confirmed}, {', '.join(p.get('rules') or [])} in "
+            f"{p.get('settings_file')}, items {', '.join(p.get('items') or []) or 'none'}")
+
+
 def rule_texts(r) -> list:
     agreement = _dict(r.get("agreement"))
     accepted = _dict(agreement.get("accepted"))
@@ -480,6 +541,7 @@ def rule_texts(r) -> list:
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
     out += [(f"autonomy {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
             for e in r.get("autonomy") or []]
+    out += [(_permission_text(_dict(p)), "warn") for p in r.get("permission_proposals") or []]
     rejected = [str(_dict(rule).get("id")) for rule in r.get("rejected_rules") or []]
     if rejected:
         out.append((f"rejected rules: {len(rejected)} ({', '.join(rejected)})", "warn"))
@@ -519,6 +581,10 @@ def _item_lines(item) -> list:
         out.append(_row(f"    blocker: {blocker}", "dim"))
     for r in item.get("restrictions") or []:
         out.append(_row(f"    restriction ({r['source']}): {r['text']}", "dim"))
+    block = item.get("permission_block")
+    if block:
+        bits = [f"permission: {block['cause']}"] + ([block["detail"]] if block.get("detail") else [])
+        out.append(_row("    " + " · ".join(bits), "warn"))
     for d in item["deliverables"]:
         ref = f" {d['ref']}" if d.get("ref") else ""
         out.append(_row(f"    {d['name']}: {d['result']}{ref}", "dim"))

@@ -191,6 +191,7 @@ def rules_in_force(record, journals=None) -> dict:
         "rejected_rules": [{"id": r["id"], "layer": r["layer"], "reason": r["reason"]}
                            for r in protocol["rejected"]],
         "instructions": active_instructions(programme),
+        "permission_proposals": programme_permission.in_force(programme),
     }
     corrections = programme_terms.active_corrections(programme)
     if corrections:
@@ -248,7 +249,7 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
     if row.get("session_id") != record.get("driving_session_id"):
         raise ProgrammeError(f"prompt {prompt_id!r} was not typed in the driving session")
     return {"prompt_id": prompt_id, "quote": payload.get("text") or "",
-            "text_hash": text_hash(payload.get("text")), "origin_verified": True}
+            "text_hash": text_hash(payload.get("text")), "at": row.get("at"), "origin_verified": True}
 
 
 def _name_words(text) -> list:
@@ -825,9 +826,11 @@ _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
 programme_sources = load_lib_module("programme_sources")
 _VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
 
+programme_permission = load_lib_module("programme_permission")
+_VERBS.update(programme_permission.build_verbs(sys.modules[__name__]))
+
 programme_view = load_lib_module("programme_view")
-VIEW_DIR = "views"
-VIEW_NAME = "view.json"
+_write_view = programme_view.write_view
 
 
 def build_view(run_id, home, record, *, journal=None, inbox_size=None) -> dict:
@@ -837,18 +840,6 @@ def build_view(run_id, home, record, *, journal=None, inbox_size=None) -> dict:
         inbox_size = programme_record.claims_count(home)
     return programme_view.build(record, journal, inbox_size=inbox_size,
                                 rules=rules_in_force(record, {run_id: journal}))
-
-
-def _write_view(home, view) -> str:
-    folder = programme_home._ensure_dir(os.path.join(home, VIEW_DIR))
-    path = os.path.join(folder, VIEW_NAME)
-
-    def write(fh):
-        json.dump(view, fh, indent=1, sort_keys=True)
-        fh.write("\n")
-
-    programme_home.atomic_write(path, write, ".view.", folder)
-    return path
 
 
 def _refresh_promoted(run_id, home) -> None:
@@ -879,7 +870,7 @@ def _rebuild_missing_view(run_id, home, record) -> None:
     programme = record.get("programme") or {}
     if programme.get("ended") or programme_home.sealed(programme):
         return
-    if not os.path.exists(os.path.join(home, VIEW_DIR, VIEW_NAME)):
+    if not os.path.exists(programme_view.view_path(home)):
         refresh_view(run_id, home)
 
 

@@ -118,6 +118,11 @@ KINDS = (
     "archive_check_failed",
     "programme_archived",
     "successor_created",
+    "permission_proposed",
+    "permission_answered",
+    "permission_verified",
+    "permission_settled",
+    "blocked_settings_write",
 )
 
 _TOKEN_PATTERNS = [

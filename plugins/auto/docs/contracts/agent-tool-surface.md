@@ -299,6 +299,53 @@ session.
   other change kinds and leaves it open. Without the stamp it refuses and the
   item still goes to Shawn through `hand-item`. `accept-agreement` also records
   a Shawn decision of kind agreement.
+- **Permission proposals**: `propose-permission` takes `--item <id>`,
+  repeatable; with none it reads every unfinished item. It reads the item
+  sessions' transcripts (paths from the session registry) for refusals ruled
+  since each session joined the item, and turns each mode or classifier refusal
+  of an eligible read into one shared proposal per destination (the main
+  checkout's `.claude/settings.local.json`, from the item's recorded repo) for a
+  native allow rule from the read-only catalog. A deny-rule or hook refusal, or
+  one whose layer is unknown, gets an explanation instead.
+  A new need folds into the open proposal for that destination and notifies
+  again only when its operations grew; operations a postponed, rejected or
+  decided proposal already holds attach as evidence with no notification. An
+  item with no recorded repo, a destination outside the remit, an ineligible
+  command, or (when named) no readable refusal gets an explanation instead. `notified_at` is
+  stored only after the herdr notifier exits 0, and every call re-sends open
+  proposals not yet notified. Programme never writes a settings file.
+  `answer-permission` takes
+  a proposal id, one of applied, not-now or no, and `--prompt <id>`: a typed
+  prompt from the driving session that names the proposal id, says exactly one
+  answer (applied or apply; not now, later or postpone; reject or decline), is
+  newer than the proposal's last state change, and that no earlier answer
+  cited. not-now and no postpone or reject an open, ineffective or
+  retry_unobserved proposal; on a postponed or rejected one they record the
+  answer and keep the state; while retrying they are recorded and applied after
+  the outcome. applied reads three settings files read-only (user
+  `~/.claude/settings.json`, the main checkout's `.claude/settings.local.json`,
+  and each blocked session's worktree `.claude/settings.json` from the session
+  registry's cwd) and keeps only the permission lists and
+  `autoMode.classifyAllShell`. Any linked command still blocked by a deny or ask
+  rule, or by classifyAllShell, makes the proposal ineffective; any uncovered
+  command keeps it open; only when every command is covered does it reserve one
+  retry on the oldest linked item whose owner pane has a live agent, and return
+  `retry_item` and `retry_text` for `prompt-item`. With no live owner pane it
+  becomes retry_unobserved. applied while retrying changes nothing, and applied
+  on a resolved proposal is refused. Every result says managed settings and a
+  `--settings` flag are not visible.
+- **Permission settlement**: `settle-permissions` (driving session) reads the
+  reserved session's transcript after the reservation for a Bash call with the
+  reserved operation and target (extra pipes or `--json` fields still count).
+  The runtime's `permissionDecision` decides: accept resolves the proposal and
+  returns its waiting items to open; reject makes it ineffective with the
+  diagnosed layer. With no such call, an idle or gone owner pane after the
+  retry was sent gives retry_unobserved. An open proposal resolves with
+  `confirmed: false`, and shows as a decision for Shawn with its covering rule,
+  when an affected session's transcript shows every operation ran after its
+  denial. It never retries; only a new typed applied arms one more attempt. A
+  later denial on a resolved proposal attaches as evidence and shows as a
+  decision for Shawn, with no state change and no notification.
 - **Worker inbox**: `claim --run <id> --item <id> --deliverable <name> --ref <ref>`
   commits one structured claim, exported to `<home>/claims.jsonl`. Free text and a
   reference with spaces are refused, and a claim never changes evidence. `mark-read`
@@ -593,6 +640,12 @@ whose recorded project is outside them.
 
 Other sessions, sessions that drive no programme, and every other field
 (an issue description included) are not checked.
+
+The same hook guards the files permission proposals target. For the driving
+session and for sessions on unfinished items, it denies a Write, Edit, MultiEdit
+or Bash call that names the `.claude/settings.local.json` of any proposal's
+destination, and journals `blocked_settings_write`. The Bash check is a text
+match. Other settings files are not checked (programme-permission-proposals.md).
 
 The pane guard and the prompt binding stop accidents and casual misuse. A
 determined process running as the same user can still append journal rows or
