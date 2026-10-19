@@ -140,6 +140,17 @@ test('a task with no trajectory renders its title and "no plan yet"', () => {
   expect(lineText(layout.lines[0] ?? [])).toContain('no plan yet')
 })
 
+test('a faded task shows its age and every part of it is dimmed; a fresh one shows no age', () => {
+  const layout = bandLayout(entries([task('1', { faded: true, age_seconds: 2400 }), task('2')]), 200, {})
+  const line = layout.lines[0] ?? []
+  const text = lineText(line)
+  expect(text).toContain('40m')
+  const fadedSpans = line.slice(0, line.findIndex(span => span.text.includes('│')))
+  expect(fadedSpans.length).toBeGreaterThan(0)
+  expect(fadedSpans.every(span => span.dim === true && span.color === undefined)).toBe(true)
+  expect(text.split('│')[1] ?? '').not.toContain('1m')
+})
+
 test('focusing the seventh task while 4 are visible swaps it into the last visible slot', () => {
   const work = entries(['1', '2', '3', '4', '5', '6', '7'].map(id => task(id)))
   const plain = bandLayout(work, 120, {})

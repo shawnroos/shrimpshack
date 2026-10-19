@@ -1,4 +1,5 @@
 import type { ClientElements } from 'claude-code'
+import { duration } from './tree'
 
 export type StepKind = 'done' | 'current' | 'waiting' | 'planned'
 export type BandStep = { kind: StepKind; title: string }
@@ -11,6 +12,8 @@ export type BandEntry = {
   location: string | null
   changeHash: string | null
   marked: boolean
+  faded: boolean
+  ageSeconds: number | null
 }
 export type BandSelection = { item?: string; step?: number }
 export type BandProps = { work: BandEntry[]; columns: number; maxLines: number; selection: BandSelection }
@@ -63,6 +66,8 @@ export function readWork(raw: unknown): BandEntry[] {
       location: text(entry.location),
       changeHash: text(entry.change_hash),
       marked: false,
+      faded: entry.faded === true,
+      ageSeconds: typeof entry.age_seconds === 'number' ? entry.age_seconds : null,
     })
   }
   return out
@@ -165,7 +170,9 @@ function entrySpans(entry: BandEntry, focused: boolean, selection: BandSelection
   if (focused && entry.location) {
     spans.push({ text: `  ${GLYPH.pane} ${truncate(entry.location, LOCATION_COLUMNS)}`, dim: true })
   }
-  return spans
+  if (!entry.faded) return spans
+  if (entry.ageSeconds !== null) spans.push({ text: ` ${duration(entry.ageSeconds)}` })
+  return spans.map(span => ({ ...span, dim: true, color: undefined }))
 }
 
 function pack(order: BandEntry[], width: number, selection: BandSelection, maxLines: number) {
