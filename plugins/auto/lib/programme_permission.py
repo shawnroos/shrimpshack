@@ -29,13 +29,13 @@ driver_session = load_lib_module("driver_session")
 RecordError = programme_record.RecordError
 
 BLOCKS_NAME = "blocks.jsonl"
-COMMAND_CAP = 2000
-REASON_CAP = 300
+COMMAND_CAP = programme_permission_rules.COMMAND_CAP
+REASON_CAP = programme_permission_rules.REASON_CAP
 EVIDENCE_CAP = 50
 TRANSCRIPT_CAP = 64 * 1024 * 1024
 OPEN = "open"
 QUIET_STATES = ("postponed", "rejected")
-ASKING_STATES = ("open", "ineffective", "retry_unobserved")
+ASKING_STATES = programme_permission_rules.ASKING_STATES
 RESOLVED = "resolved"
 RETRYING = "retrying"
 CHOICE_WORDS = {
@@ -45,10 +45,6 @@ CHOICE_WORDS = {
     "no": ("reject", "rejected", "decline", "declined"),
 }
 DECLINED_STATE = {"not-now": "postponed", "no": "rejected"}
-
-
-def _now() -> str:
-    return run_record_core.now_iso()
 
 
 def _proposals(programme) -> list:
@@ -67,8 +63,9 @@ def blocks_path(home) -> str:
     return os.path.join(home, BLOCKS_NAME)
 
 
-def _transcript_rows(path):
+def _transcript_rows(path, start=0):
     with open(path, "rb") as fh:
+        fh.seek(start)
         data = fh.read(TRANSCRIPT_CAP + 1)
     if len(data) > TRANSCRIPT_CAP:
         return []
@@ -96,7 +93,7 @@ def runtime_ruling(row) -> dict:
             "denial_kind": programme_sanitize.token(row.get("toolDenialKind"))}
 
 
-def confirm(row, decision="reject"):
+def confirm(row):
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
     sid, tool_use_id, path = row.get("session_id"), payload.get("tool_use_id"), payload.get("transcript_path")
     if not (isinstance(sid, str) and sid and isinstance(tool_use_id, str) and tool_use_id):
@@ -118,7 +115,7 @@ def confirm(row, decision="reject"):
         elif entry.get("type") == "user" and command is not None:
             if any(b.get("tool_use_id") == tool_use_id for b in _blocks(entry, "tool_result")):
                 found = runtime_ruling(entry)["ruling"]
-    if not isinstance(command, str) or found != decision:
+    if not isinstance(command, str) or found != "reject":
         return None
     if programme_journal.redact(command)[:COMMAND_CAP] != payload.get("command"):
         return None
@@ -149,7 +146,7 @@ def _explain(item, cause, detail=None, *, proposal=None, unconfirmed=None, repor
     block.setdefault("unconfirmed", [])
     if not (cause == "unconfirmed" and block.get("cause")):
         block.update(cause=cause, detail=detail)
-    block["at"] = _now()
+    block["at"] = run_record_core.now_iso()
     if proposal and proposal not in block["proposals"]:
         block["proposals"].append(proposal)
     if unconfirmed and unconfirmed not in block["unconfirmed"]:
@@ -164,7 +161,8 @@ def _new_proposal(programme, ops, dest) -> dict:
                if isinstance(p.get("id"), str) and p["id"][:5] == "perm-" and p["id"][5:].isdigit()]
     proposal = {"id": f"perm-{max(numbers, default=0) + 1}", "destination": dest["main"],
                 "settings_file": dest["file"], "items": [], "evidence": [], "state": OPEN,
-                "created_at": _now(), "changed_at": _now(), "notified_at": None,
+                "created_at": run_record_core.now_iso(), "changed_at": run_record_core.now_iso(),
+                "notified_at": None,
                 "explanation": None, "answers": [], "confirmed": None}
     _render(proposal, ops)
     programme["permission_proposals"].append(proposal)
@@ -184,8 +182,9 @@ def _attach(proposal, evidence, item_keys) -> None:
         return
     proposal["evidence"] = (proposal.get("evidence") or [])[-(EVIDENCE_CAP - 1):] + [evidence]
     if proposal.get("state") == RESOLVED:
-        proposal.update(redenied_at=_now(), explanation="denied again after it resolved; the applied rule "
-                                                        "may have been removed or narrowed")
+        proposal.update(redenied_at=run_record_core.now_iso(),
+                        explanation="denied again after it resolved; the applied rule may have been removed "
+                                    "or narrowed")
 
 
 def _place(programme, ops, dest, evidence, item_keys) -> tuple:
@@ -203,7 +202,7 @@ def _place(programme, ops, dest, evidence, item_keys) -> tuple:
             asking = _new_proposal(programme, rest, dest)
         elif set(rest) - set(asking["operations"]):
             _render(asking, sorted(set(asking["operations"]) | set(rest)))
-            asking.update(notified_at=None, changed_at=_now())
+            asking.update(notified_at=None, changed_at=run_record_core.now_iso())
         _attach(asking, evidence, item_keys)
         touched.append(asking["id"])
     return touched, asking
@@ -332,7 +331,7 @@ def notify_pending(run_id, home) -> dict:
         def stamp(rec):
             for proposal in (rec.get("programme") or {}).get("permission_proposals") or []:
                 if isinstance(proposal, dict) and proposal.get("id") in sent and not proposal.get("notified_at"):
-                    proposal["notified_at"] = _now()
+                    proposal["notified_at"] = run_record_core.now_iso()
 
         run_record_core._with_locked_run_record(home, run_id, stamp)
     return results
@@ -385,10 +384,10 @@ def _gate(host, proposal, choice, prompt) -> None:
 
 def _record_answer(proposal, choice, prompt, state) -> dict:
     before = proposal["state"]
-    proposal.setdefault("answers", []).append({"at": _now(), "choice": choice, "prompt_id": prompt["prompt_id"],
-                                               "from": before, "to": state})
+    proposal.setdefault("answers", []).append({"at": run_record_core.now_iso(), "choice": choice,
+                                               "prompt_id": prompt["prompt_id"], "from": before, "to": state})
     if state != before:
-        proposal.update(state=state, changed_at=_now())
+        proposal.update(state=state, changed_at=run_record_core.now_iso())
     return {"proposal": proposal["id"], "choice": choice, "state": state, "from": before}
 
 
@@ -396,7 +395,7 @@ def _settle_module():
     return load_lib_module("programme_permission_settle")
 
 
-def _answer_declined(programme, proposal, choice, prompt, live) -> dict:
+def _answer_declined(proposal, choice, prompt) -> dict:
     state = proposal.get("state")
     if state in ASKING_STATES:
         return _record_answer(proposal, choice, prompt, DECLINED_STATE[choice])
@@ -411,12 +410,9 @@ def apply_answer(programme, proposal, choice, prompt, live) -> dict:
     return _settle_module().apply_answer(programme, proposal, choice, prompt, live)
 
 
-ANSWERS = {"applied": apply_answer, "not-now": _answer_declined, "no": _answer_declined}
-
-
 def _h_answer_permission(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt"))
-    if len(positional) != 2 or positional[1] not in ANSWERS:
+    if len(positional) != 2 or positional[1] not in CHOICE_WORDS:
         raise ValueError("usage: answer-permission <perm-id> applied|not-now|no --prompt <id>")
     proposal_id, choice = positional
     _, _, record = host._locate(opts)
@@ -425,7 +421,9 @@ def _h_answer_permission(host, argv):
     def change(programme, prompt, rec):
         proposal = _find(programme, proposal_id)
         _gate(host, proposal, choice, prompt)
-        return ANSWERS[choice](programme, proposal, choice, prompt, live)
+        if choice == "applied":
+            return apply_answer(programme, proposal, choice, prompt, live)
+        return _answer_declined(proposal, choice, prompt)
 
     def kind(payload):
         return "permission_verified" if payload.get("verify") else "permission_answered"
@@ -433,22 +431,13 @@ def _h_answer_permission(host, argv):
     return host._write(opts, change, kind, prompt_id=opts.get("prompt"), needs_prompt=True)
 
 
-def _needs_eyes(proposal) -> bool:
-    return proposal.get("state") == RESOLVED and (proposal.get("confirmed") is False
-                                                   or bool(proposal.get("redenied_at")))
-
-
 def in_force(programme) -> list:
     out = []
     for proposal in _proposals(programme):
-        if proposal.get("state") == RESOLVED and not _needs_eyes(proposal):
+        if proposal.get("state") == RESOLVED and not programme_permission_rules.needs_eyes(proposal):
             continue
         out.append({k: proposal.get(k) for k in ("id", "state", "rules", "settings_file", "items", "confirmed")})
     return out
-
-
-def asking(programme) -> list:
-    return [p for p in _proposals(programme) if p.get("state") in ASKING_STATES or _needs_eyes(p)]
 
 
 _SPECS = (

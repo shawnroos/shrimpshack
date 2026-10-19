@@ -40,12 +40,8 @@ NEXT_ACTION = {
             "or a --settings flag on that session",
     "classifier": "the auto-mode classifier refused it; an allow rule in a file it reads would skip it",
 }
-RETRYING = "retrying"
-RESOLVED = "resolved"
-
-
-def _now() -> str:
-    return run_record_core.now_iso()
+RETRYING = programme_permission.RETRYING
+RESOLVED = programme_permission.RESOLVED
 
 
 def user_settings_path() -> str:
@@ -119,7 +115,9 @@ def verify(proposal) -> dict:
         cwd = _registry(cmd["session_id"]).get("cwd")
         if isinstance(cwd, str) and os.path.isabs(cwd):
             path = os.path.join(cwd, WORKTREE_FILE)
-            using.append(files.setdefault(path, read_settings(path, "worktree")))
+            if path not in files:
+                files[path] = read_settings(path, "worktree")
+            using.append(files[path])
         else:
             notes.append(f"worktree settings for session {cmd['session_id']} not read: the registry has no cwd")
         layers = _layers(using)
@@ -191,7 +189,7 @@ def _reserve(programme, proposal, key):
     except OSError:
         return None
     return {"item": key, "session_id": sid, "operation": call["op"], "target": call["target"],
-            "normalized": call["normalized"], "at": _now(), "transcript_offset": offset}
+            "normalized": call["normalized"], "at": run_record_core.now_iso(), "transcript_offset": offset}
 
 
 def retry_text(proposal_id, reservation) -> str:
@@ -213,7 +211,7 @@ def apply_answer(programme, proposal, choice, prompt, live) -> dict:
                               f"retried; type applied {proposal['id']} again once a worker is running")
     out = programme_permission._record_answer(proposal, choice, prompt, target)
     proposal.update(explanation=explain(check), reservation=reservation, pending_answer=None,
-                    verified={"at": _now(), "outcome": check["outcome"], "files": check["files"]})
+                    verified={"at": run_record_core.now_iso(), "outcome": check["outcome"], "files": check["files"]})
     if reservation:
         proposal["attempts"] = proposal.get("attempts", 0) + 1
     for key in proposal.get("items") or []:
@@ -227,27 +225,17 @@ def apply_answer(programme, proposal, choice, prompt, live) -> dict:
 
 def defer_answer(proposal, choice, prompt) -> dict:
     out = programme_permission._record_answer(proposal, choice, prompt, RETRYING)
-    proposal["pending_answer"] = {"choice": choice, "prompt_id": prompt["prompt_id"], "at": _now()}
+    proposal["pending_answer"] = {"choice": choice, "prompt_id": prompt["prompt_id"], "at": run_record_core.now_iso()}
     return dict(out, deferred=True)
 
 
 def _tool_uses(path, offset=0) -> list:
     try:
-        with open(path, "rb") as fh:
-            fh.seek(offset)
-            data = fh.read(programme_permission.TRANSCRIPT_CAP + 1)
+        rows = programme_permission._transcript_rows(path, offset)
     except OSError:
         return []
-    if len(data) > programme_permission.TRANSCRIPT_CAP:
-        return []
     uses, order = {}, []
-    for line in data.splitlines():
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(row, dict):
-            continue
+    for row in rows:
         if row.get("type") == "assistant":
             for block in programme_permission._blocks(row, "tool_use"):
                 command = (block.get("input") or {}).get("command")
@@ -366,9 +354,9 @@ def _unblock(programme, proposal) -> None:
 
 def _apply(programme, proposal, seen) -> dict:
     before = proposal["state"]
-    proposal.update(state=seen["state"], changed_at=_now(), explanation=seen["detail"])
+    proposal.update(state=seen["state"], changed_at=run_record_core.now_iso(), explanation=seen["detail"])
     proposal["outcome"] = {k: seen.get(k) for k in ("state", "tool_use_id", "detail")}
-    proposal["outcome"]["at"] = _now()
+    proposal["outcome"]["at"] = run_record_core.now_iso()
     if seen["state"] == RESOLVED:
         proposal.update(confirmed=seen["confirmed"], covering=seen.get("covering"))
         _unblock(programme, proposal)
@@ -385,7 +373,8 @@ def _apply(programme, proposal, seen) -> dict:
             out["deferred_answer"] = {"choice": pending["choice"], "applied": False,
                                       "why": "the retry ran, so the outcome stands"}
         else:
-            proposal.update(state=programme_permission.DECLINED_STATE[pending["choice"]], changed_at=_now())
+            proposal.update(state=programme_permission.DECLINED_STATE[pending["choice"]],
+                            changed_at=run_record_core.now_iso())
             out.update(state=proposal["state"],
                        deferred_answer={"choice": pending["choice"], "applied": True})
     return out
@@ -400,6 +389,8 @@ def observe(run_id, record) -> list:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     proposals = [p for p in programme.get("permission_proposals") or [] if isinstance(p, dict)]
     retrying = [p for p in proposals if p.get("state") == RETRYING and isinstance(p.get("reservation"), dict)]
+    if not retrying and not any(p.get("state") == "open" for p in proposals):
+        return []
     journal = programme_journal.read(run_id)
     snap = programme_sources.read_herdr()[0] if retrying else None
     layers = _hook_layers(journal)

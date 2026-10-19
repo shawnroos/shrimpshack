@@ -103,8 +103,8 @@
 #                          programme_sanitize, programme_record, programme_exec,
 #                          programme_tracker, programme_tasks, programme_plans,
 #                          session_registry
-#   programme_view       → programme_home, programme_predicate, programme_sanitize,
-#                          programme_tasks, session_registry
+#   programme_view       → programme_home, programme_permission_rules, programme_predicate,
+#                          programme_sanitize, programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_protocol, session_registry, driver_session, verb_cli;
 #                          then, after its verb table is built: programme_record,

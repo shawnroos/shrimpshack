@@ -13,6 +13,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_permission_rules = load_lib_module("programme_permission_rules")
 programme_predicate = load_lib_module("programme_predicate")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
@@ -22,7 +23,6 @@ VIEW_FORMAT = 1
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
-ASKING_STATES = ("open", "ineffective", "retry_unobserved")
 HOOK_KINDS = ("permission_denied", "permission_tool_ran", "blocked_settings_write")
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
@@ -223,8 +223,8 @@ def _watching_row(w) -> dict:
 
 def _asking(block) -> list:
     return [p for p in (_dict(p) for p in block.get("permission_proposals") or [])
-            if p.get("state") in ASKING_STATES
-            or (p.get("state") == "resolved" and (p.get("confirmed") is False or p.get("redenied_at")))]
+            if p.get("state") in programme_permission_rules.ASKING_STATES
+            or programme_permission_rules.needs_eyes(p)]
 
 
 def _decisions(block, items) -> list:

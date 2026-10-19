@@ -20,18 +20,19 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
+programme_permission_rules = load_lib_module("programme_permission_rules")
 programme_sanitize = load_lib_module("programme_sanitize")
 session_registry = load_lib_module("session_registry")
 
 DENIED_EVENT = "PermissionDenied"
 POST_TOOL_EVENTS = ("PostToolUse", "PostToolUseFailure")
-REASON_CAP = 300
-COMMAND_CAP = 2000
+REASON_CAP = programme_permission_rules.REASON_CAP
+COMMAND_CAP = programme_permission_rules.COMMAND_CAP
 FIELD_CAP = 200
 
 _GH = re.compile(r"(?:^|[^\w.-])gh(?=\s|$)")
 _CLASSIFIER_TAG = re.compile(r"^\s*\[[^\]\n]+\]")
-# U7 observed no PermissionDenied payload; these phrases are the documented reasons.
+# No real PermissionDenied payload has been captured; these phrases are the documented reasons.
 _LAYER_PHRASES = (
     ("auto mode could not evaluate this action", "classifier_no_verdict"),
     ("classifier unavailable", "classifier_unavailable"),

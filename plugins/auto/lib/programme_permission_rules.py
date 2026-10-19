@@ -9,6 +9,9 @@ import re
 UNSEEN = "Settings files cannot show managed settings or a command-line --settings flag."
 DESTINATION_FILE = os.path.join(".claude", "settings.local.json")
 BUILTIN_READ_ONLY = ("cat", "echo", "grep", "head", "ls", "pwd", "tail", "wc")
+COMMAND_CAP = 2000
+REASON_CAP = 300
+ASKING_STATES = ("open", "ineffective", "retry_unobserved")
 
 _NUMBER = re.compile(r"[0-9]{1,12}")
 _FIELDS = re.compile(r"[A-Za-z][A-Za-z0-9,]{0,399}")
@@ -399,3 +402,8 @@ def destination(repo_path, remit_paths):
     if main not in remit:
         return {"ok": False, "reason": f"main checkout {main} is not a remit repository"}
     return {"ok": True, "main": main, "file": os.path.join(main, DESTINATION_FILE)}
+
+
+def needs_eyes(proposal) -> bool:
+    return proposal.get("state") == "resolved" and (proposal.get("confirmed") is False
+                                                     or bool(proposal.get("redenied_at")))
