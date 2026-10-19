@@ -175,7 +175,7 @@ test('f on an instruction closes it as fulfilled with the why typed into the fie
   await press(pane, 'act:fulfil')
   await type(pane, 'why:i1', 'closed in PR 12')
   expect(calls.map(call => call.argv.slice(1))).toEqual([
-    ['close-instruction', 'i1', '--as', 'fulfilled', '--why', 'closed in PR 12'],
+    ['close-instruction', 'i1', '--as', 'fulfilled', '--why', 'closed in PR 12', '--origin', 'ui'],
   ])
   expect(await has(pane, 'instruction closed as fulfilled')).toBe(true)
 })

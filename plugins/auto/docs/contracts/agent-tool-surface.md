@@ -123,7 +123,8 @@ session.
   counts as a beat, and takes --origin ui as a display label.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
-  fulfilled (needs `--why`) or withdrawn (needs `--prompt`).
+  fulfilled (needs `--why`) or withdrawn (needs `--prompt`). Closing as fulfilled
+  never counts as a beat, and takes --origin ui as a display label.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
   proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
   an adoption record (machine, run, prompt id, redacted quote, prompt hash, content

@@ -28,7 +28,7 @@ DESCRIPTION_CAP = 200
 _TOOL_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
 
 
-def _origin(opts) -> str:
+def origin_of(opts) -> str:
     origin = opts.get("origin") or "pm"
     if origin not in ORIGINS:
         raise ValueError(f"--origin must be one of {list(ORIGINS)}, got {origin!r}")
@@ -66,7 +66,7 @@ def settle_amend(term, value) -> None:
     if not proposal:
         return
     extras = proposal.get("extras") or {}
-    tool = extras.get("add") if term.get("key") == "tools_of_record" else None
+    tool = _proposed_tool(term)
     if tool and isinstance(value, list) and tool in value and tool not in term["options"]:
         term["options"] = list(term["options"]) + [tool]
         term.setdefault("option_descriptions", {})[tool] = extras.get("description")
@@ -150,7 +150,7 @@ def _h_propose_term(host, argv):
         raise ValueError("usage: propose-term <key> [<value>] [--seconds N] [--until <iso>] "
                          "[--add <name> [--description <text>]]")
     key, value = positional[0], (positional[1] if len(positional) == 2 else None)
-    origin = _origin(opts)
+    origin = origin_of(opts)
 
     def change(programme, prompt, rec):
         term = host._term(programme, key)
@@ -166,7 +166,7 @@ def _h_clear_proposal(host, argv):
     positional, opts = host._parse(argv, values=("run", "origin"))
     if len(positional) != 1:
         raise ValueError("usage: clear-proposal <key>")
-    key, origin = positional[0], _origin(opts)
+    key, origin = positional[0], origin_of(opts)
 
     def change(programme, prompt, rec):
         term = host._term(programme, key)
@@ -183,7 +183,7 @@ def _h_note_term(host, argv):
     clear = bool(opts.get("clear"))
     if len(positional) != (1 if clear else 2):
         raise ValueError("usage: note-term <key> <text> | note-term <key> --clear")
-    key, origin = positional[0], _origin(opts)
+    key, origin = positional[0], origin_of(opts)
     text = None if clear else programme_sanitize.clean(positional[1], NOTE_CAP)
     if not clear and not text:
         raise ValueError("note-term needs some text, or --clear")
@@ -204,7 +204,7 @@ def _h_note_term(host, argv):
 
 def _h_request_reread(host, argv):
     _, opts = host._parse(argv, values=("run", "origin"))
-    origin = _origin(opts)
+    origin = origin_of(opts)
     return _ui_write(host, opts, lambda programme, prompt, rec: {"origin": origin}, "reread_requested")
 
 

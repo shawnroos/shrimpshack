@@ -284,7 +284,7 @@ def require_sources_named(prompt, before, after) -> None:
     # A source is turned off in words like "no plans", so a negated name still counts here.
     changed = sorted(set(before) ^ set(after))
     words = set(_name_words(programme_journal.redact(prompt["quote"]))) if prompt else set()
-    missing = [name for name in changed if name not in words]
+    missing = [name for name in changed if _squash(name) not in words]
     if prompt and missing:
         raise ProgrammeError(
             f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
@@ -517,10 +517,11 @@ def _h_record_instruction(argv):
 
 
 def _h_close_instruction(argv):
-    positional, opts = _parse(argv, values=("run", "prompt", "as", "why"))
+    positional, opts = _parse(argv, values=("run", "prompt", "as", "why", "origin"))
     if len(positional) != 1 or opts.get("as") not in INSTRUCTION_ENDINGS:
         raise ValueError("usage: close-instruction <id> --as fulfilled|withdrawn")
     withdrawn = opts["as"] == "withdrawn"
+    origin = programme_terms.origin_of(opts)
     if not withdrawn and not opts.get("why"):
         raise ValueError("close-instruction --as fulfilled needs --why")
 
@@ -531,10 +532,11 @@ def _h_close_instruction(argv):
         hits[0]["state"] = opts["as"]
         hits[0]["closed"] = {"at": _now(), "why": opts.get("why"),
                              "prompt_id": prompt and prompt["prompt_id"]}
-        return {"instruction": positional[0], "as": opts["as"], "why": opts.get("why")}
+        return {"instruction": positional[0], "as": opts["as"], "why": opts.get("why"),
+                "origin": origin}
 
     return _write(opts, change, "instruction_closed", prompt_id=opts.get("prompt"),
-                  needs_prompt=withdrawn, verb="close-instruction", target=positional[0])
+                  needs_prompt=withdrawn, beat=withdrawn, verb="close-instruction", target=positional[0])
 
 
 def _h_propose_rule(argv):
@@ -726,7 +728,7 @@ _VERBS = {
     ),
     "close-instruction": _Verb(
         _h_close_instruction,
-        "<id> --as fulfilled|withdrawn [--prompt <id>] [--why <text>] [--run <id>]",
+        "<id> --as fulfilled|withdrawn [--prompt <id>] [--why <text>] [--origin pm|ui] [--run <id>]",
         rejects="withdrawn without a typed --prompt; fulfilled without --why; an inactive id.",
     ),
     "propose-rule": _Verb(

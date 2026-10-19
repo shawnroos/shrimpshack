@@ -255,6 +255,13 @@ prog amend-term tools_of_record tracker,tasks,plans,sentry --prompt "$P_SENTRY"
 check 0 "$CODE"
 check '[["tracker", "tasks", "plans", "sentry"], true, "Error reports", "accepted"]' \
   "$(field "[${T}[\"tools_of_record\"][\"value\"], \"sentry\" in ${T}[\"tools_of_record\"][\"options\"], ${T}[\"tools_of_record\"][\"option_descriptions\"][\"sentry\"], ${T}[\"tools_of_record\"][\"proposal\"][\"state\"]]")"
+it "a hyphenated tool can be proposed and approved by naming it as written"
+prog propose-term tools_of_record tracker,tasks,plans,sentry,linear-board --add linear-board --description "The herdr board"
+check 0 "$CODE"
+P_BOARD="$(prompt typed 'widen tools of record to tracker, tasks, plans, sentry, linear-board')"
+prog amend-term tools_of_record tracker,tasks,plans,sentry,linear-board --prompt "$P_BOARD"
+check 0 "$CODE"
+check '"accepted"' "$(field "${T}[\"tools_of_record\"][\"proposal\"][\"state\"]")"
 it "a custom tool in the value does not change the sweep tools"
 check '["plans", "tasks", "tracker"]' "$(field 'sorted(ph.enabled_sources(prog))')"
 it "amend-term tools_of_record refuses a tool that is neither an option nor proposed"
@@ -325,6 +332,15 @@ check 1 "$CODE"
 has "compacted" "$OUT"
 check '"active"' "$(field 'prog["instructions"][-1]["state"]')"
 rm -f "${HOME_DIR}/.compact-flag"
+it "close-instruction --as fulfilled does not move loop.last_beat_at and records its origin"
+edit 'rec.setdefault("loop", {})["last_beat_at"] = "2026-01-01T00:00:00Z"'
+prog close-instruction "$INSTR" --as fulfilled --why "done" --origin ui
+check 0 "$CODE"
+check '"2026-01-01T00:00:00Z"' "$(raw_field 'rec["loop"]["last_beat_at"]')"
+check '"ui"' "$(run_py "$RUN" <<'PY'
+print(json.dumps([r for r in pj.read(args[0]) if r["kind"] == "instruction_closed"][-1]["payload"].get("origin")))
+PY
+)"
 
 touch "${HOME_DIR}/.compact-flag"
 it "request-reread succeeds while the compact flag is set and journals reread_requested"

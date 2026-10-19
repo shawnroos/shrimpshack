@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { readWork } from './band.tsx'
 import type { BandEntry, BandProps, BandSelection } from './band.tsx'
 
-import { minutesOf, proposeArgv, runVerb, toolsOf } from './actions'
+import { UI_ORIGIN_ARGS, minutesOf, proposeArgv, runVerb, toolsOf } from './actions'
 import type { Draft, Outcome } from './actions'
 import { ContractView, draftText, noteKey, optionRowKey, termRowKey, toolEditKey, whyKey } from './contract'
 import type { Contract, Reread, Term } from './contract'
@@ -34,7 +34,6 @@ type Found =
 let polling = false
 let lastStamp: string | undefined
 let band: BandProps | undefined
-let selectionWired = false
 let mode: 'work' | 'contract' = 'work'
 let openTerm: string | undefined
 let focusedRow: string | undefined
@@ -44,7 +43,6 @@ let drafts: Record<string, Draft> = {}
 let editing: string | undefined
 let status: Outcome | undefined
 
-const UI_ORIGIN = ['--origin', 'ui']
 
 async function dataDir($: EngineInterface): Promise<string> {
   const override = await $.env.get('CLAUDE_AUTO_DATA_DIR')
@@ -243,25 +241,25 @@ function contractActions($: EngineInterface) {
         if (editing === toolEditKey(term.key)) editing = undefined
       })
     },
-    clear: (term: Term) => perform($, ['clear-proposal', term.key, ...UI_ORIGIN], 'proposal cleared'),
+    clear: (term: Term) => perform($, ['clear-proposal', term.key, ...UI_ORIGIN_ARGS], 'proposal cleared'),
     note: async (term: Term) => {
       editing = noteKey(term.key)
       await redraw()
     },
     saveNote: (term: Term, text: string) => {
       const argv = text.trim() ? ['note-term', term.key, text.trim()] : ['note-term', term.key, '--clear']
-      return perform($, [...argv, ...UI_ORIGIN], text.trim() ? 'note saved' : 'notes cleared', () => {
+      return perform($, [...argv, ...UI_ORIGIN_ARGS], text.trim() ? 'note saved' : 'notes cleared', () => {
         editing = undefined
       })
     },
-    reread: () => perform($, ['request-reread', ...UI_ORIGIN], 're-read requested'),
+    reread: () => perform($, ['request-reread', ...UI_ORIGIN_ARGS], 're-read requested'),
     fulfil: async (id: string) => {
       editing = whyKey(id)
       await redraw()
     },
     closeAsFulfilled: (id: string, why: string) => {
       if (!why.trim()) return refuse('say why the instruction is fulfilled')
-      return perform($, ['close-instruction', id, '--as', 'fulfilled', '--why', why.trim()], 'instruction closed as fulfilled', () => {
+      return perform($, ['close-instruction', id, '--as', 'fulfilled', '--why', why.trim(), ...UI_ORIGIN_ARGS], 'instruction closed as fulfilled', () => {
         editing = undefined
       })
     },
@@ -310,11 +308,9 @@ function keepTargets(work: WorkEntry[]) {
 }
 
 async function viewedHashes($: EngineInterface, work: WorkEntry[]): Promise<Record<string, unknown>> {
-  const out: Record<string, unknown> = {}
-  for (const entry of work) {
-    if (entry.change_hash) out[entry.id] = await $.store.get(viewedKey(entry.id)).catch(() => {})
-  }
-  return out
+  const hashed = work.filter(entry => entry.change_hash)
+  const viewed = await Promise.all(hashed.map(entry => $.store.get(viewedKey(entry.id)).catch(() => {})))
+  return Object.fromEntries(hashed.map((entry, index) => [entry.id, viewed[index]]))
 }
 
 export const register: Register = on => {
@@ -436,10 +432,6 @@ export const register: Register = on => {
     if (!polling || e.surface !== 'terminal' || e.props.hasSurvey) return next(e)
     const work = await markChanged($, await readBandWork($).catch(() => []))
     if (work.length === 0) return next(e)
-    if (!selectionWired) {
-      selectionWired = true
-      onSelect(() => void $.ui.invalidate('ui.render'))
-    }
     band = { work, columns: e.props.bodyColumns, maxLines: Math.max(1, Math.min(2, e.props.maxRows)), selection: getSelection() }
     const { Client } = $.ui.resolve(e)
     return <Client key="band" module="./band-keys.tsx" props={band} width={e.props.bodyColumns} />
