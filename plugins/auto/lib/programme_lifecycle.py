@@ -514,6 +514,7 @@ def _h_set_remit(host, argv):
         programme["remit"] = dict(before, **after)
         term = programme["agreement"]["terms"]["remit"]
         term.update(set_by="shawn" if prompt else "proposal", set_at=_stamp())
+        host.programme_terms.settle_remit(term, changes)
         if prompt:
             term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
         return {"remit": after,

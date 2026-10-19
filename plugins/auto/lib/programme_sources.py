@@ -642,7 +642,7 @@ def _h_prompt_item(host, argv):
 _SPECS = (
     ("sweep", _h_sweep, "[--record-sources] [--run <id>]",
      "--record-sources from any session but the driving one. Without it, sweep writes nothing. "
-     "A source the agreement's sources term turns off is not read and reports state off."),
+     "A source the agreement's tools_of_record term turns off is not read and reports state off."),
     ("start-worker", _h_start_worker, "<item> [--session-name <name>] [--run <id>] -- <spinoff arguments>",
      "an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments."),
     ("prompt-item", _h_prompt_item, "<item> <text> [--run <id>]",

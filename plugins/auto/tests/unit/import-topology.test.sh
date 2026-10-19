@@ -110,10 +110,11 @@
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_protocol, session_registry, driver_session, verb_cli;
 #                          then, after its verb table is built: programme_record,
-#                          programme_evidence, programme_sources, programme_trajectory,
+#                          programme_evidence, programme_sources, programme_terms, programme_trajectory,
 #                          programme_view, programme_lifecycle
 #                          Those six receive `programme` as a `host` argument and never
 #                          load it back.
+#   programme_terms      → programme_home, programme_sanitize
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal,
 #                          session_registry, driver_session, programme_sanitize
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
@@ -426,7 +427,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_evidence.py programme_sources.py programme-watch.py programme-watch.sh \
            programme_view.py run_record_evidence.py programme_lifecycle.py \
            programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
-           programme_trajectory.py; do
+           programme_terms.py programme_trajectory.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -446,7 +447,7 @@ done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
 for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
-             programme-watch run_record_evidence programme_lifecycle; do
+             programme-watch run_record_evidence programme_lifecycle programme_terms; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"

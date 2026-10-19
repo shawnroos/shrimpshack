@@ -349,13 +349,23 @@ check "source-unavailable tracker" "$(cut -d' ' -f1,2 "${WORK}/trackerr.out")"
 
 reset_state
 it "a tracker turned off in the agreement is never polled, even with --tracker"
-edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tasks", "plans"]'
+edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tasks", "plans"]'
 echo 1 > "$BOARD_EXIT_FILE"
 start_watch trackeroff --tracker --max-polls 3
 wait_exit "$WPID"
 check 0 "$(lines "${WORK}/trackeroff.out")"
 has "turns the tracker off" "$(cat "${WORK}/trackeroff.err")"
-edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks", "plans"]'
+edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tracker", "tasks", "plans"]'
+
+reset_state
+it "a record from the old code with the tracker off under its sources term is never polled"
+edit 't = prog["agreement"]["terms"]; old = t.pop("tools_of_record"); t["sources"] = dict(old, key="sources", value=["tasks", "plans"])'
+echo 1 > "$BOARD_EXIT_FILE"
+start_watch trackeroffold --tracker --max-polls 3
+wait_exit "$WPID"
+check 0 "$(lines "${WORK}/trackeroffold.out")"
+has "turns the tracker off" "$(cat "${WORK}/trackeroffold.err")"
+edit 't = prog["agreement"]["terms"]; t.pop("sources", None); t["tools_of_record"] = dict(t.get("tools_of_record") or {}, key="tools_of_record", value=["tracker", "tasks", "plans"])'
 
 reset_state
 TASKS="${CLAUDE_AUTO_TASKS_DIR}/sess-w7"
@@ -372,14 +382,14 @@ check "tasks-changed sess-w7 1/0/0->0/1/0" "$(cat "${WORK}/tasks.out")"
 
 reset_state
 it "a task change is ignored while the agreement turns tasks off"
-edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "plans"]'
+edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tracker", "plans"]'
 start_watch tasksoff --max-polls 4
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 printf '{"id":"1","subject":"Write tests","activeForm":"Writing tests","status":"completed"}' > "${TASKS}/1.json"
 wait_exit "$WPID"
 check 0 "$(lines "${WORK}/tasksoff.out")"
-edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks", "plans"]'
+edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tracker", "tasks", "plans"]'
 prog drop-item linear:AI-820 --reason "test done"
 
 REPO="${WORK}/planrepo"
@@ -399,14 +409,14 @@ check "plans-changed +planrepo/docs/plans/new.md" "$(cat "${WORK}/plans.out")"
 
 reset_state
 it "a new plan is ignored while the agreement turns plans off"
-edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks"]'
+edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tracker", "tasks"]'
 start_watch plansoff --max-polls 4
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 printf '# Another\n' > "${REPO}/docs/plans/another.md"
 wait_exit "$WPID"
 check 0 "$(lines "${WORK}/plansoff.out")"
-edit 'prog["agreement"]["terms"]["sources"]["value"] = ["tracker", "tasks", "plans"]'
+edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tracker", "tasks", "plans"]'
 unset SNAP_CWD
 
 reset_state

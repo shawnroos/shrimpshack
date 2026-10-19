@@ -65,7 +65,7 @@ from this session's lease.
 4. **Validate.** `P validate` re-checks confirmed evidence that has gone stale.
    A refuted re-check reopens its item; treat it as open work in this sweep.
 5. **Read the remit.** `P sweep --record-sources`. It reads herdr and the
-   three sources the agreement's `sources` term leaves on: the tracker (the
+   three sources the agreement's `tools_of_record` term leaves on: the tracker (the
    issue tracker; `sources.tracker.provider` names the provider that answered),
    tasks (each remit session's Claude Code task list) and plans (plan docs
    changed in the last week in each pane's repo). A source turned off reports

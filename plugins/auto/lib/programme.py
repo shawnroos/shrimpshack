@@ -153,7 +153,7 @@ def active_instructions(programme) -> list:
 def _terms_view(agreement) -> dict:
     view = {}
     for key, term in sorted((agreement.get("terms") or {}).items()):
-        view[key] = {k: v for k, v in term.items() if k not in ("key", "options", "default")}
+        view[key] = {k: v for k, v in term.items() if k not in ("key", "options", "default", "proposal")}
         view[key]["options"] = term.get("options")
     return view
 
@@ -302,13 +302,14 @@ def _widen_word(opts) -> tuple:
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None):
+           journal=True, after=None, verb=None, target=None, beat=True):
     run_id, home, _ = _locate(opts)
     seen = {}
 
     def mutate(rec):
         seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt)
-        rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
+        if beat:
+            rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
         prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
@@ -374,7 +375,7 @@ def _source_list(term, value) -> list:
 
 
 def _check_value(term, value, extra):
-    if term.get("key") == "sources":
+    if term.get("key") == "tools_of_record":
         return _source_list(term, value)
     if value not in (term.get("options") or []):
         raise ProgrammeError(
@@ -485,12 +486,14 @@ def _h_amend_term(argv):
 
     def change(programme, prompt, rec):
         term = _term(programme, key)
-        checked = _check_value(term, value, opts)
-        if key == "sources":
+        checked = programme_terms.check_amend(sys.modules[__name__], term, value, opts)
+        if key == "tools_of_record":
             require_sources_named(prompt, term.get("value") or [], checked)
         else:
             require_named(prompt, key, value)
-        return _set_term(term, checked, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
+        out = _set_term(term, checked, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
+        programme_terms.settle_amend(term, checked)
+        return out
 
     return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True,
                   verb="amend-term", target=key)
@@ -712,8 +715,9 @@ _VERBS = {
         "<key> <value> --prompt <id> [--why <text>] [--until <iso>] [--seconds <n>] [--run <id>]",
         rejects="a value outside the term's options (use record-instruction); a prompt that is "
         "not typed or does not name the term key and the value; until_time without --until. "
-        "The sources term takes a comma list of tracker, tasks and plans, or none; its prompt must "
-        "name each source it turns on or off.",
+        "The tools_of_record term takes a comma list of its tools (tracker, tasks, plans and any "
+        "tool a pending proposal adds), or none; its prompt must name each tool it turns on or off. "
+        "Settles the term's pending proposal: accepted when the new value matches it, else superseded.",
     ),
     "record-instruction": _Verb(
         _h_record_instruction,
@@ -764,6 +768,8 @@ _VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
 
 programme_trajectory = load_lib_module("programme_trajectory")
 _VERBS.update(programme_trajectory.build_verbs(sys.modules[__name__]))
+programme_terms = load_lib_module("programme_terms")
+_VERBS.update(programme_terms.build_verbs(sys.modules[__name__]))
 
 programme_view = load_lib_module("programme_view")
 VIEW_DIR = "views"
