@@ -129,7 +129,8 @@ session.
   acceptance; no other verb writes it, and an agreement without it keeps the old
   rule that every product question goes to Shawn. It refuses a prompt that the
   journal holds before the last `agreement_proposed` or `project_term_edited`
-  line, so Shawn accepts the terms he last saw.
+  line, or before the last `remit_set` line that pre-filled a carried-over term,
+  so Shawn accepts the terms he last saw.
 - **Corrections** (switched off): `correct-term --prompt <id> --replies-to
   <ask-or-choice-id> --to pm|worker|shawn --reading <text>` and
   `undo-correction <correction-id> --prompt <id>`. Both refuse with "corrections
@@ -154,6 +155,28 @@ session.
   journals `correction_undone`, and its notice lists the choices recorded under
   the corrected kind, which the undo does not reverse. The rules block lists each
   active correction.
+- **Carry-over** (switched off with corrections): `keep-corrections --prompt <id>
+  <correction-id>...` stores each named active correction for the next programme on
+  the same project, under every remit repo's key (its GitHub owner/name, or its
+  path when it has none); it refuses a remit with no repo. `promote-correction
+  --prompt <id> <correction-id>` stores one correction under the key "all", for
+  every project. Its prompt must name all projects with no negation word anywhere
+  before the name, must come after the correction's own prompt in the journal, and
+  must not have driven another promotion. Both need a typed prompt from the
+  driving session, write each entry with an adoption block like the personal
+  protocol's, and journal one `rule_adopted` approval record per entry (entry
+  carryover or promotion, target `carryover:<key>:<entry id>`). `keep-corrections`
+  then journals `corrections_kept` and `promote-correction` journals
+  `correction_promoted`. The store is one JSON file per machine beside the personal
+  protocol (`CLAUDE_AUTO_CARRYOVER_STORE` overrides the path). When `set-remit`
+  stores repos on an agreement that is not yet accepted, it adds a project term for
+  each verified entry under each remit repo's key and under "all", one per area,
+  with the repo key ahead of "all", each marked with its origin key. It drops an
+  entry whose adoption does not verify on this machine and prints a notice naming
+  the entry. An accepted programme never reads the store, so a promotion never
+  changes a running programme. With the switch on, `end` prints each active
+  correction it applied, so the PM can offer them for keeping. Keep them before
+  ending: once `end` releases the lease, the programme takes no more prompts.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`).

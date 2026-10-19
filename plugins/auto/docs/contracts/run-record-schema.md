@@ -672,7 +672,7 @@ keys and keeps unknown ones.
 | `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
 | `created_at` | `<iso>` |
 | `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, autonomy, cadence, sources}, project_terms?, corrections?}`. `contract_version` is the contract stamp (today `1`), written only by `accept-agreement`; an agreement without it keeps the rule that every product question goes to Shawn |
-| `agreement.project_terms[]` | `{id: "t"+6hex, area, value, source, set_by: proposal\|shawn, at, reserved, history: [{value, set_by, at, source, prompt_id}], prompt_id?, quote?}`. Free-text terms outside the fixed `terms` map, so `normalize_programme` never back-fills them: a record without the key reads as `[]` and keeps no key. `reserved` marks an area Shawn keeps for himself. `history` holds each value an after-acceptance amendment replaced, oldest first; a before-acceptance edit keeps none |
+| `agreement.project_terms[]` | `{id: "t"+6hex, area, value, source, set_by: proposal\|shawn\|carried_over, at, reserved, history: [{value, set_by, at, source, prompt_id}], prompt_id?, quote?, origin?, carried?}`. A term pre-filled by `set-remit` from the carry-over store has `set_by: carried_over`, `origin` (the store key it came from: a GitHub owner/name, a repo path, or `all`) and `carried` (the store entry id). Free-text terms outside the fixed `terms` map, so `normalize_programme` never back-fills them: a record without the key reads as `[]` and keeps no key. `reserved` marks an area Shawn keeps for himself. `history` holds each value an after-acceptance amendment replaced, oldest first; a before-acceptance edit keeps none |
 | `agreement.corrections[]` | `{id: "c"+6hex, at, kind, anchor, to: pm\|worker\|shawn, previous: pm\|worker\|shawn\|null, prompt_id, quote, pm_reading, choices_before, undone: null \| {at, prompt_id, quote}}`. Written by `correct-term`, oldest first; `undo-correction` fills `undone`. `kind` comes from the anchor (an ask id or a choice id) and is one of the correctable kinds. The owner of a kind is the `to` of the latest entry for it with `undone` null; with none, the contract default applies and `previous` is null. `quote` is the typed prompt's journal text; `pm_reading` is the PM's reading of it. `choices_before` is the length of `decisions[]` at correction time, so undo can list the choices recorded after it. A record without the key reads as `[]` |
 | `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
@@ -725,7 +725,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
+`term_amended`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
@@ -749,7 +749,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   only because its text names the driver's pane; `target` is then the pane id or
   terminal id it named. `command` is redacted and capped at 2000 characters.
 - `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
-  `adopt-check`: `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
+  `adopt-check` (and, for the carry-over store, by `keep-corrections` and `promote-correction`;
+  see below): `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
   quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
   autonomy entry, and `repo` and `check` for a check. `target` is `rule:<id>`,
   `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
@@ -782,6 +783,15 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   (`reopened` is the item moved from handed back to open, or null); `correction_undone` carries
   `{correction, kind, restored, made_under: [choice ids], notice}`. Both add `prompt_id`, `quote`
   and `cites: [prompt_id]`.
+- `corrections_kept` carries `{kept: [correction ids], keys, stored: [{id, key, correction, hash}],
+  store_path}`; `correction_promoted` carries `{promoted, kind, stored, store_path}`. Both add the
+  approval fields. Before either line, the verb journals one `rule_adopted` line per stored entry
+  with `entry: carryover|promotion`, `target: carryover:<key>:<entry id>` and the entry's hash.
+- `remit_set` adds `carried_over: [{id, area, value, origin, carried}]` when it pre-filled project
+  terms, and `notices` naming each store entry it dropped. `accept-agreement` treats a `remit_set`
+  line with `carried_over` like a proposal: a prompt older than it does not accept.
+- `programme_ended` adds `corrections` (one line per active correction) when corrections are on
+  and the programme applied any.
 - `stopped_unwatched` carries `{items: [item ids]}`, appended on each allowed re-fire
   of the Stop hook; readers dedupe by item.
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
@@ -872,6 +882,7 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_DATA_DIR` | `~/.claude/plugins/data/auto-shrimpshack` | every programme module and hook shim |
 | `CLAUDE_AUTO_SECRETS_FILE` | `~/.secrets` | journal redaction and checker tokens; the path and values are never printed |
 | `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
+| `CLAUDE_AUTO_CARRYOVER_STORE` | `carryover.json` beside the personal protocol | `keep-corrections`, `promote-correction` and the `set-remit` pre-fill. The file is `{format: 1, keys: {<key>: [{id: "k"+6hex, key, correction, kind, to, area, value, reserved, quote, pm_reading, run_id, at, adoption}]}}`; a new entry replaces an older one of the same kind under its key |
 | `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
 | `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |
 | `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, each tracker provider 15 s | every source read in `sweep` |

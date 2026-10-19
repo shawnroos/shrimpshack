@@ -26,6 +26,7 @@ programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_decisions = load_lib_module("programme_decisions")
+programme_carryover = load_lib_module("programme_carryover")
 
 CONTRACT_VERSION = 1
 PROPOSED = "agreement_proposed"
@@ -125,10 +126,13 @@ def check_accept_order(run_id, prompt_id) -> None:
     rows = programme_journal.read(run_id)
     cited = next((i for i, row in enumerate(rows)
                   if row.get("kind") == "prompt" and row.get("prompt_id") == prompt_id), None)
-    last = max((i for i, row in enumerate(rows) if row.get("kind") in (PROPOSED, EDITED)), default=-1)
+    last = max((i for i, row in enumerate(rows) if row.get("kind") in (PROPOSED, EDITED)
+                or (row.get("kind") == "remit_set" and (row.get("payload") or {}).get("carried_over"))),
+               default=-1)
     if cited is None or cited < last:
         raise TermsError(
-            f"prompt {prompt_id!r} is older than the last proposal or project-term edit; Shawn accepts "
+            f"prompt {prompt_id!r} is older than the last proposal, project-term edit or carried-over "
+            "term; Shawn accepts "
             "the terms he last saw, so cite a prompt typed after it")
 
 
@@ -373,6 +377,82 @@ def _h_undo(host, argv):
     return host._write(opts, change, UNDONE, prompt_id=opts.get("prompt"), needs_prompt=True)
 
 
+KEPT = "corrections_kept"
+PROMOTED = "correction_promoted"
+ALL_PROJECTS = "all projects"
+
+
+def _active(programme, correction_id) -> dict:
+    entry = next((e for e in active_corrections(programme) if e.get("id") == correction_id), None)
+    if entry is None:
+        raise TermsError(f"no active correction {correction_id!r} in this programme")
+    return entry
+
+
+def end_lines(programme) -> list:
+    return correction_lines(active_corrections(programme)) if CORRECTIONS_ON else []
+
+
+def _h_keep(host, argv):
+    _check_switch()
+    positional, opts = host._parse(argv, values=("run", "prompt"))
+    if not positional:
+        raise ValueError("usage: keep-corrections --prompt <id> <correction-id>...")
+
+    def change(programme, prompt, rec):
+        keys = programme_carryover.repo_keys(programme)
+        if not keys:
+            raise TermsError("the remit names no repo, so there is no project to keep a correction for")
+        kept = [_active(programme, cid) for cid in dict.fromkeys(positional)]
+        stored = programme_carryover.store(
+            [programme_carryover.entry_for(c, key, rec) for c in kept for key in keys], prompt, rec, "carryover")
+        return {"kept": [c["id"] for c in kept], "keys": keys, "stored": stored,
+                "store_path": programme_carryover.store_path()}
+
+    return host._write(opts, change, KEPT, prompt_id=opts.get("prompt"), needs_prompt=True)
+
+
+def _check_all_projects(host, prompt) -> None:
+    host.require_named(prompt, ALL_PROJECTS)
+    # require_named looks only at the word just before the name, so "don't apply that to all
+    # projects" would pass it; any negation earlier in the prompt refuses.
+    words = host._name_words(programme_journal.redact(prompt["quote"]))
+    start = min(s for s, _ in host._runs(words, host._squash(ALL_PROJECTS)))
+    if set(words[:start]) & set(host._NEGATIONS):
+        raise TermsError(f"prompt {prompt['prompt_id']!r} negates {ALL_PROJECTS!r}; a promotion needs a "
+                         "plain yes")
+
+
+def _check_promotion_unused(rows, prompt) -> None:
+    for row in rows:
+        if row.get("kind") == PROMOTED and (row.get("cites") or [None])[0] == prompt["prompt_id"]:
+            raise TermsError(f"prompt {prompt['prompt_id']!r} already drove a promotion "
+                             f"({(row.get('payload') or {}).get('promoted')!r}); one typed prompt "
+                             "promotes one correction")
+
+
+def _h_promote(host, argv):
+    _check_switch()
+    positional, opts = host._parse(argv, values=("run", "prompt"))
+    if len(positional) != 1:
+        raise ValueError("usage: promote-correction --prompt <id> <correction-id>")
+
+    def change(programme, prompt, rec):
+        correction = _active(programme, positional[0])
+        _check_all_projects(host, prompt)
+        rows = programme_journal.read(rec["run_id"])
+        if _prompt_index(rows, prompt["prompt_id"]) <= _prompt_index(rows, correction["prompt_id"]):
+            raise TermsError(f"prompt {prompt['prompt_id']!r} is not later than the correction's prompt "
+                             f"{correction['prompt_id']!r}")
+        _check_promotion_unused(rows, prompt)
+        entry = programme_carryover.entry_for(correction, programme_carryover.ALL, rec)
+        stored = programme_carryover.store([entry], prompt, rec, "promotion")
+        return {"promoted": correction["id"], "kind": correction["kind"], "stored": stored,
+                "store_path": programme_carryover.store_path()}
+
+    return host._write(opts, change, PROMOTED, prompt_id=opts.get("prompt"), needs_prompt=True)
+
+
 _SPECS = (
     ("edit-project-term", _h_edit,
      "<term-id> <text> [--prompt <id>] [--source <evidence>] [--reserved|--unreserved] [--run <id>]",
@@ -389,6 +469,18 @@ _SPECS = (
      "every call while corrections are not on yet; no typed prompt from the driving session; an "
      "unknown or undone correction; a later correction of the same kind (named); a prompt not later "
      "than the correction's."),
+    ("keep-corrections", _h_keep,
+     "--prompt <id> <correction-id>... [--run <id>]",
+     "every call while corrections are not on yet; no typed prompt from the driving session; an "
+     "unknown or undone correction; a remit with no repo. Stores each kept correction under every "
+     "remit repo's key for the next programme on that project."),
+    ("promote-correction", _h_promote,
+     "--prompt <id> <correction-id> [--run <id>]",
+     "every call while corrections are not on yet; no typed prompt from the driving session; an "
+     "unknown or undone correction; a prompt that does not name all projects, or holds a negation "
+     "anywhere before it; a prompt not later than the correction's; a prompt that already drove a "
+     "promotion. Stores the correction for every project's next programme; running programmes "
+     "never change."),
 )
 
 

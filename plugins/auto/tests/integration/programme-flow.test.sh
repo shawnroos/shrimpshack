@@ -387,11 +387,23 @@ it "end with no typed request is refused"
 as sess-d end
 check "1" "$CODE"
 
+run_py "$RUN" <<'EOF' >/dev/null
+rec = load(args[0])
+rec["programme"]["agreement"]["corrections"] = [
+    {"id": "c0ffee1", "kind": "tool_choice", "to": "pm", "previous": None, "prompt_id": "p0000aa",
+     "quote": "pick the tools yourself", "pm_reading": "tools are mine", "undone": None}]
+save(args[0], rec)
+EOF
+
 it "end from a typed request in the driving session releases the lease"
 typed sess-d '/auto:programme-end' >/dev/null
 as sess-d end
 check "0" "$CODE"
 check "<none>" "$(lease_session w2)"
+
+it "with corrections switched off, end lists no applied correction"
+lacks "c0ffee1" "$OUT"
+lacks "c0ffee1" "$(last_entry "$RUN" programme_ended)"
 
 it "end names the cron fallback to remove"
 has "CronDelete cron-77" "$OUT"
