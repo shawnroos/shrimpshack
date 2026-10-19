@@ -350,6 +350,141 @@ has "tasks: not read yet" "$OUT"
 it "the view never says board"
 lacks "board" "$OUT"
 
+TERMS_RUN="$(new_run w10)"
+TERMS_HOME="${CLAUDE_AUTO_DATA_DIR}/programmes/${TERMS_RUN}"
+run_py "$TERMS_RUN" <<'EOF' >/dev/null
+run = args[0]
+def seed(p):
+    a = p["agreement"]
+    a["accepted"] = {"at": "2026-10-01T00:00:00Z", "prompt_id": "p000000", "quote": "go"}
+    a["contract_version"] = 1
+    a["project_terms"] = [
+        {"id": "t000001", "area": "test depth", "value": "unit tests only", "reserved": False,
+         "source": "kickoff chat", "set_by": "shawn", "history": []},
+        {"id": "t000002", "area": "release", "value": "Shawn ships releases", "reserved": True,
+         "source": "kickoff chat", "set_by": "proposal", "history": []},
+    ]
+    a["corrections"] = [{"id": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm",
+                         "previous": None, "prompt_id": "p000009",
+                         "quote": "you pick the tool, key sk-abcdefghijklmnopqrstuvwx", "pm_reading": "PM picks tools",
+                         "choices_before": 3, "undone": None}]
+    p["decisions"] = [
+        {"id": "d000001", "at": "2026-10-02T00:00:00Z", "kind": "technical_approach", "by": "pm",
+         "item": "programme", "term": "t000001", "silent": False, "why": "unit tests cover the parser"},
+        {"id": "d000002", "at": "2026-10-02T01:00:00Z", "kind": "work_sequencing", "by": "pm",
+         "item": "programme", "term": "t000002", "silent": False, "why": "hold the release for Shawn"},
+        {"id": "d000003", "at": "2026-10-02T02:00:00Z", "kind": "tool_choice", "by": "pm",
+         "item": "programme", "term": None, "silent": True, "why": "picked ripgrep"},
+    ]
+mutate(run, seed)
+pj.append(run, "project_term_edited", "sess-pm",
+          {"term_id": "t000001", "area": "test depth", "value": "unit tests only", "reserved": False,
+           "source": "kickoff chat", "accepted": False})
+pj.append(run, "pm_decided", "sess-pm", {"decision_id": "d000001", "term": "t000001"})
+pj.append(run, "term_corrected", "sess-pm",
+          {"correction": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm", "previous": None,
+           "pm_reading": "PM picks tools", "prompt_id": "p000009",
+           "quote": "you pick the tool, key sk-abcdefghijklmnopqrstuvwx"}, cites=["p000009"])
+EOF
+
+snapshot() { find "$1" -type f -exec shasum {} + 2>/dev/null | sort; }
+
+BEFORE="$(snapshot "$TERMS_HOME")"
+TERMS_OUT="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms 2>&1)"
+TERMS_JSON="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms --json 2>&1)"
+AFTER="$(snapshot "$TERMS_HOME")"
+
+it "status --terms writes nothing to the run record, journal or views"
+check "$BEFORE" "$AFTER"
+
+it "status --terms lists both project terms"
+has "t000001 test depth: unit tests only (source kickoff chat)" "$TERMS_OUT"
+it "status --terms marks a reserved term"
+has "t000002 release: Shawn ships releases (reserved for Shawn; source kickoff chat)" "$TERMS_OUT"
+
+it "each decision appears under the term it used"
+check "t000001:d000001|t000002:d000002|None:d000003" "$("$PY" -c '
+import json,sys
+t=json.loads(sys.argv[1])["terms"]
+print("|".join(str(g["term"]) + ":" + d["id"] for g in t["by_term"] for d in g["decisions"]))' "$TERMS_JSON" 2>&1)"
+
+it "a silent decision appears under no term"
+has "$(printf '  no term\n    d000003 tool_choice by pm: picked ripgrep')" "$TERMS_OUT"
+
+it "a term's decisions follow its heading"
+has "$(printf '  t000001 test depth: unit tests only\n    d000001 technical_approach by pm: unit tests cover the parser')" "$TERMS_OUT"
+
+it "the correction shows with its source and redacted quote"
+has "term_corrected c000001: tool_choice now decided by pm (was the contract default) · source typed prompt p000009 · Shawn: \"you pick the tool, key [redacted]\"" "$TERMS_OUT"
+
+it "the secret in the quote never reaches the page"
+lacks "sk-abcdefghijklmnopqrstuvwx" "$TERMS_OUT$TERMS_JSON"
+
+it "a pre-acceptance edit shows its source"
+has "project_term_edited t000001: test depth: unit tests only · source kickoff chat" "$TERMS_OUT"
+
+it "recent changes leave out rows that change no term"
+lacks "pm_decided" "$TERMS_OUT"
+
+it "status --terms prints only the terms section"
+lacks "Who waits on whom" "$TERMS_OUT"
+
+it "status --terms --json carries the same rows as the text"
+check "same" "$("$PY" - "$TERMS_JSON" "$TERMS_OUT" <<'EOF'
+import json, sys
+rows = json.loads(sys.argv[1])["rows"]
+print("same" if "\n".join(r["text"] for r in rows) == sys.argv[2] else "differs")
+EOF
+)"
+
+it "status --terms --json carries the change rows"
+check "term_corrected:p000009|project_term_edited:None" "$("$PY" -c '
+import json,sys
+t=json.loads(sys.argv[1])["terms"]
+print("|".join(c["kind"] + ":" + str(c["prompt_id"]) for c in t["changes"]))' "$TERMS_JSON" 2>&1)"
+
+it "the terms section in view.json matches status --terms --json"
+"$PY" "$PROG" set-now "Reading terms" --run "$TERMS_RUN" >/dev/null 2>&1
+check "same" "$("$PY" - "${TERMS_HOME}/views/view.json" "$TERMS_JSON" <<'EOF'
+import json, sys
+print("same" if json.load(open(sys.argv[1]))["model"]["terms"] == json.loads(sys.argv[2])["terms"] else "differs")
+EOF
+)"
+
+FULL_OUT="$("$PY" "$PROG" status --run "$TERMS_RUN" 2>&1)"
+it "the stamped status page shows the operating contract under rules in force"
+has "operating contract v1: when the terms are silent the PM decides and records why" "$FULL_OUT"
+it "the stamped status page lists the reserved project term in the contract"
+has "reserved for Shawn t000002 release: Shawn ships releases" "$FULL_OUT"
+it "the full status page does not include the terms section"
+lacks "Recent term changes" "$FULL_OUT"
+
+it "an unstamped programme's status page shows no operating contract"
+lacks "operating contract" "$("$PY" "$PROG" status --run "$QUIET" 2>&1)"
+
+run_py "$TERMS_RUN" <<'EOF' >/dev/null
+for n in range(25):
+    pj.append(args[0], "project_term_edited", "sess-pm",
+              {"term_id": "t000001", "area": "test depth", "value": f"value {n}", "reserved": False,
+               "source": "kickoff chat", "accepted": False})
+EOF
+CAP_JSON="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms --json 2>&1)"
+it "recent term changes stop at 20 rows, newest first"
+check "20|test depth: value 24|27" "$("$PY" -c '
+import json,sys
+t=json.loads(sys.argv[1])["terms"]
+print(len(t["changes"]), t["changes"][0]["text"], t["changes_total"], sep="|")' "$CAP_JSON" 2>&1)"
+it "the capped page says how many changes it left out"
+has "7 older changes not shown" "$("$PY" "$PROG" status --run "$TERMS_RUN" --terms 2>&1)"
+
+it "the slash command form status <run> terms prints the terms page"
+has "Recent term changes" "$("$PY" "$PROG" status "$TERMS_RUN terms" 2>&1)"
+it "a bare terms word selects the terms page"
+has "Decisions by term" "$("$PY" "$PROG" status "terms" --run "$TERMS_RUN" 2>&1)"
+
+it "status --terms on a programme with no terms says so"
+has "no project terms" "$("$PY" "$PROG" status --run "$QUIET" --terms 2>&1)"
+
 it "the mod reads the view format this module writes"
 FORMAT="$(run_py <<'EOF'
 print(load_lib_module("programme_view").VIEW_FORMAT)

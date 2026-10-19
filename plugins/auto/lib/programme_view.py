@@ -13,16 +13,21 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_journal = load_lib_module("programme_journal")
 programme_decisions = load_lib_module("programme_decisions")
 programme_predicate = load_lib_module("programme_predicate")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
+programme_terms = load_lib_module("programme_terms")
 session_registry = load_lib_module("session_registry")
 
 VIEW_FORMAT = 1
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
+TERM_CHANGES_LIMIT = 20
+TERM_CHANGE_KINDS = (programme_terms.EDITED, programme_terms.AMENDED,
+                     programme_terms.CORRECTED, programme_terms.UNDONE)
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
@@ -259,6 +264,64 @@ def _rules(block, rules) -> dict:
             "rules": [], "autonomy": [], "rejected_rules": [], "instructions": []}
 
 
+def _owner_text(owner) -> str:
+    return owner or "the contract default"
+
+
+def _change_text(kind, p) -> tuple:
+    if kind == programme_terms.CORRECTED:
+        return p.get("correction"), f"{p.get('kind')} now decided by {p.get('to')} (was {_owner_text(p.get('previous'))})"
+    if kind == programme_terms.UNDONE:
+        return p.get("correction"), f"{p.get('kind')} back to {_owner_text(p.get('restored'))}"
+    was = f"{p['previous']} -> " if p.get("previous") else ""
+    return p.get("term_id"), f"{p.get('area')}: {was}{p.get('value')}"
+
+
+def _term_changes(journal_entries) -> list:
+    out = []
+    for row in journal_entries:
+        if not isinstance(row, dict) or row.get("kind") not in TERM_CHANGE_KINDS:
+            continue
+        payload = _dict(row.get("payload"))
+        term, text = _change_text(row["kind"], payload)
+        prompt_id = payload.get("prompt_id")
+        source = payload.get("source") or (f"typed prompt {prompt_id}" if prompt_id else "the PM")
+        quote = programme_journal.redact(payload["quote"]) if payload.get("quote") else None
+        out.append({"at": row.get("at"), "kind": row["kind"], "term": term, "text": text, "source": source,
+                    "prompt_id": prompt_id, "quote": quote})
+    return out[::-1]
+
+
+def _terms(block, journal_entries) -> dict:
+    entries = programme_home.project_terms(block)
+    corrections = programme_terms.active_corrections(block)
+    labels = {e.get("id"): f"{e.get('area')}: {e.get('value')}" for e in entries}
+    labels.update((c.get("id"), f"correction: {c.get('kind')} decided by {c.get('to')}"
+                   + (" (undone)" if c.get("undone") else "")) for c in programme_terms.corrections(block))
+    groups = {}
+    for entry in block.get("decisions") or []:
+        entry = _dict(entry)
+        term = None if entry.get("silent") else entry.get("term")
+        groups.setdefault(term, []).append({k: entry.get(k) for k in ("id", "at", "kind", "by", "item", "why")})
+    order = [t for t in labels if t in groups] + sorted(t for t in groups if t is not None and t not in labels)
+    by_term = [{"term": t, "label": labels.get(t, "not in the record"), "decisions": groups[t]} for t in order]
+    if None in groups:
+        by_term.append({"term": None, "label": "no term", "decisions": groups[None]})
+    changes = _term_changes(journal_entries)
+    return {
+        "contract_version": _dict(block.get("agreement")).get(programme_decisions.STAMP_KEY),
+        "project_terms": [{k: e.get(k) for k in ("id", "area", "value", "reserved", "source", "set_by")}
+                          for e in entries],
+        "corrections": [{"id": c.get("id"), "kind": c.get("kind"), "to": c.get("to"),
+                         "previous": c.get("previous"), "prompt_id": c.get("prompt_id"),
+                         "quote": programme_journal.redact(c.get("quote")), "pm_reading": c.get("pm_reading")}
+                        for c in corrections],
+        "by_term": by_term,
+        "changes": changes[:TERM_CHANGES_LIMIT],
+        "changes_total": len(changes),
+    }
+
+
 def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> dict:
     now = now or datetime.datetime.now(datetime.timezone.utc)
     block = programme_home.normalize_programme(_dict(record.get("programme")))
@@ -292,6 +355,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
         "just_did": _just_did(journal_entries or []),
         "rules_in_force": _rules(block, rules),
         "items": items,
+        "terms": _terms(block, journal_entries or []),
     }
     model = _clean(model)
     return {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
@@ -359,6 +423,13 @@ def rule_texts(r) -> list:
     if rejected:
         out.append((f"rejected rules: {len(rejected)} ({', '.join(rejected)})", "warn"))
     return [(programme_sanitize.clean(text, cap=0), style) for text, style in out]
+
+
+def _rules_texts(r) -> list:
+    out = rule_texts(r)
+    if r.get("operating_contract"):
+        out += [(text, "text") for text in programme_terms.contract_lines(r["operating_contract"])]
+    return out + [(text, "text") for text in programme_terms.correction_lines(r.get("corrections") or [])]
 
 
 def _blocker_text(waiting_on) -> str:
@@ -430,7 +501,7 @@ def rows(model) -> list:
                                     + (f": {j['summary']}" if j.get("summary") else "")
                                     + (f" (x{j['repeats']})" if j["repeats"] > 1 else ""), "dim")
                                for j in model["just_did"]], "nothing yet")
-    _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in rule_texts(model["rules_in_force"])],
+    _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in _rules_texts(model["rules_in_force"])],
              "none")
     _section(out, "Items", [line for item in model["items"] for line in _item_lines(item)], "no items")
     return out
@@ -438,3 +509,36 @@ def rows(model) -> list:
 
 def render_text(view) -> str:
     return "\n".join(r["text"] for r in view["rows"])
+
+
+def _project_term_text(t) -> str:
+    notes = (["reserved for Shawn"] if t.get("reserved") else []) + [f"source {t.get('source') or 'none recorded'}"]
+    return f"  {t.get('id')} {t.get('area')}: {t.get('value')} ({'; '.join(notes)})"
+
+
+def _change_row(c) -> dict:
+    quote = f" · Shawn: \"{c['quote']}\"" if c.get("quote") else ""
+    return _row(f"  {c['at']} {c['kind']} {c['term']}: {c['text']} · source {c['source']}{quote}", "dim")
+
+
+def terms_rows(terms) -> list:
+    out = []
+    version = terms.get("contract_version")
+    _section(out, "Project terms" + (f" (operating contract v{version})" if version else ""),
+             [_row(_project_term_text(t)) for t in terms["project_terms"]]
+             + [_row(f"  {c['id']} {c['kind']} decided by {c['to']} (Shawn: \"{c['quote']}\"; "
+                     f"PM's reading: \"{c['pm_reading']}\")") for c in terms["corrections"]],
+             "no project terms")
+    _section(out, "Decisions by term",
+             [line for g in terms["by_term"] for line in
+              [_row(f"  {g['term'] + ' ' if g['term'] else ''}{g['label']}")]
+              + [_row(f"    {d['id']} {d['kind']} by {d['by']}: {d['why']}", "dim") for d in g["decisions"]]],
+             "none recorded")
+    hidden = terms["changes_total"] - len(terms["changes"])
+    _section(out, "Recent term changes", [_change_row(c) for c in terms["changes"]]
+             + ([_row(f"  {hidden} older changes not shown", "dim")] if hidden else []), "none")
+    return out
+
+
+def render_terms(view) -> str:
+    return "\n".join(r["text"] for r in terms_rows(view["model"]["terms"]))

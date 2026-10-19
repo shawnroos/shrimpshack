@@ -810,15 +810,26 @@ def refresh_view(run_id, home, record=None) -> None:
 
 
 def _h_status(argv):
-    positional, opts = _parse(argv, values=("run",), flags=("json",))
-    positional = [p for p in positional if p]
-    if len(positional) > 1 or (positional and opts.get("run")):
-        raise ValueError("usage: status [<run>|--run <id>] [--json]")
-    if positional:
-        opts["run"] = positional[0]
+    positional, opts = _parse(argv, values=("run",), flags=("json", "terms"))
+    # The slash command passes its arguments as one quoted string, so `terms` arrives as a word.
+    words = [w for p in positional for w in p.split()]
+    if "terms" in words:
+        opts["terms"] = True
+        words.remove("terms")
+    if len(words) > 1 or (words and opts.get("run")):
+        raise ValueError("usage: status [<run>|--run <id>] [--terms] [--json]")
+    if words:
+        opts["run"] = words[0]
     run_id, home, record = _locate(opts)
     view = build_view(run_id, home, record)
-    if opts.get("json"):
+    if opts.get("terms"):
+        terms = view["model"]["terms"]
+        if opts.get("json"):
+            _emit({"run": view["run"], "generated_at": view["generated_at"], "terms": terms,
+                   "rows": programme_view.terms_rows(terms)})
+        else:
+            sys.stdout.write(programme_view.render_terms(view) + "\n")
+    elif opts.get("json"):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
@@ -827,8 +838,9 @@ def _h_status(argv):
 
 _VERBS["status"] = _Verb(
     _h_status,
-    "[<run>|--run <id>] [--json]  (prints the working model: doing now, queue, watching, "
-    "who waits on whom, decisions for Shawn, just did, rules in force, items)",
+    "[<run>|--run <id>] [--terms] [--json]  (prints the working model: doing now, queue, watching, "
+    "who waits on whom, decisions for Shawn, just did, rules in force, items; --terms prints only the "
+    "project terms, decisions by term and recent term changes)",
     reads=True,
 )
 
