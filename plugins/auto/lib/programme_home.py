@@ -30,8 +30,9 @@ DEFAULT_SERVER = "default"
 DEFAULT_CADENCE_SECONDS = 3600
 ORPHAN_CADENCE_PERIODS = 2
 
-ITEM_STATES = ("open", "waiting", "done", "handed", "dropped")
-FINISHED_ITEM_STATES = ("done", "handed", "dropped")
+ITEM_STATES = ("open", "waiting", "done", "handed", "dropped", "decided")
+FINISHED_ITEM_STATES = ("done", "handed", "dropped", "decided")
+CLOSED_ITEM_STATES = ("handed", "dropped", "decided")
 DELIVERABLES = ("merged", "flagged", "verified", "released", "recorded")
 STOP_RULES = ("nothing_it_can_act_on", "only_when_done", "until_time", "never_stop")
 AUTONOMY_LEVELS = ("act", "act_and_tell", "propose", "never")
@@ -48,7 +49,7 @@ ITEM_FIELDS = (
     "history",
 )
 PROGRAMME_FIELDS = (
-    "remit", "created_at", "agreement", "instructions", "items",
+    "remit", "created_at", "agreement", "instructions", "decisions", "items",
     "working_model", "watchers", "inbox_offset", "ended",
 )
 
@@ -225,6 +226,7 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         "created_at": now_iso,
         "agreement": {"accepted": None, "terms": default_terms(now_iso)},
         "instructions": [],
+        "decisions": [],
         "items": {},
         "working_model": {"doing": None, "queue": []},
         "watchers": {},

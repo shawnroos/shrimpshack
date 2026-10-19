@@ -671,9 +671,10 @@ keys and keeps unknown ones.
 |-----|-------|
 | `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
 | `created_at` | `<iso>` |
-| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, terms: {remit, stop_rule, autonomy, cadence, sources}}` |
+| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, autonomy, cadence, sources}}`. `contract_version` is the contract stamp; an agreement without it keeps the rule that every product question goes to Shawn |
 | `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
+| `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). `record-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
@@ -689,7 +690,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 |-----|-------|
 | `id` | `[a-z][a-z0-9_-]*:<key>`, max 128 characters, e.g. `linear:AI-753`, `herdr:<ws>/<pane>` |
 | `title`, `joined_at` | string, `<iso>` |
-| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped` (`FINISHED_ITEM_STATES` are the last three). No verb sets `done`; the predicate derives it |
+| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped`, `decided` (`FINISHED_ITEM_STATES` are the last four; `CLOSED_ITEM_STATES` are `handed`, `dropped` and `decided`, which a verb sets). No verb sets `done`; the predicate derives it. `record-decision` sets `decided` on a product question when the agreement carries the contract stamp |
 | `aliases` | other ids that resolve to this item |
 | `owner` | `{pane, terminal_id, session_id}` |
 | `sessions[]` | `{session_id, pane, terminal_id, name, at}` |
@@ -699,13 +700,13 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
 | `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it |
-| `handed` | `{at, question, answered: null \| {at, choice: ship\|decline, prompt_id}}` |
+| `handed` | `{id: "a"+6hex, kind, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
 | `task_runs[]` | `{repo, run_id}` |
 | `dropped_reason` | string or `null` |
-| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `tested_build`, `tracker_synced`, `started`, `start_failed`, `reopened` |
+| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `started`, `start_failed`, `reopened` |
 
 ### 10.6 Journal and claims
 
@@ -724,7 +725,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `term_amended`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
-`item_handed`, `handed_answered`, `claim`, `claims_read`, `working_now`,
+`item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
@@ -763,6 +764,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   origin `typed`, and its `session_id` equals the record's `driving_session_id`.
 - Request lines (`takeover_request`, `handover_request`, `end_request`) carry
   `{verb, text, origin, space, lease_status, driving}`.
+- `pm_decided` carries `{decision_id, item, decision_kind, term, silent, outcome, state, why}`;
+  `item_handed` adds `{ask, ask_kind}`; `handed_answered` and `agreement_accepted` add
+  `decision_id`, the id of the decision they recorded.
 - `stopped_unwatched` carries `{items: [item ids]}`, appended on each allowed re-fire
   of the Stop hook; readers dedupe by item.
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the

@@ -13,6 +13,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_decisions = load_lib_module("programme_decisions")
 programme_predicate = load_lib_module("programme_predicate")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
@@ -118,6 +119,7 @@ def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict
         "evidence": _evidence(item),
         "waiting_on": item.get("waiting_on") if effective == "waiting" else None,
         "question": handed.get("question") if effective == "handed" else None,
+        "ask_kind": programme_decisions.ask_kind(item) if effective == "handed" else None,
         "now": _tasks_now(owner, tasks_on) if effective not in programme_home.FINISHED_ITEM_STATES else None,
         "marks": marks,
         "needs_shawn": stopped or (effective == "handed" and not handed.get("answered")),
@@ -210,7 +212,7 @@ def _watching_row(w) -> dict:
 
 
 def _decisions(block, items) -> list:
-    out = [{"kind": "handed", "item": i["id"], "question": i["question"]}
+    out = [{"kind": "handed", "item": i["id"], "question": i["question"], "ask_kind": i["ask_kind"]}
            for i in items if i["effective_state"] == "handed" and i["needs_shawn"]]
     out += [{"kind": "stopped_unwatched", "item": i["id"],
              "question": "the PM stopped while this wait had no watcher"}

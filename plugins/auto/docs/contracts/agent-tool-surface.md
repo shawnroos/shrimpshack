@@ -139,14 +139,32 @@ session.
   not journaled. Both take `--kind cron|monitor` to record the watcher kind; a
   task id with no kind counts as cron when a prompt is given and as a Monitor
   otherwise.
-- **Handing**: `hand-item` hands an item to Shawn with a question and notifies
+- **Handing**: `hand-item` hands an item to Shawn with a question and a required
+  `--kind <decision-kind>`, and notifies
   once: the tracker's needs-you mark for an issue item, else a herdr
-  notification. Its journal entry records both exit statuses as tracker and
+  notification. The ask gets an id ("a" + 6 hex) and carries the decision kind.
+  Its journal entry records the ask id, the kind as `ask_kind`, and both exit
+  statuses as tracker and
   herdr (null when not run or not found, "skipped" for the tracker on an item
   with no issue). `answer-handed`
   needs a typed `--prompt` and `--choice ship|decline`. Ship reopens the item with
-  the deliverables its change kinds imply (or the kinds passed with `--kind`);
-  decline drops it.
+  the deliverables its change kinds imply (or the change kinds passed with
+  `--kind`); decline drops it. Either way it records a Shawn decision linked to
+  the ask id, with the ask's decision kind (unknown for an ask handed before
+  kinds existed).
+- **Decisions**: `record-decision <item|programme> --kind <decision-kind>
+  (--term <id> | --silent) --why <text>` records a PM decision: an id ("d" + 6
+  hex), the decision kind, the term it used or silent when no term covered it,
+  and why. It journals `pm_decided`. The decision kinds are a closed list in
+  `lib/programme_decisions.py`: the plugin autonomy actions plus
+  technical_approach, work_sequencing, worker_coordination, tool_choice,
+  optimisation_depth, product_scope, acceptance and denied_operation. Any other
+  kind is refused. On an item that matched the product-question rule,
+  `record-decision` needs an agreement with the contract stamp; it then closes
+  the item as decided, which counts as finished, or re-matches the item's
+  other change kinds and leaves it open. Without the stamp it refuses and the
+  item still goes to Shawn through `hand-item`. `accept-agreement` also records
+  a Shawn decision of kind agreement.
 - **Worker inbox**: `claim --run <id> --item <id> --deliverable <name> --ref <ref>`
   appends one structured claim to `<home>/claims.jsonl`. Free text and a
   reference with spaces are refused, and a claim never changes evidence. `mark-read`

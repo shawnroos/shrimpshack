@@ -62,6 +62,7 @@ KINDS = (
     "item_waiting",
     "item_handed",
     "handed_answered",
+    "pm_decided",
     "claim",
     "claims_read",
     "working_now",

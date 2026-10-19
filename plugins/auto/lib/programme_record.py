@@ -29,6 +29,7 @@ programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
 driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
+programme_decisions = load_lib_module("programme_decisions")
 
 CLAIMS_NAME = "claims.jsonl"
 SOURCES = ("herdr", "tracker", "tasks", "plans")
@@ -167,7 +168,7 @@ def _h_add_item(host, argv):
             programme["items"][item_id] = item
             return payload
         item = programme["items"][key]
-        if item["state"] in ("handed", "dropped"):
+        if item["state"] in programme_home.CLOSED_ITEM_STATES:
             raise RecordError(f"item {key!r} is {item['state']}; use answer-handed or reopen-item")
         seen["update"] = True
         payload = {"item": key, "title": item["title"]}
@@ -488,21 +489,24 @@ def notify_handed(item_id, question) -> dict:
 
 
 def _h_hand_item(host, argv):
-    positional, opts = host._parse(argv, values=("run", "question"))
+    positional, opts = host._parse(argv, values=("run", "question", "kind"))
     if len(positional) != 1:
-        raise ValueError("usage: hand-item <id> --question <text>")
+        raise ValueError("usage: hand-item <id> --question <text> --kind <decision-kind>")
     item_id = check_item_id(positional[0])
     question = _text(opts.get("question"), "question")
+    if not opts.get("kind"):
+        raise ValueError("hand-item needs --kind <decision-kind>")
+    kind = programme_decisions.check_kind(opts["kind"])
 
     def change(programme, prompt, rec):
         key = _resolve(programme, item_id)
         item = programme["items"][key]
         if item["state"] not in WAITABLE_STATES:
             raise RecordError(f"item {key!r} is {item['state']}; only an open or waiting item is handed")
-        item.update(state="handed", waiting_on=None,
-                    handed={"at": _now(), "question": question, "answered": None})
-        _history(item, "handed", question=question)
-        return {"item": key, "question": question}
+        ask = programme_decisions.new_ask(kind, question)
+        item.update(state="handed", waiting_on=None, handed=ask)
+        _history(item, "handed", question=question, ask=ask["id"])
+        return {"item": key, "question": question, "ask": ask["id"], "ask_kind": kind}
 
     def after(payload):
         return {"notify": notify_handed(payload["item"], question)}
@@ -524,9 +528,13 @@ def _h_answer_handed(host, argv):
         if item["state"] != "handed":
             raise RecordError(f"item {key!r} is {item['state']}, not handed")
         host.require_named(prompt, _item_names(item_id, key))
-        answered = {"at": _now(), "choice": opts["choice"], "prompt_id": prompt["prompt_id"]}
+        decision = programme_decisions.shawn_decision(
+            programme, kind=programme_decisions.ask_kind(item), item=key, prompt=prompt,
+            ask=programme_decisions.ask_id(item), choice=opts["choice"])
+        answered = {"at": _now(), "choice": opts["choice"], "prompt_id": prompt["prompt_id"],
+                    "decision_id": decision["id"]}
         item["handed"] = dict(item.get("handed") or {}, answered=answered)
-        payload = {"item": key, "choice": opts["choice"]}
+        payload = {"item": key, "choice": opts["choice"], "decision_id": decision["id"]}
         if opts["choice"] == "decline":
             item.update(state="dropped", dropped_reason=f"declined by Shawn ({prompt['prompt_id']})")
         else:
@@ -813,12 +821,14 @@ _SPECS = (
      "unless --kind says which. --prompt stores the "
      "armed cron prompt verbatim, so a prompt that equals it is journaled with origin cron. "
      "Exempt from the compact flag; not journaled."),
-    ("hand-item", _h_hand_item, "<id> --question <text> [--run <id>]",
-     "a handed or finished item (it notifies once)."),
+    ("hand-item", _h_hand_item, "<id> --question <text> --kind <decision-kind> [--run <id>]",
+     "no --kind, or a kind outside the closed decision kinds (this --kind is a decision kind, not "
+     "a change kind); a handed or finished item (it notifies once)."),
     ("answer-handed", _h_answer_handed,
      "<id> --choice ship|decline --prompt <id> [--kind <change-kind>]... [--repo <path>] [--run <id>]",
      "no typed prompt, or one whose text does not name the item id or key; an item that is not handed; "
-     "ship with no change kind."),
+     "ship with no change kind. Here --kind is a change kind; the decision it records takes the "
+     "ask's decision kind (unknown for an ask handed before kinds existed)."),
     ("claim", _h_claim, "--run <id> --item <id> --deliverable <name> --ref <reference>",
      "free text; a reference with spaces; an unknown item or a deliverable the item does not "
      "require; an ended programme. Open to any session and exempt from the compact flag."),

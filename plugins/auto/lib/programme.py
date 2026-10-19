@@ -454,7 +454,11 @@ def _h_accept_agreement(argv):
             raise ProgrammeError("the agreement is already accepted")
         programme["agreement"]["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
                                               "quote": prompt["quote"]}
-        return {"terms": {k: t.get("value") for k, t in programme["agreement"]["terms"].items()}}
+        decision = programme_decisions.shawn_decision(
+            programme, kind=programme_decisions.AGREEMENT_KIND,
+            item=programme_decisions.PROGRAMME_TARGET, prompt=prompt)
+        return {"terms": {k: t.get("value") for k, t in programme["agreement"]["terms"].items()},
+                "decision_id": decision["id"]}
 
     return _write(opts, change, "agreement_accepted", prompt_id=opts["prompt"], needs_prompt=True)
 
@@ -736,6 +740,9 @@ _VERBS = {
 programme_record = load_lib_module("programme_record")
 _VERBS.update(programme_record.build_verbs(sys.modules[__name__]))
 
+programme_decisions = load_lib_module("programme_decisions")
+_VERBS.update(programme_decisions.build_verbs(sys.modules[__name__]))
+
 programme_evidence = load_lib_module("programme_evidence")
 _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
 
@@ -802,6 +809,7 @@ _VERBS["status"] = _Verb(
 _ERRORS = (
     ProgrammeError,
     programme_record.RecordError,
+    programme_decisions.DecisionError,
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,

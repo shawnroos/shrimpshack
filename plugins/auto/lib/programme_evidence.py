@@ -749,7 +749,7 @@ def _due(record, now) -> tuple:
     cadence = programme_home.cadence_seconds(record)
     due, skipped = [], []
     for key, item in sorted(programme["items"].items()):
-        if item.get("state") in ("handed", "dropped"):
+        if item.get("state") in programme_home.CLOSED_ITEM_STATES:
             continue
         done = programme_predicate.effective_state(item) == "done"
         if done:

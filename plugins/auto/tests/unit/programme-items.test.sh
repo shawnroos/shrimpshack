@@ -367,7 +367,7 @@ has '"linear:AI-802"' "$(journal_last item_updated)"
 
 : > "$CALLS"
 it "hand-item notifies once through the tracker mark"
-prog hand-item linear:AI-802 --question "Ship the new crop now or hold for design?"
+prog hand-item linear:AI-802 --question "Ship the new crop now or hold for design?" --kind product_call
 check '"handed"' "$(field 'items["linear:AI-802"]["state"]')"
 it "the tracker provider was called and herdr was not"
 check "board" "$(cut -d' ' -f1 "$CALLS" | sort -u | tr '\n' ' ' | sed 's/ $//')"
@@ -375,13 +375,13 @@ it "the hand is journaled with the tracker exit status"
 check '[0, null]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
 it "hand-item on an already handed item is refused and notifies nothing"
 : > "$CALLS"
-prog hand-item linear:AI-802 --question "again?"
+prog hand-item linear:AI-802 --question "again?" --kind product_call
 check "1 0" "$CODE $(wc -l < "$CALLS" | tr -d ' ')"
 
 it "hand-item when the tracker mark fails falls back to a herdr notification"
 : > "$CALLS"
 prog add-item linear:AI-803 --title "Product call" --kind product_question
-FAKE_BOARD_EXIT=3 prog hand-item linear:AI-803 --question "Which crop default?"
+FAKE_BOARD_EXIT=3 prog hand-item linear:AI-803 --question "Which crop default?" --kind product_call
 check "board herdr" "$(cut -d' ' -f1 "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
 it "the journal records both exit statuses"
 check '[3, 0]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last item_handed)")"
@@ -391,7 +391,7 @@ has "Which crop default?" "$(cat "$CALLS")"
 it "hand-item on a herdr item skips the tracker"
 : > "$CALLS"
 prog add-item herdr:w2/p40 --title "pane"
-prog hand-item herdr:w2/p40 --question "Keep this pane?"
+prog hand-item herdr:w2/p40 --question "Keep this pane?" --kind product_call
 check "herdr" "$(cut -d' ' -f1 "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
 
 it "answer-handed without a prompt is refused"
@@ -497,7 +497,7 @@ prog set-source tasks --available
 prog set-source plans --available
 check '[true, true]' "$(field '["tasks" in prog["sources"], "plans" in prog["sources"]]')"
 
-for verb_args in "add-item linear:AI-950 --title x" "alias-item linear:AI-803 linear:AI-951" "drop-item herdr:w2/p27 --reason x" "set-waiting linear:AI-800 --who ci" "watcher-beat w-ci" "hand-item linear:AI-800 --question q" "set-now x" "queue --action sweep" "mark-read" "record-tested-build linear:AI-800 --shasum ${SHA}" "set-source herdr --unavailable"; do
+for verb_args in "add-item linear:AI-950 --title x" "alias-item linear:AI-803 linear:AI-951" "drop-item herdr:w2/p27 --reason x" "set-waiting linear:AI-800 --who ci" "watcher-beat w-ci" "hand-item linear:AI-800 --question q --kind product_call" "set-now x" "queue --action sweep" "mark-read" "record-tested-build linear:AI-800 --shasum ${SHA}" "set-source herdr --unavailable"; do
   it "a non-driving session is refused: ${verb_args%% *}"
   CLAUDE_CODE_SESSION_ID="sess-stranger" prog $verb_args --run "$RUN"
   check "1 driving session" "$CODE $(printf '%s' "$OUT" | grep -o 'driving session' | head -1)"
