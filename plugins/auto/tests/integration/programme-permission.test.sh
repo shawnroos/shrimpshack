@@ -213,6 +213,9 @@ typed "$PM" "/auto:programme-handover sess-pm2" >/dev/null
 pm handover sess-pm2
 check 0 "$CODE"
 PM="sess-pm2"
+it "AE2: the new driver acknowledges the restored rules before its first write"
+pm rules --ack
+check 0 "$CODE"
 
 it "AE2: a third worker's denial after the handover joins the same proposal with no new notification"
 deny sess-w6 tu-a6 "gh pr checks 12"

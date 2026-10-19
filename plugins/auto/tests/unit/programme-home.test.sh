@@ -27,6 +27,8 @@ run_py() {
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
+sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 args = sys.argv[2:]
 $(cat)
@@ -36,14 +38,9 @@ PYEOF
 edit_record() {
   run_py "$1" "$2" <<'EOF'
 run, expr = args
-core = load_lib_module("run_record_core")
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 print("edited")
 EOF
 }
@@ -374,6 +371,53 @@ print(sorted(set(ph.PROGRAMME_FIELDS) - set(blk)), it["id"], it["state"], blk["e
 EOF
 )"
 check "[] herdr:w2/p26 open 1 3600" "$OUT"
+
+it "normalize_programme leaves project terms and the contract stamp absent on an old agreement"
+OUT="$(run_py <<'EOF'
+blk = ph.normalize_programme({"agreement": {"accepted": {"at": "2026-10-01T00:00:00Z"}}})
+print(sorted(blk["agreement"]), ph.project_terms(blk), ph.project_terms({"agreement": {"project_terms": "junk"}}))
+EOF
+)"
+check "['accepted', 'terms'] [] []" "$OUT"
+
+fresh old
+FAKES="${WORK}/fakes"
+mkdir -p "$FAKES"
+for tool in board herdr; do
+  printf '#!/bin/sh\nexit 0\n' > "${FAKES}/${tool}"
+  chmod +x "${FAKES}/${tool}"
+done
+export PATH="${FAKES}:${PATH}"
+export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets" CLAUDE_AUTO_PERSONAL_PROTOCOL="${WORK}/personal/protocol.json"
+export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks" CLAUDE_CODE_SESSION_ID="sess-old"
+unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH CLAUDE_AUTO_REPO 2>/dev/null || true
+: > "$CLAUDE_AUTO_SECRETS_FILE"
+OUT="$(create sess-old w7)"
+OLDREC="${OUT#CREATED }"
+edit_record "$OLDREC" 'rec["programme"]["agreement"]["accepted"] = {"at": "2026-10-01T00:00:00Z", "prompt_id": "p000001", "quote": "yes"}' >/dev/null
+old_prompt() {
+  run_py "$OLDREC" "$1" <<'EOF'
+print(fixture_prompt(args[0], "sess-old", args[1], "typed")["prompt_id"])
+EOF
+}
+old_agreement_keys() {
+  run_py "$OLDREC" <<'EOF'
+core = load_lib_module("run_record_core")
+print(sorted(core.read_run_record(ph.home_path(args[0]), args[0])["programme"]["agreement"]))
+EOF
+}
+PROGPY="${AUTO_ROOT}/lib/programme.py"
+it "an accepted record with no project terms and no stamp survives writes through the verbs without gaining either"
+CODES=""
+"$PY" "$PROGPY" add-item linear:AI-7 --title "Crop" --kind fix_only >/dev/null 2>&1; CODES="${CODES}$?"
+"$PY" "$PROGPY" amend-term stop_rule never_stop --prompt "$(old_prompt 'stop rule never_stop')" >/dev/null 2>&1; CODES="${CODES}$?"
+"$PY" "$PROGPY" record-instruction --prompt "$(old_prompt 'keep PRs small')" >/dev/null 2>&1; CODES="${CODES}$?"
+"$PY" "$PROGPY" log-decision linear:AI-7 --kind technical_approach --silent --why "smaller" >/dev/null 2>&1; CODES="${CODES}$?"
+"$PY" "$PROGPY" status --json >/dev/null 2>&1; CODES="${CODES}$?"
+check "00000 ['accepted', 'terms']" "${CODES} $(old_agreement_keys)"
+it "the old accepted record refuses a project-term edit and gains nothing"
+"$PY" "$PROGPY" edit-project-term t000000 "anything" --prompt "$(old_prompt 'anything')" >/dev/null 2>&1
+check "1 ['accepted', 'terms']" "$? $(old_agreement_keys)"
 
 echo ""
 echo "programme-home.test.sh: ${PASS} passed, ${FAIL} failed"

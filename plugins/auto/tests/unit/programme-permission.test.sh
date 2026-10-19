@@ -158,14 +158,9 @@ EOF
 edit() {
   run_py "$RUN" "$1" <<'EOF'
 run, expr = args
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-items = rec["programme"]["items"]
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 EOF
 }
 

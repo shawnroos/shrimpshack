@@ -20,13 +20,16 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
+programme_context = load_lib_module("programme_context")
 
 SOURCE_OUTAGE_PERIODS = 2
 REASON_KINDS = (
     "corrupt_record", "never_stop", "not_done", "until_time", "unproven_done",
     "no_rule_proposed", "undebugged_blocker", "ownerless_item", "open_item",
     "unwatched_wait", "queued_action", "unread_claim", "source_unavailable",
+    "safety_pause", "corrupt_context",
 )
+PAUSED_REASONS = ("ownerless_item", "open_item", "unwatched_wait")
 
 
 def _off(name: str) -> bool:
@@ -58,7 +61,7 @@ def evidence_complete(item: dict) -> bool:
 
 def effective_state(item: dict) -> str:
     state = item.get("state")
-    if state in ("handed", "dropped"):
+    if state in programme_home.CLOSED_ITEM_STATES:
         return state
     if evidence_complete(item) or (state == "done" and _off("EVIDENCE_CHECK")):
         return "done"
@@ -119,6 +122,8 @@ def _item_reasons(item_id, item, ctx) -> list:
             out.append({"kind": "open_item", "item": item_id})
     if state == "waiting" and not ctx["watched"][item_id] and not _off("UNWATCHED_WAIT"):
         out.append({"kind": "unwatched_wait", "item": item_id, "who": waiting_on.get("who")})
+    if ctx["paused_all"] or item_id in ctx["paused"]:
+        out = [r for r in out if r["kind"] not in PAUSED_REASONS]
     return out
 
 
@@ -146,12 +151,27 @@ def _start_iso(block: dict):
     return accepted.get("at") or block.get("created_at")
 
 
+def _context(block: dict, floor: list):
+    try:
+        paused_all, paused, pauses = programme_context.paused_items(block)
+        acceptance = programme_context.evaluate(block)
+    # Deliberate swallow into a holding reason: a raise here would make compute report
+    # corrupt_record, which the Stop hook skips, so a bad context would release the stop.
+    except Exception:
+        floor.append({"kind": "corrupt_context"})
+        return False, set(), None
+    floor.extend({"kind": "safety_pause", "item": pid} for pid in pauses)
+    return paused_all, paused, acceptance
+
+
 def _scan(block: dict, now, inbox_size, cadence: int) -> dict:
     items = block["items"]
     watchers = _dict(block.get("watchers"))
     queue = [e for e in _dict(block.get("working_model")).get("queue") or []]
-    ctx = {"proposed": _proposed_for(block), "starts": _queued_starts(queue), "watched": {}}
     floor, waits, new_items = [], [], []
+    paused_all, paused, acceptance = _context(block, floor)
+    ctx = {"proposed": _proposed_for(block), "starts": _queued_starts(queue), "watched": {},
+           "paused_all": paused_all, "paused": paused}
     counts = {"total": 0, "finished": 0, "open": 0, "waiting": 0}
     start = run_record_core.parse_iso(_start_iso(block))
     for item_id in sorted(items):
@@ -181,7 +201,8 @@ def _scan(block: dict, now, inbox_size, cadence: int) -> dict:
     floor.extend(source_reasons)
     finished = counts["finished"] == counts["total"] and len(items) == counts["total"]
     return {"done": finished or _off("DONE_CHECK"), "floor": floor,
-            "waits": waits + source_waits, "new_items": new_items, "items": counts}
+            "waits": waits + source_waits, "new_items": new_items, "items": counts,
+            "acceptance": acceptance}
 
 
 def _stop_decision(rule: str, until, done: bool, floor: list, now):
@@ -200,7 +221,7 @@ def _corrupt(now) -> dict:
     return {"done": False, "may_stop": False, "stop_rule": None, "ended": False,
             "reasons": [{"kind": "corrupt_record"}], "waits": [], "unwatched_waits": [],
             "new_items": [], "items": {"total": 0, "finished": 0, "open": 0, "waiting": 0},
-            "inbox_checked": False, "computed_at": _iso(now)}
+            "acceptance": None, "inbox_checked": False, "computed_at": _iso(now)}
 
 
 def _iso(now) -> str:
@@ -232,6 +253,7 @@ def _compute(record: dict, now, inbox_size) -> dict:
         "unwatched_waits": [r["item"] for r in scan["floor"] if r["kind"] == "unwatched_wait"],
         "new_items": scan["new_items"],
         "items": scan["items"],
+        "acceptance": scan["acceptance"],
         "inbox_checked": inbox_size is not None,
         "computed_at": _iso(now),
     }

@@ -56,7 +56,7 @@ def _item_ids(programme, session_id) -> list:
 def scope(session_id, env):
     if not isinstance(session_id, str) or not session_id:
         return None
-    driven = programme_home.driven_runs(session_id)
+    driven = [d for d in programme_home.driven_runs(session_id) if isinstance(d.get("record"), dict)]
     found = (driven[0]["run"], driven[0]["record"]) if driven else _space_run(session_id, env)
     if found is None:
         return None

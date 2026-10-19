@@ -19,4 +19,8 @@ Run the dispatch line below:
      fallback with CronDelete; their beats now refuse.
   2. Tell Shawn in one line to open the new session and run the
      `auto:programme-sweep` skill there, re-arming the watcher and the cron
-     fallback as its first sweep.
+     fallback as its first sweep. The new session's first write refuses and
+     prints the restored context (the rules in force, decisions, limits and
+     pending questions from the store); it reads them and runs
+     `programme.sh rules --ack` before it acts. Nothing from this session's
+     chat carries over.

@@ -671,9 +671,12 @@ keys and keeps unknown ones.
 |-----|-------|
 | `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
 | `created_at` | `<iso>` |
-| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, terms: {remit, stop_rule, autonomy, cadence, sources}}` |
+| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, autonomy, cadence, sources}, project_terms?, corrections?}`. `contract_version` is the contract stamp (today `1`), written only by `accept-agreement`; an agreement without it keeps the rule that every product question goes to Shawn |
+| `agreement.project_terms[]` | `{id: "t"+6hex, area, value, source, set_by: proposal\|shawn\|carried_over, at, reserved, history: [{value, set_by, at, source, prompt_id}], prompt_id?, quote?, origin?, carried?}`. A term pre-filled by `set-remit` from the carry-over store has `set_by: carried_over`, `origin` (the store key it came from: a GitHub owner/name, a repo path, or `all`) and `carried` (the store entry id). Free-text terms outside the fixed `terms` map, so `normalize_programme` never back-fills them: a record without the key reads as `[]` and keeps no key. `reserved` marks an area Shawn keeps for himself. `history` holds each value an after-acceptance amendment replaced, oldest first; a before-acceptance edit keeps none |
+| `agreement.corrections[]` | `{id: "c"+6hex, at, kind, anchor, to: pm\|worker\|shawn, previous: pm\|worker\|shawn\|null, prompt_id, quote, pm_reading, choices_before, undone: null \| {at, prompt_id, quote}}`. Written by `correct-term`, oldest first; `undo-correction` fills `undone`. `kind` comes from the anchor (an ask id or a choice id) and is one of the correctable kinds. The owner of a kind is the `to` of the latest entry for it with `undone` null; with none, the contract default applies and `previous` is null. `quote` is the typed prompt's journal text; `pm_reading` is the PM's reading of it. `choices_before` is the length of `decisions[]` at correction time, so undo can list the choices recorded after it. A record without the key reads as `[]` |
 | `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
+| `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the scoped, revisioned decision records live under `context.decisions` and are written by `record-decision`. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `permission_proposals[]` | `{id: "perm-"+n, destination, settings_file, operations, rules, reach, exclusions, key: {operations, destination}, items, evidence, state, created_at, changed_at, notified_at, answers, explanation, confirmed, verified?, reservation?, attempts?, pending_answer?, outcome?, covering?, redenied_at?}`. A separate list from `proposed_rules`. `state` is open, postponed, rejected, retrying, resolved, ineffective or retry_unobserved. `propose-permission` adds and folds entries, `answer-permission` and `settle-permissions` move them. Fields, states and rules: programme-permission-proposals.md |
 | `items` | `{"<source>:<key>": item}` (below) |
@@ -691,7 +694,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `id` | `[a-z][a-z0-9_-]*:<key>`, max 128 characters, e.g. `linear:AI-753`, `herdr:<ws>/<pane>` |
 | `title`, `joined_at` | string, `<iso>` |
 | `repo` | a `remit.repos[].path`, or null. `add-item --repo` sets it only when the path matches a remit repo; it names where a permission proposal for the item goes |
-| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped` (`FINISHED_ITEM_STATES` are the last three). No verb sets `done`; the predicate derives it |
+| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped`, `decided` (`FINISHED_ITEM_STATES` are the last four; `CLOSED_ITEM_STATES` are `handed`, `dropped` and `decided`, which a verb sets). No verb sets `done`; the predicate derives it. `log-decision` sets `decided` on a product question when the agreement carries the contract stamp |
 | `aliases` | other ids that resolve to this item |
 | `owner` | `{pane, terminal_id, session_id}` |
 | `sessions[]` | `{session_id, pane, terminal_id, name, at}` |
@@ -700,16 +703,17 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `deliverables` | `{"<name>": entry}`, names from `DELIVERABLES` (`merged`, `flagged`, `verified`, `released`, `recorded`); a new entry is `{result: "unknown"}` |
 | deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
-| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, permission?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. `propose-permission` writes `{who: shawn, reporter: shawn, watcher: null, permission: <perm-id>}`; `settle-permissions` clears it when that proposal resolves. `set-waiting` replaces the whole object, so it drops `permission` |
+| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, serves?, evidence?, unblocks_when?, safety?, permission?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. A blocker written by `set-waiting` carries `serves`, `evidence` and `unblocks_when`, or `safety: true` for a safety or data-loss pause; one written before these fields has none, and the view says so `propose-permission` writes `{who: shawn, reporter: shawn, watcher: null, permission: <perm-id>}`; `settle-permissions` clears it when that proposal resolves. `set-waiting` refuses a new wait while `permission` is set; `--clear` releases it |
 | `permission_block` | `{cause, detail, at, proposals}`: the item's latest permission explanation, written by the permission verbs |
 | `permission_scan` | `{<session id>: byte offset}`: how far `propose-permission` has read each session's transcript for this item |
-| `handed` | `{at, question, answered: null \| {at, choice: ship\|decline, prompt_id}}` |
+| `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
+| `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
 | `task_runs[]` | `{repo, run_id}` |
 | `dropped_reason` | string or `null` |
-| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `tested_build`, `tracker_synced`, `started`, `start_failed`, `reopened` |
+| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `started`, `start_failed`, `reopened` |
 
 ### 10.6 Journal and claims
 
@@ -725,10 +729,10 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
+`term_amended`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
-`item_handed`, `handed_answered`, `claim`, `claims_read`, `working_now`,
+`item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
@@ -736,6 +740,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `permission_proposed`, `permission_answered`, `permission_verified`,
 `permission_settled`, `blocked_settings_write`.
 
+- `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
+  (a list of decision ids) and `restrictions` (a list of `{text, source}`).
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
@@ -749,7 +755,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   only because its text names the driver's pane; `target` is then the pane id or
   terminal id it named. `command` is redacted and capped at 2000 characters.
 - `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
-  `adopt-check`: `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
+  `adopt-check` (and, for the carry-over store, by `keep-corrections` and `promote-correction`;
+  see below): `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
   quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
   autonomy entry, and `repo` and `check` for a check. `target` is `rule:<id>`,
   `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
@@ -769,6 +776,28 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   origin `typed`, and its `session_id` equals the record's `driving_session_id`.
 - Request lines (`takeover_request`, `handover_request`, `end_request`) carry
   `{verb, text, origin, space, lease_status, driving}`.
+- `pm_decided` carries `{decision_id, item, decision_kind, term, silent, outcome, state, why}`;
+  `item_handed` adds `{ask, ask_kind, op?}`; `handed_answered` and `agreement_accepted` add
+  `decision_id`, the id of the decision they recorded. `agreement_accepted` also carries
+  `contract_version`.
+- `agreement_proposed` adds `{project_terms: [{id, area, value, reserved}], source}` when the
+  proposal holds project terms. `project_term_edited` and `project_term_amended` carry
+  `{term_id, area, value, reserved, source, accepted}`; `project_term_amended` adds
+  `previous` (the replaced value) and the approval fields `prompt_id`, `quote` and
+  `cites: [prompt_id]`.
+- `term_corrected` carries `{correction, kind, anchor, to, previous, pm_reading, reopened, notice}`
+  (`reopened` is the item moved from handed back to open, or null); `correction_undone` carries
+  `{correction, kind, restored, made_under: [choice ids], notice}`. Both add `prompt_id`, `quote`
+  and `cites: [prompt_id]`.
+- `corrections_kept` carries `{kept: [correction ids], keys, stored: [{id, key, correction, hash}],
+  store_path}`; `correction_promoted` carries `{promoted, kind, stored, store_path}`. Both add the
+  approval fields. Before either line, the verb journals one `rule_adopted` line per stored entry
+  with `entry: carryover|promotion`, `target: carryover:<key>:<entry id>` and the entry's hash.
+- `remit_set` adds `carried_over: [{id, area, value, origin, carried}]` when it pre-filled project
+  terms, and `notices` naming each store entry it dropped. `accept-agreement` treats a `remit_set`
+  line with `carried_over` like a proposal: a prompt older than it does not accept.
+- `programme_ended` adds `corrections` (one line per active correction) when corrections are on
+  and the programme applied any.
 - `stopped_unwatched` carries `{items: [item ids]}`, appended on each allowed re-fire
   of the Stop hook; readers dedupe by item.
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
@@ -800,11 +829,16 @@ Task runs keep a journal too: `<repo>/.claude/auto/journal/<run slug>.jsonl`, on
 ### 10.7 Compaction flag
 
 The PreCompact hook writes `<home>/.compact-flag` (0600) for each programme the
-compacting session drives, with body `{at, session_id, trigger}`. Its presence is
-the signal: write verbs refuse and print the rules in force until
-`programme.py rules --ack` deletes it (`watcher-beat` is exempt), and the Stop hook
+compacting session drives, with body `{at, session_id, trigger, context_digest}`.
+`handover` writes the same flag for the new driving session with trigger
+`handover`. Its presence is the signal: write verbs refuse and print the rules in
+force and the restored context until `programme.py rules --ack` deletes it
+(`watcher-beat` is exempt). An ack whose context digest (given with `--context`,
+or else the flag's) differs from the committed decision context refuses, prints
+the current block and rewrites the flag with the current digest. The Stop hook
 adds to its reason: "Rules in force were reloaded after compaction; run
-`programme.sh rules --ack` before your next write." It does not repeat the block.
+`programme.sh rules --ack` before your next write." (after a handover it says the
+session took the programme over by handover). It does not repeat the block.
 
 ### 10.8 Read model
 
@@ -812,7 +846,13 @@ adds to its reason: "Rules in force were reloaded after compaction; run
 `{view_format: 1, run, generated_at, model, rows}`. `model` holds
 `programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
-`decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`.
+`decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`, plus the
+additive `terms`: `contract_version`; `project_terms[] {id, area, value, reserved,
+source, set_by}`; active `corrections[] {id, kind, to, previous, prompt_id, quote,
+pm_reading}` with the quote redacted; `by_term[] {term, label, decisions[]}`, where
+`term` null is "no term"; `changes[] {at, kind, term, text, source, prompt_id,
+quote}`, newest first and at most 20, built from project_term_edited,
+project_term_amended, term_corrected and correction_undone; and `changes_total`.
 `rules_in_force` holds `agreement`, `rules[] {id, layer, autonomy, requires, caveat,
 adopted_on}`, `autonomy[] {action, level, layer, adopted_on}` (entries not from the
 plugin layer), `rejected_rules[]` and `instructions[]`; an `adopted_on` machine shows
@@ -873,6 +913,7 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_DATA_DIR` | `~/.claude/plugins/data/auto-shrimpshack` | every programme module and hook shim |
 | `CLAUDE_AUTO_SECRETS_FILE` | `~/.secrets` | journal redaction and checker tokens; the path and values are never printed |
 | `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
+| `CLAUDE_AUTO_CARRYOVER_STORE` | `carryover.json` beside the personal protocol | `keep-corrections`, `promote-correction` and the `set-remit` pre-fill. The file is `{format: 1, keys: {<key>: [{id: "k"+6hex, key, correction, kind, to, area, value, reserved, quote, pm_reading, run_id, at, adoption}]}}`; a new entry replaces an older one of the same kind under its key |
 | `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
 | `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |
 | `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, each tracker provider 15 s | every source read in `sweep` |
