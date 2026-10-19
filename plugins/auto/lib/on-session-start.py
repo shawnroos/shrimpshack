@@ -5,8 +5,11 @@ Scans every run-record under <repo>/.claude/auto/ and prints a one-line resume
 hint for each resumable run. SURFACES ONLY — never auto-runs (auto-resume is U8).
 
 For a programme's driving session it instead emits one SessionStart
-`additionalContext` holding those lines plus the programme's rules in force, so
-the rules come back at session start and after every compaction.
+`additionalContext` holding those lines plus the programme's rules in force and
+its restored context (from the committed store revision), so both come back at
+session start and after every compaction. Ended programmes this session closes,
+and programmes naming this session whose lease file is gone, get one read-only
+line each.
 
 Classification (schema §5 I-3), in order:
   * loop_phase == "done"                          -> skip (no line).
@@ -86,18 +89,33 @@ def _stdin_payload() -> str:
 
 def programme_context(stdin_raw) -> list:
     pre_compact = load_lib_module("on-pre-compact")
-    holds = pre_compact.driven_programmes(
-        pre_compact.main_thread_session(pre_compact.hook_input(stdin_raw)))
-    if not holds:
+    sid = pre_compact.main_thread_session(pre_compact.hook_input(stdin_raw))
+    if not sid:
         return []
-    programme = load_lib_module("programme")
-    return [_held_block(hold) if hold.get("hold") else programme.render_rules(hold["record"])
-            for hold in holds]
+    blocks = [_restore(hold) for hold in pre_compact.driven_programmes(sid)]
+    resume = load_lib_module("programme_resume")
+    # Read-only: an ended or unleased programme is surfaced, never acted for.
+    for reader in (resume.closing_lines, resume.unleased_lines):
+        try:
+            blocks += [line + "\n" for line in reader(sid)]
+        except Exception:
+            continue
+    return blocks
 
 
-def _held_block(hold) -> str:
-    return (f"auto: programme {hold['run']} cannot restore its rules: its authority is "
-            f"{hold['hold']['outcome']} ({hold['hold']['detail']}). Do not act for it until it "
+def _restore(hold) -> str:
+    if hold.get("hold"):
+        return _held_block(hold["run"], hold["hold"])
+    try:
+        return load_lib_module("programme").render_restore(hold["run"])
+    except Exception as exc:
+        outcome = getattr(exc, "outcome", None)
+        return _held_block(hold["run"], {"outcome": outcome or "unreadable", "detail": str(exc)})
+
+
+def _held_block(run, hold) -> str:
+    return (f"auto: programme {run} cannot restore its rules: its authority is "
+            f"{hold['outcome']} ({hold['detail']}). Do not act for it until it "
             "is repaired; tell Shawn.\n")
 
 

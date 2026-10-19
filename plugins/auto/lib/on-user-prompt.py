@@ -146,23 +146,31 @@ def handle(raw: str, env) -> dict | None:
         origin = classify_origin(text, record)
         entry = programme_journal.append_prompt(run, session_id, text, origin)
     request = _REQUEST.match(text)
+    lost = None
     if request:
         try:
             _journal_request(request.group(1), session_id, text, env, origin,
                              entry and entry["prompt_id"], driving_lease)
-        except Exception:
-            pass
+        except Exception as exc:
+            lost = _lost_request(request.group(1), exc)
     if not entry:
-        return None
+        return _context(lost) if lost else None
     payload = {"run": run, "prompt_id": entry["prompt_id"], "origin": origin}
-    context = (
-        f"<{DATA_TAG}>\n"
+    return _context(
         "auto journaled this prompt. Cite its prompt_id in programme approval verbs.\n"
-        f"{json.dumps(payload, sort_keys=True)}\n"
-        f"</{DATA_TAG}>"
-    )
+        f"{json.dumps(payload, sort_keys=True)}" + (f"\n{lost}" if lost else ""))
+
+
+def _lost_request(verb, exc) -> str:
+    outcome = getattr(exc, "outcome", None)
+    why = f"its authority is {outcome} ({getattr(exc, 'detail', None) or exc})" if outcome else str(exc)
+    return (f"auto did not journal this /auto:programme-{verb} request: {why}. The {verb} verb will "
+            "refuse without it, and nothing here changed the programme. Tell Shawn.")
+
+
+def _context(text) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                   "additionalContext": context}}
+                                   "additionalContext": f"<{DATA_TAG}>\n{text}\n</{DATA_TAG}>"}}
 
 
 def _cli() -> int:

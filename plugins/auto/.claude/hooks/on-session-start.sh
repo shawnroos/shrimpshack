@@ -59,13 +59,19 @@ __cd_find_repo() {
 }
 
 # Programme gate: a lease file means a programme exists, and its driving session
-# gets the rules in force back, from any cwd.
+# gets the rules in force back, from any cwd. A closing entry names the session
+# closing an ended programme, which gets one read-only line. A home whose lease
+# file is gone is seen only when this gate passes for another reason (a repo, or
+# another lease or closing entry); scanning homes here would run Python in every
+# session forever, since archives are never deleted.
 __cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
-__cd_any_lease=0
-for __cd_f in "${__cd_leases}"/*.json; do
-  [ -e "$__cd_f" ] && __cd_any_lease=1
-  break
+__cd_closing="${__cd_leases%/leases}/closing"
+__cd_files=()
+for __cd_f in "${__cd_leases}"/*.json "${__cd_closing}"/*.json; do
+  [ -e "$__cd_f" ] && __cd_files+=("$__cd_f")
 done
+__cd_any_lease=0
+[ "${#__cd_files[@]}" -gt 0 ] && __cd_any_lease=1
 
 __cd_repo="$(__cd_find_repo)" || __cd_repo=""
 if [ -n "$__cd_repo" ] && [ ! -d "${__cd_repo}/.claude/auto" ]; then
@@ -81,7 +87,7 @@ if [ -z "$__cd_repo" ]; then
   __cd_after_sid="${__cd_stdin_json#*\"session_id\"}"
   if [[ $__cd_stdin_json != *\\u* && $__cd_after_sid != *\"session_id\"* \
         && $__cd_stdin_json =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]+)\" ]]; then
-    grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_leases}"/*.json
+    grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_files[@]}"
     [ $? = 1 ] && __cd_named=0
   fi
   [ "$__cd_named" = 1 ] || exit 0

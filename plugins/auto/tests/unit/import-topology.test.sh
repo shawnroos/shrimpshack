@@ -136,18 +136,24 @@
 #                          programme_sources, driver_session [lazy]. programme_home (end),
 #                          programme_record (claim) and programme reach it lazily or after
 #                          their verb table, so it closes no import-time cycle.
+#   programme_resume     → run_record_core, programme_home, programme_authority,
+#                          programme_recovery; programme_journal [lazy]. It takes
+#                          `programme` as a host argument for the inbox verb and never
+#                          loads it, nor programme_sources or programme_lifecycle.
 #   programme_view       → programme_home, programme_predicate, programme_sanitize,
 #                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_authority, programme_protocol, session_registry,
-#                          driver_session, verb_cli; programme_store, programme_import [lazy];
+#                          driver_session, verb_cli, programme_resume; programme_store,
+#                          programme_import [lazy];
 #                          then, after its verb table is built: programme_record,
 #                          programme_evidence, programme_sources, programme_view,
 #                          programme_lifecycle, programme_archive
 #                          Those five receive `programme` as a `host` argument and never
 #                          load it back.
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
-#                          session_registry, driver_session, programme_sanitize
+#                          session_registry, driver_session, programme_sanitize,
+#                          programme_resume [lazy] (handover flags the new driver's restore)
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
 #                          programme_record, programme_sanitize, programme_tracker,
 #                          programme_tasks, programme_plans, driver_session
@@ -156,8 +162,10 @@
 #                          programme_journal [lazy], programme_sanitize [lazy],
 #                          programme_evidence [lazy]
 #   on-user-prompt       → programme_home, programme_journal, session_registry
-#   on-pre-compact       → programme_home [lazy]
-#   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy]
+#   on-pre-compact       → programme_home [lazy], programme_resume [lazy]
+#   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy],
+#                          programme_resume [lazy]
+#   on-stop              → programme_resume [lazy] (reads the compact flag's trigger)
 #   on-stop              → phase-grammar; programme_home [lazy], programme_predicate [lazy],
 #                          programme_journal [lazy], programme [lazy]
 #   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
@@ -460,7 +468,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
            programme_store.py programme_authority.py programme_import.py \
            programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
-           programme_recovery.py programme_archive.py; do
+           programme_recovery.py programme_archive.py programme_resume.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -480,7 +488,8 @@ done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
 for _host in programme_record programme_evidence programme_sources programme_view \
-             programme-watch run_record_evidence programme_lifecycle programme_archive; do
+             programme-watch run_record_evidence programme_lifecycle programme_archive \
+             programme_resume; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
@@ -488,6 +497,16 @@ for _host in programme_record programme_evidence programme_sources programme_vie
     pass
   fi
 done
+
+it "programme_resume.py loads no verb module (it is loaded by programme at import time)"
+if loads_sibling "programme_resume.py" "programme_sources" \
+   || loads_sibling "programme_resume.py" "programme_lifecycle" \
+   || loads_sibling "programme_resume.py" "programme_record" \
+   || loads_sibling "programme_resume.py" "programme_archive"; then
+  fail "programme_resume.py must not load a verb module — programme loads it before its verb table"
+else
+  pass
+fi
 
 it "programme_evidence.py and run_record_evidence.py do NOT load the run_record facade"
 if loads_sibling "programme_evidence.py" "run_record" \

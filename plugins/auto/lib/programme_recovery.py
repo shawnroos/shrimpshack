@@ -413,8 +413,10 @@ def _pending(programme, status) -> list:
     return rows
 
 
-def packet(run_id, revision, record) -> dict:
-    """Deterministic over one committed revision plus the check that its retained objects are readable."""
+def packet(run_id, revision, record, *, objects=True) -> dict:
+    """Deterministic over one committed revision plus the check that its retained objects are readable.
+
+    objects=False skips that re-read (hooks under a timeout); its holds then read as not checked."""
     programme = programme_home.normalize_programme((record or {}).get("programme") or {})
     try:
         ctx = programme_context.block(programme)
@@ -434,7 +436,7 @@ def packet(run_id, revision, record) -> dict:
         "assignments": ctx["assignments"], "results": _results(programme),
         "evidence_limits": _evidence_limits(status),
         "uncertain_effects": unreconciled_admissions(programme),
-        "holds": artifact_holds(run_id, programme),
+        "holds": artifact_holds(run_id, programme) if objects else {"not_checked": True},
     }
     body["packet_digest"] = _sha(body)
     return body

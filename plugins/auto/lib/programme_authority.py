@@ -171,6 +171,12 @@ def read_record(run_id) -> dict:
     return _record_of(run_id, head["state"])
 
 
+def head(run_id) -> dict:
+    with _open(run_id) as store:
+        data = _guarded(run_id, lambda: programme_store.head(store))
+    return {"revision": data["revision"], "record": _record_of(run_id, data["state"])}
+
+
 def journal_rows(run_id) -> list:
     return snapshot(run_id)["journal"]
 

@@ -242,9 +242,8 @@ def _h_takeover(host, argv):
         moved = _locked(body)
     except _Refused as exc:
         _refuse(host, run, "takeover", sid, exc)
-    record = programme_home._read_record(run) or {}
     _finish(host, run, "taken_over", sid, moved, journal=False)
-    sys.stdout.write(host.render_rules(record))
+    sys.stdout.write(host.render_restore(run))
     sys.stdout.write("Re-arm the remit watcher, the cron fallback and every watcher listed above "
                      "from this session; the old session's watchers can no longer beat.\n")
     return 0
@@ -282,7 +281,18 @@ def _h_handover(host, argv):
     except _Refused as exc:
         _refuse(host, run, "handover", sid, exc)
     _finish(host, run, "handed_over", sid, moved, journal=False)
+    _flag_for_successor(run, target)
     return 0
+
+
+def _flag_for_successor(run, target) -> None:
+    # The new driver never saw this programme's context; its first write waits for an ack of it.
+    resume = load_lib_module("programme_resume")
+    try:
+        record, _ = resume.head(run)
+        resume.mark(programme_home.home_path(run), target, "handover", resume.context_digest(run, record))
+    except Exception as exc:
+        sys.stderr.write(f"programme.py: handover could not flag the restore for {target}: {exc}\n")
 
 
 def _end_request(run, sid, status):

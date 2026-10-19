@@ -438,6 +438,9 @@ def _rules_suffix(hold) -> str:
     flag = os.path.join(hold["home"], load_lib_module("programme_home").COMPACT_FLAG)
     if not os.path.exists(flag):
         return ""
+    if (load_lib_module("programme_resume").flag(hold["home"]) or {}).get("trigger") == "handover":
+        return ("\n\nThis session took the programme over by handover; read its restored context "
+                "(`programme.sh rules`), then run `programme.sh rules --ack` before your next write.")
     return ("\n\nRules in force were reloaded after compaction; run `programme.sh rules --ack` "
             "before your next write.")
 

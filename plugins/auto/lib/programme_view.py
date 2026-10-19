@@ -302,6 +302,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
         "waiting_on_whom": waits,
         "decisions_for_shawn": _decisions(block, items) + _context_decisions(status["acceptance"]),
         "acceptance": status["acceptance"],
+        "lifecycle": _lifecycle(block),
         "just_did": _just_did(journal_entries or []),
         "rules_in_force": _rules(block, rules),
         "items": items,
@@ -309,6 +310,51 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
     model = _clean(model)
     return {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
             "model": model, "rows": rows(model)}
+
+
+def _lifecycle(block) -> dict:
+    closure = _dict(block.get("closure"))
+    resources = _dict(closure.get("resources"))
+    states = {}
+    for rid, res in sorted(resources.items()):
+        states.setdefault(_dict(res).get("state") or "pending", []).append(rid)
+    archive = _dict(block.get("archive"))
+    attempts = archive.get("attempts") or []
+    last = _dict(attempts[-1]) if attempts else {}
+    return {
+        "ended": _dict(block.get("ended")).get("reason") if block.get("ended") else None,
+        "resources": states,
+        "dispositions": sorted(_dict(closure.get("dispositions"))),
+        "sealed_at": archive.get("sealed_at"),
+        "sealed_revision": archive.get("sealed_revision"),
+        "manifest": _dict(archive.get("manifest")).get("digest"),
+        "failed_checks": [] if archive.get("sealed_at") else [_dict(c).get("check") for c in last.get("failed") or []],
+        "attempts": len(attempts),
+        "predecessor": _dict(block.get("predecessor")).get("run"),
+    }
+
+
+def _lifecycle_lines(life) -> list:
+    life = _dict(life)
+    out = []
+    if life.get("predecessor"):
+        out.append(_row(f"  successor of archived programme {life['predecessor']}"))
+    if not life.get("ended"):
+        return out
+    out.append(_row(f"  ended: {life['ended']}", "text"))
+    for state, ids in sorted(_dict(life.get("resources")).items()):
+        out.append(_row(f"  resources {state}: {', '.join(ids)}", "text" if state == "released" else "warn"))
+    if life.get("dispositions"):
+        out.append(_row(f"  dispositions recorded: {', '.join(life['dispositions'])}", "dim"))
+    if life.get("sealed_at"):
+        out.append(_row(f"  archived {life['sealed_at']} at revision {life.get('sealed_revision')}; "
+                        f"manifest {life.get('manifest')}; read-only"))
+    elif life.get("failed_checks"):
+        out.append(_row(f"  not archived: the last archive attempt failed {', '.join(life['failed_checks'])}; "
+                        "run check-archive for each remedy", "warn"))
+    else:
+        out.append(_row("  not archived: run check-archive, then archive", "warn"))
+    return out
 
 
 def _yes(flag) -> str:
@@ -450,6 +496,9 @@ def rows(model) -> list:
                                     + (f" (x{j['repeats']})" if j["repeats"] > 1 else ""), "dim")
                                for j in model["just_did"]], "nothing yet")
     _section(out, "Acceptance", _acceptance_lines(model.get("acceptance")), "no requirements")
+    life = _lifecycle_lines(model.get("lifecycle"))
+    if life:
+        _section(out, "End and archive", life, "active")
     _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in rule_texts(model["rules_in_force"])],
              "none")
     _section(out, "Items", [line for item in model["items"] for line in _item_lines(item)], "no items")

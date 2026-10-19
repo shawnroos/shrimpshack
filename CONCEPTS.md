@@ -1,3 +1,7 @@
+---
+editors: claude
+---
+
 # Concepts
 
 Shared domain vocabulary for this project — entities, named processes, and status concepts
@@ -162,6 +166,24 @@ ones, not the only one.
 A named way of composing one kind of name — a worktree, branch or tab. The set
 of schemes is fixed and each is rendered by the plugin, so a name is chosen from an
 enumeration rather than written as a template.
+
+## Programme
+
+### Programme
+An auto run in which a PM coordinates work under an accepted agreement and checked stop rules.
+Its persistent home sits outside disposable code worktrees.
+
+### Recovery packet
+A revision-bound view of a Programme's retained agreement, decisions, requirements, actions, and results.
+It restores context without creating approval authority.
+
+### Archive
+A read-only retained Programme record whose preservation and resource-release checks have passed.
+Archival does not mean every requirement passed or authorize deletion.
+
+### Successor
+A new Programme linked to an archived Programme.
+It needs its own accepted agreement and does not reopen the archive.
 
 ## Peek
 

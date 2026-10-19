@@ -88,13 +88,25 @@ session.
 
 - **Read**: `describe`; `rules` prints the rules in force (agreement terms, adopted
   protocol rules, active instructions), rebuilt from the run record and wrapped in
-  an `<auto-rules>` tag as data. `rules --ack` clears the compact flag
-  `<home>/.compact-flag` and prints the block again.
+  an `<auto-rules>` tag as data, followed by the restored context (decisions,
+  requirements, binding pauses and denials, pending questions, assignments,
+  uncertain actions) from the recovery packet, wrapped in an `<auto-context>` tag
+  with its store revision and context digest. SessionStart, the compact refusal and
+  `takeover` print the same block. `rules --ack [--context <digest>]` clears the
+  compact flag `<home>/.compact-flag` and prints the block again. The flag records
+  the context digest when it was set (by PreCompact, or by `handover` for the new
+  driver); an ack whose digest is older than the committed context refuses, prints
+  the current block and rebinds the flag to it. An ack accepts nothing.
+  `inbox` (add `--all` for every claim) prints the unread worker claims from the store with their index,
+  for `mark-read --offset <n>`; `claims.jsonl` is only an export.
 - **Status**: `status [<run>|--run <id>] [--json]` prints the working model: what
   the PM is doing now, its queue, what it watches and why, who waits on whom,
   decisions for Shawn, what it just did, the rules in force, and each item with its
   deliverables, evidence, owner pane, session state and marks (new, stopped
-  unwatched). It also shows ended apart from done. Any session may run it; it
+  unwatched). It also shows ended apart from done, and for an ended programme the
+  resources still owed, the dispositions, and whether it is archived or which
+  archive checks last failed. For an active programme whose view file is missing,
+  `status` rebuilds it; a held authority prints the hold and writes nothing. Any session may run it; it
   writes nothing. Every write through the shared write path then rebuilds the same
   model into `<home>/views/view.json` (mode 0600), which the programme-view mod
   draws. A failed rebuild prints `view refresh failed` on stderr and never fails
