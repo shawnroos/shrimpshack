@@ -63,7 +63,6 @@ def git_binary() -> str:
 
 
 class Git:
-    """One isolated git runner; owns a private empty HOME until closed."""
 
     def __init__(self, ceiling):
         self.binary = git_binary()
@@ -126,7 +125,6 @@ def _lstat(path):
 
 
 def _inside(top: bytes, rel: bytes):
-    """lstat of top/rel, or None when it or any parent is missing or a parent is not a real dir."""
     path = top
     parts = rel.split(b"/")
     for part in parts[:-1]:
@@ -421,8 +419,11 @@ def read_objects(git, top, oids):
     out = git.run(top, ["cat-file", "--batch"], stdin=("\n".join(oids) + "\n").encode())
     pos = 0
     for _ in oids:
-        end = out.index(b"\n", pos)
-        oid, kind, size = out[pos:end].decode("ascii").split()
+        end = out.find(b"\n", pos)
+        fields = out[pos:end].decode("ascii", "replace").split() if end >= 0 else []
+        if len(fields) != 3 or not fields[2].isdigit():
+            raise GitError("an object vanished while it was read", "changed")
+        oid, kind, size = fields
         start = end + 1
         yield oid, kind, out[start:start + int(size)]
         pos = start + int(size) + 1

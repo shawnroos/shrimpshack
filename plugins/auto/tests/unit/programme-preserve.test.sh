@@ -336,6 +336,7 @@ g -C "$SRC9p" config remote.origin.promisor true
 g -C "$SRC9p" config extensions.partialClone origin
 it "a partial-clone (promisor) source refuses capture as unsupported"
 check "unsupported" "$(field "$(capture "$SRC9p")" code)"
+BEFORE9="$(gitdir_digest "$SRC9")|$(tree_digest "$SRC9")"
 mkdir -p "${WORK}/home9"
 printf '[remote "origin"]\n\turl = file://%s\n\tpromisor = true\n[extensions]\n\tpartialClone = origin\n' "$SRC9" > "${WORK}/home9/.gitconfig"
 OUT="$(env HOME="${WORK}/home9" GIT_ALTERNATE_OBJECT_DIRECTORIES="$SRC9/.git/objects" \
@@ -351,8 +352,8 @@ OUT="$(env HOME="${WORK}/home9" GIT_ALTERNATE_OBJECT_DIRECTORIES="$SRC9/.git/obj
   "$PY" "$DRIVER" "$AUTO_ROOT" verify "{\"run\":\"$RUN\",\"source\":\"$SID9\"}" 2>&1)"
 it "re-verifying later under the same injected environment still fails"
 check "False" "$(field "$OUT" ok)"
-it "the source objects were not used: the source repo is unchanged and no fetch happened"
-check "0" "$(find "$SRC9/.git" -name '*.promisor' | wc -l | tr -d ' ')"
+it "the reachable source was never written by the injected capture or the re-verify"
+check "$BEFORE9" "$(gitdir_digest "$SRC9")|$(tree_digest "$SRC9")"
 
 # ── Lost response and privacy of the code area ────────────────────────────────────
 SRC10="${WORK}/w/replay"
