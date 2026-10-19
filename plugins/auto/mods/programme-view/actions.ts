@@ -15,13 +15,14 @@ export type EditorKind = 'choice' | 'checklist' | 'interval' | 'space' | 'until'
 
 type Proposed = { value: unknown; extras: Record<string, unknown> }
 
-// A term's own typed value beside its options; `parse` returns undefined to refuse the text.
+export type Refusal = { refused: string }
+
+// A term's own typed value beside its options.
 export type Custom = {
   field: string
   label: string
   placeholder: (spaces: string[]) => string
-  parse: (text: string) => string | undefined
-  refusal: (text: string) => string
+  parse: (text: string) => string | Refusal
   argv: (value: string) => string[]
   proposed: (term: Term, value: string) => Proposed
   text: (value: string) => string
@@ -30,13 +31,20 @@ export type Custom = {
 const MESSAGE_CAP = 400
 const UTC_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
 
+// Date.parse rolls 2026-02-30 over to March; the round trip refuses it, as Python's strptime does.
+function isUtcTime(text: string): boolean {
+  if (!UTC_TIME.test(text) || text.startsWith('0000')) return false
+  const at = Date.parse(text)
+  return !Number.isNaN(at) && new Date(at).toISOString().replace('.000Z', 'Z') === text
+}
+
 export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
   interval: {
     field: 'minutes',
     label: 'Custom interval, in minutes: ',
     placeholder: () => '15',
-    parse: text => (/^\d+$/.test(text.trim()) && Number(text) > 0 ? String(Number(text)) : undefined),
-    refusal: text => `"${text}" is not a whole number of minutes`,
+    parse: text =>
+      /^\d+$/.test(text.trim()) && Number(text) > 0 ? String(Number(text)) : { refused: `"${text}" is not a whole number of minutes` },
     argv: minutes => ['fixed', '--seconds', String(Number(minutes) * 60)],
     proposed: (_term, minutes) => ({ value: 'fixed', extras: { seconds: Number(minutes) * 60 } }),
     text: minutes => `fixed, every ${minutes} min`,
@@ -46,7 +54,6 @@ export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
     label: 'Add a herdr space (server.workspace): ',
     placeholder: spaces => spaces[0] ?? 'default.w2',
     parse: text => text.trim(),
-    refusal: text => `"${text}" is not a herdr space`,
     argv: space => ['--add', space],
     proposed: (term, space) => ({ value: term.value, extras: { add: space } }),
     text: space => `add herdr space ${space}`,
@@ -55,8 +62,7 @@ export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
     field: 'until',
     label: 'Stop at (UTC, like 2026-10-20T18:00:00Z): ',
     placeholder: () => '2026-10-20T18:00:00Z',
-    parse: text => (UTC_TIME.test(text.trim()) && !Number.isNaN(Date.parse(text.trim())) ? text.trim() : undefined),
-    refusal: text => `"${text}" is not a UTC time like 2026-10-20T18:00:00Z`,
+    parse: text => (isUtcTime(text.trim()) ? text.trim() : { refused: `"${text}" is not a UTC time like 2026-10-20T18:00:00Z` }),
     argv: until => ['until_time', '--until', until],
     proposed: (_term, until) => ({ value: 'until_time', extras: { until } }),
     text: until => `until_time, until ${until}`,
@@ -137,7 +143,7 @@ function reply(term: Term, { value, extras }: Proposed): string {
     const drop = dropped.length > 0 ? ` and drop ${dropped.join(', ')}` : ''
     return `${verb} ${label} to ${after.join(', ') || 'none'}${drop}`
   }
-  if (term.editor === 'space' && typeof extras.add === 'string') return `widen ${label} to add herdr space ${extras.add}`
+  if (typeof extras.add === 'string') return `widen ${label} to add herdr space ${extras.add}`
   const parts = [`amend ${label} to ${words(String(value))}`]
   if (typeof extras.seconds === 'number') parts.push(interval(extras.seconds))
   if (typeof extras.until === 'string') parts.push(`until ${extras.until}`)

@@ -240,6 +240,8 @@ test('stop rule takes a UTC stop time, proposes until_time --until, and shows th
   await press(pane, 'term:stop_rule')
   await type(pane, 'custom:stop_rule:until', 'tonight')
   expect(await has(pane, '"tonight" is not a UTC time like 2026-10-20T18:00:00Z')).toBe(true)
+  await type(pane, 'custom:stop_rule:until', '2026-02-30T18:00:00Z')
+  expect(await has(pane, '"2026-02-30T18:00:00Z" is not a UTC time')).toBe(true)
   await type(pane, 'custom:stop_rule:until', '2026-10-20T18:00:00Z')
   expect(await lineAfter(pane, 'Type this:')).toBe('amend stop rule to until time until 2026-10-20T18:00:00Z')
   await press(pane, 'act:propose')

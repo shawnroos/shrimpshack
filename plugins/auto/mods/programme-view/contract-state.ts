@@ -96,7 +96,7 @@ function actions($: EngineInterface): ContractActions {
       const custom = customOf(term)
       if (!custom) return
       const value = custom.parse(text)
-      if (value === undefined) return refuse(custom.refusal(text))
+      if (typeof value !== 'string') return refuse(value.refused)
       state.status = undefined
       await change(term, { custom: value, option: undefined })
     },

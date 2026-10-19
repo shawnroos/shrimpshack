@@ -40,10 +40,10 @@ function entries(raw: unknown[]): WorkItem[] {
   return readWork(raw, 0)
 }
 
-function world(on: On, work: unknown[], store: Record<string, unknown> = {}) {
+function world(on: On, work: unknown[], store: Record<string, unknown> = {}, format = 3) {
   const files: Record<string, string> = {
     [LEASE]: JSON.stringify({ session_id: 'sess-pm', run: 'prog-1', home: HOME }),
-    [VIEW]: JSON.stringify({ view_format: 3, run: 'prog-1', generated_at: '2026-10-19T00:00:00Z', model: {}, rows: [], work }),
+    [VIEW]: JSON.stringify({ view_format: format, run: 'prog-1', generated_at: '2026-10-19T00:00:00Z', model: {}, rows: [], work }),
   }
   mock.env(on, { CLAUDE_AUTO_DATA_DIR: DATA })
   mock.clock(on)
@@ -305,4 +305,11 @@ test('after a click Tab moves to the next task, Right to the next step, Left sto
 
   await band.key({ key: 'tab', in: 'band' })
   expect(await band.find({ type: 'Text', text: /Tab-1 › pane-1/, in: 'band' })).toBeDefined()
+})
+
+test('a format-2 view from before the upgrade still draws the band', async ($, on) => {
+  world(on, [task('1')], {}, 2)
+  await opened($)
+  const band = await mountBand($)
+  expect(await band.find({ type: 'Text', text: /Owner history task 1/, in: 'band' })).toBeDefined()
 })

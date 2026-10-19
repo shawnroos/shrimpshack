@@ -4,6 +4,8 @@ import type { Contract, Reread } from './contract'
 import { viewedKey } from './selection'
 
 const VIEW_FORMAT = 3
+// A format-2 file predates editor kinds: its rows and work still show, and the contract view waits for the next write.
+const ROWS_ONLY_FORMAT = 2
 const DEFAULT_DATA_DIR = '/.claude/plugins/data/auto-shrimpshack'
 const ROW_CAP = 2000
 const STEP_KINDS = new Set<string>(['done', 'current', 'waiting', 'planned'])
@@ -194,7 +196,8 @@ export async function loadView($: EngineInterface): Promise<Found> {
   } catch (error) {
     return { kind: 'unreadable', path, why: String(error) }
   }
-  if (!isRaw(view) || view.view_format !== VIEW_FORMAT || !Array.isArray(view.rows)) {
+  const known = isRaw(view) && (view.view_format === VIEW_FORMAT || view.view_format === ROWS_ONLY_FORMAT)
+  if (!isRaw(view) || !known || !Array.isArray(view.rows)) {
     const format = isRaw(view) ? view.view_format : undefined
     return { kind: 'unreadable', path, why: `view format ${String(format)}, expected ${VIEW_FORMAT}` }
   }
@@ -203,7 +206,8 @@ export async function loadView($: EngineInterface): Promise<Found> {
     return { style: String(one.style ?? 'text'), text: String(one.text ?? '').slice(0, ROW_CAP) }
   })
   const work = await unviewed($, readWork(view.work, await $.clock.now()))
-  return { kind: 'view', path, rows, generatedAt: String(view.generated_at ?? ''), work, parts: partsOf(view) }
+  const parts = view.view_format === VIEW_FORMAT ? partsOf(view) : undefined
+  return { kind: 'view', path, rows, generatedAt: String(view.generated_at ?? ''), work, parts }
 }
 
 export async function markViewed($: EngineInterface, item: WorkItem | undefined): Promise<void> {
