@@ -142,6 +142,28 @@ session.
   open deliverable. `reopen-item` reopens a dropped item and always needs a
   typed `--prompt`. No verb sets an item to done: done is derived from confirmed
   evidence.
+- **Decisions and acceptance**: `record-decision` keeps a decision as numbered
+  revisions (scope, reason, limits, the items or programme it applies to, linked
+  requirements, and where it came from). A typed `--prompt` that names the id
+  accepts a revision; one that adds a target or drops a limit waits for
+  `accept-context`, whose typed prompt names the id and each added target, while
+  the prior revision stays in force. The same content again adds nothing.
+  `define-requirement` links a requirement to item checks (`<item-id>=<deliverable>`,
+  a deliverable the protocol requires of that item). `assign-item` binds an item to
+  the decision revision in force, compared by canonical id. `raise-blocker` gates a
+  requirement only when it names the requirement, one of its checks, the dependency
+  item, evidence and the unblock condition; `clear-blocker` clears it. `context`
+  (any session, read-only) prints the decisions, requirements and acceptance, or
+  with `--item` the item's packet, with the store revision it read; context is never
+  approval. `status` shows each requirement as satisfied, unsatisfied, blocked or
+  not accepted, with each check's result (confirmed, refuted, unknown, not_run,
+  stale or missing), the follow-ups no requirement gates on, and completed, handed,
+  dropped and open items apart. Acceptance never changes the stop rule.
+- **Safety pauses and denials**: `pause` (`--risk safety|data_loss`) holds named
+  items or the whole programme, notifies Shawn, holds the stop, and makes
+  `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed
+  prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
+  item then refuses, and requirements stay unchanged.
 - **Waits and watchers**: `set-waiting` sets who an item waits on, with an
   optional named reporter, a watcher (process or task id), the blocker kind and a
   trace or job id; `--clear` returns the item to open. `watcher-beat` updates a

@@ -28,6 +28,7 @@ programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_record = load_lib_module("programme_record")
+programme_context = load_lib_module("programme_context")
 programme_exec = load_lib_module("programme_exec")
 programme_tracker = load_lib_module("programme_tracker")
 programme_tasks = load_lib_module("programme_tasks")
@@ -543,6 +544,9 @@ def _h_start_worker(host, argv):
     key = programme_record._resolve(programme, item_id)
     if programme["items"][key]["state"] in programme_home.FINISHED_ITEM_STATES:
         raise host.ProgrammeError(f"item {key!r} is {programme['items'][key]['state']}")
+    refusal = programme_context.unsafe_reason(programme, key, "start_worker")
+    if refusal:
+        raise host.ProgrammeError(refusal)
     spinoff = spinoff_path()
     if not spinoff:
         raise host.ProgrammeError("spinoff.sh not found beside this plugin or on PATH")
@@ -622,6 +626,9 @@ def _h_prompt_item(host, argv):
     sid = host._guard(home, record)
     programme = programme_home.normalize_programme(record.get("programme") or {})
     key = programme_record._resolve(programme, item_id)
+    refusal = programme_context.unsafe_reason(programme, key, "prompt_item")
+    if refusal:
+        raise host.ProgrammeError(refusal)
     target = check_target(programme["items"][key]["owner"], record)
     payload = {"item": key, "pane": target["pane"], "reported_session": target["reported"],
                "owner_session": programme["items"][key]["owner"].get("session_id")}

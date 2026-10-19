@@ -90,6 +90,15 @@ KINDS = (
     "source_retained",
     "inventory_frozen",
     "preservation_checked",
+    "decision_recorded",
+    "requirement_defined",
+    "context_accepted",
+    "item_assigned",
+    "blocker_raised",
+    "blocker_cleared",
+    "pause_raised",
+    "pause_lifted",
+    "denial_recorded",
 )
 
 _TOKEN_PATTERNS = [

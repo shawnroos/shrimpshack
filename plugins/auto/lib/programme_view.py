@@ -209,6 +209,22 @@ def _watching_row(w) -> dict:
     return _row(text, "text" if w["live"] else "warn")
 
 
+def _context_decisions(acceptance) -> list:
+    acceptance = _dict(acceptance)
+    out = []
+    for row in acceptance.get("pending") or []:
+        added = _dict(row.get("delta")).get("added")
+        widens = f", which adds {', '.join(added)}" if added else ""
+        out.append({"kind": "context_pending", "item": None, "id": row.get("id"),
+                    "question": f"accept {row.get('kind')} {row.get('id')} revision {row.get('rev')}{widens}?"})
+    for pause in acceptance.get("safety_pauses") or []:
+        held = ", ".join(pause.get("items") or []) or "the whole programme"
+        out.append({"kind": "safety_pause", "item": None, "pause": pause.get("id"),
+                    "question": f"safety pause {pause.get('id')} ({pause.get('risk')}) holds {held}: "
+                                f"{pause.get('reason')}"})
+    return out
+
+
 def _decisions(block, items) -> list:
     out = [{"kind": "handed", "item": i["id"], "question": i["question"]}
            for i in items if i["effective_state"] == "handed" and i["needs_shawn"]]
@@ -284,7 +300,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
         "queue": [_dict(e) for e in working.get("queue") or []],
         "watching": _watching(block, status, now, programme_home.cadence_seconds(record)),
         "waiting_on_whom": waits,
-        "decisions_for_shawn": _decisions(block, items),
+        "decisions_for_shawn": _decisions(block, items) + _context_decisions(status["acceptance"]),
+        "acceptance": status["acceptance"],
         "just_did": _just_did(journal_entries or []),
         "rules_in_force": _rules(block, rules),
         "items": items,
@@ -388,6 +405,28 @@ def remit_texts(remit) -> list:
     return [f"spaces: {spaces or 'none'}", f"repos: {repos or 'any'}", f"tracker: {scope}"]
 
 
+def _acceptance_lines(acceptance) -> list:
+    if not isinstance(acceptance, dict):
+        return [_row("  the context block is unreadable", "warn")]
+    out = []
+    for req in acceptance.get("requirements") or []:
+        checks = ", ".join(f"{c['check']} {c['result']}" for c in req.get("checks") or [])
+        pending_rev = f", revision {req['pending_rev']} pending" if req.get("pending_rev") else ""
+        out.append(_row(f"  {req['id']} rev {req.get('rev')}: {req['state']}{pending_rev}"
+                        + (f" ({checks})" if checks else ""), "text" if req["state"] == "satisfied" else "warn"))
+    for b in acceptance.get("blockers") or []:
+        out.append(_row(f"  blocker {b.get('id')}: {b.get('check')} waits on {b.get('dependency')} "
+                        f"({b.get('evidence')}); unblocks when {b.get('unblock')}", "warn"))
+    for p in acceptance.get("safety_pauses") or []:
+        out.append(_row(f"  safety pause {p.get('id')} ({p.get('risk')}): {p.get('reason')}", "warn"))
+    for d in acceptance.get("denials") or []:
+        out.append(_row(f"  denied {_dict(d).get('action')} by {_dict(d).get('tool')}"
+                        + (f" for {d['item']}" if _dict(d).get("item") else "") + f": {_dict(d).get('reason')}", "warn"))
+    if out and acceptance.get("followups"):
+        out.append(_row(f"  follow-ups (no requirement gates on them): {', '.join(acceptance['followups'])}", "dim"))
+    return out
+
+
 def rows(model) -> list:
     out = [_header(model["programme"])]
     _section(out, "Remit", [_row(f"  {text}") for text in remit_texts(model.get("remit"))], "none")
@@ -410,6 +449,7 @@ def rows(model) -> list:
                                     + (f": {j['summary']}" if j.get("summary") else "")
                                     + (f" (x{j['repeats']})" if j["repeats"] > 1 else ""), "dim")
                                for j in model["just_did"]], "nothing yet")
+    _section(out, "Acceptance", _acceptance_lines(model.get("acceptance")), "no requirements")
     _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in rule_texts(model["rules_in_force"])],
              "none")
     _section(out, "Items", [line for item in model["items"] for line in _item_lines(item)], "no items")

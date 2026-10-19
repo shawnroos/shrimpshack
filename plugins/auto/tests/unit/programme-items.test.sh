@@ -518,6 +518,35 @@ CLAUDE_CODE_SESSION_ID="sess-w1" prog claim --run "$RUN" --item linear:AI-800 --
 check 1 "$CODE"
 edit 'rec["programme"]["ended"] = None'
 
+acc() {
+  run_py "$RUN" "$1" <<'EOF'
+pp = load_lib_module("programme_predicate")
+out = pp.compute(record(args[0]))["acceptance"]
+row = [r for r in out["requirements"] if r["id"] == args[1]][0]
+where = [k for k, v in out["outcomes"].items() if any(i in v for i in ("herdr:acc-a", "herdr:acc-b"))]
+print(row["state"], [c["result"] for c in row["checks"]], where)
+EOF
+}
+prog add-item herdr:acc-a --title "acceptance probe" --kind fix_only
+P_ACC="$(prompt typed 'requirement r-acc: acc-a is merged')"
+prog define-requirement r-acc --text "acc-a is merged" --check herdr:acc-a=merged --prompt "$P_ACC"
+it "a requirement on an item's protocol deliverable starts not_run"
+check "0 unsatisfied ['not_run'] ['open']" "$CODE $(acc r-acc)"
+edit 'items["herdr:acc-a"]["deliverables"]["merged"] = {"result": "refuted", "checked_at": core.now_iso()}'
+it "handing the item keeps its refuted check refuted and the requirement unsatisfied"
+prog hand-item herdr:acc-a --question "who owns acc-a?"
+check "0 unsatisfied ['refuted'] ['handed']" "$CODE $(acc r-acc)"
+P_SHIP="$(prompt typed 'ship acc-a')"
+it "answering the hand with ship reopens the item without touching its evidence"
+prog answer-handed herdr:acc-a --choice ship --prompt "$P_SHIP"
+check "0 unsatisfied ['refuted'] ['open']" "$CODE $(acc r-acc)"
+it "an alias keeps the requirement's check pointing at the same evidence"
+prog alias-item herdr:acc-a herdr:acc-b
+check "0 unsatisfied ['refuted'] ['open']" "$CODE $(acc r-acc)"
+it "dropping the item does not accept the requirement"
+prog drop-item herdr:acc-b --reason "no longer needed"
+check "0 unsatisfied ['refuted'] ['dropped']" "$CODE $(acc r-acc)"
+
 it "no item ever reached a stored done state"
 check '[]' "$(field 'sorted(k for k, v in items.items() if v["state"] == "done")')"
 

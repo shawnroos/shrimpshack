@@ -29,6 +29,7 @@ programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
 driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
+programme_context = load_lib_module("programme_context")
 
 CLAIMS_NAME = programme_journal.CLAIMS_NAME
 SOURCES = ("herdr", "tracker", "tasks", "plans")
@@ -854,5 +855,7 @@ _SPECS = (
 
 
 def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
-            for name, handler, args, rejects in _SPECS}
+    verbs = {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+             for name, handler, args, rejects in _SPECS}
+    verbs.update(programme_context.build_verbs(host, sys.modules[__name__]))
+    return verbs
