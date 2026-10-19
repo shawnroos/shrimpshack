@@ -804,7 +804,7 @@ adds to its reason: "Rules in force were reloaded after compaction; run
 ### 10.8 Read model
 
 `<home>/views/view.json` is a display copy rebuilt after every programme write:
-`{view_format: 1, run, generated_at, model, rows}`. `model` holds
+`{view_format: 2, run, generated_at, model, work, contract, reread, rows}`. `model` holds
 `programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`.
@@ -817,6 +817,42 @@ item carries `now`: its owner session's in-progress task and how many tasks are
 done, read from the tasks source while it is on. `rows` is
 `[{style: title|head|text|dim|warn, text}]`; `status` prints the rows and the mod
 draws them, so both show the same text. Nothing reads it to decide anything.
+
+`work[]` has one entry per item whose stored state is open or waiting and whose
+evidence is not complete: waiting items first, then items with a `trajectory_changed`
+row, then by `joined_at`. Each entry is `{id, title, state, joined_at, location,
+session_id, no_plan, steps[], finish, recorded_at, age_seconds, fade_after_seconds,
+faded, hash, change_hash, changed_since_first, watch}`. `location` is the
+trajectory's tab and pane names joined by " › ", never a herdr code; `session_id` is
+the owner's session. `no_plan` is true when the item has no trajectory yet. Each step
+is `{kind: done|current|waiting|planned, title, clause, clause_label, no_clause, note}`;
+`clause_label` is "no clause" when `clause` is null. `fade_after_seconds` is twice
+the cadence seconds under fixed cadence, or twice the gap between the two
+`trajectory_sweeps` under on-change cadence, never under 1800; with fewer than two
+sweeps it is 1800. `change_hash` is the newest `trajectory_changed` `new_hash`; the
+mod compares it with the hash it stored when Shawn viewed the item, so the model holds
+no viewed state. `watch` is null for open items; for waiting items it is
+`{state: watcher_live|retry_never_started|reporter_only|nothing_watching}`, checked in
+that order, with `interval_seconds` (cron watchers, the cadence) or
+`beat_age_seconds` on a live watcher and `reporter` on `reporter_only`.
+
+`contract` is `{accepted, terms[], instructions[]}`, built from the record so it can
+show proposals. Each term is `{key, label, value, value_text, description, binding:
+code|guidance|none, reliant_steps, set_by, set_at, why, notes[], proposal, options[]}`.
+`reliant_steps` counts current and planned steps of `work` entries whose clause is
+`term:<key>`. `options[]` is `{name, description, active}` for exactly the term's
+`options`; descriptions come from `TERM_GUIDE`, then `option_descriptions`, else
+"no description" (also used for a term outside the guide). `proposal` is the stored
+`{value, extras, at, origin, state, settled_at}`; a pending proposal reads
+`state: "refused"` with `reason` and `refused_at` when the newest `approval_refused`
+row whose `target` is the term key is newer than `proposal.at`. Each instruction is
+`{id, quote, applies_to, scope: own|inherited, until, at, reliant_steps}` for the
+active instructions in `rules_in_force`; `own` means it applies to an item.
+
+`reread` is `{last_at, changed_since[], requested, requested_at}`: `last_at` is the
+newest `rules_acked` or `rules_loaded` row, `changed_since` the term keys whose
+`set_at` is newer than it, and `requested` is true while a `reread_requested` row is
+newer than it. `rows` gains a "Work" section listing each `work` entry's current step.
 
 ### 10.9 Stop hook state
 

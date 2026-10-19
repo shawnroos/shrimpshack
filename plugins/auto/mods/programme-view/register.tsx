@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 const PANE = 'programme-view'
-const VIEW_FORMAT = 1
+const VIEW_FORMAT = 2
 const POLL_MS = 2000
 const DEFAULT_DATA_DIR = '/.claude/plugins/data/auto-shrimpshack'
 const ROW_CAP = 2000

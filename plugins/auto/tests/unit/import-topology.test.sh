@@ -106,7 +106,8 @@
 #   programme_trajectory → run_record_core, programme_home, programme_journal,
 #                          programme_sanitize, programme_record, driver_session
 #   programme_view       → programme_home, programme_predicate, programme_sanitize,
-#                          programme_tasks, session_registry
+#                          programme_tasks, session_registry, programme_view_work
+#   programme_view_work  → programme_home, programme_predicate
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_protocol, session_registry, driver_session, verb_cli;
 #                          then, after its verb table is built: programme_record,
@@ -427,7 +428,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_evidence.py programme_sources.py programme-watch.py programme-watch.sh \
            programme_view.py run_record_evidence.py programme_lifecycle.py \
            programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
-           programme_terms.py programme_trajectory.py; do
+           programme_terms.py programme_trajectory.py programme_view_work.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -447,7 +448,7 @@ done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
 for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
-             programme-watch run_record_evidence programme_lifecycle programme_terms; do
+             programme-watch run_record_evidence programme_lifecycle programme_terms programme_view_work; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
@@ -485,6 +486,14 @@ if loads_sibling "programme_view.py" "programme_record"; then
   fail "programme_view.py must not load programme_record — the caller passes rules and inbox size"
 else
   pass
+fi
+
+it "programme_view_work.py loads only programme_home and programme_predicate"
+_extra="$(grep -oE 'load_lib_module\("[a-z_]+"\)' "$LIB/programme_view_work.py" | grep -vE '"(programme_home|programme_predicate)"')"
+if [ -z "$_extra" ] && loads_sibling "programme_view_work.py" "programme_home"; then
+  pass
+else
+  fail "programme_view_work.py must stay a pure read over the record and journal it is handed; extra loads: ${_extra}"
 fi
 
 it "programme-watch.py does NOT load programme_sources"
