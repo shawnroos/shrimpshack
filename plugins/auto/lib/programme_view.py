@@ -121,6 +121,8 @@ def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict
         "question": handed.get("question") if effective == "handed" else None,
         "ask_kind": programme_decisions.ask_kind(item) if effective == "handed" else None,
         "now": _tasks_now(owner, tasks_on) if effective not in programme_home.FINISHED_ITEM_STATES else None,
+        "restrictions": [{"text": _dict(r).get("text"), "source": _dict(r).get("source")}
+                         for r in item.get("restrictions") or []],
         "marks": marks,
         "needs_shawn": stopped or (effective == "handed" and not handed.get("answered")),
     }
@@ -383,6 +385,8 @@ def _item_lines(item) -> list:
     blocker = _blocker_text(_dict(item.get("waiting_on")))
     if blocker:
         out.append(_row(f"    blocker: {blocker}", "dim"))
+    for r in item.get("restrictions") or []:
+        out.append(_row(f"    restriction ({r['source']}): {r['text']}", "dim"))
     for d in item["deliverables"]:
         ref = f" {d['ref']}" if d.get("ref") else ""
         out.append(_row(f"    {d['name']}: {d['result']}{ref}", "dim"))

@@ -298,6 +298,21 @@ OUT="$("$PY" "$PROG" status --run "$BLOCKED" --json 2>&1)"
 it "the json model carries the three blocker fields"
 check "merged check on AI-60|runner log tr-1 fails in infra code|infra ships the fix" "$("$PY" -c 'import json,sys; w=json.loads(sys.argv[1])["model"]["items"][0]["waiting_on"]; print("|".join(w[k] for k in ("serves","evidence","unblocks_when")))' "$OUT")"
 
+RESTRICTED="$(new_run w9)"
+run_py "$RESTRICTED" <<'EOF' >/dev/null
+def seed(p):
+    item = ph.new_item("linear:AI-63", "Shot kinds")
+    item["restrictions"] = [{"text": "source only", "source": "pm_choice", "at": core.now_iso(), "via": "prompt-item"}]
+    p["items"] = {item["id"]: item}
+mutate(args[0], seed)
+EOF
+OUT="$("$PY" "$PROG" status --run "$RESTRICTED" 2>&1)"
+it "the view shows an item's restriction with its source"
+has "restriction (pm_choice): source only" "$OUT"
+OUT="$("$PY" "$PROG" status --run "$RESTRICTED" --json 2>&1)"
+it "the json model carries the restriction and its source"
+check "source only|pm_choice" "$("$PY" -c 'import json,sys; r=json.loads(sys.argv[1])["model"]["items"][0]["restrictions"][0]; print(r["text"] + "|" + r["source"])' "$OUT" 2>&1)"
+
 WATCHED="$(new_run w8)"
 run_py "$WATCHED" <<'EOF' >/dev/null
 def seed(p):

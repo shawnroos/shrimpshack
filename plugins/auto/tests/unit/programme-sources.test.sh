@@ -543,6 +543,112 @@ CLAUDE_CODE_SESSION_ID=sess-other prog prompt-item herdr:w2/p31 "status?"
 it "prompt-item refuses a session that does not drive the programme"
 check 1 "$CODE"
 
+seed_decision() {
+  run_py "$RUN" "$1" <<'EOF'
+run, why = args
+pd = load_lib_module("programme_decisions")
+out = {}
+def body(rec):
+    rec["programme"] = ph.normalize_programme(rec["programme"])
+    out["id"] = pd.add_decision(rec["programme"], kind="product_scope", by="shawn", item="programme", why=why)["id"]
+core._with_locked_run_record(ph.home_path(run), run, body)
+print(out["id"])
+EOF
+}
+DEC="$(seed_decision "Export stays PNG only this release")"
+SENT_BEFORE="$(journal_count prompt_sent)"
+
+: > "$CALLS"
+prog prompt-item herdr:w2/p31 "carry on" --decision d000000
+it "prompt-item refuses an unknown decision id"
+check 1 "$CODE"
+has "unknown decision" "$OUT"
+it "nothing is sent for an unknown decision id"
+lacks "agent prompt" "$(calls)"
+check "$SENT_BEFORE" "$(journal_count prompt_sent)"
+
+: > "$CALLS"
+prog prompt-item herdr:w2/p31 "carry on" --decision "$DEC"
+it "prompt-item with a decision sends"
+check 0 "$CODE"
+it "the prompt carries the decision text"
+has "Export stays PNG only this release" "$(calls)"
+it "the prompt carries the reopen clause"
+has "stop and state that evidence" "$(calls)"
+it "the prompt_sent row carries the decision ids"
+check "[\"${DEC}\"]" "$(journal_last prompt_sent | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["payload"]["decision_ids"]))')"
+
+LONG="$("$PY" -c 'print("x" * 3990)')"
+: > "$CALLS"
+prog prompt-item herdr:w2/p31 "$LONG" --decision "$DEC"
+it "prompt-item refuses when the decision text pushes the prompt over the cap"
+check 1 "$CODE"
+has "4000" "$OUT"
+it "nothing is sent over the cap"
+lacks "agent prompt" "$(calls)"
+
+: > "$CALLS"
+prog prompt-item herdr:w2/p31 "build it" --restriction "source only" --source pm_choice
+it "prompt-item with a pm_choice restriction sends"
+check 0 "$CODE"
+it "the restriction is recorded on the item with its source"
+check '["source only", "pm_choice"]' "$(field '[items["herdr:w2/p31"]["restrictions"][-1][k] for k in ("text", "source")]')"
+it "the prompt names the restriction and its source"
+has "source only (source: pm_choice)" "$(calls)"
+it "the prompt_sent row carries the restriction"
+has '"source": "pm_choice"' "$(journal_last prompt_sent)"
+
+: > "$CALLS"
+prog prompt-item herdr:w2/p31 "build it" --restriction "no deploys"
+it "a restriction without a source refuses"
+check 2 "$CODE"
+has "--source" "$OUT"
+prog prompt-item herdr:w2/p31 "build it" --restriction "no deploys" --source vibes
+it "a restriction with an unknown source refuses"
+check 2 "$CODE"
+it "nothing is sent for a refused restriction"
+lacks "agent prompt" "$(calls)"
+check 1 "$(field 'len(items["herdr:w2/p31"]["restrictions"])')"
+
+BRIEF="${WORK}/brief.md"
+printf 'Build shot kinds.\n' > "$BRIEF"
+: > "$CALLS"
+prog start-worker linear:AI-753 --decision "$DEC" -- --name shot-kinds --target tab
+it "start-worker with a decision refuses without --handoff"
+check 2 "$CODE"
+has "--handoff" "$OUT"
+prog start-worker linear:AI-753 --decision d000000 -- --name shot-kinds --handoff "$BRIEF"
+it "start-worker refuses an unknown decision id"
+check 1 "$CODE"
+prog start-worker linear:AI-753 --restriction "no deploys" -- --name shot-kinds --handoff "$BRIEF"
+it "start-worker refuses a restriction without a source"
+check 2 "$CODE"
+it "refused decision starts never call spinoff"
+lacks "spinoff" "$(calls)"
+
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-753 --decision "$DEC" --restriction "source only" --source pm_choice \
+  -- --name shot-kinds --handoff "$BRIEF"
+it "start-worker with a decision and --handoff starts"
+check 0 "$CODE"
+PASSED="$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')"
+it "spinoff gets a copy in the programme home, not the original"
+has "${HOME_DIR}/" "$PASSED"
+it "the copy carries the original brief, the decision text and the reopen clause"
+COPY="$(cat "$PASSED" 2>/dev/null)"
+has "Build shot kinds." "$COPY"
+has "Export stays PNG only this release" "$COPY"
+has "stop and state that evidence" "$COPY"
+it "the copy carries the restriction with its source"
+has "source only (source: pm_choice)" "$COPY"
+it "the original brief is unchanged"
+check "Build shot kinds." "$(cat "$BRIEF")"
+it "the restriction is recorded on the started item"
+check '["source only", "pm_choice"]' "$(field '[items["linear:AI-753"]["restrictions"][-1][k] for k in ("text", "source")]')"
+it "the worker_started row carries the decision ids"
+has "$DEC" "$(journal_last worker_started)"
+write_snapshot base
+
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 

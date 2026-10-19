@@ -50,6 +50,9 @@ PROJECT_UNKNOWN = "project_unknown"
 UNSTAFFED_CAP = 20
 SIGNALS = ("tracker", "branch", "title", "label", "registry", "plan")
 _PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
+RESTRICTION_SOURCES = ("human", "runtime", "requirement", "pm_choice", "worker_assumption")
+REOPEN_CLAUSE = ("Proceed under this decision. Do not reopen it: if you find new evidence that it cannot "
+                 "hold, stop and state that evidence in your pane.")
 
 bounded = programme_exec.bounded
 _json = programme_exec.parse_json
@@ -527,25 +530,100 @@ def launch_worker(spinoff, extra) -> dict:
     return out
 
 
+def _take(argv, flag) -> tuple:
+    rest, taken = [], []
+    args = list(argv)
+    while args:
+        arg = args.pop(0)
+        if arg == flag:
+            if not args:
+                raise ValueError(f"{flag} needs a value")
+            taken.append(args.pop(0))
+        else:
+            rest.append(arg)
+    return rest, taken
+
+
+def _restrictions(opts) -> list:
+    texts, sources = opts.get("restriction") or [], opts.get("source") or []
+    if len(texts) != len(sources):
+        raise ValueError("every --restriction needs its own --source")
+    out = []
+    for text, source in zip(texts, sources):
+        if source not in RESTRICTION_SOURCES:
+            raise ValueError(f"unknown restriction source {source!r}; known: {list(RESTRICTION_SOURCES)}")
+        text = programme_sanitize.clean(text, QUOTE_CAP)
+        if not text:
+            raise ValueError("--restriction needs text")
+        out.append({"text": text, "source": source})
+    return out
+
+
+def _brief_tail(host, programme, decision_ids, restrictions) -> str:
+    known = {d.get("id"): d for d in programme.get("decisions") or [] if isinstance(d, dict)}
+    unknown = [d for d in decision_ids if d not in known]
+    if unknown:
+        raise host.ProgrammeError(f"unknown decision id {', '.join(unknown)}")
+    lines = []
+    if decision_ids:
+        lines.append("Settled decisions this work carries:")
+        for decision_id in decision_ids:
+            entry = known[decision_id]
+            lines.append(f"- {decision_id} ({entry.get('kind')}): {entry.get('why') or 'no text recorded'}")
+        lines.append(REOPEN_CLAUSE)
+    if restrictions:
+        lines.append("Restrictions on this work:")
+        lines += [f"- {r['text']} (source: {r['source']})" for r in restrictions]
+    return "\n\n" + "\n".join(lines) if lines else ""
+
+
+def _record_restrictions(item, restrictions, via) -> None:
+    at = run_record_core.now_iso()
+    item.setdefault("restrictions", []).extend(dict(r, at=at, via=via) for r in restrictions)
+
+
+def _brief_copy(home, item_id, extra, tail) -> list:
+    if "--handoff" not in extra[:-1]:
+        raise ValueError("start-worker with --decision or --restriction needs --handoff <file> "
+                         "among the spinoff arguments")
+    at = extra.index("--handoff") + 1
+    try:
+        with open(extra[at], encoding="utf-8") as fh:
+            brief = fh.read()
+    except OSError as exc:
+        raise ValueError(f"cannot read the --handoff file: {exc}") from exc
+    folder = os.path.join(home, "briefs")
+    os.makedirs(folder, exist_ok=True)
+    copy = os.path.join(folder, f"{item_id.replace(':', '-').replace('/', '-')}-{uuid.uuid4().hex[:8]}.md")
+    with open(copy, "w", encoding="utf-8") as fh:
+        fh.write(brief.rstrip("\n") + tail + "\n")
+    return extra[:at] + [copy] + extra[at + 1:]
+
+
 def _h_start_worker(host, argv):
     argv = list(argv)
     cut = argv.index("--", 1) if "--" in argv[1:] else len(argv)
     own, extra = argv[:cut], argv[cut + 1:]
-    positional, opts = host._parse(own, values=("run", "session-name"))
+    own, decision_ids = _take(own, "--decision")
+    positional, opts = host._parse(own, values=("run", "session-name"), multi=("restriction", "source"))
     if len(positional) != 1 or not extra:
         raise ValueError("usage: start-worker <item> [--session-name <name>] -- <spinoff arguments>")
     if any(a == "--session-id" or a.startswith("--session-id=") for a in extra):
         raise host.ProgrammeError("start-worker mints the session id; do not pass --session-id")
     item_id = programme_record.check_item_id(positional[0])
+    restrictions = _restrictions(opts)
     run_id, home, record = host._locate(opts)
     host._guard(home, record)
     programme = programme_home.normalize_programme(record.get("programme") or {})
     key = programme_record._resolve(programme, item_id)
     if programme["items"][key]["state"] in programme_home.FINISHED_ITEM_STATES:
         raise host.ProgrammeError(f"item {key!r} is {programme['items'][key]['state']}")
+    tail = _brief_tail(host, programme, decision_ids, restrictions)
     spinoff = spinoff_path()
     if not spinoff:
         raise host.ProgrammeError("spinoff.sh not found beside this plugin or on PATH")
+    if tail:
+        extra = _brief_copy(home, key, extra, tail)
     started = launch_worker(spinoff, extra)
 
     def change(prog, prompt, rec):
@@ -557,9 +635,11 @@ def _h_start_worker(host, argv):
             programme_record._set_owner(item, {"session": started["session_id"], "pane": started["pane"],
                                                "terminal-id": started["terminal_id"],
                                                "session-name": opts.get("session-name")})
+            _record_restrictions(item, restrictions, "start-worker")
         item["history"].append({"at": entry["at"], "kind": "started" if started["ok"] else "start_failed",
                                 "session_id": started["session_id"]})
-        return dict(item=item["id"], started=started["ok"], **{k: v for k, v in started.items() if k != "ok"})
+        return dict(item=item["id"], started=started["ok"], decision_ids=decision_ids, restrictions=restrictions,
+                    **{k: v for k, v in started.items() if k != "ok"})
 
     host._write(opts, change, lambda p: "worker_started" if p["started"] else "worker_start_failed")
     return 0 if started["ok"] else 1
@@ -611,10 +691,12 @@ def check_target(owner, record) -> dict:
 
 
 def _h_prompt_item(host, argv):
-    positional, opts = host._parse(argv, values=("run",))
+    argv, decision_ids = _take(argv, "--decision")
+    positional, opts = host._parse(argv, values=("run",), multi=("restriction", "source"))
     if len(positional) != 2:
         raise ValueError("usage: prompt-item <item> <text>")
     item_id = programme_record.check_item_id(positional[0])
+    restrictions = _restrictions(opts)
     text = programme_sanitize.clean(positional[1], PROMPT_CAP, keep_newlines=True)
     if not text or text.startswith("-"):
         raise ValueError("prompt-item needs text that is not empty and does not start with '-'")
@@ -622,6 +704,12 @@ def _h_prompt_item(host, argv):
     sid = host._guard(home, record)
     programme = programme_home.normalize_programme(record.get("programme") or {})
     key = programme_record._resolve(programme, item_id)
+    tail = _brief_tail(host, programme, decision_ids, restrictions)
+    if tail:
+        text = programme_sanitize.clean(positional[1], 0, keep_newlines=True) + tail
+        if len(text) > PROMPT_CAP:
+            raise host.ProgrammeError(f"prompt with its decisions and restrictions is {len(text)} characters; "
+                                      f"the cap is {PROMPT_CAP}")
     target = check_target(programme["items"][key]["owner"], record)
     payload = {"item": key, "pane": target["pane"], "reported_session": target["reported"],
                "owner_session": programme["items"][key]["owner"].get("session_id")}
@@ -633,22 +721,45 @@ def _h_prompt_item(host, argv):
     ok = sent["ran"] and sent["code"] == 0
     payload.update(sent=ok, session_unknown=target["session_unknown"], owner_source=target["owner_source"],
                    text=programme_journal.redact(programme_sanitize.clean(text, QUOTE_CAP)),
-                   error=None if ok else _failure(sent, "herdr agent prompt"))
+                   error=None if ok else _failure(sent, "herdr agent prompt"),
+                   decision_ids=decision_ids, restrictions=restrictions)
+    if ok and restrictions:
+        _store_restrictions(host, run_id, home, key, restrictions)
     programme_journal.append(run_id, "prompt_sent", sid, payload)
     host._emit(dict({"ok": ok, "run": run_id, "kind": "prompt_sent"}, **payload))
     return 0 if ok else 1
+
+
+def _store_restrictions(host, run_id, home, key, restrictions) -> None:
+    seen = {}
+
+    def mutate(rec):
+        rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
+        _record_restrictions(rec["programme"]["items"][key], restrictions, "prompt-item")
+        seen["record"] = rec
+
+    run_record_core._with_locked_run_record(home, run_id, mutate)
+    host.refresh_view(run_id, home, seen["record"])
 
 
 _SPECS = (
     ("sweep", _h_sweep, "[--record-sources] [--run <id>]",
      "--record-sources from any session but the driving one. Without it, sweep writes nothing. "
      "A source the agreement's sources term turns off is not read and reports state off."),
-    ("start-worker", _h_start_worker, "<item> [--session-name <name>] [--run <id>] -- <spinoff arguments>",
-     "an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments."),
-    ("prompt-item", _h_prompt_item, "<item> <text> [--run <id>]",
+    ("start-worker", _h_start_worker,
+     "<item> [--session-name <name>] [--decision <id>]... [--restriction <text> --source <source>]... "
+     "[--run <id>] -- <spinoff arguments>",
+     "an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments; an "
+     "unknown decision id; a restriction without its own --source or with a source outside human, "
+     "runtime, requirement, pm_choice, worker_assumption; a decision or restriction without --handoff "
+     "<file> among the spinoff arguments. With a decision or restriction it appends them to a copy of "
+     "the handoff file in the programme home and passes the copy."),
+    ("prompt-item", _h_prompt_item,
+     "<item> <text> [--decision <id>]... [--restriction <text> --source <source>]... [--run <id>]",
      "an item with no pane; a driver's pane or a tracker pane; a pane whose terminal changed; a pane "
-     "with no live agent; a pane whose reported session is not the item's owner. Refusals are "
-     "journaled."),
+     "with no live agent; a pane whose reported session is not the item's owner; an unknown decision "
+     "id; a restriction without a valid source; text that its decisions and restrictions push over "
+     "4000 characters. Pane refusals are journaled."),
 )
 
 
