@@ -74,7 +74,7 @@ def prompt_lookup(run_id, prompt_id, journals=None):
     if row is None:
         return None
     payload = row.get("payload") or {}
-    return {"origin": payload.get("origin"), "text_hash": text_hash(payload.get("text")),
+    return {"origin": programme_journal.prompt_origin(row), "text_hash": text_hash(payload.get("text")),
             "approved": _approved(rows, prompt_id)}
 
 
@@ -215,8 +215,9 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
     if row is None:
         raise ProgrammeError(f"no prompt {prompt_id!r} in this programme's journal")
     payload = row.get("payload") or {}
-    if payload.get("origin") != "typed":
-        raise ProgrammeError(f"prompt {prompt_id!r} is not typed (origin {payload.get('origin')!r})")
+    origin = programme_journal.prompt_origin(row)
+    if origin != "typed":
+        raise ProgrammeError(f"prompt {prompt_id!r} is not typed (origin {origin!r}; human source unverified)")
     if row.get("session_id") != record.get("driving_session_id"):
         raise ProgrammeError(f"prompt {prompt_id!r} was not typed in the driving session")
     return {"prompt_id": prompt_id, "quote": payload.get("text") or "",

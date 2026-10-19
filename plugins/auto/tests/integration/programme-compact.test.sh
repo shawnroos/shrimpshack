@@ -48,6 +48,8 @@ run_py() {
 import datetime, json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
+sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -103,7 +105,7 @@ FLAG="${HOME_DIR}/.compact-flag"
 typed() {
   run_py "$RUN" "$1" <<'EOF'
 run, text = args
-print(pj.append_prompt(run, "sess-pm", text, "typed")["prompt_id"])
+print(fixture_prompt(run, "sess-pm", text, "typed")["prompt_id"])
 EOF
 }
 
