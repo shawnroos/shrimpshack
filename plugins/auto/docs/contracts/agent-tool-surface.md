@@ -155,17 +155,26 @@ session.
   evidence.
 - **Waits and watchers**: `set-waiting` sets who an item waits on, with an
   optional named reporter, a watcher (process or task id), the blocker kind and a
-  trace or job id; `--clear` returns the item to open. `watcher-beat` updates a
+  trace or job id; `--clear` returns the item to open. `--blocker` needs
+  `--serves` (the requirement or required check it serves), `--evidence` (of
+  the dependency) and `--unblocks-when` (the condition that removes it), and
+  the refusal names each missing one. `--safety` marks a safety or data-loss
+  pause and drops that need. `--safety` or any of the three without
+  `--blocker` is refused. `watcher-beat` updates a
   watcher's heartbeat, and registers a new watcher when given a process or task
   id. A beat for an unknown watcher without an id is refused. `watcher-beat` is
   not journaled. Both take `--kind cron|monitor` to record the watcher kind; a
   task id with no kind counts as cron when a prompt is given and as a Monitor
   otherwise.
 - **Handing**: `hand-item` hands an item to Shawn with a question and a required
-  `--kind <decision-kind>`, and notifies
+  `--kind <decision-kind>`. Kind `denied_operation` also needs `--op <operation>`
+  (one word, for example `git-push`), and `--op` goes with no other kind. A
+  `denied_operation` ask for an operation that already has an open ask on any
+  item is refused, so a denial reaches Shawn once. It notifies
   once: the tracker's needs-you mark for an issue item, else a herdr
   notification. The ask gets an id ("a" + 6 hex) and carries the decision kind.
-  Its journal entry records the ask id, the kind as `ask_kind`, and both exit
+  Its journal entry records the ask id, the kind as `ask_kind`, the `op` of a
+  denied-operation ask, and both exit
   statuses as tracker and
   herdr (null when not run or not found, "skipped" for the tracker on an item
   with no issue). `answer-handed`

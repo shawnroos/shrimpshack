@@ -271,6 +271,33 @@ OUT="$("$PY" "$PROG" status --run "$QUIET" --json 2>&1)"
 it "an unwatched wait with no stopped_unwatched entry carries no stopped mark"
 check "False False" "$("$PY" -c 'import json,sys; i=json.loads(sys.argv[1])["model"]["items"][0]; print("stopped unwatched" in i["marks"], i["needs_shawn"])' "$OUT")"
 
+BLOCKED="$(new_run w6)"
+run_py "$BLOCKED" <<'EOF' >/dev/null
+def seed(p):
+    block = ph.new_item("linear:AI-60", "Blocked on infra", state="waiting")
+    block["waiting_on"] = {"who": "team-infra", "watcher": None, "reporter": "team-infra", "kind": "blocker",
+                           "trace_id": "tr-1", "serves": "merged check on AI-60",
+                           "evidence": "runner log tr-1 fails in infra code", "unblocks_when": "infra ships the fix"}
+    pause = ph.new_item("linear:AI-61", "Paused for safety", state="waiting")
+    pause["waiting_on"] = {"who": "shawn", "watcher": None, "reporter": "shawn", "kind": "blocker",
+                           "trace_id": "tr-2", "safety": True}
+    legacy = ph.new_item("linear:AI-62", "Blocker from before the fields", state="waiting")
+    legacy["waiting_on"] = {"who": "team-infra", "watcher": None, "reporter": "team-infra", "kind": "blocker",
+                            "trace_id": "tr-3"}
+    p["items"] = {i["id"]: i for i in (block, pause, legacy)}
+mutate(args[0], seed)
+EOF
+OUT="$("$PY" "$PROG" status --run "$BLOCKED" 2>&1)"
+it "the view shows what a blocker serves, its evidence and its unblock condition"
+has "blocker: serves merged check on AI-60 · evidence runner log tr-1 fails in infra code · unblocks when infra ships the fix" "$OUT"
+it "the view shows a safety pause as one"
+has "blocker: safety or data-loss pause" "$OUT"
+it "a blocker recorded before the fields says they are missing"
+has "blocker: no serves, evidence or unblock condition recorded" "$OUT"
+OUT="$("$PY" "$PROG" status --run "$BLOCKED" --json 2>&1)"
+it "the json model carries the three blocker fields"
+check "merged check on AI-60|runner log tr-1 fails in infra code|infra ships the fix" "$("$PY" -c 'import json,sys; w=json.loads(sys.argv[1])["model"]["items"][0]["waiting_on"]; print("|".join(w[k] for k in ("serves","evidence","unblocks_when")))' "$OUT")"
+
 WATCHED="$(new_run w8)"
 run_py "$WATCHED" <<'EOF' >/dev/null
 def seed(p):

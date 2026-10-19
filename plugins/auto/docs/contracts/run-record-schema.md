@@ -700,8 +700,8 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `deliverables` | `{"<name>": entry}`, names from `DELIVERABLES` (`merged`, `flagged`, `verified`, `released`, `recorded`); a new entry is `{result: "unknown"}` |
 | deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
-| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it |
-| `handed` | `{id: "a"+6hex, kind, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
+| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, serves?, evidence?, unblocks_when?, safety?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. A blocker written by `set-waiting` carries `serves`, `evidence` and `unblocks_when`, or `safety: true` for a safety or data-loss pause; one written before these fields has none, and the view says so |
+| `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
@@ -766,7 +766,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - Request lines (`takeover_request`, `handover_request`, `end_request`) carry
   `{verb, text, origin, space, lease_status, driving}`.
 - `pm_decided` carries `{decision_id, item, decision_kind, term, silent, outcome, state, why}`;
-  `item_handed` adds `{ask, ask_kind}`; `handed_answered` and `agreement_accepted` add
+  `item_handed` adds `{ask, ask_kind, op?}`; `handed_answered` and `agreement_accepted` add
   `decision_id`, the id of the decision they recorded. `agreement_accepted` also carries
   `contract_version`.
 - `agreement_proposed` adds `{project_terms: [{id, area, value, reserved}], source}` when the

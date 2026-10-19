@@ -41,6 +41,8 @@ NOTIFY_TIMEOUT_SECONDS = 5
 ISSUE_SOURCE = "linear"
 ISSUELESS_SOURCE = "herdr"
 WAITABLE_STATES = ("open", "waiting")
+BLOCKER_FIELDS = ("serves", "evidence", "unblocks-when")
+DENIED_OPERATION = "denied_operation"
 MCP_PROVIDER = "linear-mcp"
 TRACKER_STATE_TYPES = ("triage", "backlog", "unstarted", "started", "completed", "canceled")
 RECORDED_ISSUES_CAP = 200
@@ -387,11 +389,28 @@ def _upsert_watcher(programme, watcher_id, ids, item=None) -> dict:
     return entry
 
 
-def _wait_spec(opts, watcher) -> dict:
+def _blocker_fields(opts) -> dict:
+    given = {flag: _text(opts.get(flag), flag, required=False) for flag in BLOCKER_FIELDS}
+    if not opts.get("blocker"):
+        if opts.get("safety") or any(given.values()):
+            raise ValueError("--safety marks a blocker, and --serves, --evidence and --unblocks-when "
+                             "describe one: pass --blocker")
+        return {}
+    if opts.get("safety"):
+        return dict({flag.replace("-", "_"): text for flag, text in given.items() if text}, safety=True)
+    missing = [f"--{flag}" for flag, text in given.items() if not text]
+    if missing:
+        raise ValueError(f"a blocker needs --serves, --evidence, --unblocks-when (or --safety for a safety "
+                         f"or data-loss pause); missing {', '.join(missing)}")
+    return {flag.replace("-", "_"): text for flag, text in given.items()}
+
+
+def _wait_spec(opts, watcher, blocker) -> dict:
     spec = {"who": _token(opts.get("who"), "who"), "watcher": watcher,
             "reporter": _token(opts.get("reporter"), "reporter")}
     if opts.get("blocker"):
         spec["kind"] = "blocker"
+        spec.update(blocker)
     for flag in ("trace-id", "job-id"):
         if opts.get(flag):
             spec[flag.replace("-", "_")] = _token(opts[flag], flag)
@@ -405,8 +424,8 @@ def _wait_spec(opts, watcher) -> dict:
 def _h_set_waiting(host, argv):
     positional, opts = host._parse(
         argv, values=("run", "who", "reporter", "watcher", "process-id", "task-id", "kind", "trace-id",
-                      "job-id", "due"),
-        flags=("blocker", "clear"))
+                      "job-id", "due") + BLOCKER_FIELDS,
+        flags=("blocker", "safety", "clear"))
     if len(positional) != 1:
         raise ValueError("usage: set-waiting <id> --who <name> [--watcher <id>] ... | --clear")
     if not opts.get("clear") and not opts.get("who"):
@@ -416,6 +435,7 @@ def _h_set_waiting(host, argv):
     if watcher is not None:
         watcher = programme_home.check_segment(watcher)
     ids = _watcher_ids(opts)
+    blocker = {} if opts.get("clear") else _blocker_fields(opts)
 
     def change(programme, prompt, rec):
         key = _resolve(programme, item_id)
@@ -426,7 +446,7 @@ def _h_set_waiting(host, argv):
             item.update(state="open", waiting_on=None)
             _history(item, "wait_cleared")
             return {"item": key, "waiting_on": None}
-        spec = _wait_spec(opts, watcher)
+        spec = _wait_spec(opts, watcher, blocker)
         if watcher is not None:
             _upsert_watcher(programme, watcher, ids, item=key)
         item.update(state="waiting", waiting_on=spec)
@@ -488,25 +508,47 @@ def notify_handed(item_id, question) -> dict:
     return {"tracker": tracker, "herdr": herdr}
 
 
+def _open_ask_for(programme, op):
+    for key, item in programme["items"].items():
+        handed = item.get("handed") if isinstance(item.get("handed"), dict) else {}
+        if (item.get("state") == "handed" and not handed.get("answered")
+                and handed.get("kind") == DENIED_OPERATION and handed.get("op") == op):
+            return key
+    return None
+
+
 def _h_hand_item(host, argv):
-    positional, opts = host._parse(argv, values=("run", "question", "kind"))
+    positional, opts = host._parse(argv, values=("run", "question", "kind", "op"))
     if len(positional) != 1:
-        raise ValueError("usage: hand-item <id> --question <text> --kind <decision-kind>")
+        raise ValueError("usage: hand-item <id> --question <text> --kind <decision-kind> [--op <operation>]")
     item_id = check_item_id(positional[0])
     question = _text(opts.get("question"), "question")
     if not opts.get("kind"):
         raise ValueError("hand-item needs --kind <decision-kind>")
     kind = programme_decisions.check_kind(opts["kind"])
+    if (kind == DENIED_OPERATION) != bool(opts.get("op")):
+        raise ValueError(f"--kind {DENIED_OPERATION} needs --op <operation>, and --op goes only with that kind")
+    op = _token(opts.get("op"), "op")
 
     def change(programme, prompt, rec):
         key = _resolve(programme, item_id)
         item = programme["items"][key]
         if item["state"] not in WAITABLE_STATES:
             raise RecordError(f"item {key!r} is {item['state']}; only an open or waiting item is handed")
+        if op is not None:
+            holder = _open_ask_for(programme, op)
+            if holder is not None:
+                raise RecordError(f"operation {op!r} already has an open ask to Shawn on {holder!r}; "
+                                  "wait for that answer instead of asking again")
         ask = programme_decisions.new_ask(kind, question)
+        if op is not None:
+            ask["op"] = op
         item.update(state="handed", waiting_on=None, handed=ask)
         _history(item, "handed", question=question, ask=ask["id"])
-        return {"item": key, "question": question, "ask": ask["id"], "ask_kind": kind}
+        out = {"item": key, "question": question, "ask": ask["id"], "ask_kind": kind}
+        if op is not None:
+            out["op"] = op
+        return out
 
     def after(payload):
         return {"notify": notify_handed(payload["item"], question)}
@@ -811,8 +853,12 @@ _SPECS = (
     ("set-waiting", _h_set_waiting,
      "<id> --who <name> [--reporter <name>] [--watcher <id> [--process-id <n>] [--task-id <id> "
      "[--kind cron|monitor]]] "
-     "[--blocker] [--trace-id <id>] [--job-id <id>] [--due <iso>] [--run <id>] | <id> --clear",
-     "no --who; a finished item; a watcher id that is not a safe name; a --due that is not an ISO time."),
+     "[--blocker (--serves <text> --evidence <text> --unblocks-when <text> | --safety)] [--trace-id <id>] "
+     "[--job-id <id>] [--due <iso>] [--run <id>] | <id> --clear",
+     "no --who; a finished item; a watcher id that is not a safe name; a --due that is not an ISO time; "
+     "a --blocker without --serves (the requirement or required check it serves), --evidence (of the "
+     "dependency) and --unblocks-when (the condition that removes it), unless --safety marks a safety or "
+     "data-loss pause; --safety or any of the three without --blocker."),
     ("watcher-beat", _h_watcher_beat,
      "<watcher-id> [--process-id <n>|--task-id <id> [--kind cron|monitor]] [--item <id>] "
      "[--prompt <cron prompt>] [--run <id>]",
@@ -821,9 +867,12 @@ _SPECS = (
      "unless --kind says which. --prompt stores the "
      "armed cron prompt verbatim, so a prompt that equals it is journaled with origin cron. "
      "Exempt from the compact flag; not journaled."),
-    ("hand-item", _h_hand_item, "<id> --question <text> --kind <decision-kind> [--run <id>]",
+    ("hand-item", _h_hand_item,
+     "<id> --question <text> --kind <decision-kind> [--op <operation>] [--run <id>]",
      "no --kind, or a kind outside the closed decision kinds (this --kind is a decision kind, not "
-     "a change kind); a handed or finished item (it notifies once)."),
+     "a change kind); a handed or finished item (it notifies once); kind denied_operation without "
+     "--op, or --op with any other kind; a denied_operation ask for an operation that already has an "
+     "open ask on any item."),
     ("answer-handed", _h_answer_handed,
      "<id> --choice ship|decline --prompt <id> [--kind <change-kind>]... [--repo <path>] [--run <id>]",
      "no typed prompt, or one whose text does not name the item id or key; an item that is not handed; "

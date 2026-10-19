@@ -142,7 +142,12 @@ from this session's lease.
     - A wait a person reports back on: `P set-waiting <item> --who <who> --reporter <name>`.
     - A wait with a due time: add `--due <ISO time>`.
     - A blocker held by another team or shared by two items: debug it at
-      runtime first, then pass `--blocker --trace-id <id>` or `--job-id <id>`.
+      runtime first, then pass `--blocker --trace-id <id>` (or `--job-id <id>`)
+      with `--serves "<requirement or required check it serves>"`,
+      `--evidence "<what shows the dependency>"` and
+      `--unblocks-when "<the condition that removes it>"`. If you cannot name
+      all three, it is not a blocker: keep working. A safety or data-loss
+      pause takes `--blocker --safety` instead of the three.
     - An item no protocol rule matches: `P propose-rule '<rule json>'`, then
       `P set-waiting <item> --who shawn --reporter shawn`.
 12. **Hand product calls.** A product question goes to Shawn with

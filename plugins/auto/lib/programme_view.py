@@ -359,6 +359,17 @@ def rule_texts(r) -> list:
     return [(programme_sanitize.clean(text, cap=0), style) for text, style in out]
 
 
+def _blocker_text(waiting_on) -> str:
+    if waiting_on.get("kind") != "blocker":
+        return ""
+    if waiting_on.get("safety"):
+        return "safety or data-loss pause"
+    parts = [f"{label} {waiting_on[key]}" for key, label in
+             (("serves", "serves"), ("evidence", "evidence"), ("unblocks_when", "unblocks when"))
+             if waiting_on.get(key)]
+    return " · ".join(parts) or "no serves, evidence or unblock condition recorded"
+
+
 def _item_lines(item) -> list:
     marks = "".join(f" [{m}]" for m in item["marks"])
     out = [_row(f"  {item['id']}  {item['effective_state']}  {item['title']}{marks}",
@@ -369,6 +380,9 @@ def _item_lines(item) -> list:
     out.append(_row("    " + " · ".join(detail), "dim"))
     if item.get("now"):
         out.append(_row(f"    {item['now']}", "dim"))
+    blocker = _blocker_text(_dict(item.get("waiting_on")))
+    if blocker:
+        out.append(_row(f"    blocker: {blocker}", "dim"))
     for d in item["deliverables"]:
         ref = f" {d['ref']}" if d.get("ref") else ""
         out.append(_row(f"    {d['name']}: {d['result']}{ref}", "dim"))

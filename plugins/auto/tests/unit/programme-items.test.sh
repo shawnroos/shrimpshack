@@ -308,9 +308,34 @@ it "set-waiting --clear returns the item to open"
 prog set-waiting linear:AI-800 --clear
 check '["open", null]' "$(field '[items["linear:AI-800"]["state"], items["linear:AI-800"]["waiting_on"]]')"
 
-it "set-waiting on a blocker records the kind and trace id"
+it "a blocker without --serves is refused and names the missing field"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --blocker --trace-id tr-77 \
+  --evidence "build log tr-77 fails in infra code" --unblocks-when "infra ships the runner fix"
+check "2 open" "$CODE $(field 'items["linear:AI-802"]["state"]' | tr -d '"')"
+has "blocker needs --serves" "$OUT"
+it "a blocker with no fields names all three"
 prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --blocker --trace-id tr-77
-check '["blocker", "tr-77", "team-infra"]' "$(field '[items["linear:AI-802"]["waiting_on"]["kind"], items["linear:AI-802"]["waiting_on"]["trace_id"], items["linear:AI-802"]["waiting_on"]["reporter"]]')"
+check 2 "$CODE"
+has "--serves, --evidence, --unblocks-when" "$OUT"
+it "--safety without --blocker is a usage error"
+prog set-waiting linear:AI-802 --who shawn --reporter shawn --safety
+check 2 "$CODE"
+has "--safety marks a blocker" "$OUT"
+
+it "set-waiting on a blocker records the kind, trace id and the three fields"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --blocker --trace-id tr-77 \
+  --serves "merged check on AI-802" --evidence "build log tr-77 fails in infra code" \
+  --unblocks-when "infra ships the runner fix"
+check '["blocker", "tr-77", "team-infra", "merged check on AI-802", "build log tr-77 fails in infra code", "infra ships the runner fix"]' "$(field '[items["linear:AI-802"]["waiting_on"][k] for k in ("kind", "trace_id", "reporter", "serves", "evidence", "unblocks_when")]')"
+it "--safety records a pause without the three fields"
+prog set-waiting linear:AI-802 --who shawn --reporter shawn --blocker --safety --trace-id tr-78
+check '0 ["blocker", true, null]' "$CODE $(field '[items["linear:AI-802"]["waiting_on"]["kind"], items["linear:AI-802"]["waiting_on"]["safety"], items["linear:AI-802"]["waiting_on"].get("serves")]')"
+it "a plain wait records no blocker fields"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra
+check '[null, null]' "$(field '[items["linear:AI-802"]["waiting_on"].get("kind"), items["linear:AI-802"]["waiting_on"].get("serves")]')"
+it "blocker fields on a plain wait are a usage error"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --serves "x"
+check 2 "$CODE"
 it "set-waiting without --who is a usage error"
 prog set-waiting linear:AI-802
 check 2 "$CODE"
@@ -393,6 +418,29 @@ it "hand-item on a herdr item skips the tracker"
 prog add-item herdr:w2/p40 --title "pane"
 prog hand-item herdr:w2/p40 --question "Keep this pane?" --kind product_call
 check "herdr" "$(cut -d' ' -f1 "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
+
+prog add-item linear:AI-810 --title "Needs a push"
+prog add-item linear:AI-811 --title "Also needs a push"
+it "a denied-operation ask without --op is a usage error"
+prog hand-item linear:AI-810 --question "Grant git push to org/repo?" --kind denied_operation
+check "2 open" "$CODE $(field 'items["linear:AI-810"]["state"]' | tr -d '"')"
+has "denied_operation needs --op" "$OUT"
+it "--op with another decision kind is a usage error"
+prog hand-item linear:AI-810 --question "Ship it?" --kind product_call --op git-push
+check "2 open" "$CODE $(field 'items["linear:AI-810"]["state"]' | tr -d '"')"
+it "a denied-operation ask records the operation on the ask"
+prog hand-item linear:AI-810 --question "Grant git push to org/repo?" --kind denied_operation --op git-push
+check '["handed", "denied_operation", "git-push"]' "$(field '[items["linear:AI-810"]["state"], items["linear:AI-810"]["handed"]["kind"], items["linear:AI-810"]["handed"]["op"]]')"
+it "the hand journal carries the operation"
+has '"op": "git-push"' "$(journal_last item_handed)"
+it "a second ask for the same operation is refused and notifies nothing"
+: > "$CALLS"
+prog hand-item linear:AI-811 --question "Grant git push again?" --kind denied_operation --op git-push
+check "1 open 0" "$CODE $(field 'items["linear:AI-811"]["state"]' | tr -d '"') $(wc -l < "$CALLS" | tr -d ' ')"
+has "linear:AI-810" "$OUT"
+it "an ask for a different operation succeeds"
+prog hand-item linear:AI-811 --question "Grant prod deploy?" --kind denied_operation --op prod-deploy
+check '0 "prod-deploy"' "$CODE $(field 'items["linear:AI-811"]["handed"]["op"]')"
 
 it "answer-handed without a prompt is refused"
 prog answer-handed linear:AI-802 --choice ship
