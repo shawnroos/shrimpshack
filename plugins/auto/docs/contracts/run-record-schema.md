@@ -703,6 +703,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
 | `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, serves?, evidence?, unblocks_when?, safety?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. A blocker written by `set-waiting` carries `serves`, `evidence` and `unblocks_when`, or `safety: true` for a safety or data-loss pause; one written before these fields has none, and the view says so |
 | `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
+| `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
@@ -733,6 +734,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
 `taken_over`, `handed_over`, `programme_ended`, `request_refused`.
 
+- `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
+  (a list of decision ids) and `restrictions` (a list of `{text, source}`).
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,

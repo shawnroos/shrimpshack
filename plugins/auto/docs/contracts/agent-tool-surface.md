@@ -303,6 +303,18 @@ session.
   pane with no live agent, and a pane whose reported session is not the item's
   owner. Refusals and sends are journaled; a pane with no reported or
   registered session is sent to and marked session unknown.
+- **Decision links and restrictions**: `start-worker` and `prompt-item` take
+  `--decision <id>` (repeatable) and `--restriction <text> --source
+  <human|runtime|requirement|pm_choice|worker_assumption>` (repeatable). Each
+  decision id must name a recorded decision; the verb appends its text and the
+  clause "Proceed under this decision. Do not reopen it: if you find new
+  evidence that it cannot hold, stop and state that evidence in your pane."
+  `start-worker` with a decision or restriction needs `--handoff <file>` among
+  the spinoff arguments, appends to a copy under `<programme home>/briefs/` and
+  passes the copy; the original is unchanged. `prompt-item` refuses when its
+  text plus the appended block exceeds 4000 characters. Unknown ids, bad
+  sources and the cap refuse before anything is sent. A successful start or
+  send records the restrictions on the item.
 - **Remit**: `set-remit` stores the remit the PM worked out (skill
   programme-remit): spaces, repos (absolute path and GitHub owner/name) and
   the tracker scope (team keys, projects, initiatives, each with name and id).
