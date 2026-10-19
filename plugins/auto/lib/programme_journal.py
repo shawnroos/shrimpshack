@@ -101,6 +101,9 @@ KINDS = (
     "denial_recorded",
     "code_captured",
     "code_capture_failed",
+    "operation_admitted",
+    "operation_settled",
+    "operation_uncertain",
 )
 
 _TOKEN_PATTERNS = [

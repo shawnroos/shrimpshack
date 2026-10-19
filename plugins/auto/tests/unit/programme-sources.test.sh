@@ -414,9 +414,21 @@ it "a failed start does not set the owner"
 check 'null' "$(field 'items["linear:AI-753"]["owner"]["session_id"]')"
 it "the failed start is journaled"
 has "no agent" "$(journal_last worker_start_failed)"
+ATTEMPT_FAILED="$(jq_py 'd["attempt"]' | tr -d '"')"
+it "a launch with no agent appearing stays uncertain, not failed"
+check '"uncertain"' "$(jq_py 'd["operation_state"]')"
 
 : > "$CALLS"
 FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-753 -- --name shot-kinds --handoff /tmp/h.md
+it "a second start while the first launch is uncertain is refused by default"
+check 1 "$CODE"
+it "the refusal names the uncertain attempt"
+has "$ATTEMPT_FAILED" "$OUT"
+it "the refused retry never calls spinoff"
+lacks "spinoff" "$(calls)"
+
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-753 --despite "$ATTEMPT_FAILED" -- --name shot-kinds --handoff /tmp/h.md
 it "start-worker succeeds when the agent appears"
 check 0 "$CODE"
 SID_OK="$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--session-id ([^ ]+).*/\1/')"

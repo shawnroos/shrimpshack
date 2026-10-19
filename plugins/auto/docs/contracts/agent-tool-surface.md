@@ -203,6 +203,24 @@ session.
   clones, shallow history, git lock files or a source that changes during capture
   refuse it. `--check` says whether the receipt still covers the source as it is
   now; it deletes nothing, and a receipt is never deletion approval.
+- **External actions and recovery**: `start-worker` and `prompt-item` commit an
+  admission (the target, the owner epoch and a digest of the request) before
+  spinoff or herdr runs, re-read authority just before the call, and commit the
+  receipt after it. An admission whose outcome is unknown stays uncertain: a
+  later start or prompt on that item refuses unless it names the attempt with
+  `--despite`, and the attempt stays open either way. A launch is never retried
+  just because its agent is missing. `reconcile-operations` (the current driving
+  session, also after `end`) settles an admitted launch when a live agent reports
+  its minted session; a prompt has no delivery receipt, so it stays uncertain.
+  A receipt that arrives after end or a handover is kept on the operation and
+  changes no ownership. `recover` (any session, read-only) prints the replacement
+  PM's packet from one committed revision: pending decisions, decisions with their
+  reasons and binding limits, requirements and acceptance, open actions, retained
+  results, evidence limits, uncertain actions, and holds. Long text is cut in the
+  packet and comes back in full with `recover --get <id>`. A held authority prints
+  a hold and exits 1; a missing retained result holds its item and refuses
+  dispatch for it. `--rebuild-projections` rewrites only the exports and the
+  view. The packet is context, never approval.
 - **Working model and sources**: `set-now` records what the PM is doing now;
   `queue` adds a next action (a worker start is action start_worker with
   `--item`) or removes one; `record-tested-build` stores the tested build's

@@ -156,6 +156,8 @@ def _move(run, new_sid, kind, sid, extra, cites=None) -> dict:
         seen["moved"] = {"from_session": rec.get("driving_session_id"), "to_session": new_sid,
                          "leases": [key for key, _ in leases]}
         rec["driving_session_id"] = new_sid
+        programme = rec.setdefault("programme", {})
+        programme["owner_epoch"] = int(programme.get("owner_epoch") or 0) + 1
         rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
         seen["moved"].update(extra(seen["moved"], rec))
 

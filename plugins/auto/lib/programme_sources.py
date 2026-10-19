@@ -33,6 +33,7 @@ programme_exec = load_lib_module("programme_exec")
 programme_tracker = load_lib_module("programme_tracker")
 programme_tasks = load_lib_module("programme_tasks")
 programme_plans = load_lib_module("programme_plans")
+programme_recovery = load_lib_module("programme_recovery")
 session_registry = load_lib_module("session_registry")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
@@ -506,8 +507,8 @@ def await_agent(session_id, pane, before, wait) -> dict:
         time.sleep(POLL_SECONDS)
 
 
-def launch_worker(spinoff, extra) -> dict:
-    session_id = str(uuid.uuid4())
+def launch_worker(spinoff, extra, session_id=None) -> dict:
+    session_id = session_id or str(uuid.uuid4())
     before = {r.get("pane_id") for r in agent_rows() or []}
     run = bounded([spinoff] + list(extra) + ["--session-id", session_id],
                   _seconds(SPINOFF_TIMEOUT_ENV, SPINOFF_TIMEOUT))
@@ -515,26 +516,75 @@ def launch_worker(spinoff, extra) -> dict:
     match = _PANE_LINE.search(output)
     pane = programme_sanitize.token(match.group(1)) if match else None
     out = {"session_id": session_id, "pane": pane, "terminal_id": None, "spinoff_exit": run["code"],
-           "ok": False, "reason": None, "output_tail": programme_sanitize.clean(output[-400:], 400)}
+           "ok": False, "reason": None, "output_tail": programme_sanitize.clean(output[-400:], 400),
+           "outcome": "failed"}
     if not run["ran"] or run["code"] != 0:
         out["reason"] = _failure(run, "spinoff")
+        if not run["ran"]:
+            out["outcome"] = "uncertain" if run["timed_out"] else "not_executed"
         return out
     found = await_agent(session_id, pane, before, _seconds(WORKER_WAIT_ENV, WORKER_WAIT))
     if found["row"] is None:
-        out["reason"] = found["reason"]
+        out.update(reason=found["reason"], outcome="uncertain")
         return out
-    out.update(ok=True, pane=programme_sanitize.token(found["row"].get("pane_id")) or pane,
+    out.update(ok=True, outcome="completed", pane=programme_sanitize.token(found["row"].get("pane_id")) or pane,
                terminal_id=programme_sanitize.token(found["row"].get("terminal_id")))
     return out
+
+
+def _launch_assign(started, session_name):
+    def assign(prog, op):
+        item = prog["items"][programme_record._resolve(prog, op["item"])]
+        entry = {k: started.get(k) for k in ("session_id", "pane", "terminal_id", "ok", "reason", "spinoff_exit")}
+        entry.update(at=run_record_core.now_iso(), attempt=op["attempt"])
+        item.setdefault("starts", []).append(entry)
+        if started.get("ok"):
+            programme_record._set_owner(item, {"session": started["session_id"], "pane": started["pane"],
+                                               "terminal-id": started["terminal_id"],
+                                               "session-name": session_name})
+        item["history"].append({"at": entry["at"], "kind": "started" if started.get("ok") else "start_failed",
+                                "session_id": started["session_id"]})
+        return True
+    return assign
+
+
+def _reconcile_assign(target):
+    return _launch_assign(dict(target, ok=True, reason=None, spinoff_exit=None), None)
+
+
+def _settled(host, run_id, home, op, payload_kind, payload, outcome, assign=None, source="dispatcher"):
+    sid = driver_session_id()
+    done = programme_recovery.settle(run_id, home, op["attempt"], outcome=outcome,
+                                     facts={k: payload.get(k) for k in ("reason", "pane", "terminal_id",
+                                                                         "session_id")},
+                                     source=source, sid=sid, journal_kind=payload_kind, payload=payload,
+                                     assign=assign)
+    host.refresh_view(run_id, home)
+    return done
+
+
+def driver_session_id():
+    return load_lib_module("driver_session").driving_session_id()
+
+
+def _replay(host, run_id, op) -> int:
+    state = op.get("state")
+    host._emit({"ok": state == "completed", "run": run_id, "replayed": True, "attempt": op.get("attempt"),
+                "operation_state": state, "receipt": op.get("receipt")})
+    if state in programme_recovery.OPEN:
+        raise host.ProgrammeError(f"{op.get('attempt')} was admitted earlier and is {state}; it is not "
+                                  "invoked again. Run reconcile-operations")
+    return 0 if state == "completed" else 1
 
 
 def _h_start_worker(host, argv):
     argv = list(argv)
     cut = argv.index("--", 1) if "--" in argv[1:] else len(argv)
     own, extra = argv[:cut], argv[cut + 1:]
-    positional, opts = host._parse(own, values=("run", "session-name"))
+    positional, opts = host._parse(own, values=("run", "session-name"), multi=("despite",))
     if len(positional) != 1 or not extra:
-        raise ValueError("usage: start-worker <item> [--session-name <name>] -- <spinoff arguments>")
+        raise ValueError("usage: start-worker <item> [--session-name <name>] [--despite <attempt>]... "
+                         "-- <spinoff arguments>")
     if any(a == "--session-id" or a.startswith("--session-id=") for a in extra):
         raise host.ProgrammeError("start-worker mints the session id; do not pass --session-id")
     item_id = programme_record.check_item_id(positional[0])
@@ -550,22 +600,26 @@ def _h_start_worker(host, argv):
     spinoff = spinoff_path()
     if not spinoff:
         raise host.ProgrammeError("spinoff.sh not found beside this plugin or on PATH")
-    started = launch_worker(spinoff, extra)
-
-    def change(prog, prompt, rec):
-        item = prog["items"][programme_record._resolve(prog, item_id)]
-        entry = {k: started[k] for k in ("session_id", "pane", "terminal_id", "ok", "reason", "spinoff_exit")}
-        entry["at"] = run_record_core.now_iso()
-        item.setdefault("starts", []).append(entry)
-        if started["ok"]:
-            programme_record._set_owner(item, {"session": started["session_id"], "pane": started["pane"],
-                                               "terminal-id": started["terminal_id"],
-                                               "session-name": opts.get("session-name")})
-        item["history"].append({"at": entry["at"], "kind": "started" if started["ok"] else "start_failed",
-                                "session_id": started["session_id"]})
-        return dict(item=item["id"], started=started["ok"], **{k: v for k, v in started.items() if k != "ok"})
-
-    host._write(opts, change, lambda p: "worker_started" if p["started"] else "worker_start_failed")
+    op = programme_recovery.admit(host, opts, run_id, home, kind="launch", item=key,
+                                  target={"session_id": str(uuid.uuid4())}, request={"spinoff": extra},
+                                  expect_epoch=programme_recovery.owner_epoch(programme),
+                                  despite=opts.get("despite") or ())
+    if op["replayed"]:
+        return _replay(host, run_id, op)
+    reason = programme_recovery.recheck(run_id, home, op)
+    if reason:
+        _settled(host, run_id, home, op, "worker_start_failed",
+                 {"item": key, "started": False, "reason": reason, "session_id": op["target"]["session_id"]},
+                 "not_executed")
+        raise host.ProgrammeError(f"start refused before spinoff ran: {reason}")
+    started = launch_worker(spinoff, extra, op["target"]["session_id"])
+    programme_recovery._pause(run_id, "after_invoke")
+    payload = dict(item=key, started=started["ok"], **{k: v for k, v in started.items() if k != "ok"})
+    done = _settled(host, run_id, home, op, "worker_started" if started["ok"] else "worker_start_failed",
+                    payload, started["outcome"], assign=_launch_assign(started, opts.get("session-name")))
+    host._emit(dict({"ok": True, "run": run_id, "kind": "worker_started" if started["ok"] else
+                     "worker_start_failed", "attempt": op["attempt"], "operation_state": done["state"],
+                     "late": not done["receipt"]["authority_current"]}, **payload))
     return 0 if started["ok"] else 1
 
 
@@ -615,9 +669,9 @@ def check_target(owner, record) -> dict:
 
 
 def _h_prompt_item(host, argv):
-    positional, opts = host._parse(argv, values=("run",))
+    positional, opts = host._parse(argv, values=("run",), multi=("despite",))
     if len(positional) != 2:
-        raise ValueError("usage: prompt-item <item> <text>")
+        raise ValueError("usage: prompt-item <item> <text> [--despite <attempt>]...")
     item_id = programme_record.check_item_id(positional[0])
     text = programme_sanitize.clean(positional[1], PROMPT_CAP, keep_newlines=True)
     if not text or text.startswith("-"):
@@ -629,36 +683,87 @@ def _h_prompt_item(host, argv):
     refusal = programme_context.unsafe_reason(programme, key, "prompt_item")
     if refusal:
         raise host.ProgrammeError(refusal)
-    target = check_target(programme["items"][key]["owner"], record)
+    owner = programme["items"][key]["owner"]
+    target = check_target(owner, record)
     payload = {"item": key, "pane": target["pane"], "reported_session": target["reported"],
-               "owner_session": programme["items"][key]["owner"].get("session_id")}
+               "owner_session": owner.get("session_id")}
     if not target["ok"]:
         payload["reason"] = target["reason"]
         programme_journal.append(run_id, "prompt_refused", sid, payload)
         raise host.ProgrammeError(f"prompt refused: {target['reason']}")
+    op = programme_recovery.admit(
+        host, opts, run_id, home, kind="send", item=key,
+        target={"pane": target["pane"], "terminal_id": owner.get("terminal_id"),
+                "session_id": owner.get("session_id")},
+        request={"text_digest": programme_recovery._sha(text)},
+        expect_epoch=programme_recovery.owner_epoch(programme), despite=opts.get("despite") or ())
+    if op["replayed"]:
+        return _replay(host, run_id, op)
+    reason = programme_recovery.recheck(run_id, home, op)
+    if reason is None:
+        live = check_target(owner, record)
+        reason = None if live["ok"] else live["reason"]
+    if reason:
+        payload["reason"] = reason
+        _settled(host, run_id, home, op, "prompt_refused", payload, "not_executed")
+        raise host.ProgrammeError(f"prompt refused: {reason}")
     sent = _herdr(["agent", "prompt", target["pane"], text])
+    programme_recovery._pause(run_id, "after_invoke")
     ok = sent["ran"] and sent["code"] == 0
+    outcome = "completed" if ok else ("failed" if sent["ran"] else
+                                      ("uncertain" if sent["timed_out"] else "not_executed"))
     payload.update(sent=ok, session_unknown=target["session_unknown"], owner_source=target["owner_source"],
                    text=programme_journal.redact(programme_sanitize.clean(text, QUOTE_CAP)),
                    error=None if ok else _failure(sent, "herdr agent prompt"))
-    programme_journal.append(run_id, "prompt_sent", sid, payload)
-    host._emit(dict({"ok": ok, "run": run_id, "kind": "prompt_sent"}, **payload))
+    done = _settled(host, run_id, home, op, "prompt_sent", payload, outcome)
+    host._emit(dict({"ok": ok, "run": run_id, "kind": "prompt_sent", "attempt": op["attempt"],
+                     "operation_state": done["state"]}, **payload))
     return 0 if ok else 1
+
+
+def _h_reconcile(host, argv):
+    _, opts = host._parse(argv, values=("run",))
+    run_id = programme_home.check_run_id(opts.get("run") or host._run_from_leases(driver_session_id()))
+    home = programme_home.home_path(run_id)
+    record = run_record_core.read_run_record(home, run_id)
+    sid = driver_session_id()
+    if not session_registry.caller_drives(record, sid):
+        raise host.ProgrammeError("only the programme's current driving session reconciles its operations")
+    report = programme_recovery.reconcile(run_id, home, agent_rows=agent_rows, session_of=session_of,
+                                          assign_launch=_reconcile_assign, sid=sid)
+    host.refresh_view(run_id, home)
+    host._emit({"ok": True, "run": run_id, "operations": report,
+                "unreconciled": programme_recovery.unreconciled_for(run_id)})
+    return 0
+
+
+def _h_recover(host, argv):
+    return programme_recovery.recover_verb(host, argv)
 
 
 _SPECS = (
     ("sweep", _h_sweep, "[--record-sources] [--run <id>]",
      "--record-sources from any session but the driving one. Without it, sweep writes nothing. "
      "A source the agreement's sources term turns off is not read and reports state off."),
-    ("start-worker", _h_start_worker, "<item> [--session-name <name>] [--run <id>] -- <spinoff arguments>",
-     "an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments."),
+    ("start-worker", _h_start_worker,
+     "<item> [--session-name <name>] [--despite <attempt>]... [--run <id>] -- <spinoff arguments>",
+     "an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments; an "
+     "earlier launch on the item that is admitted or uncertain, unless named with --despite; ended or "
+     "moved ownership between admission and the launch."),
     ("prompt-item", _h_prompt_item, "<item> <text> [--run <id>]",
      "an item with no pane; a driver's pane or a tracker pane; a pane whose terminal changed; a pane "
      "with no live agent; a pane whose reported session is not the item's owner. Refusals are "
-     "journaled."),
+     "journaled. An earlier prompt to the item that is admitted or uncertain refuses unless named with "
+     "--despite."),
+    ("reconcile-operations", _h_reconcile, "[--run <id>]",
+     "any session but the current driving one. Works after end. Settles an admitted launch when a live "
+     "agent reports its minted session; leaves every other admitted action uncertain."),
+    ("recover", _h_recover, "[--get <id>] [--rebuild-projections] [--run <id>]",
+     "an unknown id. Read-only unless --rebuild-projections; any session may read. A held authority prints "
+     "a hold and exits 1, never an empty programme."),
 )
 
 
 def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects, reads=name == "recover")
             for name, handler, args, rejects in _SPECS}

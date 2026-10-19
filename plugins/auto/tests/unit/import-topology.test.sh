@@ -122,10 +122,14 @@
 #                          programme_predicate, programme_record, programme_sanitize,
 #                          programme_protocol, driver_session, verification;
 #                          programme_artifacts [lazy]
+#   programme_recovery   → run_record_core, programme_home, programme_journal,
+#                          programme_authority, programme_context, programme_artifacts;
+#                          driver_session [lazy]. Live herdr reads are passed in by
+#                          programme_sources, so it never loads programme_sources.
 #   programme_sources    → run_record_core, programme_home, programme_journal,
 #                          programme_sanitize, programme_record, programme_context, programme_exec,
 #                          programme_tracker, programme_tasks, programme_plans,
-#                          session_registry
+#                          programme_recovery, session_registry; driver_session [lazy]
 #   programme_view       → programme_home, programme_predicate, programme_sanitize,
 #                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
@@ -449,7 +453,8 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_view.py run_record_evidence.py programme_lifecycle.py \
            programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
            programme_store.py programme_authority.py programme_import.py \
-           programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py; do
+           programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
+           programme_recovery.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -487,7 +492,7 @@ else
 fi
 
 for _low in programme_store programme_authority programme_import programme_artifacts \
-            programme_gitio programme_preserve; do
+            programme_gitio programme_preserve programme_recovery; do
   it "${_low}.py does NOT load programme or a programme verb module"
   if loads_sibling "${_low}.py" "programme" || loads_sibling "${_low}.py" "programme_record" \
      || loads_sibling "${_low}.py" "programme_lifecycle"; then
@@ -496,6 +501,13 @@ for _low in programme_store programme_authority programme_import programme_artif
     pass
   fi
 done
+
+it "programme_recovery.py does NOT load programme_sources (the sources verbs load it)"
+if loads_sibling "programme_recovery.py" "programme_sources"; then
+  fail "programme_recovery.py loading programme_sources closes a cycle; take live reads as callables"
+else
+  pass
+fi
 
 it "programme_journal.py and programme_store.py load each other only lazily"
 if grep -qE '^[a-z_]+ = load_lib_module\("programme_(authority|store)"\)' "$LIB/programme_journal.py" \
