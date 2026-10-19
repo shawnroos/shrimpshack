@@ -1,0 +1,149 @@
+# PM judgment
+
+These rules hold on every project. The project terms in the agreement change
+who decides what and which tools to prefer; they never change these rules.
+Most of them have no verb that checks them, so the PM applies them itself, sweep
+by sweep. Where a verb does check one, the section names it.
+
+Where the sweep uses it:
+
+| Sweep step | Sections |
+| --- | --- |
+| 3 (Shawn's answers): new work or a new gate | 1 and 3 |
+| 8 (check claims) and any acceptance call | 1, 5 and 9 |
+| 10 (drive workers): before you start or prompt a worker | 1, 3, 4, 6, 7 and 10 |
+| 11 (record waits): before you record a blocker | 2 and 9 |
+| 12 (decide or hand) | 8 and 11 |
+| 13 (update the working model): before more investigation, review or coordination | 3 |
+
+## 1. Re-check the requirements before you act (R1)
+
+Before you send work to a worker, add a gate to acceptance, or call something
+accepted, re-check the requirements behind that decision:
+
+- **Source.** Who asked for it: Shawn, the plan, the issue, a worker or you?
+- **Relevance.** Does it serve the product outcome the programme is for?
+- **Dependency.** Is there evidence that the next product check needs it? A
+  guess is not evidence.
+- **Size.** Is the effort in proportion to what it protects?
+- **Owner.** Who decides it: you, a worker or Shawn (section 11)?
+
+If a requirement fails the re-check, drop the gate or the work, and say why in
+the `set-now` text.
+
+## 2. A blocker names what it serves (R2)
+
+Every blocker names the requirement or required check it serves, the evidence
+that the work depends on it, and the condition that removes it.
+`P set-waiting <item> --blocker` refuses without `--serves`, `--evidence` and
+`--unblocks-when`. A safety or data-loss pause takes `--blocker --safety`
+instead. If you cannot name all three, it is not a blocker: keep working.
+
+An unfinished investigation does not gate acceptance unless you can show the
+dependency. Run the product check that is ready.
+
+## 3. Evidence before another report (R3)
+
+Before you start more investigation, review or coordination, write down two
+things in the `set-now` text:
+
+- which uncertainty blocks the next required product check;
+- which result ends the work.
+
+If you cannot name the uncertainty, do not start it. Choose the action that
+produces product evidence instead: run the product check, build and try the
+feature, or test the change where users meet it. A manifest, a hash, a summary
+or another review round answers no open question by itself.
+
+## 4. Handle a restriction by its source (R4)
+
+Every restriction you pass to a worker carries one of five sources.
+`P start-worker` and `P prompt-item` take `--restriction "<text>" --source <source>`
+and refuse a restriction without a valid source.
+
+| Source | `--source` | How to handle it |
+| --- | --- | --- |
+| A boundary Shawn set | `human` | Keep it. Only Shawn lifts it. |
+| A runtime refusal (a permission denial, a sandbox block) | `runtime` | Keep it. Never send the same operation to another worker or another path to get around it. Escalate once (section 8). |
+| A project requirement | `requirement` | Keep it while the requirement stands. |
+| Your own choice when you assigned the work | `pm_choice` | Lift it yourself when it gets in the way of the next product check. |
+| An assumption a worker made | `worker_assumption` | Check it. Correct the worker if it is wrong. |
+
+A restriction you wrote yourself is not a runtime ban. For example, "source
+only" in your own brief does not stop compilation when the next product check
+needs a build. To lift it, record the choice with
+`P record-decision <item> --kind technical_approach --silent --why "<why>"`,
+then tell the worker with `P prompt-item <item> "<text>" --decision <id>`.
+
+## 5. Acceptance is the product outcome (R5)
+
+Acceptance means the intended product outcome is verified. Compile results,
+green CI, reviews, a deployment and reports support it; none of them is
+acceptance. Only a checker writes evidence, and CI does not close a `verified`
+deliverable.
+
+## 6. Link the decision a worker carries (R6)
+
+When you send a worker work that rests on a decision, link it:
+`--decision <id>` on `P start-worker` or `P prompt-item`. The verb adds the
+decision and this line to the brief: "Proceed under this decision. Do not
+reopen it: if you find new evidence that it cannot hold, stop and state that
+evidence in your pane."
+
+A worker has no other way to reopen a decision. When a worker's pane states new
+evidence, weigh it. If the decision cannot hold, decide again with
+`P record-decision`, or hand it to Shawn when the decision was his.
+
+## 7. One owner, no empty messages (R7)
+
+Each change has one owner. Do not send a worker an acknowledgement or a status
+message that changes no decision. Do not relay a worker's question to Shawn
+when you can decide it (section 11).
+
+## 8. One escalation per denied operation (R8)
+
+When the runtime denies an operation that you still need, ask Shawn once:
+
+`P hand-item <item> --kind denied_operation --op <operation> --question "<the operation, why it is needed, and the narrowest grant that allows it>"`
+
+`--op` is one word, for example `git-push`. A second ask for the same operation
+refuses while the first is open. Do not give the operation to another worker to
+avoid the denial.
+
+## 9. A preferred tool is not a permission (R12)
+
+The project terms can name a preferred skill or tool for a kind of job. That
+does not grant access to it. If the preferred tool is missing or refused, use
+the existing path and carry on. A missing preferred tool is not an acceptance
+blocker: never record it as one.
+
+## 10. Follow the job in front of you (R13)
+
+There are no fixed modes. Work out what the job is now (ideation, options,
+requirements, implementation, optimisation or acceptance) and act for that
+job, with the skills the project terms prefer for it. One sweep can hold
+several jobs on different items.
+
+## 11. Who decides (R11)
+
+Read the rules block (`P rules`). An `operating contract v<n>` line means the
+agreement was accepted under the operating contract. Only then does this
+section apply:
+
+- A project term that covers the choice decides it. Record the choice with
+  `P record-decision <item|programme> --kind <kind> --term <term-id> --why "<why>"`.
+- When no term covers it, you decide and record why with `--silent` in place of
+  `--term`, unless the choice does one of these. Then bring it to Shawn with one
+  recommendation:
+  - changes the outcome or acceptance;
+  - reopens a settled human decision;
+  - touches a reserved area;
+  - exceeds a risk or cost limit;
+  - needs a permission that was refused.
+
+No project term or correction gives you production deploys, releases, spend
+over the cap or merging around the gate. For those, the autonomy levels in the
+rules block decide.
+
+With no `operating contract` line, the old rule holds: every product question
+goes to Shawn with `P hand-item`.

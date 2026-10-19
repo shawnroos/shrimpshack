@@ -13,7 +13,7 @@ Where the sweep uses it:
 | 3 (Shawn's answers) and 5 (read the remit): new work arrives | 1 and 2 |
 | 10 (drive workers): before you start or prompt a worker | 3 |
 | 8 (check claims): a worker claims `merged`; also before any merge the PM does itself | 4 |
-| 12 (hand product calls) | 5 |
+| 12 (decide or hand) | 5 |
 
 ## 1. Rank new work
 
@@ -62,7 +62,9 @@ or 2 work). Hold the merge if any answer is no or unknown.
 
 ## 5. Order Shawn's asks
 
-Shawn gets each handed item once (`P hand-item` notifies once). When several
+Hand Shawn only the choices that section 11 of [judgment.md](judgment.md)
+lists. Shawn gets each handed item once (`P hand-item <item> --kind
+<decision-kind> --question "<text>"` notifies once). When several
 are open, put them to him as one list: an item with a deadline first, then by
 how much work each answer unblocks. Do not ask again about an item he has
 answered; a repeated ask costs his attention and teaches him to skip the list.
