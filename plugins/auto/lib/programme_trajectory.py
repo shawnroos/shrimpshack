@@ -168,9 +168,10 @@ def _h_record_trajectories(host, argv):
         return {"stored": stored, "changed": changes, "skipped": skipped, "at": at}
 
     def after(payload):
+        # A non-empty return is journaled as effects_recorded, so an unchanged sweep must return nothing.
         for row in payload["changed"]:
             programme_journal.append(run_id, "trajectory_changed", sid, row)
-        return {"changed": [row["item"] for row in payload["changed"]]}
+        return {"changed": [row["item"] for row in payload["changed"]]} if payload["changed"] else None
 
     return host._write(opts, change, "trajectory_changed", journal=False, after=after)
 

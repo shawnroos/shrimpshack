@@ -271,6 +271,48 @@ OUT="$("$PY" "$PROG" status --run "$QUIET" --json 2>&1)"
 it "an unwatched wait with no stopped_unwatched entry carries no stopped mark"
 check "False False" "$("$PY" -c 'import json,sys; i=json.loads(sys.argv[1])["model"]["items"][0]; print("stopped unwatched" in i["marks"], i["needs_shawn"])' "$OUT")"
 
+BLOCKED="$(new_run w6)"
+run_py "$BLOCKED" <<'EOF' >/dev/null
+def seed(p):
+    block = ph.new_item("linear:AI-60", "Blocked on infra", state="waiting")
+    block["waiting_on"] = {"who": "team-infra", "watcher": None, "reporter": "team-infra", "kind": "blocker",
+                           "trace_id": "tr-1", "serves": "merged check on AI-60",
+                           "evidence": "runner log tr-1 fails in infra code", "unblocks_when": "infra ships the fix"}
+    pause = ph.new_item("linear:AI-61", "Paused for safety", state="waiting")
+    pause["waiting_on"] = {"who": "shawn", "watcher": None, "reporter": "shawn", "kind": "blocker",
+                           "trace_id": "tr-2", "safety": True}
+    legacy = ph.new_item("linear:AI-62", "Blocker from before the fields", state="waiting")
+    legacy["waiting_on"] = {"who": "team-infra", "watcher": None, "reporter": "team-infra", "kind": "blocker",
+                            "trace_id": "tr-3"}
+    p["items"] = {i["id"]: i for i in (block, pause, legacy)}
+mutate(args[0], seed)
+EOF
+OUT="$("$PY" "$PROG" status --run "$BLOCKED" 2>&1)"
+it "the view shows what a blocker serves, its evidence and its unblock condition"
+has "blocker: serves merged check on AI-60 · evidence runner log tr-1 fails in infra code · unblocks when infra ships the fix" "$OUT"
+it "the view shows a safety pause as one"
+has "blocker: safety or data-loss pause" "$OUT"
+it "a blocker recorded before the fields says they are missing"
+has "blocker: no serves, evidence or unblock condition recorded" "$OUT"
+OUT="$("$PY" "$PROG" status --run "$BLOCKED" --json 2>&1)"
+it "the json model carries the three blocker fields"
+check "merged check on AI-60|runner log tr-1 fails in infra code|infra ships the fix" "$("$PY" -c 'import json,sys; w=json.loads(sys.argv[1])["model"]["items"][0]["waiting_on"]; print("|".join(w[k] for k in ("serves","evidence","unblocks_when")))' "$OUT")"
+
+RESTRICTED="$(new_run w12)"
+run_py "$RESTRICTED" <<'EOF' >/dev/null
+def seed(p):
+    item = ph.new_item("linear:AI-63", "Shot kinds")
+    item["restrictions"] = [{"text": "source only", "source": "pm_choice", "at": core.now_iso(), "via": "prompt-item"}]
+    p["items"] = {item["id"]: item}
+mutate(args[0], seed)
+EOF
+OUT="$("$PY" "$PROG" status --run "$RESTRICTED" 2>&1)"
+it "the view shows an item's restriction with its source"
+has "restriction (pm_choice): source only" "$OUT"
+OUT="$("$PY" "$PROG" status --run "$RESTRICTED" --json 2>&1)"
+it "the json model carries the restriction and its source"
+check "source only|pm_choice" "$("$PY" -c 'import json,sys; r=json.loads(sys.argv[1])["model"]["items"][0]["restrictions"][0]; print(r["text"] + "|" + r["source"])' "$OUT" 2>&1)"
+
 WATCHED="$(new_run w8)"
 run_py "$WATCHED" <<'EOF' >/dev/null
 def seed(p):
@@ -588,6 +630,142 @@ check "[]|5|[]|None|3" "$(got empty)"
 it "a record with no programme block still builds"
 check "[]|False" "$(got no_block)"
 
+TERMS_RUN="$(new_run w10)"
+TERMS_HOME="${CLAUDE_AUTO_DATA_DIR}/programmes/${TERMS_RUN}"
+run_py "$TERMS_RUN" <<'EOF' >/dev/null
+run = args[0]
+def seed(p):
+    a = p["agreement"]
+    a["accepted"] = {"at": "2026-10-01T00:00:00Z", "prompt_id": "p000000", "quote": "go"}
+    a["contract_version"] = 1
+    a["project_terms"] = [
+        {"id": "t000001", "area": "test depth", "value": "unit tests only", "reserved": False,
+         "source": "kickoff chat", "set_by": "shawn", "history": []},
+        {"id": "t000002", "area": "release", "value": "Shawn ships releases", "reserved": True,
+         "source": "kickoff chat", "set_by": "proposal", "history": []},
+    ]
+    a["corrections"] = [{"id": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm",
+                         "previous": None, "prompt_id": "p000009",
+                         "quote": "you pick the tool, key [redacted]", "pm_reading": "PM picks tools",
+                         "choices_before": 3, "undone": None}]
+    p["decisions"] = [
+        {"id": "d000001", "at": "2026-10-02T00:00:00Z", "kind": "technical_approach", "by": "pm",
+         "item": "programme", "term": "t000001", "silent": False, "why": "unit tests cover the parser"},
+        {"id": "d000002", "at": "2026-10-02T01:00:00Z", "kind": "work_sequencing", "by": "pm",
+         "item": "programme", "term": "t000002", "silent": False, "why": "hold the release for Shawn"},
+        {"id": "d000003", "at": "2026-10-02T02:00:00Z", "kind": "tool_choice", "by": "pm",
+         "item": "programme", "term": None, "silent": True, "why": "picked ripgrep"},
+    ]
+mutate(run, seed)
+pj.append(run, "project_term_edited", "sess-pm",
+          {"term_id": "t000001", "area": "test depth", "value": "unit tests only", "reserved": False,
+           "source": "kickoff chat", "accepted": False})
+pj.append(run, "pm_decided", "sess-pm", {"decision_id": "d000001", "term": "t000001"})
+pj.append(run, "term_corrected", "sess-pm",
+          {"correction": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm", "previous": None,
+           "pm_reading": "PM picks tools", "prompt_id": "p000009",
+           "quote": "you pick the tool, key [redacted]"}, cites=["p000009"])
+EOF
+
+snapshot() { find "$1" -type f -exec shasum {} + 2>/dev/null | sort; }
+
+"$PY" "$PROG" status --run "$TERMS_RUN" >/dev/null 2>&1
+BEFORE="$(snapshot "$TERMS_HOME")"
+TERMS_OUT="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms 2>&1)"
+TERMS_JSON="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms --json 2>&1)"
+AFTER="$(snapshot "$TERMS_HOME")"
+
+it "status --terms writes nothing to the run record, journal or views"
+check "$BEFORE" "$AFTER"
+
+it "status --terms lists both project terms"
+has "t000001 test depth: unit tests only (source kickoff chat)" "$TERMS_OUT"
+it "status --terms marks a reserved term"
+has "t000002 release: Shawn ships releases (reserved for Shawn; source kickoff chat)" "$TERMS_OUT"
+
+it "each decision appears under the term it used"
+check "t000001:d000001|t000002:d000002|None:d000003" "$("$PY" -c '
+import json,sys
+t=json.loads(sys.argv[1])["terms"]
+print("|".join(str(g["term"]) + ":" + d["id"] for g in t["by_term"] for d in g["decisions"]))' "$TERMS_JSON" 2>&1)"
+
+it "a silent decision appears under no term"
+has "$(printf '  no term\n    d000003 tool_choice by pm: picked ripgrep')" "$TERMS_OUT"
+
+it "a term's decisions follow its heading"
+has "$(printf '  t000001 test depth: unit tests only\n    d000001 technical_approach by pm: unit tests cover the parser')" "$TERMS_OUT"
+
+it "the correction shows with its source and redacted quote"
+has "term_corrected c000001: tool_choice now decided by pm (was the contract default) · source typed prompt p000009 · Shawn: \"you pick the tool, key [redacted]\"" "$TERMS_OUT"
+
+it "the secret in the quote never reaches the page"
+lacks "sk-abcdefghijklmnopqrstuvwx" "$TERMS_OUT$TERMS_JSON"
+
+it "a pre-acceptance edit shows its source"
+has "project_term_edited t000001: test depth: unit tests only · source kickoff chat" "$TERMS_OUT"
+
+it "recent changes leave out rows that change no term"
+lacks "pm_decided" "$TERMS_OUT"
+
+it "status --terms prints only the terms section"
+lacks "Who waits on whom" "$TERMS_OUT"
+
+it "status --terms --json carries the same rows as the text"
+check "same" "$("$PY" - "$TERMS_JSON" "$TERMS_OUT" <<'EOF'
+import json, sys
+rows = json.loads(sys.argv[1])["rows"]
+print("same" if "\n".join(r["text"] for r in rows) == sys.argv[2] else "differs")
+EOF
+)"
+
+it "status --terms --json carries the change rows"
+check "term_corrected:p000009|project_term_edited:None" "$("$PY" -c '
+import json,sys
+t=json.loads(sys.argv[1])["terms"]
+print("|".join(c["kind"] + ":" + str(c["prompt_id"]) for c in t["changes"]))' "$TERMS_JSON" 2>&1)"
+
+it "the terms section in view.json matches status --terms --json"
+"$PY" "$PROG" set-now "Reading terms" --run "$TERMS_RUN" >/dev/null 2>&1
+check "same" "$("$PY" - "${TERMS_HOME}/views/view.json" "$TERMS_JSON" <<'EOF'
+import json, sys
+print("same" if json.load(open(sys.argv[1]))["model"]["terms"] == json.loads(sys.argv[2])["terms"] else "differs")
+EOF
+)"
+
+FULL_OUT="$("$PY" "$PROG" status --run "$TERMS_RUN" 2>&1)"
+it "the stamped status page shows the operating contract under rules in force"
+has "operating contract v1: when the terms are silent the PM decides and records why" "$FULL_OUT"
+it "the stamped status page lists the reserved project term in the contract"
+has "reserved for Shawn t000002 release: Shawn ships releases" "$FULL_OUT"
+it "the full status page does not include the terms section"
+lacks "Recent term changes" "$FULL_OUT"
+
+it "an unstamped programme's status page shows no operating contract"
+lacks "operating contract" "$("$PY" "$PROG" status --run "$QUIET" 2>&1)"
+
+run_py "$TERMS_RUN" <<'EOF' >/dev/null
+for n in range(25):
+    pj.append(args[0], "project_term_edited", "sess-pm",
+              {"term_id": "t000001", "area": "test depth", "value": f"value {n}", "reserved": False,
+               "source": "kickoff chat", "accepted": False})
+EOF
+CAP_JSON="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms --json 2>&1)"
+it "recent term changes stop at 20 rows, newest first"
+check "20|test depth: value 24|27" "$("$PY" -c '
+import json,sys
+t=json.loads(sys.argv[1])["terms"]
+print(len(t["changes"]), t["changes"][0]["text"], t["changes_total"], sep="|")' "$CAP_JSON" 2>&1)"
+it "the capped page says how many changes it left out"
+has "7 older changes not shown" "$("$PY" "$PROG" status --run "$TERMS_RUN" --terms 2>&1)"
+
+it "the slash command form status <run> terms prints the terms page"
+has "Recent term changes" "$("$PY" "$PROG" status "$TERMS_RUN terms" 2>&1)"
+it "a bare terms word selects the terms page"
+has "Decisions by term" "$("$PY" "$PROG" status "terms" --run "$TERMS_RUN" 2>&1)"
+
+it "status --terms on a programme with no terms says so"
+has "no project terms" "$("$PY" "$PROG" status --run "$QUIET" --terms 2>&1)"
+
 it "the mod reads the view format this module writes"
 FORMAT="$(run_py <<'EOF'
 print(load_lib_module("programme_view").VIEW_FORMAT)
@@ -603,6 +781,60 @@ check "../../mods/programme-view/register.tsx" "$("$PY" -c 'import json,sys; pri
 it "the mod's slash command does not share a name with a command or skill"
 NAME="$(sed -n "s/^ *name: '\(.*\)',$/\1/p" "${MOD}/register.tsx")"
 check "programme-view|absent" "${NAME}|$([ -e "${AUTO_ROOT}/commands/${NAME}.md" ] || [ -e "${AUTO_ROOT}/skills/${NAME}" ] && echo present || echo absent)"
+
+it "an empty programme renders an Acceptance section with no requirements"
+has "no requirements" "$("$PY" "$PROG" status --run "$QUIET" 2>&1)"
+
+ACC="$(new_run w11)"
+run_py "$ACC" <<'EOF' >/dev/null
+def seed(p):
+    browser = ph.new_item("herdr:browser", "Browser flow", now_iso="2026-10-01T00:00:00Z")
+    browser["matched_rule"] = ["fix-only"]
+    browser["deliverables"] = {"verified": {"result": "confirmed", "checked_at": "2026-10-05T00:00:00Z"}}
+    linux = ph.new_item("herdr:linux", "Linux probe", now_iso="2026-10-01T00:00:00Z")
+    p["items"] = {"herdr:browser": browser, "herdr:linux": linux}
+    p["context"] = {
+        "requirements": {"r-browser": [{"rev": 1, "text": "browser passes", "checks": ["herdr:browser=verified"],
+                                        "decision_id": None, "state": "accepted",
+                                        "accepted": {"at": "2026-10-04T00:00:00Z", "prompt_id": "p1"}},
+                                       {"rev": 2, "text": "browser and mobile pass",
+                                        "checks": ["herdr:browser=verified"], "decision_id": None,
+                                        "state": "pending_acceptance", "accepted": None, "delta": None}]},
+        "pauses": {"s9": {"risk": "data_loss", "reason": "the backfill may drop rows", "items": ["herdr:linux"],
+                          "state": "active"}},
+        "denials": [{"id": "x1", "tool": "Bash", "action": "start_worker", "reason": "permission denied",
+                     "item": "herdr:linux"}]}
+mutate(args[0], seed)
+EOF
+ACC_JSON="$("$PY" "$PROG" status --run "$ACC" --json 2>&1)"
+ACC_TEXT="$("$PY" "$PROG" status --run "$ACC" 2>&1)"
+acc_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); m=d["model"]; print(eval(sys.argv[2]))' "$ACC_JSON" "$1" "${2:-}" 2>&1; }
+
+it "the model carries the predicate's acceptance unchanged (one computation per build)"
+check "True" "$(run_py "$ACC" "$ACC_JSON" <<'EOF'
+pp = load_lib_module("programme_predicate")
+pv = load_lib_module("programme_view")
+rec = record(args[0])
+model = json.loads(args[1])["model"]
+status = pp.compute(rec, inbox_size=0)
+print(model["acceptance"] == pv._clean(status["acceptance"]))
+EOF
+)"
+it "status shows the satisfied requirement with its check result and the pending revision"
+has "r-browser rev 1: satisfied, revision 2 pending (herdr:browser=verified confirmed)" "$ACC_TEXT"
+it "status lists the open item no requirement gates on as a follow-up"
+has "follow-ups (no requirement gates on them): herdr:linux" "$ACC_TEXT"
+it "status shows the safety pause"
+has "safety pause s9 (data_loss): the backfill may drop rows" "$ACC_TEXT"
+it "status shows the denial"
+has "denied start_worker by Bash for herdr:linux: permission denied" "$ACC_TEXT"
+it "decisions for Shawn ask about the pending revision and the pause"
+check "context_pending:r-browser safety_pause:s9" \
+  "$(acc_q '" ".join(d["kind"] + ":" + (d.get("id") or d.get("pause") or "") for d in m["decisions_for_shawn"] if d["kind"] in ("context_pending", "safety_pause"))')"
+it "the header reports the pause as a stop reason"
+has "safety_pause" "$(acc_q 'm["programme"]["reasons"]')"
+it "status text is still the view rows, line for line"
+check "True" "$(acc_q '"\n".join(r["text"] for r in d["rows"]) == sys.argv[3]' "$ACC_TEXT")"
 
 echo "programme-view.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

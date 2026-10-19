@@ -2,13 +2,13 @@
 """PreCompact: mark each programme this session drives as compacted.
 
 While `<home>/.compact-flag` exists, the programme's write verbs refuse and print
-the rules in force until the PM runs `programme.py rules --ack`. Never blocks
-compaction. Always exits 0.
+the rules in force and the restored context until the PM runs `programme.py rules
+--ack`. The flag records the decision context digest at compaction, so an ack after
+that context changed refuses. Never blocks compaction. Always exits 0.
 """
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import sys
@@ -41,16 +41,13 @@ def driven_programmes(session_id) -> list:
     return load_lib_module("programme_home").driven_runs(session_id)
 
 
-def _set_flag(home, session_id, data) -> None:
-    body = json.dumps({
-        "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "session_id": session_id,
-        "trigger": data.get("trigger"),
-    })
-    flag = os.path.join(home, load_lib_module("programme_home").COMPACT_FLAG)
-    fd = os.open(flag, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(body + "\n")
+def _set_flag(hold, session_id, data) -> None:
+    resume = load_lib_module("programme_resume")
+    try:
+        digest = resume.context_digest(hold["run"], hold["record"]) if hold.get("record") else None
+    except Exception:
+        digest = None
+    resume.mark(hold["home"], session_id, data.get("trigger"), digest)
 
 
 def mark_compacted(raw) -> list:
@@ -59,7 +56,7 @@ def mark_compacted(raw) -> list:
     marked = []
     for hold in driven_programmes(sid):
         try:
-            _set_flag(hold["home"], sid, data)
+            _set_flag(hold, sid, data)
             marked.append(hold["run"])
         except OSError:
             continue

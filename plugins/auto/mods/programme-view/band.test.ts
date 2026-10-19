@@ -307,8 +307,8 @@ test('after a click Tab moves to the next task, Right to the next step, Left sto
   expect(await band.find({ type: 'Text', text: /Tab-1 › pane-1/, in: 'band' })).toBeDefined()
 })
 
-test('a format-2 view from before the upgrade still draws the band', async ($, on) => {
-  world(on, [task('1')], {}, 2)
+test('a format-1 view from before the upgrade still draws the band', async ($, on) => {
+  world(on, [task('1')], {}, 1)
   await opened($)
   const band = await mountBand($)
   expect(await band.find({ type: 'Text', text: /Owner history task 1/, in: 'band' })).toBeDefined()

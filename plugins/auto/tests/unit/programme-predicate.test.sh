@@ -502,6 +502,164 @@ EOF
 )"
 check "False ['all_steps_terminal', 'all_steps_terminal_global', 'blockers', 'gaps_open', 'iteration_pending', 'majors', 'met', 'minors']" "$OUT"
 
+# ── U3: acceptance is reported apart from done and may_stop ────────────────
+CTX_HELPERS='
+def req(rid, checks, accepted_at=None, state="accepted"):
+    return [{"rev": 1, "text": rid, "checks": checks, "decision_id": None, "state": state,
+             "accepted": {"at": accepted_at or ago(30), "prompt_id": "p1"} if state == "accepted" else None}]
+
+def with_context(rec, requirements=None, pauses=None, blockers=None):
+    rec["programme"]["context"] = {"requirements": requirements or {}, "pauses": pauses or {},
+                                   "blockers": blockers or {}}
+    return rec
+
+def confirmed_at(it, name, minutes):
+    it["deliverables"][name] = {"result": "confirmed", "checked_at": ago(minutes)}
+    return it
+
+def acceptance(out):
+    return {r["id"]: (r["state"], [c["result"] for c in r["checks"]]) for r in out["acceptance"]["requirements"]}
+'
+
+it "a record with no context reports empty acceptance and changes nothing else"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+out = show(record(done("linear:AI-1")))
+print(out["acceptance"]["requirements"], out["acceptance"]["followups"])
+EOF
+)"
+check "may_stop=True done=True reasons=
+[] []" "$OUT"
+
+it "AE7: a satisfied requirement and an open unrelated item: acceptance satisfied, the stop still held"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+browser = confirmed_at(item("herdr:browser"), "merged", 5)
+rec = with_context(record(browser, item("herdr:linux")),
+                   {"r-browser": req("r-browser", ["herdr:browser=merged"])})
+out = show(rec)
+print(acceptance(out), out["acceptance"]["followups"])
+EOF
+)"
+check "may_stop=False done=False reasons=open_item:herdr:browser,open_item:herdr:linux
+{'r-browser': ('satisfied', ['confirmed'])} ['herdr:linux']" "$OUT"
+
+it "check results stay distinct: not_run, unknown, refuted, stale and missing never read confirmed"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+a = item("herdr:a")
+b = item("herdr:b"); b["deliverables"]["merged"] = {"result": "unknown", "checked_at": ago(1)}
+c = item("herdr:c"); c["deliverables"]["merged"] = {"result": "refuted", "checked_at": ago(1)}
+d = confirmed_at(item("herdr:d"), "merged", 60)
+rec = with_context(record(a, b, c, d), {"r": req("r", ["herdr:a=merged", "herdr:b=merged", "herdr:c=merged",
+                                                         "herdr:d=merged", "herdr:e=merged"])})
+print(acceptance(pp.compute(rec, NOW)))
+EOF
+)"
+check "{'r': ('unsatisfied', ['not_run', 'unknown', 'refuted', 'stale', 'missing'])}" "$OUT"
+
+it "handed and dropped items do not accept a requirement, though the programme is done"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+rec = with_context(record(item("herdr:a", state="handed"), item("herdr:b", state="dropped")),
+                   {"r": req("r", ["herdr:a=merged", "herdr:b=merged"])})
+out = show(rec)
+print(acceptance(out), out["acceptance"]["outcomes"]["handed"], out["acceptance"]["outcomes"]["dropped"])
+EOF
+)"
+check "may_stop=True done=True reasons=
+{'r': ('unsatisfied', ['not_run', 'not_run'])} ['herdr:a'] ['herdr:b']" "$OUT"
+
+it "the evidence-check hatch makes an item done but leaves its check not_run"
+OUT="$(CLAUDE_AUTO_TEST_NO_EVIDENCE_CHECK=1 scenario <<EOF
+${CTX_HELPERS}
+rec = with_context(record(item("herdr:a", state="done")), {"r": req("r", ["herdr:a=merged"])})
+out = pp.compute(rec, NOW)
+print(out["done"], acceptance(out))
+EOF
+)"
+check "True {'r': ('unsatisfied', ['not_run'])}" "$OUT"
+
+it "only_when_done keeps its effect: done with an unsatisfied requirement may stop"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+rec = with_context(record(item("herdr:a", state="handed"), stop_rule="only_when_done"),
+                   {"r": req("r", ["herdr:a=merged"])})
+out = show(rec)
+print(acceptance(out))
+EOF
+)"
+check "may_stop=True done=True reasons=
+{'r': ('unsatisfied', ['not_run'])}" "$OUT"
+
+it "never_stop keeps its effect: a satisfied requirement does not release it"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+rec = with_context(record(confirmed_at(confirmed_at(item("herdr:a"), "merged", 5), "recorded", 5),
+                          stop_rule="never_stop"),
+                   {"r": req("r", ["herdr:a=merged"])})
+out = show(rec)
+print(acceptance(out))
+EOF
+)"
+check "may_stop=False done=True reasons=never_stop:-
+{'r': ('satisfied', ['confirmed'])}" "$OUT"
+
+it "a safety pause replaces the paused item's open and ownerless reasons with its own"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+rec = with_context(record(item("herdr:a", pane=None), item("herdr:b", pane=None)),
+                   pauses={"s1": {"risk": "data_loss", "reason": "rows", "items": ["herdr:a"], "state": "active"}})
+show(rec)
+EOF
+)"
+check "may_stop=False done=False reasons=open_item:herdr:b,ownerless_item:herdr:b,safety_pause:s1" "$OUT"
+
+it "a programme-wide pause holds every item's activity reasons and holds the stop itself"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+rec = with_context(record(item("herdr:a"), item("herdr:b")),
+                   pauses={"s1": {"risk": "safety", "reason": "prod", "items": [], "state": "active"}})
+show(rec)
+EOF
+)"
+check "may_stop=False done=False reasons=safety_pause:s1" "$OUT"
+
+it "a lifted pause has no effect"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+rec = with_context(record(done("linear:AI-1")),
+                   pauses={"s1": {"risk": "safety", "reason": "prod", "items": [], "state": "lifted"}})
+show(rec)
+EOF
+)"
+check "may_stop=True done=True reasons=" "$OUT"
+
+it "an open blocker gates only the requirement it names"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+a = confirmed_at(item("herdr:a"), "merged", 5)
+rec = with_context(record(a, item("herdr:dep")),
+                   {"r1": req("r1", ["herdr:a=merged"]), "r2": req("r2", ["herdr:a=merged"])},
+                   blockers={"b1": {"requirement": "r1", "check": "herdr:a=merged", "dependency": "herdr:dep",
+                                    "evidence": "trace:1", "unblock": "dep lands", "state": "open"}})
+print(acceptance(pp.compute(rec, NOW)))
+EOF
+)"
+check "{'r1': ('blocked', ['confirmed']), 'r2': ('satisfied', ['confirmed'])}" "$OUT"
+
+it "a malformed context block holds the stop as corrupt_context instead of a skipped corrupt record"
+OUT="$(scenario <<EOF
+${CTX_HELPERS}
+rec = record(done("linear:AI-1"))
+rec["programme"]["context"] = {"requirements": ["not", "a", "map"]}
+out = show(rec)
+print(out["acceptance"])
+EOF
+)"
+check "may_stop=False done=True reasons=corrupt_context:-
+None" "$OUT"
+
 echo
 echo "programme-predicate.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

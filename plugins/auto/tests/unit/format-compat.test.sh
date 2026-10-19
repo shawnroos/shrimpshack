@@ -660,6 +660,31 @@ assert_eq "no" "$in_describe"
 
 rm -rf "$cli_tmp"; trap - EXIT
 
+it "promotion upgrades a v1-keyed legacy programme record, and the authority holds format 2"
+promoted="$("$PY" - "$AUTO_ROOT" "$(mktemp -d -t fc-promote.XXXXXX)" <<'PYEOF' 2>&1
+import json, os, sys
+os.environ["CLAUDE_AUTO_DATA_DIR"] = os.path.join(sys.argv[2], "data")
+os.environ["CLAUDE_AUTO_SECRETS_FILE"] = os.path.join(sys.argv[2], "no-secrets")
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+ph = load_lib_module("programme_home")
+core = load_lib_module("run_record_core")
+run = "prog-v1"
+home = ph.home_path(run)
+os.makedirs(os.path.join(home, ".claude", "auto"))
+legacy = {"run_id": run, "run_kind": "programme", "programme_format": 1, "loop_phase": "work",
+          "adapter": "native", "adapter_scale": "three-tier", "seam_paused": False, "units": [],
+          "loop": {"driver": "self", "last_beat_at": "2026-10-01T00:00:00Z"},
+          "programme": ph.new_programme_block([("default", "wv1")], "2026-10-01T00:00:00Z")}
+json.dump(legacy, open(core.run_record_path(home, run), "w"))
+report = load_lib_module("programme_import").promote(run)
+state = load_lib_module("programme_authority").read_record(run)
+v1 = [k for k in ("adapter", "adapter_scale", "seam_paused", "units") if k in state]
+print(report["status"], state.get("format"), state.get("backend"), "handoff_paused" in state, v1)
+PYEOF
+)"
+assert_eq "promoted 2 native True []" "$promoted"
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "format-compat.test.sh: ${PASS} passed, ${FAIL} failed"

@@ -30,6 +30,28 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    Then work out the remit: load the `auto:programme-remit` skill, find the
    repos and the tracker scope with your own tools, and store them with
    `programme.sh set-remit`. Accepting the agreement in step 5 approves it.
+   Its output lists `carried_over`: project terms kept from an earlier
+   programme on the same repos, already added to this agreement. `notices`
+   names any carried-over entry it dropped.
+   Then pre-fill the project terms from evidence, not from questions to Shawn. Each
+   term is one area and one short text: who decides that area (Shawn, the PM or
+   a worker), the existing skills or tools to prefer for a kind of job
+   (ideation, options, requirements, implementation, optimisation,
+   acceptance), or what acceptance means for this project. Read the evidence
+   yourself:
+   - the remit repos: their README, CLAUDE.md or AGENTS.md, plan docs and test
+     commands;
+   - prior runs: the `carried_over` terms, and plans and run records under each
+     repo's `.claude/auto/`;
+   - Shawn's installed skills: name only skills in your own skill list. Never
+     name one you cannot see there.
+   Add them with `programme.sh propose-agreement --project-term "<area>=<text>"
+   --source "<where it came from>"`. One call takes one `--source`, so make one
+   call per source. An area Shawn keeps for himself goes in as
+   `--reserved-term "<area>=<text>"`. An area that already has a term
+   (carried over or earlier) refuses; leave it. An area about deploys,
+   releases, spend, permissions, risk or cost limits, or settled decisions is
+   refused unless it is reserved for Shawn.
 4. Show one screen, and nothing else:
    - the remit as three short lines (spaces, repos, tracker), as the
      programme-remit skill shows them;
@@ -44,7 +66,11 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
      - tasks: how many remit sessions have a task list (`with_lists`);
      - plans: which repos and how many recent plans (the `plans` list, or
        `repos` and `recent` in the `sources` block);
-   - the items the sweep proposes to adopt, one line each.
+   - the items the sweep proposes to adopt, one line each;
+   - the project terms, from the "Project terms" section of
+     `programme.sh status --terms`: one line each with its source. Mark each
+     carried-over term (its source reads "carried over from ..."), and add any
+     `notices` line from `set-remit`.
 
    Ask Shawn to accept, or to change terms in plain words. He can turn a
    source off ("no plans for this one"). Then wait for his typed reply.
@@ -52,6 +78,11 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    - Acceptance: `programme.sh accept-agreement --prompt <id>`.
    - A term change: `programme.sh amend-term <key> <value> --prompt <id>`, then
      ask again.
+   - A project term change: `programme.sh edit-project-term <term-id> "<text>"
+     [--reserved|--unreserved]`, or a new one with `propose-agreement
+     --project-term "<area>=<text>" --source "Shawn at startup"`. Show the
+     screen again and ask again: `accept-agreement` refuses a prompt older than
+     the last proposal or project-term edit.
    - Turning sources off or on: `programme.sh amend-term tools_of_record <list>
      --prompt <id>`, where the list holds the sources that stay on, comma
      separated (`tracker,tasks`), or `none`. His reply must name each source
@@ -64,7 +95,9 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    (leave out an option the proposal does not give). For `alias`, decide
    whether the pane's work is the same item and use `alias-item` or `add-item`.
 7. Offer the live view in one line: "Type `/programme-view` for the live
-   working model, or `/auto:programme-status` for a snapshot."
+   working model, `/auto:programme-status` for a snapshot, or
+   `/auto:programme-status terms` for the terms and the decisions made under
+   them."
 8. Arm the wake-ups:
    1. Monitor the remit watcher, with the longest timeout:
       `bash "<plugin root>/lib/programme-watch.sh"` (add `--tracker` only when

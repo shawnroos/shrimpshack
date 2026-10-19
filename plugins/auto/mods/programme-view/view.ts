@@ -4,8 +4,8 @@ import type { Contract, Reread } from './contract'
 import { viewedKey } from './selection'
 
 const VIEW_FORMAT = 3
-// A format-2 file predates editor kinds: its rows and work still show, and the contract view waits for the next write.
-const ROWS_ONLY_FORMAT = 2
+// Older files carry no editor kinds: their rows and work still show, and the contract view waits for the next write.
+const ROWS_ONLY_FORMATS = new Set<unknown>([1, 2])
 const DEFAULT_DATA_DIR = '/.claude/plugins/data/auto-shrimpshack'
 const ROW_CAP = 2000
 const STEP_KINDS = new Set<string>(['done', 'current', 'waiting', 'planned'])
@@ -196,7 +196,7 @@ export async function loadView($: EngineInterface): Promise<Found> {
   } catch (error) {
     return { kind: 'unreadable', path, why: String(error) }
   }
-  const known = isRaw(view) && (view.view_format === VIEW_FORMAT || view.view_format === ROWS_ONLY_FORMAT)
+  const known = isRaw(view) && (view.view_format === VIEW_FORMAT || ROWS_ONLY_FORMATS.has(view.view_format))
   if (!isRaw(view) || !known || !Array.isArray(view.rows)) {
     const format = isRaw(view) ? view.view_format : undefined
     return { kind: 'unreadable', path, why: `view format ${String(format)}, expected ${VIEW_FORMAT}` }

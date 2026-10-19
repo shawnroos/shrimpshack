@@ -72,13 +72,9 @@ EOF
 edit() {
   run_py "$RUN" "$1" <<'EOF'
 run, expr = args
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 EOF
 }
 
@@ -98,7 +94,16 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed beat check-deliverable claim clear-proposal close-instruction describe drop-item end expire hand-item handover mark-read merge-item note-term prompt-item propose-agreement propose-rule propose-term queue record-instruction record-issues record-tested-build record-trajectories reopen-item request-reread rules set-now set-remit set-source set-waiting start start-worker status sweep takeover tracker-synced validate watcher-beat" "$VERBS"
+check "accept-agreement accept-context add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed answer-permission archive assign-item beat check-archive check-deliverable claim clear-blocker clear-proposal close-instruction collect-result context correct-term create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire hand-item handover inbox keep-corrections lift-pause log-decision mark-read merge-item note-term pause preserve-code promote promote-correction prompt-item propose-agreement propose-permission propose-rule propose-term queue raise-blocker reconcile-leases reconcile-operations record-decision record-denial record-instruction record-issues record-tested-build record-trajectories recover release-resources reopen-item request-reread rules set-now set-remit set-source set-waiting settle-permissions start start-worker status sweep takeover tracker-synced undo-correction validate watcher-beat" "$VERBS"
+
+
+# _VERBS.update lets a later module silently replace a verb another module registered under the same name.
+it "no two modules register the same verb name"
+DECLARED="$(cd "${AUTO_ROOT}/lib" && grep -hoE '^ *\("[a-z-]+", _h_|^ *"[a-z-]+": _Verb\(|^_VERBS\["[a-z-]+"\]' programme*.py \
+  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)"
+check "" "$(printf '%s\n' "$DECLARED" | uniq -d | tr '\n' ' ')"
+it "every declared verb is dispatched"
+check "$(printf '%s\n' "$DECLARED" | wc -l | tr -d ' ')" "$(printf '%s\n' $VERBS | wc -l | tr -d ' ')"
 
 P_TYPED="$(prompt typed 'stop rule: only when done, stop only when everything is done')"
 P_CRON="$(prompt cron 'wake up and sweep the space')"
@@ -581,6 +586,69 @@ it "an unknown verb exits 2 and points at describe"
 prog no-such-verb
 check 2 "$CODE"
 has "describe" "$OUT"
+
+it "claim refuses --op instead of silently writing a second claim"
+prog claim --run prog-x --item linear:AI-1 --deliverable merged --ref pr-1 --op claim-1
+check 2 "$CODE"
+has "claim takes no --op" "$OUT"
+it "a lifecycle verb that keeps no operation id refuses --op too"
+prog end --op end-1
+check 2 "$CODE"
+has "end takes no --op" "$OUT"
+
+it "describe names every compact-flag exemption the surface doc names"
+CONTRACT="$("$PY" -c 'import json,sys; print(json.load(sys.stdin)["contract"])' <<< "$DESC" 2>&1)"
+MISSING=""
+for exempt in "rules --ack" claim collect-result watcher-beat beat reconcile-operations release-resources \
+              dispose-item dispose-action archive "tracker-synced --check"; do
+  case "$CONTRACT" in *"\`${exempt}\`"*) ;; *) MISSING+="${exempt}; " ;; esac
+done
+check "" "$MISSING"
+it "describe documents --op as a global flag and names the verbs that refuse it"
+check "true true true" "$("$PY" -c '
+import json, sys
+op = json.load(sys.stdin).get("global_flags", {}).get("--op", "")
+print(str("replay" in op).lower(), str("`claim`" in op).lower(), str("`release-resources`" in op).lower())' <<< "$DESC" 2>&1)"
+
+# ── The PM's sweep instructions (U8): store-backed reads, restored context, three kinds of open work ──
+SKILL="${AUTO_ROOT}/skills/programme-sweep/SKILL.md"
+SEQ="${AUTO_ROOT}/skills/programme-sweep/references/sequencing.md"
+SKILL_TEXT="$(cat "$SKILL" "$SEQ" 2>/dev/null)"
+it "the sweep reads claims through the store-backed inbox verb"
+has "P inbox" "$SKILL_TEXT"
+it "the sweep never tells the PM to read the claims export"
+lacks "Read the new
+   lines of \`<home>/claims.jsonl\`" "$SKILL_TEXT"
+has "Never read \`claims.jsonl\`" "$SKILL_TEXT"
+it "the sweep restores context from the store, not the former chat"
+has "Your context comes from the programme's store, not from this chat" "$SKILL_TEXT"
+has "P recover --get <id>" "$SKILL_TEXT"
+it "the sweep says an acknowledgement accepts nothing and a stale one is re-read"
+has "An ack accepts nothing" "$SKILL_TEXT"
+has "refuses as stale" "$SKILL_TEXT"
+it "worker briefs cite the retained assignment by id and quote its limits"
+has "P context --item <item>" "$SKILL_TEXT"
+has "Quote the limits" "$SKILL_TEXT"
+it "the sweep collects results and preserves code before long waits or cleanup"
+has "P collect-result --item <item>" "$SKILL_TEXT"
+has "P preserve-code --source <worktree> --check" "$SKILL_TEXT"
+it "scenario 4: an unrelated investigation never gates acceptance"
+has "| Unrelated investigation |" "$SKILL_TEXT"
+has "It never gates acceptance" "$SKILL_TEXT"
+it "scenario 4: a required dependency is a linked blocker"
+has "P raise-blocker <id> --requirement <id> --check <item>=<deliverable> --dependency <item> --evidence <ref> --unblock <condition>" "$SKILL_TEXT"
+it "scenario 4: a safety risk is an independent pause, not a requirement"
+has "P pause <id> --risk safety" "$SKILL_TEXT"
+has "A pause is not a requirement" "$SKILL_TEXT"
+it "every P verb the sweep instructions name is a real programme verb"
+DESCRIBED="$("$PY" "$PROG" describe 2>/dev/null | "$PY" -c 'import json,sys; print(" ".join(json.load(sys.stdin)["verbs"]))')"
+UNKNOWN=""
+for verb in $(printf '%s\n' "$SKILL_TEXT" | grep -oE '`P [a-z][a-z-]*' | sed 's/`P //' | sort -u); do
+  case " $DESCRIBED " in *" $verb "*) ;; *) UNKNOWN+="$verb " ;; esac
+done
+check "" "$UNKNOWN"
+it "the verb scan above found verbs to check"
+if [ "$(printf '%s\n' "$SKILL_TEXT" | grep -oE '`P [a-z][a-z-]*' | sort -u | wc -l | tr -d ' ')" -ge 20 ]; then pass; else fail "too few P verbs found"; fi
 
 echo ""
 echo "programme-verbs.test.sh: ${PASS} passed, ${FAIL} failed"

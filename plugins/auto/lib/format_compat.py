@@ -12,6 +12,8 @@ chokepoint, so every other module in the tree speaks ONLY the new vocabulary.
 DAG ROOT. Pure stdlib; imports no sibling. Wired into:
   * ``run_record_core._read_json``        — read_run_record + the locked RMW path
   * ``_bootstrap.load_run_record_safe``   — every hook and scan consumer
+  * ``programme_authority._record_of``     — a promoted programme's record, read from
+    programme.db (``programme_import`` upgrades a legacy record before it commits)
   * ``workflows.resolve``             — workflow-file reads, before validate()
   * ``workflow_validate.validate_and_lint`` — the authoring WRITE gate
   * ``presets.load_preset``               — hand-authored preset reads (the THIRD

@@ -42,13 +42,51 @@ def classify_origin(text: str, record: dict) -> str:
 
 
 def _driving_run(session_id):
+    held = None
     for lease in programme_home.leases_for_session(session_id):
-        if programme_home.lease_status(lease) not in programme_home.HELD_LEASE_STATES:
+        status, read = programme_home.lease_state(lease)
+        if status not in programme_home.HELD_LEASE_STATES:
             continue
-        record = programme_home._read_record(lease.get("run"))
+        record, hold = read or programme_home.read_programme(lease.get("run"))
+        if hold is not None:
+            held = held or dict(hold, run=lease.get("run"))
+            continue
         if session_registry.caller_drives(record, session_id=session_id):
-            return lease["run"], record, lease
-    return None, None, None
+            return lease["run"], record, lease, None
+    return None, None, None, held
+
+
+def _closing_runs(session_id) -> list:
+    # After end the leases are gone, but the driving session (or the one that ended it) still
+    # types the approvals its closure needs; a sealed archive takes nothing.
+    found = []
+    for run in programme_home.closing_runs(session_id):
+        record, hold = programme_home.read_programme(run)
+        programme = (record or {}).get("programme") or {}
+        if hold is not None or not programme.get("ended") or programme_home.sealed(programme):
+            continue
+        if session_id in (record.get("driving_session_id"), (programme.get(programme_home.CLOSURE) or {}).get("ended_by")):
+            found.append((run, record))
+    return found
+
+
+def _closing_context(session_id, text, closing, notes, source) -> dict | None:
+    journaled = []
+    for run, record in closing:
+        origin = classify_origin(text, record)
+        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
+        journaled.append({"run": run, "prompt_id": entry["prompt_id"], "origin": origin})
+    return _context(
+        "auto journaled this prompt into each ended programme this session is closing. Cite the "
+        "prompt_id for that run in its closure verbs.\n"
+        f"{json.dumps(journaled, sort_keys=True)}" + "".join(f"\n{note}" for note in notes))
+
+
+def _held_context(held) -> dict:
+    return _context(
+        f"auto did not journal this prompt: programme {held['run']}'s authority is "
+        f"{held['outcome']} ({held['detail']}). Nothing typed here can approve a change "
+        "until it is repaired.")
 
 
 def _space_lease(session_id, env):
@@ -79,6 +117,7 @@ def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lea
          "lease_status": status, "driving": driving, "source": source},
         cites=[prompt_id] if driving and prompt_id else None,
     )
+    return lease["run"]
 
 
 def handle(raw: str, env) -> dict | None:
@@ -90,30 +129,48 @@ def handle(raw: str, env) -> dict | None:
     if not isinstance(session_id, str) or not session_id or not isinstance(text, str):
         return None
     source = programme_prompt_source.capture(data)
-    run, record, driving_lease = _driving_run(session_id)
+    run, record, driving_lease, held = _driving_run(session_id)
+    if held is not None:
+        return _held_context(held)
+    closing = _closing_runs(session_id) if run is None else []
     entry = None
     origin = "unknown"
     if run:
         origin = classify_origin(text, record)
         entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
     request = _REQUEST.match(text)
+    lost = None
+    received = None
     if request:
         try:
-            _journal_request(request.group(1), session_id, text, env, origin,
-                             entry and entry["prompt_id"], driving_lease, source)
-        except Exception:
-            pass
+            received = _journal_request(request.group(1), session_id, text, env, origin,
+                                        entry and entry["prompt_id"], driving_lease, source)
+        except Exception as exc:
+            lost = _lost_request(request.group(1), exc)
+    if closing:
+        notes = [lost] if lost else []
+        if received:
+            notes.append(f"auto journaled this /auto:programme-{request.group(1)} request into programme "
+                         f"{received}, the programme leased in this session's space.")
+        return _closing_context(session_id, text, closing, notes, source)
     if not entry:
-        return None
+        return _context(lost) if lost else None
     payload = {"run": run, "prompt_id": entry["prompt_id"], "origin": origin}
-    context = (
-        f"<{DATA_TAG}>\n"
+    return _context(
         "auto journaled this prompt. Cite its prompt_id in programme approval verbs.\n"
-        f"{json.dumps(payload, sort_keys=True)}\n"
-        f"</{DATA_TAG}>"
-    )
+        f"{json.dumps(payload, sort_keys=True)}" + (f"\n{lost}" if lost else ""))
+
+
+def _lost_request(verb, exc) -> str:
+    outcome = getattr(exc, "outcome", None)
+    why = f"its authority is {outcome} ({getattr(exc, 'detail', None) or exc})" if outcome else str(exc)
+    return (f"auto did not journal this /auto:programme-{verb} request: {why}. The {verb} verb will "
+            "refuse without it, and nothing here changed the programme. Tell Shawn.")
+
+
+def _context(text) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                   "additionalContext": context}}
+                                   "additionalContext": f"<{DATA_TAG}>\n{text}\n</{DATA_TAG}>"}}
 
 
 def _cli() -> int:

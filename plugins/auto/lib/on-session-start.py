@@ -5,8 +5,11 @@ Scans every run-record under <repo>/.claude/auto/ and prints a one-line resume
 hint for each resumable run. SURFACES ONLY — never auto-runs (auto-resume is U8).
 
 For a programme's driving session it instead emits one SessionStart
-`additionalContext` holding those lines plus the programme's rules in force, so
-the rules come back at session start and after every compaction.
+`additionalContext` holding those lines plus the programme's rules in force and
+its restored context (from the committed store revision), so both come back at
+session start and after every compaction. Ended programmes this session closes,
+and programmes naming this session whose lease file is gone, get one read-only
+line each.
 
 Classification (schema §5 I-3), in order:
   * loop_phase == "done"                          -> skip (no line).
@@ -88,19 +91,38 @@ def programme_context(stdin_raw) -> list:
     pre_compact = load_lib_module("on-pre-compact")
     data = pre_compact.hook_input(stdin_raw)
     sid = pre_compact.main_thread_session(data)
-    holds = pre_compact.driven_programmes(sid)
-    if not holds:
+    if not sid:
         return []
-    programme = load_lib_module("programme")
-    journal = load_lib_module("programme_journal")
-    blocks = []
-    for hold in holds:
-        blocks.append(programme.render_rules(hold["record"]))
+    blocks = [_restore(hold, sid, data.get("source")) for hold in pre_compact.driven_programmes(sid)]
+    resume = load_lib_module("programme_resume")
+    # Read-only: an ended or unleased programme is surfaced, never acted for.
+    for reader in (resume.closing_lines, resume.unleased_lines):
         try:
-            journal.append(hold["run"], "rules_loaded", sid, {"source": data.get("source")})
+            blocks += [line + "\n" for line in reader(sid)]
         except Exception:
-            pass  # rel-001: the block is already rendered; a lost row only ages "last re-read".
+            continue
     return blocks
+
+
+def _restore(hold, sid, source) -> str:
+    if hold.get("hold"):
+        return _held_block(hold["run"], hold["hold"])
+    # Journaled before rendering: the row moves the store revision, and the block must name the latest one.
+    try:
+        load_lib_module("programme_journal").append(hold["run"], "rules_loaded", sid, {"source": source})
+    except Exception:
+        pass  # rel-001: a lost row only ages "last re-read"; the restore still runs.
+    try:
+        return load_lib_module("programme").render_restore(hold["run"])
+    except Exception as exc:
+        outcome = getattr(exc, "outcome", None)
+        return _held_block(hold["run"], {"outcome": outcome or "unreadable", "detail": str(exc)})
+
+
+def _held_block(run, hold) -> str:
+    return (f"auto: programme {run} cannot restore its rules: its authority is "
+            f"{hold['outcome']} ({hold['detail']}). Do not act for it until it "
+            "is repaired; tell Shawn.\n")
 
 
 def _cli(argv) -> int:

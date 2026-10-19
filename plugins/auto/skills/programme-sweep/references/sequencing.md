@@ -13,7 +13,8 @@ Where the sweep uses it:
 | 3 (Shawn's answers) and 5 (read the remit): new work arrives | 1 and 2 |
 | 10 (drive workers): before you start or prompt a worker | 3 |
 | 8 (check claims): a worker claims `merged`; also before any merge the PM does itself | 4 |
-| 12 (hand product calls) | 5 |
+| 12 (decide or hand) | 5 |
+| 4, 8 and 10: an open investigation, a blocker or a risk touches accepted work | 6 |
 
 ## 1. Rank new work
 
@@ -62,10 +63,31 @@ or 2 work). Hold the merge if any answer is no or unknown.
 
 ## 5. Order Shawn's asks
 
-Shawn gets each handed item once (`P hand-item` notifies once). When several
+Hand Shawn only the choices that section 11 of [judgment.md](judgment.md)
+lists. Shawn gets each handed item once (`P hand-item <item> --kind
+<decision-kind> --question "<text>"` notifies once). When several
 are open, put them to him as one list: an item with a deadline first, then by
 how much work each answer unblocks. Do not ask again about an item he has
 answered; a repeated ask costs his attention and teaches him to skip the list.
+
+## 6. Investigation, dependency or safety
+
+Three kinds of open work look alike and act differently. Decide which one it is
+before you record anything.
+
+| Kind | Test | What you record | Effect |
+| --- | --- | --- | --- |
+| Unrelated investigation | No accepted requirement's check needs its answer. | Nothing new. It shows as a follow-up in `P status`. | It never gates acceptance. A browser requirement can pass while a Linux probe stays open. |
+| Required dependency | A named check of an accepted requirement cannot pass until it finishes, and you can show why. | `P raise-blocker <id> --requirement <id> --check <item>=<deliverable> --dependency <item> --evidence <ref> --unblock <condition>` | It blocks only that requirement. `P clear-blocker <id> --why <text>` when the condition holds. |
+| Safety or data-loss risk | Continuing could harm users, production or data, whatever the requirements say. | `P pause <id> --risk safety\|data_loss --reason <text> [--item <item>]` | It stops `start-worker` and `prompt-item` on what it holds and tells Shawn. Only `P lift-pause <id> --prompt <id>` with his typed words lifts it. |
+
+- Unfinished investigation alone is never a blocker. Without the requirement,
+  the check, the dependency, the evidence and the unblock condition,
+  `raise-blocker` refuses, and that is correct.
+- A pause is not a requirement. Do not add a requirement to stop unsafe work,
+  and do not wait for acceptance to lift a pause.
+- A tool that refuses an action binds. Record it with `P record-denial` and ask
+  Shawn; do not find another route to the same action.
 
 ## Examples from a real programme
 

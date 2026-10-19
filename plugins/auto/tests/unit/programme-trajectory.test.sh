@@ -67,13 +67,9 @@ EOF
 edit() {
   run_py "$RUN" "$1" <<'EOF'
 run, expr = args
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 EOF
 }
 
@@ -190,6 +186,7 @@ it "items not in the input keep their last trajectory"
 check '"Write view test"' "$(field 'prog["items"]["linear:AI-1"]["trajectory"]["current"]["title"]')"
 it "an unchanged path journals nothing"
 check 0 "$(count_kind trajectory_changed)"
+check 0 "$(count_kind effects_recorded)"
 
 AE1='[
  {"item": "linear:AI-1", "done": [],

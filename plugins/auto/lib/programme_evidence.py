@@ -597,7 +597,7 @@ def _resolve(programme, item_id) -> str:
 
 def _claimed_ref(home, key, deliverable):
     ref = None
-    for row in programme_journal.read_path(programme_record.claims_path(home)):
+    for row in programme_journal.claims(os.path.basename(os.path.normpath(home))):
         payload = row.get("payload") or {}
         if payload.get("item") == key and payload.get("deliverable") == deliverable:
             ref = payload.get("ref")
@@ -703,7 +703,11 @@ def _store(programme, run_id, key, deliverable, ref, verdict) -> dict:
     if verdict["result"] != "confirmed":
         item["done_at"] = None
         out["claim"] = "unconfirmed"
-    if verdict["result"] == "unknown" and entry["unknown_streak"] >= UNKNOWNS_BEFORE_WAIT \
+    held = [p.get("id") for p in programme.get("permission_proposals") or []
+            if isinstance(p, dict) and p.get("state") != "resolved" and key in (p.get("items") or [])]
+    if held and verdict["result"] == "unknown":
+        out["permission_hold"] = held
+    elif verdict["result"] == "unknown" and entry["unknown_streak"] >= UNKNOWNS_BEFORE_WAIT \
             and item.get("state") in programme_record.WAITABLE_STATES:
         out["waiting_on"] = _wait_on_system(programme, run_id, key, item, deliverable)
     elif verdict["result"] != "unknown":
@@ -739,7 +743,11 @@ def _h_check_deliverable(host, argv):
                         _context(host, programme, key, deliverable, repo))
 
     def change(programme, prompt, rec):
-        return _store(programme, run_id, _resolve(programme, key), deliverable, ref, verdict)
+        out = _store(programme, run_id, _resolve(programme, key), deliverable, ref, verdict)
+        retained = load_lib_module("programme_artifacts").retained_for_item(programme, out["item"])
+        if retained:
+            out["retained_results"] = retained
+        return out
 
     return host._write(dict(opts, run=run_id), change, "evidence_checked")
 
@@ -749,7 +757,7 @@ def _due(record, now) -> tuple:
     cadence = programme_home.cadence_seconds(record)
     due, skipped = [], []
     for key, item in sorted(programme["items"].items()):
-        if item.get("state") in ("handed", "dropped"):
+        if item.get("state") in programme_home.CLOSED_ITEM_STATES:
             continue
         done = programme_predicate.effective_state(item) == "done"
         if done:

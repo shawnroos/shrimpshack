@@ -95,11 +95,11 @@ test('a lease whose home does not match its run is ignored', async ($, on) => {
   expect(ran.text).toContain('drives no auto programme')
 })
 
-test('a format-2 view from before the upgrade still shows its rows until the next write rebuilds it', async ($, on) => {
+test('a format-1 view from before the upgrade still shows its rows until the next write rebuilds it', async ($, on) => {
   mock.clock(on)
   world(on, {
     [`${LEASES}/default__w2.json`]: JSON.stringify({ session_id: 'sess-pm', run: 'prog-1', home: HOME }),
-    [VIEW]: viewText([{ style: 'text', text: 'old row' }], 2),
+    [VIEW]: viewText([{ style: 'text', text: 'old row' }], 1),
   }, {})
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await $.command.run({ command: 'programme-view' } as never)

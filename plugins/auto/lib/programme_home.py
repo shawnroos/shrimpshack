@@ -16,6 +16,7 @@ import re
 import secrets
 import sys
 import tempfile
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -30,14 +31,18 @@ DEFAULT_SERVER = "default"
 DEFAULT_CADENCE_SECONDS = 3600
 ORPHAN_CADENCE_PERIODS = 2
 
-ITEM_STATES = ("open", "waiting", "done", "handed", "dropped")
-FINISHED_ITEM_STATES = ("done", "handed", "dropped")
+ITEM_STATES = ("open", "waiting", "done", "handed", "dropped", "decided")
+FINISHED_ITEM_STATES = ("done", "handed", "dropped", "decided")
+CLOSED_ITEM_STATES = ("handed", "dropped", "decided")
 DELIVERABLES = ("merged", "flagged", "verified", "released", "recorded")
 STOP_RULES = ("nothing_it_can_act_on", "only_when_done", "until_time", "never_stop")
 AUTONOMY_LEVELS = ("act", "act_and_tell", "propose", "never")
-LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer")
-HELD_LEASE_STATES = ("live", "orphaned", "expired")
+LEASE_STATES = ("free", "live", "orphaned", "ended", "expired", "newer", "unavailable")
+HELD_LEASE_STATES = ("live", "orphaned", "expired", "unavailable")
+AUTHORITY_HOLDS = ("unsupported", "corrupt", "unavailable")
 COMPACT_FLAG = ".compact-flag"
+ARCHIVE = "archive"
+CLOSURE = "closure"
 WATCHER_KINDS = ("cron", "monitor")
 SWEEP_SOURCES = ("tracker", "tasks", "plans")
 TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
@@ -45,11 +50,11 @@ TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
     "deliverables", "waiting_on", "task_runs", "dropped_reason", "joined_at",
-    "history", "trajectory",
+    "history", "trajectory", "repo",
 )
 PROGRAMME_FIELDS = (
-    "remit", "created_at", "agreement", "instructions", "items",
-    "working_model", "watchers", "inbox_offset", "ended",
+    "remit", "created_at", "agreement", "instructions", "decisions", "items",
+    "working_model", "watchers", "inbox_offset", "ended", "permission_proposals",
 )
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -268,6 +273,11 @@ def enabled_sources(programme) -> set:
     return {name for name in value if name in SWEEP_SOURCES}
 
 
+def project_terms(programme) -> list:
+    entries = ((programme or {}).get("agreement") or {}).get("project_terms")
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
 def source_enabled(programme, name) -> bool:
     return name not in SWEEP_SOURCES or name in enabled_sources(programme)
 
@@ -287,11 +297,13 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         "created_at": now_iso,
         "agreement": {"accepted": None, "terms": default_terms(now_iso)},
         "instructions": [],
+        "decisions": [],
         "items": {},
         "working_model": {"doing": None, "queue": []},
         "watchers": {},
         "inbox_offset": 0,
         "ended": None,
+        "permission_proposals": [],
     }
 
 
@@ -318,9 +330,15 @@ def normalize_item(item: dict, item_id=None) -> dict:
     for key in ("aliases", "sessions", "task_runs", "history"):
         out[key] = list(item.get(key) or [])
     out["deliverables"] = dict(item.get("deliverables") or {})
-    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "trajectory"):
+    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "trajectory", "repo"):
         out.setdefault(key, None)
     return out
+
+
+def session_ids(item) -> list:
+    sids = [(item.get("owner") or {}).get("session_id")]
+    sids += [s.get("session_id") for s in item.get("sessions") or [] if isinstance(s, dict)]
+    return [s for s in dict.fromkeys(sids) if isinstance(s, str) and s]
 
 
 def normalize_programme(block: dict) -> dict:
@@ -387,11 +405,20 @@ def read_lease(path: str):
     return lease
 
 
-def _read_record(run_id: str):
+def read_programme(run_id: str) -> tuple:
     try:
-        return run_record_core.read_run_record(home_path(run_id), run_id)
-    except (run_record_core.RunRecordError, ProgrammeHomeError, OSError, ValueError):
-        return None
+        return run_record_core.read_run_record(home_path(run_id), run_id), None
+    except run_record_core.RunRecordError as exc:
+        outcome = getattr(exc, "outcome", None)
+        if outcome in AUTHORITY_HOLDS:
+            return None, {"outcome": outcome, "detail": str(exc)}
+        return None, None
+    except (ProgrammeHomeError, OSError, ValueError):
+        return None, None
+
+
+def _read_record(run_id: str):
+    return read_programme(run_id)[0]
 
 
 def _newer(stamp) -> bool:
@@ -403,20 +430,35 @@ def _age_seconds(stamp, now) -> float | None:
     return None if when is None else (now - when).total_seconds()
 
 
+def sealed(programme) -> bool:
+    return bool(((programme or {}).get(ARCHIVE) or {}).get("sealed_at"))
+
+
 def lease_status(lease, now=None) -> str:
+    return lease_state(lease, now)[0]
+
+
+def lease_state(lease, now=None) -> tuple:
+    # (status, (record, hold)) when the status came from reading the run, else (status, None).
     if lease is None:
-        return "free"
+        return "free", None
     if lease.get("corrupt"):
-        return "orphaned"
+        return "orphaned", None
     if _newer(lease.get("programme_format")):
-        return "newer"
+        return "newer", None
     run = lease.get("run")
     try:
         if lease.get("home") != home_path(run):
-            return "orphaned"
+            return "orphaned", None
     except ProgrammeHomeError:
-        return "orphaned"
-    record = _read_record(run)
+        return "orphaned", None
+    read = record, hold = read_programme(run)
+    return _status_of(record, hold, now), read
+
+
+def _status_of(record, hold, now) -> str:
+    if hold is not None:
+        return "unavailable"
     if record is None:
         return "orphaned"
     if _newer(record.get("programme_format")):
@@ -465,9 +507,13 @@ def driven_runs(session_id, now=None) -> list:
             run = lease.get("run")
             if any(hold["run"] == run for hold in found):
                 continue
-            if lease_status(lease, now) not in HELD_LEASE_STATES:
+            status, read = lease_state(lease, now)
+            if status not in HELD_LEASE_STATES:
                 continue
-            record = _read_record(run)
+            record, hold = read or read_programme(run)
+            if hold is not None:
+                found.append({"run": run, "home": home_path(run), "record": None, "hold": hold})
+                continue
             if not isinstance(record, dict) or record.get("driving_session_id") != session_id:
                 continue
             found.append({"run": run, "home": home_path(run), "record": record})
@@ -518,19 +564,62 @@ def _release_leases(run_id: str) -> None:
                 pass
 
 
-def _end_locked(run_id: str, reason: str, now_iso: str) -> None:
-    record = _read_record(run_id)
+def closing_dir() -> str:
+    return os.path.join(programmes_dir(), "closing")
+
+
+def write_closing(run_id: str, sessions) -> None:
+    sessions = sorted({s for s in sessions if isinstance(s, str) and s})
+    if not sessions:
+        return
+    folder = _ensure_dir(closing_dir())
+
+    def write(fh):
+        json.dump({"run": run_id, "sessions": sessions}, fh, sort_keys=True)
+        fh.write("\n")
+
+    atomic_write(_contained(os.path.join(folder, check_run_id(run_id) + ".json")), write, ".closing.")
+
+
+def closing_runs(session_id) -> list:
+    """Runs whose closing entry names this session: ended programmes it may still approve dispositions for."""
+    try:
+        names = sorted(os.listdir(closing_dir()))
+    except (OSError, ProgrammeHomeError):
+        return []
+    runs = []
+    for name in names:
+        if name.startswith(".") or not name.endswith(".json"):
+            continue
+        entry = read_lease(os.path.join(closing_dir(), name))
+        if entry and not entry.get("corrupt") and session_id in (entry.get("sessions") or []):
+            runs.append(entry.get("run"))
+    return runs
+
+
+def _end_locked(run_id: str, reason: str, now_iso: str, event=None) -> None:
+    record, hold = read_programme(run_id)
+    if hold is not None:
+        raise ProgrammeHomeError(f"programme {run_id} cannot end: its authority is {hold['outcome']}")
     if record is not None:
         home = home_path(run_id)
+        phase_key = load_lib_module("phase-grammar").LOOP_PHASE_KEY
+        archive = load_lib_module("programme_archive")
+        leases = [key for key, lease in iter_leases() if lease and lease.get("run") == run_id]
+        ended_by = (event or {}).get("session_id")
 
         def mutate(rec):
-            programme = rec.setdefault("programme", {})
-            programme["ended"] = {"at": now_iso, "reason": reason}
+            rec[phase_key] = "done"
+            rec.setdefault("programme", {})["ended"] = {"at": now_iso, "reason": reason}
+            archive.open_closure(rec, leases, ended_by, now_iso)
 
-        # Phase first: a crash between the two writes must leave a record that
-        # reads as ended, or its lease stays held as live or orphaned.
-        load_lib_module("run_record").set_loop(home, run_id, loop_phase="done")
-        run_record_core._with_locked_run_record(home, run_id, mutate)
+        load_lib_module("programme_authority").write(
+            home, run_id, mutate, (lambda _result, _rec: event) if event else None)
+        write_closing(run_id, [record.get("driving_session_id"), ended_by])
+        archive.pause("after_end_commit")
+        _release_leases(run_id)
+        archive.settle_leases(run_id)
+        return
     _release_leases(run_id)
 
 
@@ -546,11 +635,97 @@ def end_programme(run_id: str, reason: str, now=None) -> None:
     _with_leases_lock(lambda: _end_locked(run_id, reason, stamp))
 
 
+def _remit_keys(record) -> list:
+    keys = []
+    for space in ((record.get("programme") or {}).get("remit") or {}).get("spaces") or []:
+        try:
+            keys.append(space_key(space.get("server") or DEFAULT_SERVER, space.get("workspace")))
+        except (ProgrammeHomeError, AttributeError):
+            continue
+    return keys
+
+
+def _stale_remit(home, run_id) -> list:
+    try:
+        with open(run_record_core.run_record_path(home, run_id)) as fh:
+            return _remit_keys(json.load(fh))
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def _claimants(now, stamp) -> dict:
+    found = {}
+    for entry in load_lib_module("_bootstrap").iter_programme_outcomes():
+        run, home, record = entry["run_id"], entry["home"], entry["record"]
+        if entry["outcome"] in AUTHORITY_HOLDS:
+            keys = _stale_remit(home, run) + [k for k, lease in iter_leases()
+                                               if lease and lease.get("run") == run]
+            synthetic = {"run": run, "home": home, "session_id": None,
+                         "programme_format": run_record_core.PROGRAMME_FORMAT}
+            for key in keys:
+                found.setdefault(key, {"lease": synthetic, "status": "unavailable", "record": None})
+            continue
+        if record is None or (record.get("programme") or {}).get("ended"):
+            continue
+        synthetic = {"run": run, "home": home, "session_id": record.get("driving_session_id"),
+                     "programme_format": record.get("programme_format"),
+                     "created_at": (record.get("programme") or {}).get("created_at") or stamp}
+        status = lease_status(synthetic, now)
+        if status == "expired":
+            _end_locked(run, "agreement_unaccepted", stamp)
+            continue
+        if status in ("free", "ended"):
+            continue
+        for key in _remit_keys(record):
+            found.setdefault(key, {"lease": synthetic, "status": status, "record": record})
+    return found
+
+
+def _republish(claim, server, workspace, stamp) -> None:
+    lease = claim["lease"]
+    if claim["record"] is None or read_lease(lease_path(server, workspace)) is not None:
+        return
+    _write_lease(server, workspace, lease["run"], lease["home"], lease["session_id"],
+                 lease.get("created_at") or stamp)
+
+
+def _test_pause(point) -> None:
+    if not run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_LEASE_PAUSE_" + point.upper()):
+        return
+    run_record_core.test_pause("lease_" + point)
+
+
+def reconcile_run_leases(run_id: str) -> list:
+    check_run_id(run_id)
+
+    def body():
+        record, hold = read_programme(run_id)
+        if hold is not None:
+            raise ProgrammeHomeError(f"programme {run_id} authority is {hold['outcome']}: {hold['detail']}")
+        if record is None or (record.get("programme") or {}).get("ended"):
+            raise ProgrammeHomeError(f"programme {run_id} has no live record to reconcile from")
+        home, sid = home_path(run_id), record.get("driving_session_id")
+        written = []
+        for key in _remit_keys(record):
+            server, workspace = key.split(".", 1)
+            lease = read_lease(lease_path(server, workspace))
+            if lease and (lease.get("corrupt") or lease.get("run") != run_id):
+                raise LeaseHeld(key, lease, lease_status(lease))
+            if lease is None or lease.get("session_id") != sid or lease.get("home") != home:
+                _write_lease(server, workspace, run_id, home, sid,
+                             (lease or {}).get("created_at") or _iso(_now()))
+                written.append(key)
+                _test_pause("after_write")
+        return written
+
+    return _with_leases_lock(body)
+
+
 def _mint_run_id(now) -> str:
     return f"prog-{now.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
 
 
-def create_programme(spaces, session_id, *, run_id=None, now=None) -> dict:
+def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=None) -> dict:
     if not isinstance(session_id, str) or not session_id:
         raise ProgrammeHomeError("a programme needs its driving session id")
     parsed = []
@@ -572,18 +747,26 @@ def create_programme(spaces, session_id, *, run_id=None, now=None) -> dict:
             lease = read_lease(lease_path(server, workspace))
             if lease_status(lease, now) == "expired":
                 _end_locked(lease["run"], "agreement_unaccepted", stamp)
+        claimants = _claimants(now, stamp)
         for server, workspace in parsed:
             lease = read_lease(lease_path(server, workspace))
             status = lease_status(lease, now)
             if status not in ("free", "ended"):
                 raise LeaseHeld(space_key(server, workspace), lease, status)
+            claim = claimants.get(space_key(server, workspace))
+            if claim is not None:
+                _republish(claim, server, workspace, stamp)
+                raise LeaseHeld(space_key(server, workspace), claim["lease"], claim["status"])
         home = home_path(run_id)
         if os.path.exists(home):
             raise ProgrammeHomeError(f"programme home already exists: {home}")
         _ensure_dir(home)
+        block = new_programme_block(parsed, stamp)
+        if predecessor is not None:
+            block["predecessor"] = dict(predecessor)
         run_record_core.init_run_record(
             home, run_id, backend="native", steps=[], loop_phase="work",
-            run_kind="programme", programme=new_programme_block(parsed, stamp),
+            run_kind="programme", programme=block,
             driving_session_id=session_id,
         )
         for server, workspace in parsed:
