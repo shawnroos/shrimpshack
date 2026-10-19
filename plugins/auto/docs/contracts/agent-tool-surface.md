@@ -145,13 +145,13 @@ session.
   undo; and a kind the new owner already decides. It records the quote from the
   journal, the PM's reading labelled as the PM's, the anchor, the kind, the new
   owner and the previous owner, and journals `term_corrected`. Its output carries
-  one `notice` line with the quote, the reading and the change. When the anchor is
+  one notice line with the quote, the reading and the change. When the anchor is
   a handed ask and the new owner is the PM or a worker, the same write moves the
   item back to open, so `record-decision --term <correction-id>` works on it
   without `answer-handed`. `undo-correction` needs a typed prompt whose journal
   line comes after the correction's prompt. It reverts only the latest active
   correction of that kind, and refuses naming the later correction otherwise. It
-  journals `correction_undone`, and its `notice` lists the choices recorded under
+  journals `correction_undone`, and its notice lists the choices recorded under
   the corrected kind, which the undo does not reverse. The rules block lists each
   active correction.
 - **Instructions**: `record-instruction` records the cited words, what they apply
@@ -192,12 +192,12 @@ session.
   otherwise.
 - **Handing**: `hand-item` hands an item to Shawn with a question and a required
   `--kind <decision-kind>`. Kind `denied_operation` also needs `--op <operation>`
-  (one word, for example `git-push`), and `--op` goes with no other kind. A
+  (one word, for example git-push), and `--op` goes with no other kind. A
   `denied_operation` ask for an operation that already has an open ask on any
   item is refused, so a denial reaches Shawn once. It notifies
   once: the tracker's needs-you mark for an issue item, else a herdr
   notification. The ask gets an id ("a" + 6 hex) and carries the decision kind.
-  Its journal entry records the ask id, the kind as `ask_kind`, the `op` of a
+  Its journal entry records the ask id, the kind as `ask_kind`, the op of a
   denied-operation ask, and both exit
   statuses as tracker and
   herdr (null when not run or not found, "skipped" for the tracker on an item
