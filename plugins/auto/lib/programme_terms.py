@@ -3,6 +3,8 @@
 
 Project terms sit at ``agreement.project_terms``, outside the fixed ``terms`` map that
 ``normalize_programme`` back-fills, so a record without them keeps reading as the old contract.
+Typed corrections live at ``agreement.corrections``; ``correct-term`` and ``undo-correction``
+refuse while ``CORRECTIONS_ON`` is false.
 ``programme.py`` registers ``edit-project-term`` through ``build_verbs(host)``; its
 ``propose-agreement`` and ``accept-agreement`` call ``add``, ``check_accept_order`` and ``stamp``.
 """
@@ -217,12 +219,176 @@ def _h_edit(host, argv):
                        prompt_id=opts.get("prompt"))
 
 
+# No environment override: the PM can set environment variables from its own shell.
+CORRECTIONS_ON = False
+CORRECTIONS_OFF = "corrections are not on yet"
+CORRECTED = "term_corrected"
+UNDONE = "correction_undone"
+CORRECTABLE_KINDS = ("technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
+                     "optimisation_depth")
+OWNERS = ("pm", "worker", "shawn")
+_ANCHOR_ROWS = {"item_handed": "ask", "pm_decided": "decision_id", "handed_answered": "decision_id"}
+
+
+def corrections(programme) -> list:
+    entries = programme.get("agreement", {}).get("corrections")
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
+def active_corrections(programme) -> list:
+    return [e for e in corrections(programme) if not e.get("undone")]
+
+
+def owner_of(programme, kind):
+    latest = [e for e in active_corrections(programme) if e.get("kind") == kind]
+    return latest[-1] if latest else None
+
+
+def _owner_text(owner) -> str:
+    return owner or "the contract default"
+
+
+def correction_lines(entries) -> list:
+    return [programme_sanitize.clean(
+        f"correction {e.get('id')}: {e.get('kind')} decided by {e.get('to')} (Shawn: \"{e.get('quote')}\"; "
+        f"PM's reading: \"{e.get('pm_reading')}\")", cap=0) for e in entries]
+
+
+def _check_switch() -> None:
+    if not CORRECTIONS_ON:
+        raise TermsError(CORRECTIONS_OFF)
+
+
+def _row_index(rows, kind, key, value):
+    return next((i for i, row in enumerate(rows) if row.get("kind") == kind
+                 and (row.get(key) == value or (row.get("payload") or {}).get(key) == value)), None)
+
+
+def _prompt_index(rows, prompt_id) -> int:
+    index = _row_index(rows, "prompt", "prompt_id", prompt_id)
+    if index is None:
+        raise TermsError(f"no prompt {prompt_id!r} in this programme's journal")
+    return index
+
+
+def _anchor(programme, anchor_id) -> tuple:
+    for entry in programme.get("decisions") or []:
+        if isinstance(entry, dict) and entry.get("id") == anchor_id:
+            return entry.get("kind"), None
+    for key, item in programme["items"].items():
+        if programme_decisions.ask_id(item) == anchor_id:
+            return programme_decisions.ask_kind(item), key
+    raise TermsError(f"no ask or recorded choice {anchor_id!r} in this programme")
+
+
+def _check_correctable(kind) -> None:
+    if kind not in CORRECTABLE_KINDS:
+        raise TermsError(f"kind {kind!r} is not correctable; a correction may change only "
+                         f"{', '.join(CORRECTABLE_KINDS)}")
+
+
+def _check_anchor_order(rows, anchor_id, prompt_id) -> None:
+    anchor = min((i for kind, key in _ANCHOR_ROWS.items()
+                  for i in [_row_index(rows, kind, key, anchor_id)] if i is not None), default=None)
+    if anchor is None or anchor > _prompt_index(rows, prompt_id):
+        raise TermsError(f"{anchor_id!r} was not recorded before prompt {prompt_id!r}; a correction "
+                         "replies only to an ask or choice Shawn had already seen")
+
+
+def _check_prompt_unused(programme, prompt_id) -> None:
+    for entry in corrections(programme):
+        used = entry.get("prompt_id") == prompt_id or (entry.get("undone") or {}).get("prompt_id") == prompt_id
+        if used:
+            raise TermsError(f"prompt {prompt_id!r} already drove correction {entry.get('id')!r}; "
+                             "one typed prompt makes one correction")
+
+
+def _h_correct(host, argv):
+    _check_switch()
+    positional, opts = host._parse(argv, values=("run", "prompt", "replies-to", "to", "reading"))
+    if positional or not opts.get("replies-to") or opts.get("to") not in OWNERS:
+        raise ValueError("usage: correct-term --prompt <id> --replies-to <ask-or-choice-id> "
+                         "--to pm|worker|shawn --reading <text>")
+    reading = _text(opts.get("reading"), "--reading")
+    anchor_id, to = opts["replies-to"], opts["to"]
+
+    def change(programme, prompt, rec):
+        kind, item_key = _anchor(programme, anchor_id)
+        _check_correctable(kind)
+        _check_anchor_order(programme_journal.read(rec["run_id"]), anchor_id, prompt["prompt_id"])
+        _check_prompt_unused(programme, prompt["prompt_id"])
+        current = owner_of(programme, kind)
+        previous = current.get("to") if current else None
+        if previous == to:
+            raise TermsError(f"{kind} is already decided by {to} (correction {current.get('id')!r})")
+        entry = {"id": "c" + secrets.token_hex(3), "at": run_record_core.now_iso(), "kind": kind,
+                 "anchor": anchor_id, "to": to, "previous": previous, "prompt_id": prompt["prompt_id"],
+                 "quote": prompt["quote"], "pm_reading": reading,
+                 "choices_before": len(programme.get("decisions") or []), "undone": None}
+        programme["agreement"]["corrections"] = corrections(programme) + [entry]
+        reopened = None
+        if item_key and to != "shawn" and programme["items"][item_key]["state"] == "handed":
+            item = programme["items"][item_key]
+            item.update(state="open", waiting_on=None)
+            host.programme_record._history(item, "reopened", correction=entry["id"])
+            reopened = item_key
+        notice = (f"correction {entry['id']}: {kind} now decided by {to} (was {_owner_text(previous)}). "
+                  f"Shawn said \"{prompt['quote']}\"; PM's reading: \"{reading}\"")
+        return {"correction": entry["id"], "kind": kind, "anchor": anchor_id, "to": to, "previous": previous,
+                "pm_reading": reading, "reopened": reopened, "notice": programme_sanitize.clean(notice, cap=0)}
+
+    return host._write(opts, change, CORRECTED, prompt_id=opts.get("prompt"), needs_prompt=True)
+
+
+def _h_undo(host, argv):
+    _check_switch()
+    positional, opts = host._parse(argv, values=("run", "prompt"))
+    if len(positional) != 1:
+        raise ValueError("usage: undo-correction <correction-id> --prompt <id>")
+    correction_id = positional[0]
+
+    def change(programme, prompt, rec):
+        entries = corrections(programme)
+        entry = next((e for e in entries if e.get("id") == correction_id), None)
+        if entry is None:
+            raise TermsError(f"no correction {correction_id!r}")
+        if entry.get("undone"):
+            raise TermsError(f"correction {correction_id!r} is already undone")
+        newer = owner_of(programme, entry["kind"])
+        if newer is not entry:
+            raise TermsError(f"correction {newer.get('id')!r} changed {entry['kind']} later; undo it first")
+        rows = programme_journal.read(rec["run_id"])
+        if _prompt_index(rows, prompt["prompt_id"]) <= _prompt_index(rows, entry["prompt_id"]):
+            raise TermsError(f"prompt {prompt['prompt_id']!r} is not later than the correction's prompt "
+                             f"{entry['prompt_id']!r}")
+        entry["undone"] = {"at": run_record_core.now_iso(), "prompt_id": prompt["prompt_id"],
+                           "quote": prompt["quote"]}
+        made = [d.get("id") for d in (programme.get("decisions") or [])[entry.get("choices_before", 0):]
+                if isinstance(d, dict) and (d.get("kind") == entry["kind"] or d.get("term") == correction_id)]
+        notice = (f"undid correction {correction_id}: {entry['kind']} back to {_owner_text(entry['previous'])}; "
+                  f"choices made under it stand: {', '.join(made) or 'none'}")
+        return {"correction": correction_id, "kind": entry["kind"], "restored": entry["previous"],
+                "made_under": made, "notice": notice}
+
+    return host._write(opts, change, UNDONE, prompt_id=opts.get("prompt"), needs_prompt=True)
+
+
 _SPECS = (
     ("edit-project-term", _h_edit,
      "<term-id> <text> [--prompt <id>] [--source <evidence>] [--reserved|--unreserved] [--run <id>]",
      "an unknown term id; an empty text; both --reserved and --unreserved; a protected area left "
      "unreserved. After acceptance it also rejects no typed --prompt, a prompt that does not name the "
      "area and the new text, and any change of reservation."),
+    ("correct-term", _h_correct,
+     "--prompt <id> --replies-to <ask-or-choice-id> --to pm|worker|shawn --reading <text> [--run <id>]",
+     "every call while corrections are not on yet; no typed prompt from the driving session; an "
+     "unknown anchor; an anchor recorded after the prompt; a kind off the correctable list; a prompt "
+     "that already drove a correction; a kind already decided by the new owner."),
+    ("undo-correction", _h_undo,
+     "<correction-id> --prompt <id> [--run <id>]",
+     "every call while corrections are not on yet; no typed prompt from the driving session; an "
+     "unknown or undone correction; a later correction of the same kind (named); a prompt not later "
+     "than the correction's."),
 )
 
 

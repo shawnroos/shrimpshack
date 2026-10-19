@@ -220,6 +220,49 @@ EOF
 )"
 check "cron" "$OUT"
 
+verb_on() {
+  CLAUDE_CODE_SESSION_ID=sess-pm run_py "$@" <<'EOF'
+pt = load_lib_module("programme_terms")
+pt.CORRECTIONS_ON = True
+sys.exit(load_lib_module("programme")._cli(args))
+EOF
+}
+programme_field() {
+  run_py "$RUN" "$1" <<'EOF'
+prog = load_lib_module("run_record_core").read_run_record(ph.home_path(args[0]), args[0])["programme"]
+print(eval(args[1]))
+EOF
+}
+latest_prompt() {
+  run_py "$RUN" <<'EOF'
+print([x for x in pj.read(args[0]) if x["kind"] == "prompt"][-1]["prompt_id"])
+EOF
+}
+set_cadence_prompt() {
+  run_py "$RUN" "$1" <<'EOF' >/dev/null
+core = load_lib_module("run_record_core")
+def mutate(rec):
+    rec["programme"]["watchers"]["cadence"] = {"prompt": args[1]}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+}
+verb_on add-item linear:AI-7 --title "Crop approach" --kind fix_only --run "$RUN" >/dev/null
+verb_on hand-item linear:AI-7 --question "Crop on the client or the server?" --kind technical_approach --run "$RUN" >/dev/null
+ASK="$(programme_field 'prog["items"]["linear:AI-7"]["handed"]["id"]')"
+
+it "the same correction text journaled as cron does not change the terms"
+set_cadence_prompt "that didn't need me"
+prompt_hook sess-pm "that didn't need me" >/dev/null
+OUT="$(verb_on correct-term --prompt "$(latest_prompt)" --replies-to "$ASK" --to pm --reading "mine to decide" --run "$RUN")"
+check "0 is not typed" "$(programme_field 'len(prog["agreement"].get("corrections") or [])') $(printf '%s' "$OUT" | grep -o 'is not typed' | head -1)"
+set_cadence_prompt "sweep the programme now"
+
+it "a typed prompt fed through the prompt hook lets correct-term change the term"
+prompt_hook sess-pm "that didn't need me" >/dev/null
+verb_on correct-term --prompt "$(latest_prompt)" --replies-to "$ASK" --to pm --reading "mine to decide" --run "$RUN" >/dev/null
+check "1 technical_approach pm that didn't need me" \
+  "$(programme_field '" ".join(str(x) for x in [len(prog["agreement"]["corrections"])] + [prog["agreement"]["corrections"][-1][k] for k in ("kind", "to", "quote")])')"
+
 it "/auto:programme-takeover typed in a new session in w2 is journaled as a takeover request in w2's home"
 FAKE_HERDR_PANE="w2:p40" session_start sess-new "w2:p40" >/dev/null
 OUT="$(prompt_hook sess-new "/auto:programme-takeover")"

@@ -130,6 +130,30 @@ session.
   rule that every product question goes to Shawn. It refuses a prompt that the
   journal holds before the last `agreement_proposed` or `project_term_edited`
   line, so Shawn accepts the terms he last saw.
+- **Corrections** (switched off): `correct-term --prompt <id> --replies-to
+  <ask-or-choice-id> --to pm|worker|shawn --reading <text>` and
+  `undo-correction <correction-id> --prompt <id>`. Both refuse with "corrections
+  are not on yet" and write nothing while the code constant `CORRECTIONS_ON` in
+  `lib/programme_terms.py` is false. No environment variable turns it on, the
+  test-harness hatches included. With the switch on, `correct-term` changes who
+  decides one kind of choice. It takes the kind from the anchor (a handed ask's
+  `handed.id` or a recorded choice's id); the PM never names it. It needs a typed
+  prompt from the driving session, and it refuses: an unknown anchor; an anchor
+  whose journal line comes after the prompt's line; a kind outside the closed
+  correctable list (technical_approach, work_sequencing, worker_coordination,
+  tool_choice, optimisation_depth); a prompt that already drove a correction or an
+  undo; and a kind the new owner already decides. It records the quote from the
+  journal, the PM's reading labelled as the PM's, the anchor, the kind, the new
+  owner and the previous owner, and journals `term_corrected`. Its output carries
+  one `notice` line with the quote, the reading and the change. When the anchor is
+  a handed ask and the new owner is the PM or a worker, the same write moves the
+  item back to open, so `record-decision --term <correction-id>` works on it
+  without `answer-handed`. `undo-correction` needs a typed prompt whose journal
+  line comes after the correction's prompt. It reverts only the latest active
+  correction of that kind, and refuses naming the later correction otherwise. It
+  journals `correction_undone`, and its `notice` lists the choices recorded under
+  the corrected kind, which the undo does not reverse. The rules block lists each
+  active correction.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`).

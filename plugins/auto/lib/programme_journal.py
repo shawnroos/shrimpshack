@@ -49,6 +49,8 @@ KINDS = (
     "term_amended",
     "project_term_edited",
     "project_term_amended",
+    "term_corrected",
+    "correction_undone",
     "instruction_recorded",
     "instruction_closed",
     "rule_proposed",

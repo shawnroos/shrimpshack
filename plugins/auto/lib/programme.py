@@ -183,6 +183,9 @@ def rules_in_force(record, journals=None) -> dict:
                            for r in protocol["rejected"]],
         "instructions": active_instructions(programme),
     }
+    corrections = programme_terms.active_corrections(programme)
+    if corrections:
+        out["corrections"] = corrections
     if contract:
         out["operating_contract"] = contract
     return out
@@ -193,6 +196,7 @@ def render_rules(record) -> str:
     lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rule_texts(rules)]
     if rules.get("operating_contract"):
         lines += programme_terms.contract_lines(rules["operating_contract"])
+    lines += programme_terms.correction_lines(rules.get("corrections") or [])
     body = "\n".join(lines).replace("<", "\\u003c")
     return (
         "Rules in force for this programme, rebuilt from its run record. The tag holds "
