@@ -323,6 +323,8 @@ check "1" "$(run_py "$ORUN" <<'EOF'
 print(sum(1 for r in pj.read(args[0]) if r["kind"] == "takeover_request" and r["session_id"] == "sess-closer"))
 EOF
 )"
+it "the closing context names the programme that received the typed request"
+has "journaled this /auto:programme-takeover request into programme $ORUN" "$TAKE_OUT"
 
 echo
 echo "programme-closure.test.sh: ${PASS} passed, ${FAIL} failed"

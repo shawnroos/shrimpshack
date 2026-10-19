@@ -136,6 +136,10 @@ class JournalError(Exception):
     pass
 
 
+class _RoutedToAuthority(Exception):
+    pass
+
+
 def secret_assignments(path=None, encoding=None) -> list:
     path = os.path.expanduser(path or os.environ.get(SECRETS_ENV) or DEFAULT_SECRETS_FILE)
     with open(path, encoding=encoding) as fh:
@@ -242,7 +246,14 @@ def append_to(path: str, kind: str, session_id, payload=None, *, cites=None,
               prompt_id=None, now=None) -> dict:
     row = entry(kind, session_id, payload, cites=cites, prompt_id=prompt_id, now=now)
     _refuse_promoted(path)
-    _locked(path, lambda: _write_line(path, row))
+
+    def body():
+        # promote holds this lock through its first export; a writer queued behind it must not
+        # append to that export.
+        _refuse_promoted(path)
+        _write_line(path, row)
+
+    _locked(path, body)
     return row
 
 
@@ -253,11 +264,23 @@ def claims_path(run_id: str) -> str:
 def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None) -> dict:
     if isinstance(row, dict) and row.get("kind") == "prompt" and provenance != "derived":
         raise JournalError(f"a {provenance} copy is never journaled as a prompt; it approves nothing")
-    if _promoted(run_id):
-        return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard)
-    path = claims_path(run_id) if channel == "claims" else journal_path(run_id)
-    _locked(path, lambda: _write_line(path, row))
-    return row
+    if not _promoted(run_id):
+        path = claims_path(run_id) if channel == "claims" else journal_path(run_id)
+
+        def body():
+            # promote holds this lock through its first export; a writer queued behind it would
+            # append to that export and be absorbed as a foreign write. The authority takes the
+            # run lock first, so re-route only after releasing this one.
+            if _promoted(run_id):
+                raise _RoutedToAuthority()
+            _write_line(path, row)
+            return row
+
+        try:
+            return _locked(path, body)
+        except _RoutedToAuthority:
+            pass
+    return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard)
 
 
 def append(run_id: str, kind: str, session_id, payload=None, *, cites=None, now=None) -> dict:

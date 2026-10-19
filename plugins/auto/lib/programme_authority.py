@@ -293,7 +293,7 @@ def _export_absorbed(home, run_id, body):
     absorbed = []
     try:
         return body(absorbed)
-    except BaseException:
+    except Exception:
         if any(absorbed):
             export(home, run_id)
         raise

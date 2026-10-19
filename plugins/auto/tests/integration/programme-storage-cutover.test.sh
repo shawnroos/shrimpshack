@@ -694,6 +694,20 @@ old = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=5
 core._with_locked_run_record(home(run), run, lambda r: r["loop"].update(last_beat_at=old))
 EOF
 new_typed sess-j '/auto:programme-takeover' >/dev/null
+it "an obsolete writer's consuming row cannot use up a real typed request"
+check "1 foreign_write 1" "$(run_py "$RUN6" <<'EOF' | tail -1
+run = args[0]
+lc = load_lib_module("programme_lifecycle")
+before = lc._requests(run, "takeover", "sess-j")
+consumed = {"kind": "taken_over", "at": before[0]["at"], "session_id": "sess-j",
+            "payload": {"request": lc._request_ref(before[0])}}
+with open(os.path.join(home(run), "journal.jsonl"), "a") as fh:
+    fh.write(json.dumps(consumed, sort_keys=True) + "\n")
+auth.mutate(home(run), run, lambda r: None)
+prov = [r.get("provenance") for r in auth.snapshot(run)["journal"] if r.get("kind") == "taken_over"]
+print(len(before), ",".join(sorted(set(map(str, prov)))), len(lc._requests(run, "takeover", "sess-j")))
+EOF
+)"
 LOG7="${WORK}/takeover7.log"
 ( CLAUDE_AUTO_TEST_STORE_PAUSE_AFTER_COMMIT=1 CLAUDE_CODE_SESSION_ID=sess-j HERDR_WORKSPACE_ID=w6 \
     "$PY" "$PROG" takeover --run "$RUN6" > "$LOG7" 2>&1 ) &
@@ -771,6 +785,96 @@ ev = [e for e in snap["events"] if ((e["payload"] or {}).get("row") or {}).get("
 print("same" if len(ev) == 1 and ev[0]["operation_id"].startswith("w-") else f"split {ev}")
 EOF
 )"
+
+# ── journal and claims appends that decided "legacy" just before promote ran ──
+cat > "${WORK}/appender.py" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+pj = load_lib_module("programme_journal")
+run, mode = sys.argv[2], sys.argv[3]
+try:
+    if mode == "prompt":
+        print("appender:prompt_id", pj.append_prompt(run, "sess-t", "please merge it", "typed")["prompt_id"], flush=True)
+    elif mode == "claim":
+        pj.append_claim(run, "worker-t", {"item": "racing-claim"})
+    else:
+        pj.append_to(pj.journal_path(run), "working_now", None, {"by": "append_to-racer"})
+    print("appender:ok", flush=True)
+except pj.JournalError as exc:
+    print("appender:refused", exc, flush=True)
+EOF
+WS=w14
+RUN14="$(legacy_programme sess-t w14)"
+GATE14="${WORK}/gate14"
+for mode in prompt claim path; do
+  ( "$PY" "${WORK}/pause_shim.py" "$GATE14" "${WORK}/appender.py" "$AUTO_ROOT" "$RUN14" "$mode" \
+      > "${WORK}/append14-${mode}.log" 2>&1 ) &
+  CHILDREN="$CHILDREN $!"
+done
+it "a typed prompt, a claim and a path append that routed before promotion are paused at the journal lock"
+wait_for "${WORK}/append14-prompt.log" "shim:paused" && wait_for "${WORK}/append14-claim.log" "shim:paused" \
+  && wait_for "${WORK}/append14-path.log" "shim:paused" && pass || fail "a racing append never paused"
+as sess-t promote --run "$RUN14"
+check "0 promoted" "$CODE $(json_field 'd["status"]')"
+touch "$GATE14"
+for mode in prompt claim path; do wait_for "${WORK}/append14-${mode}.log" "appender:" ; done
+sleep 0.2
+P14="$(sed -n 's/^appender:prompt_id \(p[0-9a-f]*\)$/\1/p' "${WORK}/append14-prompt.log")"
+it "the racing prompt and claim report success"
+has "appender:ok" "$(cat "${WORK}/append14-prompt.log")"
+has "appender:ok" "$(cat "${WORK}/append14-claim.log")"
+it "the racing path append is refused rather than written into the export"
+has "appender:refused" "$(cat "${WORK}/append14-path.log")"
+as sess-t beat --run "$RUN14"
+it "the racing prompt lands in the authority as a native row and still approves"
+check "native|typed|claim-native|no-path-row|no-quarantine" "$(run_py "$RUN14" "$P14" <<'EOF'
+run, pid = args
+prog = load_lib_module("programme")
+snap = auth.snapshot(run)
+prow = [r for r in snap["journal"] if r.get("prompt_id") == pid]
+crow = [r for r in snap["claims"] if (r.get("payload") or {}).get("item") == "racing-claim"]
+look = prog.prompt_lookup(run, pid)
+d = os.path.dirname(export_path(run))
+print("native" if len(prow) == 1 and "provenance" not in prow[0] else f"prompt {prow}",
+      (look or {}).get("origin"),
+      "claim-native" if len(crow) == 1 and "provenance" not in crow[0] else f"claim {crow}",
+      "no-path-row" if not any((r.get("payload") or {}).get("by") == "append_to-racer" for r in snap["journal"])
+      else "path-row-leaked",
+      "quarantined" if any(".foreign-" in n for n in os.listdir(d)) else "no-quarantine", sep="|")
+EOF
+)"
+it "the racing prompt and claim commit as authority events with their own provenance"
+check "derived worker_result" "$(run_py "$RUN14" "$P14" <<'EOF'
+run, pid = args
+snap = auth.snapshot(run)
+def prov(pred):
+    ev = [e for e in snap["events"] if pred(((e["payload"] or {}).get("row") or {}))]
+    return ev[0]["provenance"] if len(ev) == 1 else f"events {len(ev)}"
+print(prov(lambda r: r.get("prompt_id") == pid), prov(lambda r: (r.get("payload") or {}).get("item") == "racing-claim"))
+EOF
+)"
+
+WS=w15
+RUN15="$(legacy_programme sess-u w15)"
+GATE15="${WORK}/gate15"
+( "$PY" "${WORK}/pause_shim.py" "$GATE15" "${WORK}/appender.py" "$AUTO_ROOT" "$RUN15" claim \
+    > "${WORK}/append15.log" 2>&1 ) &
+P15=$!
+CHILDREN="$CHILDREN $P15"
+it "a claim paused before promotion is refused when the programme ends before it resumes"
+wait_for "${WORK}/append15.log" "shim:paused" || fail "the racing claim never paused"
+as sess-u promote --run "$RUN15"
+run_py "$RUN15" >/dev/null <<'EOF'
+auth.mutate(home(args[0]), args[0], lambda r: r["programme"].update(ended={"at": "2026-01-01T00:00:00Z"}))
+EOF
+touch "$GATE15"
+wait "$P15" 2>/dev/null
+check "appender:refused 0" "$(grep -o 'appender:refused' "${WORK}/append15.log") $(run_py "$RUN15" <<'EOF'
+print(len(auth.snapshot(args[0])["claims"]))
+EOF
+)"
+has "the programme has ended" "$(cat "${WORK}/append15.log")"
 
 # ── 11. import gaps ──────────────────────────────────────────────────────
 WS=w7

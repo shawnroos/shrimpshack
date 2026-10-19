@@ -69,7 +69,7 @@ def _closing_runs(session_id) -> list:
     return found
 
 
-def _closing_context(session_id, text, closing, lost) -> dict | None:
+def _closing_context(session_id, text, closing, notes) -> dict | None:
     journaled = []
     for run, record in closing:
         origin = classify_origin(text, record)
@@ -78,7 +78,7 @@ def _closing_context(session_id, text, closing, lost) -> dict | None:
     return _context(
         "auto journaled this prompt into each ended programme this session is closing. Cite the "
         "prompt_id for that run in its closure verbs.\n"
-        f"{json.dumps(journaled, sort_keys=True)}" + (f"\n{lost}" if lost else ""))
+        f"{json.dumps(journaled, sort_keys=True)}" + "".join(f"\n{note}" for note in notes))
 
 
 def _held_context(held) -> dict:
@@ -116,6 +116,7 @@ def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lea
          "lease_status": status, "driving": driving},
         cites=[prompt_id] if driving and prompt_id else None,
     )
+    return lease["run"]
 
 
 def handle(raw: str, env) -> dict | None:
@@ -137,14 +138,19 @@ def handle(raw: str, env) -> dict | None:
         entry = programme_journal.append_prompt(run, session_id, text, origin)
     request = _REQUEST.match(text)
     lost = None
+    received = None
     if request:
         try:
-            _journal_request(request.group(1), session_id, text, env, origin,
-                             entry and entry["prompt_id"], driving_lease)
+            received = _journal_request(request.group(1), session_id, text, env, origin,
+                                        entry and entry["prompt_id"], driving_lease)
         except Exception as exc:
             lost = _lost_request(request.group(1), exc)
     if closing:
-        return _closing_context(session_id, text, closing, lost)
+        notes = [lost] if lost else []
+        if received:
+            notes.append(f"auto journaled this /auto:programme-{request.group(1)} request into programme "
+                         f"{received}, the programme leased in this session's space.")
+        return _closing_context(session_id, text, closing, notes)
     if not entry:
         return _context(lost) if lost else None
     payload = {"run": run, "prompt_id": entry["prompt_id"], "origin": origin}

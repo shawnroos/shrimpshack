@@ -105,7 +105,8 @@ def _request_ref(row) -> dict:
 def _requests(run, verb, sid) -> list:
     rows = programme_journal.read(run)
     unverified = programme_authority().UNVERIFIED
-    used = [(r.get("payload") or {}).get("request") for r in rows if r.get("kind") in CONSUMING_KINDS]
+    used = [(r.get("payload") or {}).get("request") for r in rows
+            if r.get("kind") in CONSUMING_KINDS and r.get("provenance") not in unverified]
     return [r for r in rows
             if r.get("kind") == f"{verb}_request" and r.get("session_id") == sid
             and r.get("provenance") not in unverified
