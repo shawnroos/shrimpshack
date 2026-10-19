@@ -471,6 +471,7 @@ out("mystery", f"{terms['mystery']['description']}|{terms['mystery']['binding']}
 out("cadence_meta", f"{terms['cadence']['binding']}|{terms['cadence']['description']}|{terms['cadence']['label']}|{terms['cadence']['value_text']}")
 active = [o["name"] for o in terms["cadence"]["options"] if o["active"]]
 out("cadence_active", " ".join(active))
+out("editors", " ".join(f"{k}:{t['editor']}" for k, t in terms.items()))
 
 r = rec()
 cad = r["programme"]["agreement"]["terms"]["cadence"]
@@ -566,6 +567,8 @@ it "a term carries binding, description, label and value text"
 check "code|How often the PM sweeps the programme.|cadence|on_change, seconds 3600" "$(got cadence_meta)"
 it "the active option is marked"
 check "on_change" "$(got cadence_active)"
+it "each term names how the contract view edits it; a term outside the guide is a plain choice"
+check "remit:space stop_rule:until autonomy:choice cadence:interval tools_of_record:checklist mystery:choice" "$(got editors)"
 it "reread: rules loaded at 09:10 and cadence set at 09:30 give changed since cadence"
 check "2026-10-19T09:10:00Z|cadence|False" "$(got reread)"
 it "a term carries who set it, why and its notes"
@@ -590,7 +593,7 @@ FORMAT="$(run_py <<'EOF'
 print(load_lib_module("programme_view").VIEW_FORMAT)
 EOF
 )"
-has "const VIEW_FORMAT = ${FORMAT}" "$(cat "${MOD}/register.tsx")"
+has "const VIEW_FORMAT = ${FORMAT}" "$(cat "${MOD}/view.ts")"
 it "the view ships as format 2"
 check "2" "$FORMAT"
 

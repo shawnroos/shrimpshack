@@ -2,42 +2,12 @@ import type { Elements, RenderElement } from 'claude-code'
 
 import { COLOR, GLYPH } from './palette'
 import type { Selection } from './selection'
+import type { Step, Watch, WorkItem } from './view'
 
 export type Ui = Elements['terminal']
 
-export type Step = {
-  kind: 'done' | 'current' | 'waiting' | 'planned'
-  title: string
-  clause: string | null
-  clause_label: string
-  no_clause: boolean
-}
-
-export type Watch = {
-  state: 'watcher_live' | 'reporter_only' | 'retry_never_started' | 'nothing_watching'
-  interval_seconds?: number | null
-  beat_age_seconds?: number | null
-  reporter?: string
-}
-
-export type WorkEntry = {
-  id: string
-  title: string
-  state: string
-  location: string | null
-  no_plan: boolean
-  steps: Step[]
-  finish: string | null
-  age_seconds: number | null
-  faded: boolean
-  change_hash: string | null
-  changed_since_first: boolean
-  watch: Watch | null
-}
-
 export type TreeProps = {
-  work: WorkEntry[]
-  viewed: Record<string, unknown>
+  work: WorkItem[]
   selection: Selection
   onSelect: (target: Selection) => void
 }
@@ -47,20 +17,6 @@ export function duration(seconds: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   const minutes = Math.floor((seconds % 3600) / 60)
   return `${Math.floor(seconds / 3600)}h${minutes ? ` ${minutes}m` : ''}`
-}
-
-export function liveAge<T>(raw: T, nowMs: number): T {
-  if (typeof raw !== 'object' || raw === null) return raw
-  const entry = raw as Record<string, unknown>
-  const at = typeof entry.recorded_at === 'string' ? Date.parse(entry.recorded_at) : Number.NaN
-  if (Number.isNaN(at)) return raw
-  const age = Math.max(0, Math.floor((nowMs - at) / 1000))
-  const after = typeof entry.fade_after_seconds === 'number' ? entry.fade_after_seconds : undefined
-  return { ...entry, age_seconds: age, faded: after === undefined ? entry.faded : age > after } as T
-}
-
-export function planChanged(entry: WorkEntry, viewed: unknown): boolean {
-  return Boolean(entry.change_hash) && entry.changed_since_first && viewed !== entry.change_hash
 }
 
 function watchText(watch: Watch | null): { text: string; isWarning: boolean } {
@@ -98,7 +54,7 @@ function clauseTail(ui: Ui, step: Step): RenderElement[] {
   return [<Text dimColor>{`   ${GLYPH.clause} ${step.clause_label}`}</Text>]
 }
 
-function tree(ui: Ui, entry: WorkEntry, props: TreeProps): RenderElement[] {
+function tree(ui: Ui, entry: WorkItem, props: TreeProps): RenderElement[] {
   const { Box, Button, Text } = ui
   const dim = entry.faded
   const pick = (target: Selection) => () => props.onSelect(target)
@@ -121,7 +77,7 @@ function tree(ui: Ui, entry: WorkEntry, props: TreeProps): RenderElement[] {
       </Button>
       {entry.location ? <Text dimColor>{`   ${GLYPH.pane} ${entry.location}`}</Text> : <Text>{''}</Text>}
       {entry.age_seconds == null ? <Text>{''}</Text> : <Text dimColor>{` · ${duration(entry.age_seconds)}`}</Text>}
-      {planChanged(entry, props.viewed[entry.id])
+      {entry.changed
         ? [<Text color={COLOR.changed}>{`  ${GLYPH.changed}`}</Text>, <Text dimColor={dim}> plan changed</Text>]
         : []}
     </Box>

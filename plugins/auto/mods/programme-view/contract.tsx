@@ -1,7 +1,7 @@
 import type { RenderElement } from 'claude-code'
 
-import { acceptReply, draftReply, instructionTemplate, toolsOf, withdrawReply } from './actions'
-import type { Draft, Outcome } from './actions'
+import { acceptReply, customOf, draftReply, draftText, instructionTemplate, isChecklist, toolsOf, withdrawReply } from './actions'
+import type { Draft, EditorKind, Outcome } from './actions'
 import { COLOR, GLYPH } from './palette'
 import type { Ui } from './tree'
 
@@ -21,6 +21,7 @@ export type Term = {
   value_text: string
   description: string
   binding: 'code' | 'guidance' | 'none'
+  editor: EditorKind
   reliant_steps: number
   set_by: string | null
   set_at: string | null
@@ -44,8 +45,7 @@ export type ContractActions = {
   reread: () => void
   fulfil: (id: string) => void
   closeAsFulfilled: (id: string, why: string) => void
-  minutes: (term: Term, text: string) => void
-  space: (term: Term, value: string) => void
+  custom: (term: Term, text: string) => void
   addTool: (term: Term) => void
   toolName: (term: Term, text: string) => void
   toolDescription: (term: Term, text: string) => void
@@ -109,20 +109,6 @@ function proposalText(proposal: Proposal): string {
   }
 }
 
-export function draftText(term: Term, draft: Draft): string | undefined {
-  const parts: string[] = []
-  const name = draft.add?.name
-  if (draft.tools || name) {
-    const tools = toolsOf(term, draft)
-    parts.push((name && !tools.includes(name) ? [...tools, name] : tools).join(', ') || 'none')
-    if (name) parts.push(`new tool ${name}${draft.add?.description ? ` (${draft.add.description})` : ', needs a description'}`)
-  }
-  if (draft.space) parts.push(`add herdr space ${draft.space}`)
-  if (draft.minutes) parts.push(`fixed, every ${draft.minutes} min`)
-  if (draft.option && !draft.minutes && !draft.space) parts.push(draft.option)
-  return parts.length > 0 ? parts.join(' · ') : undefined
-}
-
 function steps(count: number): string {
   if (count === 0) return 'No step relies on this'
   return count === 1 ? '1 step relies on this' : `${count} steps rely on this`
@@ -158,33 +144,21 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
   )
 
   function customOptions(term: Term, draft: Draft | undefined) {
-    if (term.key === 'cadence') {
+    const custom = customOf(term)
+    if (custom) {
       line(
-        `${term.key}:minutes`,
+        `${term.key}:custom`,
         pad(8),
         <Input
-          key="custom:cadence:minutes"
-          label="Custom interval, in minutes: "
-          placeholder="15"
-          value={draft?.minutes ? String(draft.minutes) : ''}
-          onSubmit={text => act.minutes(term, text)}
+          key={`custom:${term.key}:${custom.field}`}
+          label={custom.label}
+          placeholder={custom.placeholder(spaces)}
+          value={draft?.custom ?? ''}
+          onSubmit={text => act.custom(term, text)}
         />,
       )
     }
-    if (term.key === 'remit') {
-      line(
-        `${term.key}:spaces`,
-        pad(8),
-        <Input
-          key="custom:remit:space"
-          label="Add a herdr space (server.workspace): "
-          placeholder={spaces[0] ?? 'default.w2'}
-          value={draft?.space ?? ''}
-          onSubmit={text => act.space(term, text.trim())}
-        />,
-      )
-    }
-    if (term.key !== 'tools_of_record') return
+    if (!isChecklist(term)) return
     line(`${term.key}:add`, pad(8), <Button key="custom:tools:add" label="Add a tool…" plain onPress={() => act.addTool(term)} />)
     if (editing !== toolEditKey(term.key)) return
     line(
@@ -271,7 +245,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
       )
     }
     const draft = drafts[term.key]
-    const isMulti = Array.isArray(term.value)
+    const isMulti = isChecklist(term)
     const ticked = isMulti ? toolsOf(term, draft) : []
     const [on, off] = isMulti ? [GLYPH.checkOn, GLYPH.checkOff] : [GLYPH.radioOn, GLYPH.radioOff]
     line(`${term.key}:options`, <Text dimColor>{`        Options${isMulti ? '  (choose any)' : ''}`}</Text>)

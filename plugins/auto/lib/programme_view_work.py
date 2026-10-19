@@ -211,6 +211,7 @@ def _term(key, term, counts, journal_entries) -> dict:
         "value_text": _value_text(term),
         "description": guide.get("description") or NO_DESCRIPTION,
         "binding": guide.get("binding") or "none",
+        "editor": guide.get("editor") or "choice",
         "reliant_steps": counts.get(f"term:{key}", 0),
         "set_by": term.get("set_by"),
         "set_at": term.get("set_at"),

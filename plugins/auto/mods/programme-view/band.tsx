@@ -1,23 +1,10 @@
 import type { ClientElements } from 'claude-code'
 import { COLOR as PALETTE_COLOR, GLYPH as PALETTE_GLYPH } from './palette'
 import { duration } from './tree'
+import type { Step, WorkItem } from './view'
 
-export type StepKind = 'done' | 'current' | 'waiting' | 'planned'
-export type BandStep = { kind: StepKind; title: string }
-export type BandEntry = {
-  id: string
-  title: string
-  steps: BandStep[]
-  finish: string | null
-  noPlan: boolean
-  location: string | null
-  changeHash: string | null
-  marked: boolean
-  faded: boolean
-  ageSeconds: number | null
-}
 export type BandSelection = { item?: string; step?: number }
-export type BandProps = { work: BandEntry[]; columns: number; maxLines: number; selection: BandSelection }
+export type BandProps = { work: WorkItem[]; columns: number; maxLines: number; selection: BandSelection }
 export type BandKey = { key: string; shift?: boolean }
 export type Span = { text: string; color?: string; dim?: boolean; bold?: boolean; inverse?: boolean; step?: number }
 export type Hit = { line: number; x0: number; x1: number; item: string; step: number }
@@ -35,44 +22,12 @@ export const GLYPH = {
   capRight: '\uE0B4',
 }
 
-const COLOR = { done: PALETTE_COLOR.done, active: PALETTE_COLOR.current, next: PALETTE_COLOR.next, marked: PALETTE_COLOR.changed }
+const COLOR = { done: PALETTE_COLOR.done, active: PALETTE_COLOR.current, next: PALETTE_COLOR.next, changed: PALETTE_COLOR.changed }
 const TITLE_COLUMNS = 24
 const LOCATION_COLUMNS = 32
 const SHORTEN_OVER = 8
 const SEPARATOR = '  │  '
 const MORE_ROOM = 10
-const STEP_KINDS = new Set<string>(['done', 'current', 'waiting', 'planned'])
-
-function text(value: unknown): string | null {
-  return typeof value === 'string' && value !== '' ? value : null
-}
-
-export function readWork(raw: unknown): BandEntry[] {
-  if (!Array.isArray(raw)) return []
-  const out: BandEntry[] = []
-  for (const value of raw) {
-    if (typeof value !== 'object' || value === null) continue
-    const entry = value as Record<string, unknown>
-    const id = text(entry.id)
-    if (id === null) continue
-    const steps = (Array.isArray(entry.steps) ? entry.steps : [])
-      .filter((s): s is Record<string, unknown> => typeof s === 'object' && s !== null && STEP_KINDS.has(String(s.kind)))
-      .map(s => ({ kind: s.kind as StepKind, title: String(s.title ?? '') }))
-    out.push({
-      id,
-      title: String(entry.title ?? ''),
-      steps,
-      finish: text(entry.finish),
-      noPlan: entry.no_plan === true,
-      location: text(entry.location),
-      changeHash: text(entry.change_hash),
-      marked: false,
-      faded: entry.faded === true,
-      ageSeconds: typeof entry.age_seconds === 'number' ? entry.age_seconds : null,
-    })
-  }
-  return out
-}
 
 export function columns(value: string): number {
   return [...value].length
@@ -87,23 +42,23 @@ export function lineText(spans: Span[]): string {
   return spans.map(span => span.text).join('')
 }
 
-function activeStep(entry: BandEntry): number {
+function activeStep(entry: WorkItem): number {
   return entry.steps.findIndex(step => step.kind === 'current' || step.kind === 'waiting')
 }
 
-export function currentStep(entry: BandEntry): number {
+export function currentStep(entry: WorkItem): number {
   const active = activeStep(entry)
   if (active !== -1) return active
   const planned = entry.steps.findIndex(step => step.kind === 'planned')
   return planned === -1 ? Math.max(0, entry.steps.length - 1) : planned
 }
 
-function selectedStep(entry: BandEntry, selection: BandSelection): number {
+function selectedStep(entry: WorkItem, selection: BandSelection): number {
   const step = selection.step
   return typeof step === 'number' && step >= 0 && step < entry.steps.length ? step : currentStep(entry)
 }
 
-function stepColor(entry: BandEntry, index: number): string | undefined {
+function stepColor(entry: WorkItem, index: number): string | undefined {
   const active = activeStep(entry)
   const next = active === -1 ? entry.steps.findIndex(step => step.kind === 'planned') : active + 1
   if (entry.steps[index]?.kind === 'done') return COLOR.done
@@ -111,19 +66,19 @@ function stepColor(entry: BandEntry, index: number): string | undefined {
   return index === next ? COLOR.next : undefined
 }
 
-const STEP_GLYPH: Record<StepKind, string> = {
+const STEP_GLYPH: Record<Step['kind'], string> = {
   done: GLYPH.done,
   current: GLYPH.current,
   waiting: GLYPH.waiting,
   planned: GLYPH.planned,
 }
 
-function link(entry: BandEntry, previous: number, index: number): string {
+function link(entry: WorkItem, previous: number, index: number): string {
   if (index - previous > 1) return '…'
   return entry.steps[previous]?.kind === 'done' ? '━' : '┄'
 }
 
-function visibleSteps(entry: BandEntry, selected: number | undefined): number[] {
+function visibleSteps(entry: WorkItem, selected: number | undefined): number[] {
   const all = entry.steps.map((_, index) => index)
   if (all.length <= SHORTEN_OVER) return all
   const current = currentStep(entry)
@@ -133,7 +88,7 @@ function visibleSteps(entry: BandEntry, selected: number | undefined): number[] 
   return all.filter(index => keep.has(index))
 }
 
-function track(entry: BandEntry, selected: number | undefined): Span[] {
+function track(entry: WorkItem, selected: number | undefined): Span[] {
   const shown = visibleSteps(entry, selected)
   const spans: Span[] = []
   let previous: number | undefined
@@ -159,24 +114,24 @@ function track(entry: BandEntry, selected: number | undefined): Span[] {
   return spans
 }
 
-function entrySpans(entry: BandEntry, focused: boolean, selection: BandSelection): Span[] {
+function entrySpans(entry: WorkItem, focused: boolean, selection: BandSelection): Span[] {
   const spans: Span[] = [{ text: `${truncate(entry.title, TITLE_COLUMNS)} `, bold: focused }]
-  if (entry.noPlan || entry.steps.length === 0) {
+  if (entry.no_plan || entry.steps.length === 0) {
     spans.push({ text: 'no plan yet', dim: true })
   } else {
     spans.push(...track(entry, focused ? selectedStep(entry, selection) : undefined), { text: `${GLYPH.goal} ` })
     if (entry.finish) spans.push({ text: truncate(entry.finish, TITLE_COLUMNS), dim: true })
   }
-  if (entry.marked) spans.push({ text: ` ${GLYPH.changed}`, color: COLOR.marked })
+  if (entry.changed) spans.push({ text: ` ${GLYPH.changed}`, color: COLOR.changed })
   if (focused && entry.location) {
     spans.push({ text: `  ${GLYPH.pane} ${truncate(entry.location, LOCATION_COLUMNS)}`, dim: true })
   }
   if (!entry.faded) return spans
-  if (entry.ageSeconds !== null) spans.push({ text: ` ${duration(entry.ageSeconds)}` })
+  if (entry.age_seconds !== null) spans.push({ text: ` ${duration(entry.age_seconds)}` })
   return spans.map(span => ({ ...span, dim: true, color: undefined }))
 }
 
-function pack(order: BandEntry[], width: number, selection: BandSelection, maxLines: number) {
+function pack(order: WorkItem[], width: number, selection: BandSelection, maxLines: number) {
   const lines: Span[][] = [[]]
   const stepHits: Hit[] = []
   const entryHits: Hit[] = []
@@ -210,7 +165,7 @@ function pack(order: BandEntry[], width: number, selection: BandSelection, maxLi
   return { lines, hits: [...stepHits, ...entryHits], shown }
 }
 
-export function bandLayout(work: BandEntry[], width: number, selection: BandSelection, maxLines = 2): BandLayout {
+export function bandLayout(work: WorkItem[], width: number, selection: BandSelection, maxLines = 2): BandLayout {
   let packed = pack(work, width, selection, maxLines)
   const focused = work.find(entry => entry.id === selection.item)
   if (focused && !packed.shown.includes(focused.id)) {
@@ -234,7 +189,7 @@ export function selectionAt(layout: BandLayout, x: number, y: number): Required<
 }
 
 export function moveSelection(
-  work: BandEntry[],
+  work: WorkItem[],
   selection: BandSelection,
   key: BandKey,
 ): Required<BandSelection> | undefined {

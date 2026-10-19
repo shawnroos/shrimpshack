@@ -6,13 +6,70 @@ export type Outcome = { ok: boolean; message: string }
 
 export type Draft = {
   option?: string
-  minutes?: number
-  space?: string
+  custom?: string
   tools?: string[]
   add?: { name?: string; description?: string }
 }
 
+export type EditorKind = 'choice' | 'checklist' | 'interval' | 'space' | 'until'
+
+type Proposed = { value: unknown; extras: Record<string, unknown> }
+
+// A term's own typed value beside its options; `parse` returns undefined to refuse the text.
+export type Custom = {
+  field: string
+  label: string
+  placeholder: (spaces: string[]) => string
+  parse: (text: string) => string | undefined
+  refusal: (text: string) => string
+  argv: (value: string) => string[]
+  proposed: (term: Term, value: string) => Proposed
+  text: (value: string) => string
+}
+
 const MESSAGE_CAP = 400
+const UTC_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
+
+export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
+  interval: {
+    field: 'minutes',
+    label: 'Custom interval, in minutes: ',
+    placeholder: () => '15',
+    parse: text => (/^\d+$/.test(text.trim()) && Number(text) > 0 ? String(Number(text)) : undefined),
+    refusal: text => `"${text}" is not a whole number of minutes`,
+    argv: minutes => ['fixed', '--seconds', String(Number(minutes) * 60)],
+    proposed: (_term, minutes) => ({ value: 'fixed', extras: { seconds: Number(minutes) * 60 } }),
+    text: minutes => `fixed, every ${minutes} min`,
+  },
+  space: {
+    field: 'space',
+    label: 'Add a herdr space (server.workspace): ',
+    placeholder: spaces => spaces[0] ?? 'default.w2',
+    parse: text => text.trim(),
+    refusal: text => `"${text}" is not a herdr space`,
+    argv: space => ['--add', space],
+    proposed: (term, space) => ({ value: term.value, extras: { add: space } }),
+    text: space => `add herdr space ${space}`,
+  },
+  until: {
+    field: 'until',
+    label: 'Stop at (UTC, like 2026-10-20T18:00:00Z): ',
+    placeholder: () => '2026-10-20T18:00:00Z',
+    parse: text => (UTC_TIME.test(text.trim()) && !Number.isNaN(Date.parse(text.trim())) ? text.trim() : undefined),
+    refusal: text => `"${text}" is not a UTC time like 2026-10-20T18:00:00Z`,
+    argv: until => ['until_time', '--until', until],
+    proposed: (_term, until) => ({ value: 'until_time', extras: { until } }),
+    text: until => `until_time, until ${until}`,
+  },
+}
+
+export function isChecklist(term: Term): boolean {
+  return term.editor === 'checklist'
+}
+
+export function customOf(term: Term): Custom | undefined {
+  return CUSTOM[term.editor]
+}
 
 export async function runVerb($: EngineInterface, argv: string[]): Promise<Outcome> {
   const session = await $.session.id()
@@ -39,28 +96,27 @@ export function toolsOf(term: Term, draft?: Draft): string[] {
   return draft?.tools ?? (Array.isArray(term.value) ? term.value.map(String) : [])
 }
 
-export function proposeArgv(term: Term, draft: Draft | undefined): string[] | string {
-  const key = term.key
-  if (key === 'tools_of_record') {
-    const name = draft?.add?.name
-    if (name && !draft?.add?.description) return `give ${name} a description first`
-    const tools = toolsOf(term, draft)
-    const list = name && !tools.includes(name) ? [...tools, name] : tools
-    if (!draft?.tools && !name) return 'tick or add a tool first'
-    const add = name ? ['--add', name, '--description', draft?.add?.description ?? ''] : []
-    return ['propose-term', key, list.join(',') || 'none', ...add, ...UI_ORIGIN_ARGS]
-  }
-  if (key === 'remit' && draft?.space) return ['propose-term', key, '--add', draft.space, ...UI_ORIGIN_ARGS]
-  if (key === 'cadence' && draft?.minutes) return ['propose-term', key, 'fixed', '--seconds', String(draft.minutes * 60), ...UI_ORIGIN_ARGS]
-  if (draft?.option) return ['propose-term', key, draft.option, ...UI_ORIGIN_ARGS]
+function checklistArgs(term: Term, draft: Draft | undefined): string[] | string {
+  const name = draft?.add?.name
+  if (name && !draft?.add?.description) return `give ${name} a description first`
+  const tools = toolsOf(term, draft)
+  const list = name && !tools.includes(name) ? [...tools, name] : tools
+  if (!draft?.tools && !name) return 'tick or add a tool first'
+  const add = name ? ['--add', name, '--description', draft?.add?.description ?? ''] : []
+  return [list.join(',') || 'none', ...add]
+}
+
+function proposeArgs(term: Term, draft: Draft | undefined): string[] | string {
+  if (isChecklist(term)) return checklistArgs(term, draft)
+  const custom = customOf(term)
+  if (custom && draft?.custom) return custom.argv(draft.custom)
+  if (draft?.option) return [draft.option]
   return 'pick an option first'
 }
 
-export function minutesOf(text: string): number | undefined {
-  const trimmed = text.trim()
-  if (!/^\d+$/.test(trimmed)) return undefined
-  const minutes = Number(trimmed)
-  return minutes > 0 ? minutes : undefined
+export function proposeArgv(term: Term, draft: Draft | undefined): string[] | string {
+  const args = proposeArgs(term, draft)
+  return typeof args === 'string' ? args : ['propose-term', term.key, ...args, ...UI_ORIGIN_ARGS]
 }
 
 const words = (name: string) => name.replaceAll('_', ' ')
@@ -71,9 +127,9 @@ function interval(seconds: number): string {
 
 // Every reply must name the term and the value: the approval check refuses a typed reply that does not
 // (require_named / require_sources_named in lib/programme.py), and for tools it needs the dropped ones too.
-function reply(term: Term, value: unknown, extras: Record<string, unknown>): string {
+function reply(term: Term, { value, extras }: Proposed): string {
   const label = words(term.key)
-  if (term.key === 'tools_of_record') {
+  if (isChecklist(term)) {
     const before = toolsOf(term)
     const after = Array.isArray(value) ? value.map(String) : []
     const dropped = before.filter(tool => !after.includes(tool))
@@ -81,7 +137,7 @@ function reply(term: Term, value: unknown, extras: Record<string, unknown>): str
     const drop = dropped.length > 0 ? ` and drop ${dropped.join(', ')}` : ''
     return `${verb} ${label} to ${after.join(', ') || 'none'}${drop}`
   }
-  if (term.key === 'remit' && typeof extras.add === 'string') return `widen ${label} to add herdr space ${extras.add}`
+  if (term.editor === 'space' && typeof extras.add === 'string') return `widen ${label} to add herdr space ${extras.add}`
   const parts = [`amend ${label} to ${words(String(value))}`]
   if (typeof extras.seconds === 'number') parts.push(interval(extras.seconds))
   if (typeof extras.until === 'string') parts.push(`until ${extras.until}`)
@@ -91,22 +147,36 @@ function reply(term: Term, value: unknown, extras: Record<string, unknown>): str
 export function acceptReply(term: Term): string | undefined {
   const proposal = term.proposal
   if (!proposal || (proposal.state !== 'pending' && proposal.state !== 'refused')) return
-  return reply(term, proposal.value, proposal.extras ?? {})
+  return reply(term, { value: proposal.value, extras: proposal.extras ?? {} })
 }
 
 // A new tool must be proposed before an amend may name it, so a draft that adds one has no reply yet.
 export function draftReply(term: Term, draft: Draft | undefined): string | undefined {
   if (!draft) return
-  if (term.key === 'tools_of_record') {
+  if (isChecklist(term)) {
     if (draft.add?.name || !draft.tools) return
     const before = toolsOf(term)
     const same = draft.tools.length === before.length && draft.tools.every(tool => before.includes(tool))
-    return same ? undefined : reply(term, draft.tools, {})
+    return same ? undefined : reply(term, { value: draft.tools, extras: {} })
   }
-  if (term.key === 'remit' && draft.space) return reply(term, term.value, { add: draft.space })
-  if (term.key === 'cadence' && draft.minutes) return reply(term, 'fixed', { seconds: draft.minutes * 60 })
+  const custom = customOf(term)
+  if (custom && draft.custom) return reply(term, custom.proposed(term, draft.custom))
   const active = term.options.find(option => option.active)?.name
-  if (draft.option && draft.option !== active) return reply(term, draft.option, {})
+  if (draft.option && draft.option !== active) return reply(term, { value: draft.option, extras: {} })
+}
+
+export function draftText(term: Term, draft: Draft): string | undefined {
+  if (isChecklist(term)) {
+    const name = draft.add?.name
+    if (!draft.tools && !name) return
+    const tools = toolsOf(term, draft)
+    const parts = [(name && !tools.includes(name) ? [...tools, name] : tools).join(', ') || 'none']
+    if (name) parts.push(`new tool ${name}${draft.add?.description ? ` (${draft.add.description})` : ', needs a description'}`)
+    return parts.join(' · ')
+  }
+  const custom = customOf(term)
+  if (custom && draft.custom) return custom.text(draft.custom)
+  return draft.option
 }
 
 export function instructionTemplate(title: string | undefined): string {

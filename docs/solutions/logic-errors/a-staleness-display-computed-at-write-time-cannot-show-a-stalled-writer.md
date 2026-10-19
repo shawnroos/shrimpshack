@@ -37,32 +37,20 @@ The tests could not catch this, because each test fed the mod a fixed `view.json
 
 The fix is the commit "fix(auto): age stale work from the clock and tidy the contract view" on branch `feature/programme-sessions-contract` (no PR opened and not on `main` as of this writing; find the PR that lands that branch for the merged form).
 
-1. The mod works out age and fade when it draws, from the stored `recorded_at` and `fade_after_seconds`, using `$.clock.now()`. This is `liveAge` in `plugins/auto/mods/programme-view/tree.tsx`:
+1. The mod works out age and fade when it draws, from the stored `recorded_at` and `fade_after_seconds`, using `$.clock.now()`. This is `age` in `plugins/auto/mods/programme-view/view.ts`:
 
 ```ts
-export function liveAge<T>(raw: T, nowMs: number): T {
-  if (typeof raw !== 'object' || raw === null) return raw
-  const entry = raw as Record<string, unknown>
+function age(entry: Raw, nowMs: number): { age_seconds: number | null; faded: boolean } {
+  const stored = { age_seconds: typeof entry.age_seconds === 'number' ? entry.age_seconds : null, faded: entry.faded === true }
   const at = typeof entry.recorded_at === 'string' ? Date.parse(entry.recorded_at) : Number.NaN
-  if (Number.isNaN(at)) return raw
-  const age = Math.max(0, Math.floor((nowMs - at) / 1000))
+  if (Number.isNaN(at)) return stored
+  const seconds = Math.max(0, Math.floor((nowMs - at) / 1000))
   const after = typeof entry.fade_after_seconds === 'number' ? entry.fade_after_seconds : undefined
-  return { ...entry, age_seconds: age, faded: after === undefined ? entry.faded : age > after } as T
+  return { age_seconds: seconds, faded: after === undefined ? stored.faded : seconds > after }
 }
 ```
 
-2. Both `parts`-based readers use it. In `plugins/auto/mods/programme-view/register.tsx`, the pane applies it in `partsOf` (time from `$.clock.now()`) and the band applies it in `readBandWork`:
-
-```diff
--    work: work as WorkEntry[],
-+    work: work.map(entry => liveAge(entry, nowMs)) as WorkEntry[],
-```
-```diff
--    return view?.view_format === VIEW_FORMAT ? readWork(view.work) : []
-+    if (view?.view_format !== VIEW_FORMAT || !Array.isArray(view.work)) return []
-+    const now = await $.clock.now()
-+    return readWork(view.work.map((entry: unknown) => liveAge(entry, now)))
-```
+2. The band and the pane read the view through one function, `loadView` in the same file. It parses `work` once with `readWork(view.work, await $.clock.now())`, which applies `age` to every entry, so neither surface can show a write-time age. (The first version of the fix applied the same step twice, once in each surface's own reader; a later refactor merged the readers.)
 
 3. The 2-second poll now also redraws the pane when the wall-clock minute changes, not only when the file changes:
 
@@ -80,7 +68,7 @@ export function liveAge<T>(raw: T, nowMs: number): T {
      })
 ```
 
-The writer did not change. `_work_entry` still writes `recorded_at`, `fade_after_seconds`, and a build-time `age_seconds` and `faded`. The mod overwrites the last two whenever `recorded_at` parses. If `fade_after_seconds` is missing, `liveAge` keeps the writer's `faded`. If `recorded_at` is missing or does not parse, it keeps the writer's values unchanged.
+The writer did not change. `_work_entry` still writes `recorded_at`, `fade_after_seconds`, and a build-time `age_seconds` and `faded`. The mod overwrites the last two whenever `recorded_at` parses. If `fade_after_seconds` is missing, `age` keeps the writer's `faded`. If `recorded_at` is missing or does not parse, it keeps the writer's values unchanged.
 
 Two tests in `plugins/auto/mods/programme-view/tree.test.ts` cover the fix. The shared test world (`plugins/auto/mods/programme-view/test-world.ts`) pins the mock clock to `2026-10-19T10:00:00Z` and returns the clock:
 

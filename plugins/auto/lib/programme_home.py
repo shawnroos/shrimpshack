@@ -200,6 +200,7 @@ def default_terms(now_iso: str) -> dict:
 
 TERM_GUIDE = {
     "remit": {
+        "editor": "space",
         "binding": "code",
         "description": "Which herdr spaces, repos and tracker scope the PM looks after.",
         "options": {
@@ -209,6 +210,7 @@ TERM_GUIDE = {
         },
     },
     "stop_rule": {
+        "editor": "until",
         "binding": "code",
         "description": "When the PM may stop sweeping and end its turn.",
         "options": {
@@ -219,6 +221,7 @@ TERM_GUIDE = {
         },
     },
     "autonomy": {
+        "editor": "choice",
         "binding": "none",
         "description": "How far the PM may act without asking Shawn first.",
         "options": {
@@ -226,6 +229,7 @@ TERM_GUIDE = {
         },
     },
     "cadence": {
+        "editor": "interval",
         "binding": "code",
         "description": "How often the PM sweeps the programme.",
         "options": {
@@ -234,6 +238,7 @@ TERM_GUIDE = {
         },
     },
     "tools_of_record": {
+        "editor": "checklist",
         "binding": "code",
         "description": "Which tools the PM reads to learn the state of the work.",
         "options": {

@@ -51,9 +51,18 @@ export function workEntry(id: string, title: string, extra: Record<string, unkno
 
 const option = (name: string, active = false) => ({ name, description: `what ${name} means`, active })
 
+const EDITORS: Record<string, string> = {
+  remit: 'space',
+  stop_rule: 'until',
+  autonomy: 'choice',
+  cadence: 'interval',
+  tools_of_record: 'checklist',
+}
+
 export function term(key: string, extra: Record<string, unknown> = {}) {
   return {
     key,
+    editor: EDITORS[key] ?? 'choice',
     label: key.replaceAll('_', ' '),
     value: 'v',
     value_text: `${key} value`,

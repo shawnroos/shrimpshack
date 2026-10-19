@@ -1,8 +1,10 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, Mounted } from 'claude-code/testing'
-import { GLYPH, bandLayout, lineText, moveSelection, readWork } from './band.tsx'
-import type { BandEntry, Span } from './band.tsx'
+import { GLYPH, bandLayout, lineText, moveSelection } from './band.tsx'
+import type { Span } from './band.tsx'
+import { readWork } from './view'
+import type { WorkItem } from './view'
 
 const DATA = '/data'
 const HOME = `${DATA}/programmes/prog-1`
@@ -34,8 +36,8 @@ function task(id: string, over: Record<string, unknown> = {}) {
   }
 }
 
-function entries(raw: unknown[]): BandEntry[] {
-  return readWork(raw)
+function entries(raw: unknown[]): WorkItem[] {
+  return readWork(raw, 0)
 }
 
 function world(on: On, work: unknown[], store: Record<string, unknown> = {}) {
@@ -252,6 +254,23 @@ test('the band draws every task collapsed through one Client', async ($, on) => 
   expect(await band.find({ type: 'Button' })).toBeUndefined()
   expect(await band.find({ type: 'Text', text: /Owner history task 1/, in: 'band' })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /Tab-1 › pane-1/, in: 'band' })).toBeUndefined()
+})
+
+test('the band marks a changed plan by the same rule as the tree, and a click clears it', async ($, on) => {
+  const store = world(on, [
+    task('1', { change_hash: 'h1', changed_since_first: true }),
+    task('2', { change_hash: 'h2', changed_since_first: false }),
+  ])
+  await opened($)
+  const band = await mountBand($)
+  const marks = async () => {
+    const found = await band.find({ type: 'Text', text: new RegExp(GLYPH.changed), in: 'band' })
+    return found !== undefined
+  }
+  expect(await marks()).toBe(true)
+  await band.pointer({ type: 'down', x: 1, y: 0, button: 'left', in: 'band' })
+  expect(store['viewed:1']).toBe('h1')
+  expect(await marks()).toBe(false)
 })
 
 test('AE7: without a click, Tab leaves the band unfocused and selects nothing', async ($, on) => {

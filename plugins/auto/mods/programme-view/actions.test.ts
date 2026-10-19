@@ -233,6 +233,21 @@ test('remit takes any herdr space by name, including one outside the remit, and 
   expect(calls.map(call => call.argv.slice(1))).toEqual([['propose-term', 'remit', '--add', 'default.w9', '--origin', 'ui']])
 })
 
+test('stop rule takes a UTC stop time, proposes until_time --until, and shows the reply that names it', async ($, on) => {
+  world(on, { [LEASE]: lease(), [VIEW]: viewText() })
+  const calls = verbs(on)
+  const pane = await contractPane($)
+  await press(pane, 'term:stop_rule')
+  await type(pane, 'custom:stop_rule:until', 'tonight')
+  expect(await has(pane, '"tonight" is not a UTC time like 2026-10-20T18:00:00Z')).toBe(true)
+  await type(pane, 'custom:stop_rule:until', '2026-10-20T18:00:00Z')
+  expect(await lineAfter(pane, 'Type this:')).toBe('amend stop rule to until time until 2026-10-20T18:00:00Z')
+  await press(pane, 'act:propose')
+  expect(calls.map(call => call.argv.slice(1))).toEqual([
+    ['propose-term', 'stop_rule', 'until_time', '--until', '2026-10-20T18:00:00Z', '--origin', 'ui'],
+  ])
+})
+
 test('the action keys are drawn only while the pane is focused, with their hotkeys', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const pane = await contractPane($)
