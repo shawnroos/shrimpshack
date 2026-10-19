@@ -270,7 +270,7 @@ check "True" "$(field "$OUT" ok)"
 it "collector, verifier and restore ran no hook, filter, textconv, pager or fsmonitor"
 check "none" "$(cat "${MARK}/ran" 2>/dev/null || echo none)"
 it "positive control: the planted fsmonitor and filters do run under plain git"
-g -C "$SRC7" status >/dev/null 2>&1
+g -C "$SRC7" status </dev/null >/dev/null 2>&1
 has "mark.sh" "$(cat "${MARK}/ran" 2>/dev/null)"
 
 # ── Scenario 8: independently asserted inventories catch omissions ─────────────────
