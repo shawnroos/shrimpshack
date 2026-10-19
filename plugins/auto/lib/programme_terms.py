@@ -41,6 +41,14 @@ PROTECTED_STEMS = {
 }
 # Whole words only: as a substring "prod" would also refuse "product".
 PROTECTED_WORDS = {"prod": "prod_deploy"}
+ESCALATIONS = (
+    "change the outcome or acceptance",
+    "reopen a settled human decision",
+    "touch a reserved area",
+    "exceed a risk or cost limit",
+    "need a permission that was refused",
+)
+CONTRACT_CAVEAT = "The PM decides unless the operating contract's escalation list applies."
 
 
 class TermsError(Exception):
@@ -125,6 +133,34 @@ def check_accept_order(run_id, prompt_id) -> None:
 def stamp(programme) -> int:
     programme["agreement"][programme_decisions.STAMP_KEY] = CONTRACT_VERSION
     return CONTRACT_VERSION
+
+
+def contract_view(programme):
+    if not programme_decisions.stamped(programme):
+        return None
+    return {
+        "version": programme["agreement"][programme_decisions.STAMP_KEY],
+        "project_terms": [{k: e.get(k) for k in ("id", "area", "value", "reserved")}
+                          for e in programme_home.project_terms(programme)],
+        "escalations": list(ESCALATIONS),
+        "protected": list(PROTECTED_STEMS),
+    }
+
+
+def apply_contract(rules, autonomy) -> tuple:
+    rules = [dict(rule, caveat=CONTRACT_CAVEAT)
+             if rule["id"] == "product-question" and rule["layer"] == "plugin" else rule
+             for rule in rules]
+    return rules, autonomy
+
+
+def contract_lines(view) -> list:
+    out = [f"operating contract v{view['version']}: when the terms are silent the PM decides and records why"]
+    out += [f"{'reserved for Shawn' if t.get('reserved') else 'project term'} {t.get('id')} "
+            f"{t.get('area')}: {t.get('value')}" for t in view["project_terms"]]
+    out.append("bring Shawn only decisions that: " + "; ".join(view["escalations"]))
+    out.append("protected escalations override every project term: " + ", ".join(view["protected"]))
+    return [programme_sanitize.clean(text, cap=0) for text in out]
 
 
 def _find(programme, term_id) -> dict:

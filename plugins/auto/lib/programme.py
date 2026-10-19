@@ -170,7 +170,10 @@ def rules_in_force(record, journals=None) -> dict:
     autonomy = [{"action": action, "level": entry["level"], "layer": entry["layer"],
                  "adopted_on": entry["adopted_on"]}
                 for action, entry in sorted(protocol["autonomy"].items()) if entry["layer"] != "plugin"]
-    return {
+    contract = programme_terms.contract_view(programme)
+    if contract:
+        rules, autonomy = programme_terms.apply_contract(rules, autonomy)
+    out = {
         "run": record.get("run_id"),
         "agreement": {"accepted": programme["agreement"].get("accepted"),
                       "terms": _terms_view(programme["agreement"])},
@@ -180,11 +183,16 @@ def rules_in_force(record, journals=None) -> dict:
                            for r in protocol["rejected"]],
         "instructions": active_instructions(programme),
     }
+    if contract:
+        out["operating_contract"] = contract
+    return out
 
 
 def render_rules(record) -> str:
     rules = rules_in_force(record)
     lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rule_texts(rules)]
+    if rules.get("operating_contract"):
+        lines += programme_terms.contract_lines(rules["operating_contract"])
     body = "\n".join(lines).replace("<", "\\u003c")
     return (
         "Rules in force for this programme, rebuilt from its run record. The tag holds "

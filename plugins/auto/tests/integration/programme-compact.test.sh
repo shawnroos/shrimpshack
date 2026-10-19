@@ -273,6 +273,28 @@ lacks "<auto-rules>" "$STOP2"
 it "without the flag the Stop reason does not point at reloaded rules"
 lacks "Rules in force were reloaded" "$STOP2"
 
+it "the compact reprint for an unstamped programme has no operating contract"
+pre_compact '{"session_id":"sess-pm","trigger":"auto","custom_instructions":null}' >/dev/null
+lacks "operating contract" "$(context_of "$(session_start '{"session_id":"sess-pm","source":"compact"}')")"
+prog rules --ack
+prog propose-agreement --project-term "crop defaults=PM picks the crop default" \
+  --reserved-term "pricing copy=Shawn writes every price string" --source "repo README"
+prog accept-agreement --prompt "$(typed 'yes, I accept the agreement')"
+it "the agreement is accepted with the contract stamp"
+check 0 "$CODE"
+pre_compact '{"session_id":"sess-pm","trigger":"auto","custom_instructions":null}' >/dev/null
+CTX_STAMPED="$(context_of "$(session_start '{"session_id":"sess-pm","source":"compact"}')")"
+it "after compaction a stamped programme's reprinted block keeps the project terms"
+has "crop defaults: PM picks the crop default" "$CTX_STAMPED"
+has "reserved for Shawn" "$CTX_STAMPED"
+it "after compaction a stamped programme's reprinted block keeps the escalation list"
+has "bring Shawn only decisions that:" "$CTX_STAMPED"
+lacks "The PM never decides a product question" "$CTX_STAMPED"
+it "rules --ack on a stamped programme prints the operating contract"
+prog rules --ack
+check 0 "$CODE"
+has "crop defaults: PM picks the crop default" "$OUT"
+
 it "an ended programme takes no flag"
 run_py "$RUN" <<'EOF' >/dev/null
 ph.end_programme(args[0], "done")
