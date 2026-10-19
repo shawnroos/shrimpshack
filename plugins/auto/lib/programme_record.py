@@ -243,6 +243,9 @@ def _merge_into(programme, src_id, dst_id) -> None:
     for key in ("title", "waiting_on", "tested_build"):
         if not dst.get(key) and src.get(key):
             dst[key] = src[key]
+    newer = (src.get("trajectory") or {}).get("recorded_at") or ""
+    if newer > ((dst.get("trajectory") or {}).get("recorded_at") or ""):
+        dst["trajectory"] = src["trajectory"]
     dst["history"].extend(src["history"])
     _history(dst, "merged", source=src_id)
     _rewrite_refs(programme, [src_id] + src["aliases"], dst_id)

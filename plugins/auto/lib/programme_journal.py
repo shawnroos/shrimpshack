@@ -43,6 +43,7 @@ KINDS = (
     "blocked_tracker_write",
     "tracker_synced",
     "issues_recorded",
+    "trajectory_changed",
     "remit_set",
     "prompts_pruned",
     "agreement_proposed",

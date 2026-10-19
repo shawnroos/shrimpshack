@@ -103,14 +103,16 @@
 #                          programme_sanitize, programme_record, programme_exec,
 #                          programme_tracker, programme_tasks, programme_plans,
 #                          session_registry
+#   programme_trajectory → run_record_core, programme_home, programme_journal,
+#                          programme_sanitize, programme_record, driver_session
 #   programme_view       → programme_home, programme_predicate, programme_sanitize,
 #                          programme_tasks, session_registry
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_protocol, session_registry, driver_session, verb_cli;
 #                          then, after its verb table is built: programme_record,
-#                          programme_evidence, programme_sources, programme_view,
-#                          programme_lifecycle
-#                          Those five receive `programme` as a `host` argument and never
+#                          programme_evidence, programme_sources, programme_trajectory,
+#                          programme_view, programme_lifecycle
+#                          Those six receive `programme` as a `host` argument and never
 #                          load it back.
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal,
 #                          session_registry, driver_session, programme_sanitize
@@ -423,7 +425,8 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme.py programme.sh verb_cli.py programme_record.py programme_sanitize.py \
            programme_evidence.py programme_sources.py programme-watch.py programme-watch.sh \
            programme_view.py run_record_evidence.py programme_lifecycle.py \
-           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py; do
+           programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
+           programme_trajectory.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -442,7 +445,7 @@ for _hook in on-user-prompt.sh on-pre-compact.sh; do
 done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
-for _host in programme_record programme_evidence programme_sources programme_view \
+for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
              programme-watch run_record_evidence programme_lifecycle; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then

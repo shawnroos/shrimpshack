@@ -45,7 +45,7 @@ TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
     "deliverables", "waiting_on", "task_runs", "dropped_reason", "joined_at",
-    "history",
+    "history", "trajectory",
 )
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "instructions", "items",
@@ -256,7 +256,7 @@ def normalize_item(item: dict, item_id=None) -> dict:
     for key in ("aliases", "sessions", "task_runs", "history"):
         out[key] = list(item.get(key) or [])
     out["deliverables"] = dict(item.get("deliverables") or {})
-    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at"):
+    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "trajectory"):
         out.setdefault(key, None)
     return out
 
@@ -276,6 +276,7 @@ def normalize_programme(block: dict) -> dict:
     agreement["terms"] = terms
     out["agreement"] = agreement
     out["items"] = {k: normalize_item(v, k) for k, v in (out["items"] or {}).items()}
+    out["trajectory_sweeps"] = list(out.get("trajectory_sweeps") or [])
     remit = dict(out["remit"] or {})
     remit.setdefault("spaces", [])
     remit.setdefault("tabs", [])

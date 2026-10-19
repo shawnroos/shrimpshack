@@ -174,6 +174,17 @@ session.
   fail; the watcher never reads through the MCP, and a sweep that cannot read
   the tracker leaves a linear-mcp tracker available. The recorded check never
   reads `recorded_issues`.
+- **Trajectories**: `record-trajectories` reads a JSON list on stdin, one entry per
+  open item: `{item, done, current, planned, finish, location}`, where a step is
+  `{title, clause}` and a clause is `term:<key>`, `rule:<id>`, `instruction:<id>`
+  or null. It stores each entry on the item as its trajectory and moves
+  `trajectory_sweeps` to the previous and latest call times. A clause that is not
+  in the rules in force is stored as null with an `unknown_clause` note, never
+  refused. An entry for an unknown, done, handed or dropped item is skipped with a
+  reason and the rest are stored; input over 1 MB is refused whole, and `[]`
+  writes nothing. Only an item whose step path changed under the same driving
+  session gets a `trajectory_changed` journal row; moving the current step to
+  done is not a change, and neither is a first recording.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)

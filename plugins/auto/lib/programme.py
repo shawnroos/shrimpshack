@@ -762,6 +762,9 @@ _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
 programme_sources = load_lib_module("programme_sources")
 _VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
 
+programme_trajectory = load_lib_module("programme_trajectory")
+_VERBS.update(programme_trajectory.build_verbs(sys.modules[__name__]))
+
 programme_view = load_lib_module("programme_view")
 VIEW_DIR = "views"
 VIEW_NAME = "view.json"
