@@ -675,6 +675,7 @@ keys and keeps unknown ones.
 | `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
+| `permission_proposals[]` | `{id: "perm-"+n, destination, settings_file, operations, rules, reach, exclusions, key: {operations, destination}, items, evidence, state, created_at, changed_at, notified_at, answers, explanation, confirmed, verified?, reservation?, attempts?, pending_answer?, outcome?, covering?, redenied_at?}`. A separate list from `proposed_rules`. `state` is open, postponed, rejected, retrying, resolved, ineffective or retry_unobserved. `propose-permission` adds and folds entries, `answer-permission` and `settle-permissions` move them. Fields, states and rules: programme-permission-proposals.md |
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
 | `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
@@ -689,6 +690,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 |-----|-------|
 | `id` | `[a-z][a-z0-9_-]*:<key>`, max 128 characters, e.g. `linear:AI-753`, `herdr:<ws>/<pane>` |
 | `title`, `joined_at` | string, `<iso>` |
+| `repo` | a `remit.repos[].path`, or null. `add-item --repo` sets it only when the path matches a remit repo; it names where a permission proposal for the item goes |
 | `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped` (`FINISHED_ITEM_STATES` are the last three). No verb sets `done`; the predicate derives it |
 | `aliases` | other ids that resolve to this item |
 | `owner` | `{pane, terminal_id, session_id}` |
@@ -698,7 +700,8 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `deliverables` | `{"<name>": entry}`, names from `DELIVERABLES` (`merged`, `flagged`, `verified`, `released`, `recorded`); a new entry is `{result: "unknown"}` |
 | deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
-| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it |
+| `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, permission?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. `propose-permission` writes `{who: shawn, reporter: shawn, watcher: null, permission: <perm-id>}`; `settle-permissions` clears it when that proposal resolves. `set-waiting` replaces the whole object, so it drops `permission` |
+| `permission_block` | `{cause, detail, at, proposals, unconfirmed, reports?}`: the item's latest permission explanation, written by the permission verbs |
 | `handed` | `{at, question, answered: null \| {at, choice: ship\|decline, prompt_id}}` |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
@@ -728,7 +731,10 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
-`taken_over`, `handed_over`, `programme_ended`, `request_refused`.
+`taken_over`, `handed_over`, `programme_ended`, `request_refused`,
+`permission_denied`, `permission_tool_ran`, `permission_proposed`,
+`permission_answered`, `permission_verified`, `permission_settled`,
+`permission_block_reported`, `blocked_settings_write`.
 
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`;
@@ -767,6 +773,28 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   of the Stop hook; readers dedupe by item.
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
   PR head. No verb writes it yet.
+- Permission lines (programme-permission-proposals.md gives the full rules):
+  - `permission_denied` and `permission_tool_ran` are written by the
+    `on-permission-event` hook, never by a verb: `{event, tool, tool_use_id,
+    item_ids, transcript_path, transcript_bytes, command}`, and for a denial also
+    `reason` and `layer`. `command` is redacted and capped at 2000 characters.
+    `permission_tool_ran` is written for any command that runs `gh`, only while a
+    proposal is not resolved. A row counts only after the session's own
+    transcript confirms it.
+  - `permission_proposed {items, denials, proposals, notify}`. `notify` maps each
+    proposal id the call tried to notify to the notifier's exit status.
+  - `permission_answered {proposal, choice, state, from, deferred?, noop?}` and
+    `permission_verified`, the same plus `{verify, reservation, retry_item,
+    retry_text}` for an applied answer that ran the verify. Both carry
+    `prompt_id`, `quote` and `cites`.
+  - `permission_settled {settled, pending}`, written only when at least one
+    proposal changed state.
+  - `blocked_settings_write {tool, path, item_ids, command?}`, written by the
+    PreToolUse hook when it refuses a call that names a proposal's
+    `.claude/settings.local.json`.
+  - `permission_block_reported {item, operations, refusal, command_hash}` goes to
+    `<home>/blocks.jsonl`, not to the journal. `report-block` writes it from any
+    session; it never holds the command text.
 
 `<home>/claims.jsonl` is the worker inbox. Each line has the journal line shape with
 kind `claim`, `session_id` = the worker, payload `{item, deliverable, ref}`. Inbox

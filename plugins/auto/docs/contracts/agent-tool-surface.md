@@ -406,6 +406,12 @@ whose recorded project is outside them.
 Other sessions, sessions that drive no programme, and every other field
 (an issue description included) are not checked.
 
+The same hook guards the files permission proposals target. For the driving
+session and for sessions on unfinished items, it denies a Write, Edit, MultiEdit
+or Bash call that names the `.claude/settings.local.json` of any proposal's
+destination, and journals `blocked_settings_write`. The Bash check is a text
+match. Other settings files are not checked (programme-permission-proposals.md).
+
 The pane guard and the prompt binding stop accidents and casual misuse. A
 determined process running as the same user can still append journal rows or
 type into the pane by means the hook cannot see. The text check does not see:

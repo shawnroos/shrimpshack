@@ -50,11 +50,15 @@ from this session's lease.
    | Reopen a dropped item | `P reopen-item <item> --prompt <id>` |
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
+   | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
 
    The cited message must name what it approves, or the verb refuses it and
    lists the missing words: the item id or key (`AI-753`) for the item rows, the
    rule id for `adopt-rule`, the action and the level for `adopt-autonomy`, the
-   repo and the check key (`verified.lookup`) for `adopt-check`. A `--widening`
+   repo and the check key (`verified.lookup`) for `adopt-check`, the proposal id
+   (`perm-1`) and exactly one answer word for `answer-permission`: "applied" or
+   "apply" for applied, "not now", "later" or "postpone" for not-now, "reject" or
+   "decline" for no. Shawn types, for example, "applied perm-1". A `--widening`
    needs the word "widen" in his message too. When his message does not name the
    target, do not run the verb: ask him to confirm in words that name it, for
    example "adopt merge_around_gate at act, widen it", and cite that reply.
@@ -117,22 +121,54 @@ from this session's lease.
    shows the claim as unconfirmed.
    For a `merged` claim, and before any merge you do yourself, run the merge
    gates in section 4 of [references/sequencing.md](references/sequencing.md).
-9. **Arm retry watchers.** For each queue entry with action `arm_retry_watcher`:
+9. **Permission blocks.** Turn blocked reads into one proposal Shawn answers.
+   - Read the new `permission_denied` lines of `<home>/journal.jsonl` and the new
+     lines of `<home>/blocks.jsonl`. Skip a denial whose `tool_use_id` is already
+     in the `denials` of a `permission_proposed` line; a repeat does no harm.
+   - For each denial: `P propose-permission --denial <payload.tool_use_id> --item <id>`,
+     with one `--item` for each id in its `item_ids`. Several denials can share
+     one call.
+   - For an item with worker reports and no denial:
+     `P propose-permission --item <payload.item>`. It records an explanation
+     that the denying layer is unknown; it never makes a proposal.
+   - `P propose-permission` with no arguments re-sends open proposals whose
+     notification never went out.
+   - When `P answer-permission ... applied` in step 3 returned a `retry_text`,
+     send it once, exactly as returned: `P prompt-item <retry_item> "<retry_text>"`.
+     The same text is in that answer's `permission_verified` line. Never send it
+     twice, and never write your own.
+   - `P settle-permissions` every sweep. It reads the blocked session's
+     transcript and moves a retrying proposal to resolved, ineffective or
+     retry_unobserved. A `pending` line saying the retry was not sent means
+     the `prompt-item` above is still due.
+   - `propose-permission` sets the item waiting on Shawn for that proposal.
+     Never run `set-waiting` on such an item: it drops the proposal link, and
+     settlement can then not return the item to open.
+   - Never pass your own `check-deliverable` or `gh` result to a blocked worker
+     as a stand-in for the blocked read, and never tell a worker to split the
+     command or run it another way. Both route the blocked read around Shawn.
+   - A denial in your own session has no item. `propose-permission` refuses it,
+     because your session is not on any item. Tell Shawn in one line instead.
+10. **Arm retry watchers.** For each queue entry with action `arm_retry_watcher`:
    1. Read the item's `watchers["retry-<item>"].retry.argv`.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
    3. `P queue --remove <entry-id>`.
-10. **Drive workers.**
+11. **Drive workers.**
    - Before you start or prompt a worker on new work, find what it waits for
      with section 3 of [references/sequencing.md](references/sequencing.md).
    - Start a queued worker with `P start-worker <item> -- <spinoff arguments>`.
      Never pass `--session-id`; the verb mints it.
    - Prompt a worker with `P prompt-item <item> "<text>"`. It sends only to the
      item's recorded pane and owner session.
-   - Every brief or prompt to a worker carries these two clauses:
+   - Every brief or prompt to a worker carries these three clauses:
      - "Record before any long background wait: send your claim first."
      - "Never prompt the PM's pane. Report with
        `bash <plugin root>/lib/programme.sh claim --run <run> --item <item> --deliverable <name> --ref <ref>`."
-11. **Record waits.** Every wait has a live watcher or a named reporter.
+     - "When a command is denied permission, do not run it again, and do not try
+       another tool, wrapper or worker for it. Report it with
+       `bash <plugin root>/lib/programme.sh report-block --run <run> --item <item> --command '<command>'`,
+       then continue the work that does not need it."
+12. **Record waits.** Every wait has a live watcher or a named reporter.
     - A wait the PM watches: Monitor
       `programme-watch.sh --item <item> -- <watch command>` (for example
       `gh run watch <id>`), then `P set-waiting <item> --who <who> --watcher <watcher id>
@@ -145,18 +181,18 @@ from this session's lease.
       runtime first, then pass `--blocker --trace-id <id>` or `--job-id <id>`.
     - An item no protocol rule matches: `P propose-rule '<rule json>'`, then
       `P set-waiting <item> --who shawn --reporter shawn`.
-12. **Hand product calls.** A product question goes to Shawn with
+13. **Hand product calls.** A product question goes to Shawn with
     `P hand-item <item> --question "<one question>"`. It notifies him once.
     When several are open, order them with section 5 of [references/sequencing.md](references/sequencing.md).
-13. **Update the working model.** `P set-now "<what you do next>" --item <item>`
+14. **Update the working model.** `P set-now "<what you do next>" --item <item>`
     (or `--clear`), and `P queue --action <name> --item <item>` or
     `--remove <entry-id>` so the queue matches your next actions.
-14. **Update the tracker.** For each issue item whose state changed in this
+15. **Update the tracker.** For each issue item whose state changed in this
     sweep (worker started, PR opened or merged, blocked, handed, unblocked),
     load the `auto:programme-tracker` skill and follow it. It writes only when
     `P tracker-synced --item <item> --state <label> --check` says the item is
     due, and it never writes a done state or a root-cause comment.
-15. **Re-arm the wake-ups.**
+16. **Re-arm the wake-ups.**
     - Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh"` with the
       longest timeout. Add `--tracker` only when the space has an issue
       tracker it can poll. Tasks and plans are always watched unless the
@@ -166,7 +202,7 @@ from this session's lease.
       CronCreate it again at the cadence term with the exact text
       `Run the programme sweep: load the auto:programme-sweep skill and follow it.`
       and run `P watcher-beat cron --task-id <id> --kind cron --prompt "<that exact text>"`.
-16. **Stop.** End the turn. The Stop hook holds you while you have a next action
+17. **Stop.** End the turn. The Stop hook holds you while you have a next action
     of your own or a wait with no watcher; act on the reason it gives.
 
 Show Shawn the live view with `/programme-view`, or a snapshot with
