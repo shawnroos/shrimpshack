@@ -179,7 +179,10 @@ def rules_in_force(record, journals=None) -> dict:
     autonomy = [{"action": action, "level": entry["level"], "layer": entry["layer"],
                  "adopted_on": entry["adopted_on"]}
                 for action, entry in sorted(protocol["autonomy"].items()) if entry["layer"] != "plugin"]
-    return {
+    contract = programme_terms.contract_view(programme)
+    if contract:
+        rules = programme_terms.apply_contract(rules)
+    out = {
         "run": record.get("run_id"),
         "agreement": {"accepted": programme["agreement"].get("accepted"),
                       "terms": _terms_view(programme["agreement"])},
@@ -189,11 +192,17 @@ def rules_in_force(record, journals=None) -> dict:
                            for r in protocol["rejected"]],
         "instructions": active_instructions(programme),
     }
+    corrections = programme_terms.active_corrections(programme)
+    if corrections:
+        out["corrections"] = corrections
+    if contract:
+        out["operating_contract"] = contract
+    return out
 
 
 def render_rules(record, revision=None) -> str:
     rules = rules_in_force(record)
-    lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rule_texts(rules)]
+    lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rules_texts(rules)]
     body = "\n".join(lines).replace("<", "\\u003c")
     return (
         "Rules in force for this programme, rebuilt from its run record. The tag holds "
@@ -473,7 +482,10 @@ def _h_rules(argv):
 
 
 def _h_propose_agreement(argv):
-    _, opts = _parse(argv, values=("run", "why", "until", "seconds"), multi=("term",))
+    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source"),
+                     multi=("term", "project-term", "reserved-term"))
+    host = sys.modules[__name__]
+    parsed, source = programme_terms.parse_specs(host, opts)
 
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
@@ -487,8 +499,9 @@ def _h_propose_agreement(argv):
             value = _check_value(term, value, opts)
             _set_term(term, value, opts, set_by="proposal", why=opts.get("why"))
             proposed[key] = value
+        added = programme_terms.add(host, programme, parsed, source)
         programme["agreement"]["proposed_at"] = _now()
-        return {"terms": proposed, "why": opts.get("why")}
+        return {"terms": proposed, "why": opts.get("why"), **added}
 
     return _write(opts, change, "agreement_proposed")
 
@@ -501,9 +514,15 @@ def _h_accept_agreement(argv):
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
             raise ProgrammeError("the agreement is already accepted")
+        programme_terms.check_accept_order(rec["run_id"], prompt["prompt_id"])
         programme["agreement"]["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
                                               "quote": prompt["quote"]}
-        return {"terms": {k: t.get("value") for k, t in programme["agreement"]["terms"].items()}}
+        version = programme_terms.stamp(programme)
+        decision = programme_decisions.shawn_decision(
+            programme, kind=programme_decisions.AGREEMENT_KIND,
+            item=programme_decisions.PROGRAMME_TARGET, prompt=prompt)
+        return {"terms": {k: t.get("value") for k, t in programme["agreement"]["terms"].items()},
+                "decision_id": decision["id"], "contract_version": version}
 
     return _write(opts, change, "agreement_accepted", prompt_id=opts["prompt"], needs_prompt=True)
 
@@ -731,13 +750,18 @@ _VERBS = {
     ),
     "propose-agreement": _Verb(
         _h_propose_agreement,
-        "[--run <id>] [--term <key>=<value>]... [--why <text>] [--until <iso>] [--seconds <n>]",
-        rejects="an accepted agreement; a value outside the term's options.",
+        "[--run <id>] [--term <key>=<value>]... [--project-term <area>=<text>]... "
+        "[--reserved-term <area>=<text>]... [--source <evidence>] [--why <text>] [--until <iso>] "
+        "[--seconds <n>]",
+        rejects="an accepted agreement; a value outside the term's options; a project term without "
+        "--source, without <area>=<text>, for an area that already has one, or whose area or text names a "
+        "protected escalation without being reserved for Shawn.",
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,
         "--prompt <id> [--run <id>]",
-        rejects="no --prompt; a prompt that is unknown, not typed, or not from the driving session.",
+        rejects="no --prompt; a prompt that is unknown, not typed, not from the driving session, or "
+        "older than the last proposal or project-term edit.",
     ),
     "amend-term": _Verb(
         _h_amend_term,
@@ -784,9 +808,16 @@ _VERBS = {
     ),
 }
 
+
 # Loaded last: build_verbs reads this module's _Verb, _parse, _locate and _write.
 programme_record = load_lib_module("programme_record")
 _VERBS.update(programme_record.build_verbs(sys.modules[__name__]))
+
+programme_decisions = load_lib_module("programme_decisions")
+_VERBS.update(programme_decisions.build_verbs(sys.modules[__name__]))
+
+programme_terms = load_lib_module("programme_terms")
+_VERBS.update(programme_terms.build_verbs(sys.modules[__name__]))
 
 programme_evidence = load_lib_module("programme_evidence")
 _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
@@ -853,16 +884,27 @@ def _rebuild_missing_view(run_id, home, record) -> None:
 
 
 def _h_status(argv):
-    positional, opts = _parse(argv, values=("run",), flags=("json",))
-    positional = [p for p in positional if p]
-    if len(positional) > 1 or (positional and opts.get("run")):
-        raise ValueError("usage: status [<run>|--run <id>] [--json]")
-    if positional:
-        opts["run"] = positional[0]
+    positional, opts = _parse(argv, values=("run",), flags=("json", "terms"))
+    # The slash command passes its arguments as one quoted string, so `terms` arrives as a word.
+    words = [w for p in positional for w in p.split()]
+    if "terms" in words:
+        opts["terms"] = True
+        words.remove("terms")
+    if len(words) > 1 or (words and opts.get("run")):
+        raise ValueError("usage: status [<run>|--run <id>] [--terms] [--json]")
+    if words:
+        opts["run"] = words[0]
     run_id, home, record = _locate(opts)
     _rebuild_missing_view(run_id, home, record)
     view = build_view(run_id, home, record)
-    if opts.get("json"):
+    if opts.get("terms"):
+        terms = view["model"]["terms"]
+        if opts.get("json"):
+            _emit({"run": view["run"], "generated_at": view["generated_at"], "terms": terms,
+                   "rows": programme_view.terms_rows(terms)})
+        else:
+            sys.stdout.write(programme_view.render_terms(view) + "\n")
+    elif opts.get("json"):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
@@ -905,15 +947,18 @@ _VERBS["inbox"] = _Verb(
 )
 _VERBS["status"] = _Verb(
     _h_status,
-    "[<run>|--run <id>] [--json]  (prints the working model: doing now, queue, watching, "
+    "[<run>|--run <id>] [--terms] [--json]  (prints the working model: doing now, queue, watching, "
     "who waits on whom, decisions for Shawn, just did, acceptance, end and archive state, rules in "
-    "force, items; rebuilds a missing view for an active programme)",
+    "force, items; rebuilds a missing view for an active programme; --terms prints only the project "
+    "terms, decision-log entries by term and recent term changes)",
     reads=True,
 )
 
 _ERRORS = (
     ProgrammeError,
     programme_record.RecordError,
+    programme_decisions.DecisionError,
+    programme_terms.TermsError,
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,

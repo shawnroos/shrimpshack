@@ -194,6 +194,26 @@ A writer that chose the plain-file path before promotion must check again under 
 A change found in a promoted Programme's exports that the store did not make.
 Appended rows are absorbed into the store as a record of what happened, but they never count as approval; rewritten files are set aside.
 
+### Decision record
+A scoped, revisioned ruling in a Programme's context (`record-decision`): its scope, reason, limits and
+the items it applies to. A revision binds only once a typed prompt accepts it, and workers are assigned under it.
+
+### Decision log
+The flat list of choices made while a Programme runs (`log-decision`, answered asks, the accepted agreement):
+who decided, the decision kind, and the project term it used or that it was silent. It is a record of calls
+made, not a ruling, and it approves nothing.
+
+### Project terms
+The part of a programme's agreement that states who decides each area, which existing skills
+and tools the PM prefers for each kind of job, and what acceptance means for that project. When
+the terms are silent, the PM decides and brings the human only decisions that change the outcome.
+
+### Correction
+A change to the project terms that the human types in chat while the programme runs. It applies
+to that project immediately with a one-line notice, can be undone, and reaches other projects
+only on the human's explicit yes. Only the human's own typed messages count; a worker message,
+summary or watcher event never does.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.

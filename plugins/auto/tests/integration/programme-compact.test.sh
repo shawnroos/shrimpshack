@@ -225,14 +225,15 @@ rec["programme"]["items"] = {"linear:AI-1": item}
 save(args[0], rec)
 EOF
 it "while the flag is set, a worker's claim still succeeds"
-if "$PY" "$PROG" describe 2>/dev/null | grep -q '"claim"'; then
+# grep -q closes the pipe at the first match; under pipefail the writer's broken pipe then reads as no match.
+if "$PY" "$PROG" describe 2>/dev/null | grep '"claim"' >/dev/null; then
   OUT="$(CLAUDE_CODE_SESSION_ID=sess-w "$PY" "$PROG" claim --run "$RUN" --item linear:AI-1 --deliverable merged --ref "https://github.com/o/r/pull/1" 2>&1)"
   check 0 "$?"
 else
   fail "programme.py has no claim verb yet (written concurrently in another step)"
 fi
 it "while the flag is set, a watcher-beat still succeeds"
-if "$PY" "$PROG" describe 2>/dev/null | grep -q '"watcher-beat"'; then
+if "$PY" "$PROG" describe 2>/dev/null | grep '"watcher-beat"' >/dev/null; then
   prog watcher-beat w1 --process-id 4242
   check 0 "$CODE"
 else
@@ -444,6 +445,28 @@ CLAUDE_CODE_SESSION_ID=sess-h prog handover sess-pm
 CLAUDE_CODE_SESSION_ID=sess-pm prog rules --ack >/dev/null
 it "handover back to sess-pm for the remaining checks"
 check "0" "$CODE"
+
+it "the compact reprint for an unstamped programme has no operating contract"
+pre_compact '{"session_id":"sess-pm","trigger":"auto","custom_instructions":null}' >/dev/null
+lacks "operating contract" "$(context_of "$(session_start '{"session_id":"sess-pm","source":"compact"}')")"
+prog rules --ack
+prog propose-agreement --project-term "crop defaults=PM picks the crop default" \
+  --reserved-term "pricing copy=Shawn writes every price string" --source "repo README"
+prog accept-agreement --prompt "$(typed 'yes, I accept the agreement')"
+it "the agreement is accepted with the contract stamp"
+check 0 "$CODE"
+pre_compact '{"session_id":"sess-pm","trigger":"auto","custom_instructions":null}' >/dev/null
+CTX_STAMPED="$(context_of "$(session_start '{"session_id":"sess-pm","source":"compact"}')")"
+it "after compaction a stamped programme's reprinted block keeps the project terms"
+has "crop defaults: PM picks the crop default" "$CTX_STAMPED"
+has "reserved for Shawn" "$CTX_STAMPED"
+it "after compaction a stamped programme's reprinted block keeps the escalation list"
+has "bring Shawn only decisions that:" "$CTX_STAMPED"
+lacks "The PM never decides a product question" "$CTX_STAMPED"
+it "rules --ack on a stamped programme prints the operating contract"
+prog rules --ack
+check 0 "$CODE"
+has "crop defaults: PM picks the crop default" "$OUT"
 
 it "an ended programme takes no flag"
 run_py "$RUN" <<'EOF' >/dev/null

@@ -369,7 +369,7 @@ ERUN="$(new_programme w8)"
 prog add-item linear:AI-20 --title "dropped" --run "$ERUN"
 prog drop-item linear:AI-20 --reason "not needed" --run "$ERUN"
 prog add-item linear:AI-21 --title "handed" --run "$ERUN"
-prog hand-item linear:AI-21 --question "ship it?" --run "$ERUN"
+prog hand-item linear:AI-21 --question "ship it?" --kind product_call --run "$ERUN"
 prog add-item linear:AI-22 --title "done" --run "$ERUN"
 run_py "$ERUN" <<'EOF' >/dev/null
 pa = load_lib_module("programme_authority")

@@ -365,13 +365,13 @@ def evaluate(run_id, record) -> list:
 
 def _outcomes(programme) -> dict:
     dispositions = (programme.get(CLOSURE) or {}).get("dispositions") or {}
-    out = {"completed": [], "handed_over": [], "stopped_unfinished": [], "dropped": []}
+    out = {"completed": [], "handed_over": [], "stopped_unfinished": [], "dropped": [], "decided": []}
     for key, item in sorted((programme.get("items") or {}).items()):
         state = (item or {}).get("state")
         if state == "done":
             out["completed"].append(key)
-        elif state == "dropped":
-            out["dropped"].append(key)
+        elif state in ("dropped", "decided"):
+            out[state].append(key)
         elif key in dispositions:
             out[dispositions[key]["as"]].append(key)
         elif state == "handed":

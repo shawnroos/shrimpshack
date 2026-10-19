@@ -61,7 +61,7 @@ def evidence_complete(item: dict) -> bool:
 
 def effective_state(item: dict) -> str:
     state = item.get("state")
-    if state in ("handed", "dropped"):
+    if state in programme_home.CLOSED_ITEM_STATES:
         return state
     if evidence_complete(item) or (state == "done" and _off("EVIDENCE_CHECK")):
         return "done"

@@ -138,11 +138,11 @@ def _evidence_complete(item) -> bool:
 
 
 def outcomes(items) -> dict:
-    out = {"completed": [], "handed": [], "dropped": [], "open": []}
+    out = {"completed": [], "handed": [], "dropped": [], "decided": [], "open": []}
     for item_id in sorted(items):
         item = _dict(items[item_id])
         state = item.get("state")
-        if state in ("handed", "dropped"):
+        if state in ("handed", "dropped", "decided"):
             out[state].append(item_id)
         elif _evidence_complete(item):
             out["completed"].append(item_id)

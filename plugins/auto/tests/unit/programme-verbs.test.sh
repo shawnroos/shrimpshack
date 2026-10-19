@@ -94,7 +94,16 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement accept-context add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed archive assign-item beat check-archive check-deliverable claim clear-blocker close-instruction collect-result context create-successor define-requirement describe dispose-action dispose-item drop-item end expire hand-item handover inbox lift-pause mark-read merge-item pause preserve-code promote prompt-item propose-agreement propose-rule queue raise-blocker reconcile-leases reconcile-operations record-decision record-denial record-instruction record-issues record-tested-build recover release-resources reopen-item rules set-now set-remit set-source set-waiting start start-worker status sweep takeover tracker-synced validate watcher-beat" "$VERBS"
+check "accept-agreement accept-context add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed archive assign-item beat check-archive check-deliverable claim clear-blocker close-instruction collect-result context correct-term create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire hand-item handover inbox keep-corrections lift-pause log-decision mark-read merge-item pause preserve-code promote promote-correction prompt-item propose-agreement propose-rule queue raise-blocker reconcile-leases reconcile-operations record-decision record-denial record-instruction record-issues record-tested-build recover release-resources reopen-item rules set-now set-remit set-source set-waiting start start-worker status sweep takeover tracker-synced undo-correction validate watcher-beat" "$VERBS"
+
+
+# _VERBS.update lets a later module silently replace a verb another module registered under the same name.
+it "no two modules register the same verb name"
+DECLARED="$(cd "${AUTO_ROOT}/lib" && grep -hoE '^ *\("[a-z-]+", _h_|^ *"[a-z-]+": _Verb\(|^_VERBS\["[a-z-]+"\]' programme*.py \
+  | grep -oE '"[a-z-]+"' | tr -d '"' | sort)"
+check "" "$(printf '%s\n' "$DECLARED" | uniq -d | tr '\n' ' ')"
+it "every declared verb is dispatched"
+check "$(printf '%s\n' "$DECLARED" | wc -l | tr -d ' ')" "$(printf '%s\n' $VERBS | wc -l | tr -d ' ')"
 
 P_TYPED="$(prompt typed 'stop rule: only when done, stop only when everything is done')"
 P_CRON="$(prompt cron 'wake up and sweep the space')"

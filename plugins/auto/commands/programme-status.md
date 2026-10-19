@@ -1,6 +1,6 @@
 ---
 description: Show an auto programme's working model, items and rules in force
-argument-hint: "[<run>]"
+argument-hint: "[<run>] [terms]"
 allowed-tools: Bash
 ---
 
@@ -14,6 +14,12 @@ archive check last failed.
 With no argument it shows the programme this session drives. Pass a run id to show
 another programme. It reads only; for an active programme whose live view file is
 missing, it writes the view again.
+
+Pass `terms` (`/auto:programme-status terms`, or `<run> terms`) to show only the
+terms page: the project terms in force and the corrections, each decision under the
+term it used (decisions made where the terms are silent sit under "no term"), and
+the 20 most recent term changes with their source and Shawn's quote in redacted
+form. Viewing the page never counts as approval and writes nothing.
 
 Run the dispatch line below and print its output as it is:
 

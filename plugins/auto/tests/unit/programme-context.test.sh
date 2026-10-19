@@ -303,7 +303,8 @@ edit 'items["herdr:browser-e2e"] = dict(items["herdr:extra"], id="herdr:browser-
 
 # ── Scenario 3 / AE7: unrelated open work cannot gate satisfied browser acceptance ──
 edit "items['herdr:browser-e2e']['deliverables']['verified'] = {'result': 'confirmed', 'checked_at': ${NOW_EXPR}}"
-prog set-waiting herdr:linux-probe --who team:linux --blocker --trace-id t-linux-1 --run "$RUN"
+prog set-waiting herdr:linux-probe --who team:linux --blocker --serves "the linux investigation" \
+  --evidence "trace t-linux-1" --unblocks-when "team linux reports the kernel owner" --trace-id t-linux-1 --run "$RUN"
 
 it "AE7: browser acceptance is satisfied while the Linux investigation is open and waiting"
 check "satisfied" "$(req_state r-browser)"
@@ -462,7 +463,7 @@ it "the predicate output carries acceptance separately from done and may_stop"
 check "False False" "$(pyget "$P" 'str(d["done"])') $(pyget "$P" 'str(d["may_stop"])')"
 
 # ── Scenario 9: handed/dropped work does not accept; policies keep separate effects ──
-prog hand-item herdr:linux-probe --question "linux needs a kernel owner" --run "$RUN"
+prog hand-item herdr:linux-probe --question "linux needs a kernel owner" --kind product_scope --run "$RUN"
 prog drop-item herdr:docs-page --reason "superseded by the new docs site" --run "$RUN"
 edit "items['herdr:browser-e2e']['deliverables'] = {n: {'result': 'confirmed', 'checked_at': ${NOW_EXPR}} for n in items['herdr:browser-e2e']['deliverables']}"
 it "with every item finished, the programme is done but r-linux is not accepted"

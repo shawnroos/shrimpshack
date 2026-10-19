@@ -305,9 +305,34 @@ it "set-waiting --clear returns the item to open"
 prog set-waiting linear:AI-800 --clear
 check '["open", null]' "$(field '[items["linear:AI-800"]["state"], items["linear:AI-800"]["waiting_on"]]')"
 
-it "set-waiting on a blocker records the kind and trace id"
+it "a blocker without --serves is refused and names the missing field"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --blocker --trace-id tr-77 \
+  --evidence "build log tr-77 fails in infra code" --unblocks-when "infra ships the runner fix"
+check "2 open" "$CODE $(field 'items["linear:AI-802"]["state"]' | tr -d '"')"
+has "blocker needs --serves" "$OUT"
+it "a blocker with no fields names all three"
 prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --blocker --trace-id tr-77
-check '["blocker", "tr-77", "team-infra"]' "$(field '[items["linear:AI-802"]["waiting_on"]["kind"], items["linear:AI-802"]["waiting_on"]["trace_id"], items["linear:AI-802"]["waiting_on"]["reporter"]]')"
+check 2 "$CODE"
+has "--serves, --evidence, --unblocks-when" "$OUT"
+it "--safety without --blocker is a usage error"
+prog set-waiting linear:AI-802 --who shawn --reporter shawn --safety
+check 2 "$CODE"
+has "--safety marks a blocker" "$OUT"
+
+it "set-waiting on a blocker records the kind, trace id and the three fields"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --blocker --trace-id tr-77 \
+  --serves "merged check on AI-802" --evidence "build log tr-77 fails in infra code" \
+  --unblocks-when "infra ships the runner fix"
+check '["blocker", "tr-77", "team-infra", "merged check on AI-802", "build log tr-77 fails in infra code", "infra ships the runner fix"]' "$(field '[items["linear:AI-802"]["waiting_on"][k] for k in ("kind", "trace_id", "reporter", "serves", "evidence", "unblocks_when")]')"
+it "--safety records a pause without the three fields"
+prog set-waiting linear:AI-802 --who shawn --reporter shawn --blocker --safety --trace-id tr-78
+check '0 ["blocker", true, null]' "$CODE $(field '[items["linear:AI-802"]["waiting_on"]["kind"], items["linear:AI-802"]["waiting_on"]["safety"], items["linear:AI-802"]["waiting_on"].get("serves")]')"
+it "a plain wait records no blocker fields"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra
+check '[null, null]' "$(field '[items["linear:AI-802"]["waiting_on"].get("kind"), items["linear:AI-802"]["waiting_on"].get("serves")]')"
+it "blocker fields on a plain wait are a usage error"
+prog set-waiting linear:AI-802 --who team-infra --reporter team-infra --serves "x"
+check 2 "$CODE"
 it "set-waiting without --who is a usage error"
 prog set-waiting linear:AI-802
 check 2 "$CODE"
@@ -364,7 +389,7 @@ has '"linear:AI-802"' "$(journal_last item_updated)"
 
 : > "$CALLS"
 it "hand-item notifies once through the tracker mark"
-prog hand-item linear:AI-802 --question "Ship the new crop now or hold for design?"
+prog hand-item linear:AI-802 --question "Ship the new crop now or hold for design?" --kind product_call
 check '"handed"' "$(field 'items["linear:AI-802"]["state"]')"
 it "the tracker provider was called and herdr was not"
 check "board" "$(cut -d' ' -f1 "$CALLS" | sort -u | tr '\n' ' ' | sed 's/ $//')"
@@ -372,13 +397,13 @@ it "the hand's notification outcome is journaled after the hand, with the tracke
 check '[0, null, "item_handed"]' "$("$PY" -c 'import json,sys; d=json.loads(sys.stdin.read())["payload"]; p=d["notify"]; print(json.dumps([p["tracker"], p["herdr"], d["kind"]]))' <<< "$(journal_last effects_recorded)")"
 it "hand-item on an already handed item is refused and notifies nothing"
 : > "$CALLS"
-prog hand-item linear:AI-802 --question "again?"
+prog hand-item linear:AI-802 --question "again?" --kind product_call
 check "1 0" "$CODE $(wc -l < "$CALLS" | tr -d ' ')"
 
 it "hand-item when the tracker mark fails falls back to a herdr notification"
 : > "$CALLS"
 prog add-item linear:AI-803 --title "Product call" --kind product_question
-FAKE_BOARD_EXIT=3 prog hand-item linear:AI-803 --question "Which crop default?"
+FAKE_BOARD_EXIT=3 prog hand-item linear:AI-803 --question "Which crop default?" --kind product_call
 check "board herdr" "$(cut -d' ' -f1 "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
 it "the journal records both exit statuses"
 check '[3, 0]' "$("$PY" -c 'import json,sys; p=json.loads(sys.stdin.read())["payload"]["notify"]; print(json.dumps([p["tracker"], p["herdr"]]))' <<< "$(journal_last effects_recorded)")"
@@ -388,8 +413,31 @@ has "Which crop default?" "$(cat "$CALLS")"
 it "hand-item on a herdr item skips the tracker"
 : > "$CALLS"
 prog add-item herdr:w2/p40 --title "pane"
-prog hand-item herdr:w2/p40 --question "Keep this pane?"
+prog hand-item herdr:w2/p40 --question "Keep this pane?" --kind product_call
 check "herdr" "$(cut -d' ' -f1 "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
+
+prog add-item linear:AI-810 --title "Needs a push"
+prog add-item linear:AI-811 --title "Also needs a push"
+it "a denied-operation ask without --operation is a usage error"
+prog hand-item linear:AI-810 --question "Grant git push to org/repo?" --kind denied_operation
+check "2 open" "$CODE $(field 'items["linear:AI-810"]["state"]' | tr -d '"')"
+has "denied_operation needs --operation" "$OUT"
+it "--operation with another decision kind is a usage error"
+prog hand-item linear:AI-810 --question "Ship it?" --kind product_call --operation git-push
+check "2 open" "$CODE $(field 'items["linear:AI-810"]["state"]' | tr -d '"')"
+it "a denied-operation ask records the operation on the ask"
+prog hand-item linear:AI-810 --question "Grant git push to org/repo?" --kind denied_operation --operation git-push
+check '["handed", "denied_operation", "git-push"]' "$(field '[items["linear:AI-810"]["state"], items["linear:AI-810"]["handed"]["kind"], items["linear:AI-810"]["handed"]["op"]]')"
+it "the hand journal carries the operation"
+has '"op": "git-push"' "$(journal_last item_handed)"
+it "a second ask for the same operation is refused and notifies nothing"
+: > "$CALLS"
+prog hand-item linear:AI-811 --question "Grant git push again?" --kind denied_operation --operation git-push
+check "1 open 0" "$CODE $(field 'items["linear:AI-811"]["state"]' | tr -d '"') $(wc -l < "$CALLS" | tr -d ' ')"
+has "linear:AI-810" "$OUT"
+it "an ask for a different operation succeeds"
+prog hand-item linear:AI-811 --question "Grant prod deploy?" --kind denied_operation --operation prod-deploy
+check '0 "prod-deploy"' "$CODE $(field 'items["linear:AI-811"]["handed"]["op"]')"
 
 it "answer-handed without a prompt is refused"
 prog answer-handed linear:AI-802 --choice ship
@@ -494,7 +542,7 @@ prog set-source tasks --available
 prog set-source plans --available
 check '[true, true]' "$(field '["tasks" in prog["sources"], "plans" in prog["sources"]]')"
 
-for verb_args in "add-item linear:AI-950 --title x" "alias-item linear:AI-803 linear:AI-951" "drop-item herdr:w2/p27 --reason x" "set-waiting linear:AI-800 --who ci" "watcher-beat w-ci" "hand-item linear:AI-800 --question q" "set-now x" "queue --action sweep" "mark-read" "record-tested-build linear:AI-800 --shasum ${SHA}" "set-source herdr --unavailable"; do
+for verb_args in "add-item linear:AI-950 --title x" "alias-item linear:AI-803 linear:AI-951" "drop-item herdr:w2/p27 --reason x" "set-waiting linear:AI-800 --who ci" "watcher-beat w-ci" "hand-item linear:AI-800 --question q --kind product_call" "set-now x" "queue --action sweep" "mark-read" "record-tested-build linear:AI-800 --shasum ${SHA}" "set-source herdr --unavailable"; do
   it "a non-driving session is refused: ${verb_args%% *}"
   CLAUDE_CODE_SESSION_ID="sess-stranger" prog $verb_args --run "$RUN"
   check "1 driving session" "$CODE $(printf '%s' "$OUT" | grep -o 'driving session' | head -1)"
@@ -536,7 +584,7 @@ it "a requirement on an item's protocol deliverable starts not_run"
 check "0 unsatisfied ['not_run'] ['open']" "$CODE $(acc r-acc)"
 edit 'items["herdr:acc-a"]["deliverables"]["merged"] = {"result": "refuted", "checked_at": core.now_iso()}'
 it "handing the item keeps its refuted check refuted and the requirement unsatisfied"
-prog hand-item herdr:acc-a --question "who owns acc-a?"
+prog hand-item herdr:acc-a --question "who owns acc-a?" --kind worker_coordination
 check "0 unsatisfied ['refuted'] ['handed']" "$CODE $(acc r-acc)"
 P_SHIP="$(prompt typed 'ship acc-a')"
 it "answering the hand with ship reopens the item without touching its evidence"

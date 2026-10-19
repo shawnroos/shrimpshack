@@ -283,7 +283,7 @@ check "" "$CRASHES"
 RUN6="$(new_programme w6)"
 prog add-item linear:AI-61 --title "two deliverables" --run "$RUN6"
 prog add-item linear:AI-62 --title "needs Shawn" --run "$RUN6"
-prog hand-item linear:AI-62 --question "ship the linux path first?" --run "$RUN6"
+prog hand-item linear:AI-62 --question "ship the linux path first?" --kind work_sequencing --run "$RUN6"
 run_py "$RUN6" >/dev/null <<'EOF'
 def change(rec):
     item = rec["programme"]["items"]["linear:AI-61"]
