@@ -692,7 +692,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 |-----|-------|
 | `id` | `[a-z][a-z0-9_-]*:<key>`, max 128 characters, e.g. `linear:AI-753`, `herdr:<ws>/<pane>` |
 | `title`, `joined_at` | string, `<iso>` |
-| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped`, `decided` (`FINISHED_ITEM_STATES` are the last four; `CLOSED_ITEM_STATES` are `handed`, `dropped` and `decided`, which a verb sets). No verb sets `done`; the predicate derives it. `record-decision` sets `decided` on a product question when the agreement carries the contract stamp |
+| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped`, `decided` (`FINISHED_ITEM_STATES` are the last four; `CLOSED_ITEM_STATES` are `handed`, `dropped` and `decided`, which a verb sets). No verb sets `done`; the predicate derives it. `log-decision` sets `decided` on a product question when the agreement carries the contract stamp |
 | `aliases` | other ids that resolve to this item |
 | `owner` | `{pane, terminal_id, session_id}` |
 | `sessions[]` | `{session_id, pane, terminal_id, name, at}` |
