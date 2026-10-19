@@ -168,9 +168,33 @@ session.
   prompt from the driving session that names the proposal id, says exactly one
   answer (applied or apply; not now, later or postpone; reject or decline), is
   newer than the proposal's last state change, and that no earlier answer
-  cited. not-now and no postpone or reject an open proposal; on a postponed or
-  rejected one they record the answer and keep the state. applied is refused
-  until the verify-and-retry step lands.
+  cited. not-now and no postpone or reject an open, ineffective or
+  retry_unobserved proposal; on a postponed or rejected one they record the
+  answer and keep the state; while retrying they are recorded and applied after
+  the outcome. applied reads three settings files read-only (user
+  `~/.claude/settings.json`, the main checkout's `.claude/settings.local.json`,
+  and each blocked session's worktree `.claude/settings.json` from the session
+  registry's cwd) and keeps only the permission lists and
+  `autoMode.classifyAllShell`. Any linked command still blocked by a deny or ask
+  rule, or by classifyAllShell, makes the proposal ineffective; any uncovered
+  command keeps it open; only when every command is covered does it reserve one
+  retry on the oldest linked item whose owner pane has a live agent, and return
+  `retry_item` and `retry_text` for `prompt-item`. With no live owner pane it
+  becomes retry_unobserved. applied while retrying changes nothing, and applied
+  on a resolved proposal is refused. Every result says managed settings and a
+  `--settings` flag are not visible.
+- **Permission settlement**: `settle-permissions` (driving session) reads the
+  reserved session's transcript after the reservation for a Bash call with the
+  reserved operation and target (extra pipes or `--json` fields still count).
+  The runtime's `permissionDecision` decides: accept resolves the proposal and
+  returns its waiting items to open; reject makes it ineffective with the
+  diagnosed layer. With no such call, an idle or gone owner pane after the
+  retry was sent gives retry_unobserved. An open proposal resolves with
+  `confirmed: false`, and shows as a decision for Shawn with its covering rule,
+  when an affected session's transcript shows every operation ran after its
+  denial. It never retries; only a new typed applied arms one more attempt. A
+  later denial on a resolved proposal attaches as evidence and shows as a
+  decision for Shawn, with no state change and no notification.
 - **Worker inbox**: `claim --run <id> --item <id> --deliverable <name> --ref <ref>`
   appends one structured claim to `<home>/claims.jsonl`. Free text and a
   reference with spaces are refused, and a claim never changes evidence. `mark-read`

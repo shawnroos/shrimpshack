@@ -36,6 +36,8 @@ TRANSCRIPT_CAP = 64 * 1024 * 1024
 OPEN = "open"
 QUIET_STATES = ("postponed", "rejected")
 ASKING_STATES = ("open", "ineffective", "retry_unobserved")
+RESOLVED = "resolved"
+RETRYING = "retrying"
 CHOICE_WORDS = {
     "applied": ("applied", "apply"),
     "not-now": ("not now", "later", "postpone", "postponed"),
@@ -86,6 +88,14 @@ def _blocks(row, kind) -> list:
     return [b for b in content if isinstance(b, dict) and b.get("type") == kind] if isinstance(content, list) else []
 
 
+def runtime_ruling(row) -> dict:
+    found = row.get("permissionDecision") if isinstance(row.get("permissionDecision"), dict) else {}
+    ruling = found.get("decision")
+    return {"ruling": ruling if ruling in ("accept", "reject") else None,
+            "reason_type": programme_sanitize.token(found.get("reasonType")),
+            "denial_kind": programme_sanitize.token(row.get("toolDenialKind"))}
+
+
 def confirm(row, decision="reject"):
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
     sid, tool_use_id, path = row.get("session_id"), payload.get("tool_use_id"), payload.get("transcript_path")
@@ -107,7 +117,7 @@ def confirm(row, decision="reject"):
                     command = (block.get("input") or {}).get("command")
         elif entry.get("type") == "user" and command is not None:
             if any(b.get("tool_use_id") == tool_use_id for b in _blocks(entry, "tool_result")):
-                found = (entry.get("permissionDecision") or {}).get("decision")
+                found = runtime_ruling(entry)["ruling"]
     if not isinstance(command, str) or found != decision:
         return None
     if programme_journal.redact(command)[:COMMAND_CAP] != payload.get("command"):
@@ -173,6 +183,9 @@ def _attach(proposal, evidence, item_keys) -> None:
     if any(e.get("tool_use_id") == evidence["tool_use_id"] for e in proposal.get("evidence") or []):
         return
     proposal["evidence"] = (proposal.get("evidence") or [])[-(EVIDENCE_CAP - 1):] + [evidence]
+    if proposal.get("state") == RESOLVED:
+        proposal.update(redenied_at=_now(), explanation="denied again after it resolved; the applied rule "
+                                                        "may have been removed or narrowed")
 
 
 def _place(programme, ops, dest, evidence, item_keys) -> tuple:
@@ -379,17 +392,23 @@ def _record_answer(proposal, choice, prompt, state) -> dict:
     return {"proposal": proposal["id"], "choice": choice, "state": state, "from": before}
 
 
-def _answer_declined(programme, proposal, choice, prompt, rec) -> dict:
+def _settle_module():
+    return load_lib_module("programme_permission_settle")
+
+
+def _answer_declined(programme, proposal, choice, prompt, live) -> dict:
     state = proposal.get("state")
-    if state == OPEN:
+    if state in ASKING_STATES:
         return _record_answer(proposal, choice, prompt, DECLINED_STATE[choice])
     if state in QUIET_STATES:
         return _record_answer(proposal, choice, prompt, state)
-    raise RecordError(f"{proposal['id']} is {state}; not-now and no answer an open, postponed or rejected proposal")
+    if state == RETRYING:
+        return _settle_module().defer_answer(proposal, choice, prompt)
+    raise RecordError(f"{proposal['id']} is {state}; Programme no longer asks about it")
 
 
-def apply_answer(programme, proposal, choice, prompt, rec) -> dict:
-    raise RecordError("answer-permission applied is not available yet: verify and retry land in U4")
+def apply_answer(programme, proposal, choice, prompt, live) -> dict:
+    return _settle_module().apply_answer(programme, proposal, choice, prompt, live)
 
 
 ANSWERS = {"applied": apply_answer, "not-now": _answer_declined, "no": _answer_declined}
@@ -400,27 +419,36 @@ def _h_answer_permission(host, argv):
     if len(positional) != 2 or positional[1] not in ANSWERS:
         raise ValueError("usage: answer-permission <perm-id> applied|not-now|no --prompt <id>")
     proposal_id, choice = positional
+    _, _, record = host._locate(opts)
+    live = _settle_module().live_item(record, proposal_id) if choice == "applied" else None
 
     def change(programme, prompt, rec):
         proposal = _find(programme, proposal_id)
         _gate(host, proposal, choice, prompt)
-        return ANSWERS[choice](programme, proposal, choice, prompt, rec)
+        return ANSWERS[choice](programme, proposal, choice, prompt, live)
 
-    return host._write(opts, change, "permission_answered", prompt_id=opts.get("prompt"), needs_prompt=True)
+    def kind(payload):
+        return "permission_verified" if payload.get("verify") else "permission_answered"
+
+    return host._write(opts, change, kind, prompt_id=opts.get("prompt"), needs_prompt=True)
+
+
+def _needs_eyes(proposal) -> bool:
+    return proposal.get("state") == RESOLVED and (proposal.get("confirmed") is False
+                                                   or bool(proposal.get("redenied_at")))
 
 
 def in_force(programme) -> list:
     out = []
     for proposal in _proposals(programme):
-        if proposal.get("state") == "resolved" and proposal.get("confirmed") is not False:
+        if proposal.get("state") == RESOLVED and not _needs_eyes(proposal):
             continue
         out.append({k: proposal.get(k) for k in ("id", "state", "rules", "settings_file", "items", "confirmed")})
     return out
 
 
 def asking(programme) -> list:
-    return [p for p in _proposals(programme)
-            if p.get("state") in ASKING_STATES or (p.get("state") == "resolved" and p.get("confirmed") is False)]
+    return [p for p in _proposals(programme) if p.get("state") in ASKING_STATES or _needs_eyes(p)]
 
 
 _SPECS = (
@@ -437,11 +465,15 @@ _SPECS = (
     ("answer-permission", _h_answer_permission, "<perm-id> applied|not-now|no --prompt <id> [--run <id>]",
      "no typed prompt; a prompt that does not name the proposal id, or does not say exactly one of "
      "applied/apply, not now/later/postpone, reject/decline matching the choice; a prompt older than the "
-     "proposal's last state change; a prompt an earlier answer cited; not-now or no on a proposal that "
-     "is not open, postponed or rejected."),
+     "proposal's last state change; a prompt an earlier answer cited; any answer on a resolved proposal. "
+     "applied reads the user, main-checkout local and worktree settings files read-only and reserves one "
+     "retry only when every blocked command is covered; applied while retrying changes nothing; not-now "
+     "or no while retrying applies after the outcome."),
 )
 
 
 def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
-            for name, handler, args, rejects in _SPECS}
+    verbs = {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+             for name, handler, args, rejects in _SPECS}
+    verbs.update(_settle_module().build_verbs(host))
+    return verbs

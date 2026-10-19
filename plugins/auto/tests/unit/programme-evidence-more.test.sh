@@ -490,6 +490,25 @@ prog validate
 fx
 check '"refuted"' "$(result_of linear:AI-1 flagged)"
 
+prog add-item linear:AI-90 --kind flagged_code --title "Blocked read"
+edit 'items["linear:AI-90"]["deliverables"]["merged"] = {"result": "confirmed", "ref": "acme/web#9", "checked_at": ago(60), "confirmed_at": ago(60), "fields": {"pr": "acme/web#9"}}; prog["permission_proposals"] = [{"id": "perm-1", "state": "open", "items": ["linear:AI-90"], "operations": ["pr_checks"]}]'
+MERGED_BEFORE="$(field 'items["linear:AI-90"]["deliverables"]["merged"]')"
+KEYS_BEFORE="$(field 'sorted(items["linear:AI-90"]["deliverables"])')"
+STATE_BEFORE="$(field 'items["linear:AI-90"]["state"]')"
+prog check-deliverable linear:AI-90 flagged --ref 'a/b/c'
+prog check-deliverable linear:AI-90 flagged --ref 'a/b/c'
+
+it "AE7: two unknowns on an item with an open permission proposal arm no retry watcher"
+check "\"unknown\" 2 false ${STATE_BEFORE} []" \
+  "$(result_of linear:AI-90 flagged) $(field 'items["linear:AI-90"]["deliverables"]["flagged"]["unknown_streak"]') $(field '"retry-linear-AI-90" in prog.get("watchers", {})') $(field 'items["linear:AI-90"]["state"]') $(field '[q for q in prog["working_model"].get("queue") or [] if q.get("item") == "linear:AI-90"]')"
+has '"permission_hold": ["perm-1"]' "$OUT"
+it "AE7: completed deliverables and the acceptance set are unchanged"
+check "${MERGED_BEFORE} ${KEYS_BEFORE}" "$(field 'items["linear:AI-90"]["deliverables"]["merged"]') $(field 'sorted(items["linear:AI-90"]["deliverables"])')"
+it "control: once the proposal resolves, the next unknown arms the retry watcher"
+edit 'prog["permission_proposals"][0]["state"] = "resolved"'
+prog check-deliverable linear:AI-90 flagged --ref 'a/b/c'
+check true "$(field '"retry-linear-AI-90" in prog.get("watchers", {})')"
+
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 

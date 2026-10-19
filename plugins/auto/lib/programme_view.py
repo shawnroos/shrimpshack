@@ -223,7 +223,8 @@ def _watching_row(w) -> dict:
 
 def _asking(block) -> list:
     return [p for p in (_dict(p) for p in block.get("permission_proposals") or [])
-            if p.get("state") in ASKING_STATES or (p.get("state") == "resolved" and p.get("confirmed") is False)]
+            if p.get("state") in ASKING_STATES
+            or (p.get("state") == "resolved" and (p.get("confirmed") is False or p.get("redenied_at")))]
 
 
 def _decisions(block, items) -> list:
@@ -236,7 +237,12 @@ def _decisions(block, items) -> list:
         reason = next((e.get("reason") for e in reversed(proposal.get("evidence") or []) if e.get("reason")), None)
         question = (f"{proposal.get('id')}: allow {', '.join(proposal.get('rules') or [])} in "
                     f"{proposal.get('settings_file')} for {', '.join(proposal.get('items') or [])} "
-                    f"({proposal.get('state')}); answer applied, not now or reject {proposal.get('id')}")
+                    f"({proposal.get('state')}); " + (
+                        "no answer needed; check the rule is still in place" if proposal.get("state") == "resolved"
+                        else f"answer applied, not now or reject {proposal.get('id')}"))
+        covering = _dict(proposal.get("covering"))
+        if covering.get("rule"):
+            question += "; covered by " + programme_sanitize.wrap(f"{covering['rule']} in {covering.get('source')}")
         if reason:
             question += "; last denial " + programme_sanitize.wrap(reason, cap=120)
         if proposal.get("explanation"):
