@@ -405,6 +405,8 @@ def _h_keep(host, argv):
     if not positional:
         raise ValueError("usage: keep-corrections --prompt <id> <correction-id>...")
 
+    seen = {}
+
     def change(programme, prompt, rec):
         keys = programme_carryover.repo_keys(programme)
         if not keys:
@@ -414,12 +416,18 @@ def _h_keep(host, argv):
         for correction in kept:
             _check_prompt_after(rows, prompt, correction["prompt_id"])
         host.require_named(prompt, *(c["id"] for c in kept))
-        stored = programme_carryover.store(
-            [programme_carryover.entry_for(c, key, rec) for c in kept for key in keys], prompt, rec, "carryover")
-        return {"kept": [c["id"] for c in kept], "keys": keys, "stored": stored,
+        adopted = programme_carryover.prepare(
+            [programme_carryover.entry_for(c, key, rec) for c in kept for key in keys], prompt, rec)
+        seen.update(adopted=adopted, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
+        return {"kept": [c["id"] for c in kept], "keys": keys, "stored": programme_carryover.summary(adopted),
                 "store_path": programme_carryover.store_path()}
 
-    return host._write(opts, change, KEPT, prompt_id=opts.get("prompt"), needs_prompt=True)
+    return host._write(opts, change, KEPT, prompt_id=opts.get("prompt"), needs_prompt=True,
+                       after=lambda _: _store_after(seen, "carryover"))
+
+
+def _store_after(seen, how) -> None:
+    programme_carryover.store(seen["adopted"], seen["prompt"], seen["run"], seen["sid"], how)
 
 
 def _check_all_projects(host, prompt) -> None:
@@ -447,18 +455,22 @@ def _h_promote(host, argv):
     if len(positional) != 1:
         raise ValueError("usage: promote-correction --prompt <id> <correction-id>")
 
+    seen = {}
+
     def change(programme, prompt, rec):
         correction = _active(programme, positional[0])
         _check_all_projects(host, prompt)
         rows = programme_journal.read(rec["run_id"])
         _check_prompt_after(rows, prompt, correction["prompt_id"])
         _check_promotion_unused(rows, prompt)
-        entry = programme_carryover.entry_for(correction, programme_carryover.ALL, rec)
-        stored = programme_carryover.store([entry], prompt, rec, "promotion")
-        return {"promoted": correction["id"], "kind": correction["kind"], "stored": stored,
-                "store_path": programme_carryover.store_path()}
+        adopted = programme_carryover.prepare(
+            [programme_carryover.entry_for(correction, programme_carryover.ALL, rec)], prompt, rec)
+        seen.update(adopted=adopted, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
+        return {"promoted": correction["id"], "kind": correction["kind"],
+                "stored": programme_carryover.summary(adopted), "store_path": programme_carryover.store_path()}
 
-    return host._write(opts, change, PROMOTED, prompt_id=opts.get("prompt"), needs_prompt=True)
+    return host._write(opts, change, PROMOTED, prompt_id=opts.get("prompt"), needs_prompt=True,
+                       after=lambda _: _store_after(seen, "promotion"))
 
 
 _SPECS = (

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PM decisions, Shawn's answers and asks: one record shape with an id and a decision kind.
 
-``programme.py`` registers ``record-decision`` through ``build_verbs(host)``;
+``programme.py`` registers ``log-decision`` through ``build_verbs(host)``;
 ``hand-item``, ``answer-handed`` and ``accept-agreement`` build their records here.
 """
 
@@ -116,15 +116,15 @@ def _check_pm_may_decide(protocol, programme, kind) -> None:
                             "does not record it as its own: use hand-item")
 
 
-def _h_record_decision(host, argv):
+def _h_log_decision(host, argv):
     positional, opts = host._parse(argv, values=("run", "kind", "term", "why", "repo"), flags=("silent",))
     if len(positional) != 1:
-        raise ValueError("usage: record-decision <item|programme> --kind <kind> (--term <id> | --silent) "
+        raise ValueError("usage: log-decision <item|programme> --kind <kind> (--term <id> | --silent) "
                          "--why <text>")
     record = host.programme_record
     target = positional[0] if positional[0] == PROGRAMME_TARGET else record.check_item_id(positional[0])
     if bool(opts.get("term")) == bool(opts.get("silent")):
-        raise ValueError("record-decision needs exactly one of --term <id> or --silent")
+        raise ValueError("log-decision needs exactly one of --term <id> or --silent")
     why = record._text(opts.get("why"), "why")
     kind = check_kind(opts.get("kind"))
     term = None
@@ -156,7 +156,7 @@ def _h_record_decision(host, argv):
 
 
 _SPECS = (
-    ("record-decision", _h_record_decision,
+    ("log-decision", _h_log_decision,
      "<item-id|programme> --kind <decision-kind> (--term <id> | --silent) --why <text> [--repo <path>] "
      "[--run <id>]",
      "an unknown decision kind; denied_operation, or a kind whose autonomy level is propose or never "

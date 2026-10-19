@@ -104,10 +104,10 @@ core = load_lib_module("run_record_core")
 args = sys.argv[2:]
 def rec_path(run):
     return os.path.join(ph.home_path(run), ".claude", "auto", run + ".json")
-def load(run):
-    return json.load(open(rec_path(run)))
-def save(run, rec):
-    json.dump(rec, open(rec_path(run), "w"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+load = programme_records.load
+save = programme_records.save
 def ago(hours):
     t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
     return t.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -419,6 +419,9 @@ has "CronDelete cron-77" "$OUT"
 it "end stops a Monitor watcher with TaskStop, never CronDelete"
 has "TaskStop bh1i1vbv7" "$OUT"
 lacks "CronDelete bh1i1vbv7" "$OUT"
+it "end names the watcher id release-resources takes beside each task id"
+has "CronDelete cron-77  (then release-resources --watcher cron)" "$OUT"
+has "TaskStop bh1i1vbv7  (then release-resources --watcher tracker-source)" "$OUT"
 
 it "the ended run shows ended"
 as sess-d status --run "$RUN"
@@ -619,6 +622,8 @@ has '"cron_task_ids": ["cron-88"]' "$ENDED"
 it "takeover on an expired programme refreshes the view and names the cadence fallback to remove"
 check "agreement_unaccepted" "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["model"]["programme"]["ended"]["reason"])' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN10}/views/view.json" 2>&1)"
 has "CronDelete cron-88" "$OUT"
+it "an expiry end names the watcher id beside the cron task id"
+has "CronDelete cron-88  (then release-resources --watcher cadence)" "$OUT"
 has "Stop watcher process 4242" "$OUT"
 
 it "beat from a session that does not drive the programme is refused"

@@ -1,3 +1,7 @@
+---
+editors: claude
+---
+
 # Concepts
 
 Shared domain vocabulary for this project — entities, named processes, and status concepts
@@ -164,6 +168,40 @@ of schemes is fixed and each is rendered by the plugin, so a name is chosen from
 enumeration rather than written as a template.
 
 ## Programme
+
+### Programme
+An auto run in which a PM coordinates work under an accepted agreement and checked stop rules.
+Its persistent home sits outside disposable code worktrees.
+
+### Recovery packet
+A revision-bound view of a Programme's retained agreement, decisions, requirements, actions, and results.
+It restores context without creating approval authority.
+
+### Archive
+A read-only retained Programme record whose preservation and resource-release checks have passed.
+Archival does not mean every requirement passed or authorize deletion.
+
+### Successor
+A new Programme linked to an archived Programme.
+It needs its own accepted agreement and does not reopen the archive.
+
+### Promotion
+The one-way move of a Programme's home from plain files to its durable store.
+After promotion the store is the only source of truth and the files are exports rebuilt from it.
+A writer that chose the plain-file path before promotion must check again under the lock before it writes.
+
+### Foreign write
+A change found in a promoted Programme's exports that the store did not make.
+Appended rows are absorbed into the store as a record of what happened, but they never count as approval; rewritten files are set aside.
+
+### Decision record
+A scoped, revisioned ruling in a Programme's context (`record-decision`): its scope, reason, limits and
+the items it applies to. A revision binds only once a typed prompt accepts it, and workers are assigned under it.
+
+### Decision log
+The flat list of choices made while a Programme runs (`log-decision`, answered asks, the accepted agreement):
+who decided, the decision kind, and the project term it used or that it was silent. It is a record of calls
+made, not a ruling, and it approves nothing.
 
 ### Project terms
 The part of a programme's agreement that states who decides each area, which existing skills

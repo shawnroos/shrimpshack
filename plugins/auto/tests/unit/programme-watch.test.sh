@@ -216,11 +216,16 @@ check 0 "$(lines "${WORK}/own.out")"
 
 reset_state
 it "a claim appended to the inbox prints claim"
-printf '{"kind":"claim"}\n' > "${HOME_DIR}/claims.jsonl"
+add_claim() {
+  run_py "$RUN" <<'EOF' >/dev/null
+load_lib_module("programme_journal").append_claim(args[0], "sess-w", {"item": "linear:AI-1", "deliverable": "merged", "ref": "pr-1"})
+EOF
+}
+add_claim
 start_watch claim
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
-printf '{"kind":"claim"}\n' >> "${HOME_DIR}/claims.jsonl"
+add_claim
 wait_exit "$WPID"
 has "claim" "$(cat "${WORK}/claim.out")"
 it "the claim line counts only the new claim"
@@ -331,6 +336,7 @@ start_watch notracker --max-polls 2
 wait_exit "$WPID"
 lacks "tracker" "$(cat "${WORK}/notracker.out")"
 it "a newer tracker updatedAt prints tracker-changed"
+: > "$BEATS"
 start_watch tracker --tracker
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4

@@ -416,8 +416,16 @@ def load_run_record_safe(path: str):
 
     The upgrade is inside the try/except: a shim raise on a pathological record
     degrades to None (skip) rather than taking a fail-closed hook down.
+
+    A promoted programme's record file is an export; for one, this reads the
+    authority instead, and a held authority reads as None like any unreadable
+    record. Discovery that must tell a hold from absence uses
+    ``iter_programme_outcomes``.
     """
     try:
+        routed = _programme_record_at(path)
+        if routed is not None:
+            return routed[0]
         with open(path, "r") as fh:
             led = json.load(fh)
         if not isinstance(led, dict):
@@ -425,6 +433,21 @@ def load_run_record_safe(path: str):
         return load_lib_module("format_compat").upgrade_run_record(led)
     except Exception:
         return None
+
+
+def _programme_record_at(path: str):
+    dispatch = os.path.dirname(os.path.abspath(path))
+    root = os.path.dirname(os.path.dirname(dispatch))
+    if os.path.basename(os.path.dirname(root)) != "programmes" or not path.endswith(".json"):
+        return None
+    run_id = os.path.basename(path)[: -len(".json")]
+    authority = load_lib_module("programme_authority")
+    if not authority.routes(root, run_id):
+        return None
+    try:
+        return (authority.read_record(run_id),)
+    except Exception:
+        return (None,)
 
 
 def iter_worktree_run_records(repo_root: str):
@@ -460,13 +483,16 @@ def iter_worktree_run_records(repo_root: str):
         yield run_id, led
 
 
-def iter_programme_homes():
-    """Yield ``(home, run_id, run_record_dict)`` for each programme record under
-    ``<data dir>/programmes/<run-id>/``. Skips the leases folder, dot names and
-    anything that fails the path-segment check. Never raises.
+def iter_programme_outcomes():
+    """Yield ``{home, run_id, outcome, record, detail}`` for each programme home
+    under ``<data dir>/programmes/<run-id>/``, promoted homes found by their
+    database and never by their exports. ``outcome`` is legacy, supported,
+    unsupported, corrupt or unavailable; ``record`` is None for a hold. Skips the
+    leases folder, dot names, unsafe names and empty homes. Never raises.
     """
     try:
         programme_home = load_lib_module("programme_home")
+        authority = load_lib_module("programme_authority")
         root = programme_home.programmes_dir()
         names = sorted(os.listdir(root))
     except Exception:
@@ -480,9 +506,28 @@ def iter_programme_homes():
             continue
         if not os.path.isdir(home):
             continue
-        for run_id, led in iter_worktree_run_records(home):
-            if led.get("run_kind") == "programme":
-                yield home, run_id, led
+        try:
+            found = authority.outcome(name)
+            record = None
+            if found["outcome"] in ("legacy", "supported"):
+                record = programme_home.read_programme(name)[0]
+                if not isinstance(record, dict) or record.get("run_kind") != "programme":
+                    continue
+        except Exception as exc:
+            found, record = {"outcome": "unavailable", "detail": str(exc)}, None
+        if found["outcome"] == "absent":
+            continue
+        yield {"home": home, "run_id": name, "outcome": found["outcome"], "record": record,
+               "detail": found["detail"]}
+
+
+def iter_programme_homes():
+    """Yield ``(home, run_id, run_record_dict)`` for each readable programme record;
+    ``iter_programme_outcomes`` also yields the homes whose authority is held.
+    """
+    for entry in iter_programme_outcomes():
+        if entry["record"] is not None:
+            yield entry["home"], entry["run_id"], entry["record"]
 
 
 def iter_active_runs(repo_root: str):

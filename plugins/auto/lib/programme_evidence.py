@@ -597,7 +597,7 @@ def _resolve(programme, item_id) -> str:
 
 def _claimed_ref(home, key, deliverable):
     ref = None
-    for row in programme_journal.read_path(programme_record.claims_path(home)):
+    for row in programme_journal.claims(os.path.basename(os.path.normpath(home))):
         payload = row.get("payload") or {}
         if payload.get("item") == key and payload.get("deliverable") == deliverable:
             ref = payload.get("ref")
@@ -739,7 +739,11 @@ def _h_check_deliverable(host, argv):
                         _context(host, programme, key, deliverable, repo))
 
     def change(programme, prompt, rec):
-        return _store(programme, run_id, _resolve(programme, key), deliverable, ref, verdict)
+        out = _store(programme, run_id, _resolve(programme, key), deliverable, ref, verdict)
+        retained = load_lib_module("programme_artifacts").retained_for_item(programme, out["item"])
+        if retained:
+            out["retained_results"] = retained
+        return out
 
     return host._write(dict(opts, run=run_id), change, "evidence_checked")
 

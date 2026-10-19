@@ -38,6 +38,9 @@ that the work depends on it, and the condition that removes it.
 `P set-waiting <item> --blocker` refuses without `--serves`, `--evidence` and
 `--unblocks-when`. A safety or data-loss pause takes `--blocker --safety`
 instead. If you cannot name all three, it is not a blocker: keep working.
+These flags mark the wait. A blocker on a check of an accepted requirement also
+takes `P raise-blocker`, and a safety or data-loss risk also takes `P pause`
+(section 6 of [sequencing.md](sequencing.md)).
 
 An unfinished investigation does not gate acceptance unless you can show the
 dependency. Run the product check that is ready.
@@ -72,7 +75,7 @@ and refuse a restriction without a valid source.
 A restriction you wrote yourself is not a runtime ban. For example, "source
 only" in your own brief does not stop compilation when the next product check
 needs a build. To lift it, record the choice with
-`P record-decision <item> --kind technical_approach --silent --why "<why>"`,
+`P log-decision <item> --kind technical_approach --silent --why "<why>"`,
 then tell the worker with `P prompt-item <item> "<text>" --decision <id>`.
 
 ## 5. Acceptance is the product outcome (R5)
@@ -85,14 +88,15 @@ deliverable.
 ## 6. Link the decision a worker carries (R6)
 
 When you send a worker work that rests on a decision, link it:
-`--decision <id>` on `P start-worker` or `P prompt-item`. The verb adds the
+`--decision <id>` on `P start-worker` or `P prompt-item`, with a decision-log id
+or a decision record id from `P context --item <item>`. The verb adds the
 decision and this line to the brief: "Proceed under this decision. Do not
 reopen it: if you find new evidence that it cannot hold, stop and state that
 evidence in your pane."
 
 A worker has no other way to reopen a decision. When a worker's pane states new
 evidence, weigh it. If the decision cannot hold, decide again with
-`P record-decision`, or hand it to Shawn when the decision was his.
+`P log-decision`, or hand it to Shawn when the decision was his.
 
 ## 7. One owner, no empty messages (R7)
 
@@ -102,11 +106,12 @@ when you can decide it (section 11).
 
 ## 8. One escalation per denied operation (R8)
 
-When the runtime denies an operation that you still need, ask Shawn once:
+When the runtime denies an operation that you still need, record the refusal
+with `P record-denial`, then ask Shawn once:
 
-`P hand-item <item> --kind denied_operation --op <operation> --question "<the operation, why it is needed, and the narrowest grant that allows it>"`
+`P hand-item <item> --kind denied_operation --operation <operation> --question "<the operation, why it is needed, and the narrowest grant that allows it>"`
 
-`--op` is one word, for example `git-push`. A second ask for the same operation
+`--operation` is one word, for example `git-push`. A second ask for the same operation
 refuses while the first is open. Do not give the operation to another worker to
 avoid the denial.
 
@@ -131,7 +136,7 @@ agreement was accepted under the operating contract. Only then does this
 section apply:
 
 - A project term that covers the choice decides it. Record the choice with
-  `P record-decision <item|programme> --kind <kind> --term <term-id> --why "<why>"`.
+  `P log-decision <item|programme> --kind <kind> --term <term-id> --why "<why>"`.
 - When no term covers it, you decide and record why with `--silent` in place of
   `--term`, unless the choice does one of these. Then bring it to Shawn with one
   recommendation:

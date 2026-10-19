@@ -115,10 +115,18 @@ def adopt(entry, prompt, rec) -> dict:
     return dict(entry, adoption=adoption)
 
 
-# Pre-fill verifies an entry only through its approval row, so every stored entry gets one.
-def store(entries, prompt, rec, how) -> list:
-    adopted = [adopt(e, prompt, rec) for e in entries]
+def prepare(entries, prompt, rec) -> list:
+    return [adopt(e, prompt, rec) for e in entries]
 
+
+def summary(adopted) -> list:
+    return [{"id": e["id"], "key": e["key"], "correction": e["correction"], "hash": e["adoption"]["hash"]}
+            for e in adopted]
+
+
+# Pre-fill verifies an entry only through its approval row, so every stored entry gets one. The
+# rows are separate journal writes, so this runs after the programme write commits, never inside it.
+def store(adopted, prompt, run_id, session_id, how) -> None:
     def update(doc):
         for entry in adopted:
             kept = [e for e in entries_under(doc, entry["key"]) if e.get("kind") != entry["kind"]]
@@ -127,12 +135,10 @@ def store(entries, prompt, rec, how) -> list:
     _write(update)
     for entry in adopted:
         programme_journal.append(
-            rec["run_id"], APPROVAL_KIND, rec.get("driving_session_id"),
+            run_id, APPROVAL_KIND, session_id,
             {"entry": how, "target": target(entry["key"], entry["id"]), "hash": entry["adoption"]["hash"],
              "prompt_id": prompt["prompt_id"], "quote": prompt["quote"]},
             cites=[prompt["prompt_id"]])
-    return [{"id": e["id"], "key": e["key"], "correction": e["correction"], "hash": e["adoption"]["hash"]}
-            for e in adopted]
 
 
 def _verified(entry, key, lookup):

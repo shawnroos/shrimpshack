@@ -414,9 +414,21 @@ it "a failed start does not set the owner"
 check 'null' "$(field 'items["linear:AI-753"]["owner"]["session_id"]')"
 it "the failed start is journaled"
 has "no agent" "$(journal_last worker_start_failed)"
+ATTEMPT_FAILED="$(jq_py 'd["attempt"]' | tr -d '"')"
+it "a launch with no agent appearing stays uncertain, not failed"
+check '"uncertain"' "$(jq_py 'd["operation_state"]')"
 
 : > "$CALLS"
 FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-753 -- --name shot-kinds --handoff /tmp/h.md
+it "a second start while the first launch is uncertain is refused by default"
+check 1 "$CODE"
+it "the refusal names the uncertain attempt"
+has "$ATTEMPT_FAILED" "$OUT"
+it "the refused retry never calls spinoff"
+lacks "spinoff" "$(calls)"
+
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-753 --despite "$ATTEMPT_FAILED" -- --name shot-kinds --handoff /tmp/h.md
 it "start-worker succeeds when the agent appears"
 check 0 "$CODE"
 SID_OK="$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--session-id ([^ ]+).*/\1/')"
@@ -618,24 +630,26 @@ it "nothing is sent for a refused restriction"
 lacks "agent prompt" "$(calls)"
 check 1 "$(field 'len(items["herdr:w2/p31"]["restrictions"])')"
 
+# Main's launch tests above leave an uncertain launch on AI-753, which refuses a new one by design.
+prog add-item linear:AI-790 --title "Shot kinds brief"
 BRIEF="${WORK}/brief.md"
 printf 'Build shot kinds.\n' > "$BRIEF"
 : > "$CALLS"
-prog start-worker linear:AI-753 --decision "$DEC" -- --name shot-kinds --target tab
+prog start-worker linear:AI-790 --decision "$DEC" -- --name shot-kinds --target tab
 it "start-worker with a decision refuses without --handoff"
 check 2 "$CODE"
 has "--handoff" "$OUT"
-prog start-worker linear:AI-753 --decision d000000 -- --name shot-kinds --handoff "$BRIEF"
+prog start-worker linear:AI-790 --decision d000000 -- --name shot-kinds --handoff "$BRIEF"
 it "start-worker refuses an unknown decision id"
 check 1 "$CODE"
-prog start-worker linear:AI-753 --restriction "no deploys" -- --name shot-kinds --handoff "$BRIEF"
+prog start-worker linear:AI-790 --restriction "no deploys" -- --name shot-kinds --handoff "$BRIEF"
 it "start-worker refuses a restriction without a source"
 check 2 "$CODE"
 it "refused decision starts never call spinoff"
 lacks "spinoff" "$(calls)"
 
 : > "$CALLS"
-FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-753 --decision "$DEC" --restriction "source only" --source pm_choice \
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-790 --decision "$DEC" --restriction "source only" --source pm_choice \
   -- --name shot-kinds --handoff "$BRIEF"
 it "start-worker with a decision and --handoff starts"
 check 0 "$CODE"
@@ -652,9 +666,27 @@ has "source only (source: pm_choice)" "$COPY"
 it "the original brief is unchanged"
 check "Build shot kinds." "$(cat "$BRIEF")"
 it "the restriction is recorded on the started item"
-check '["source only", "pm_choice"]' "$(field '[items["linear:AI-753"]["restrictions"][-1][k] for k in ("text", "source")]')"
+check '["source only", "pm_choice"]' "$(field '[items["linear:AI-790"]["restrictions"][-1][k] for k in ("text", "source")]')"
 it "the worker_started row carries the decision ids"
 has "$DEC" "$(journal_last worker_started)"
+run_py "$RUN" <<'EOF' >/dev/null
+def body(rec):
+    rec["programme"].setdefault("context", {})["decisions"] = {"crop-scope": [
+        {"rev": 1, "scope": "crop only", "reason": "Shawn wants crop first", "limits": ["no export work"],
+         "applies_to": ["programme"], "requirements": [], "state": "accepted"}]}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+prog add-item linear:AI-791 --title "Crop brief"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-791 --decision crop-scope -- --name crop --handoff "$BRIEF"
+it "start-worker takes a decision record id and quotes its revision and limits"
+check 0 "$CODE"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+has "decision:crop-scope@1 (decision record): crop only; reason: Shawn wants crop first; limits: no export work" "$COPY"
+prog prompt-item herdr:w2/p31 "carry on" --decision no-such-record
+it "a decision id in neither the log nor the decision records refuses"
+check 1 "$CODE"
+has "no accepted decision record" "$OUT"
 write_snapshot base
 
 it "no command crashed with a traceback"

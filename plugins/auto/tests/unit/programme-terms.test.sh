@@ -405,7 +405,7 @@ step edit-project-term "$(term_id naming)" "kebab case for every file"
 step amend-term stop_rule never_stop --prompt "$(prompt typed 'stop rule never_stop')"
 step record-instruction --prompt "$(prompt typed 'keep the PR small')"
 step add-item linear:AI-1 --title "Crop" --kind fix_only
-step record-decision linear:AI-1 --kind technical_approach --silent --why "smaller diff"
+step log-decision linear:AI-1 --kind technical_approach --silent --why "smaller diff"
 step rules
 check "0000000 false" "$CODES $(field '"contract_version" in prog["agreement"]')"
 
@@ -414,11 +414,11 @@ prog propose-agreement --project-term "crop defaults=PM picks the crop default" 
   --reserved-term "pricing copy=Shawn writes every price string" --source "repo README" --run "$RUN"
 prog accept-agreement --prompt "$(prompt typed 'yes, I accept the agreement')" --run "$RUN"
 run_py "$RUN" <<'EOF' >/dev/null
-rec = record(args[0])
-agreement = rec["programme"]["agreement"]
-agreement.pop("contract_version")
-agreement["accepted"]["at"] = "2026-10-01T00:00:00Z"
-json.dump(rec, open(core.run_record_path(ph.home_path(args[0]), args[0]), "w"))
+def unstamp(rec):
+    agreement = rec["programme"]["agreement"]
+    agreement.pop("contract_version")
+    agreement["accepted"]["at"] = "2026-10-01T00:00:00Z"
+core._with_locked_run_record(ph.home_path(args[0]), args[0], unstamp)
 EOF
 it "an unstamped programme's rules block equals the block from before the operating contract"
 prog rules --run "$RUN"
@@ -437,7 +437,7 @@ rule flagged-code: act, requires merged, flagged, verified, recorded; caveat: A 
 rule product-question: propose, requires handed; caveat: The PM never decides a product question.
 rule shared-blocker: never, requires debugged; caveat: The PM never fixes another team's code. It debugs and records only.
 rule shared-package: act_and_tell, requires merged, released, recorded; caveat: A full release needs Shawn's yes. An eval waiver must be a named instruction.
-</auto-rules>" "$OUT"
+</auto-rules>" "${OUT%%</auto-rules>*}</auto-rules>"
 it "an unstamped programme's rules JSON has no operating contract"
 check false "$(run_py "$RUN" <<'EOF'
 prog = load_lib_module("programme")

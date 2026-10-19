@@ -38,14 +38,9 @@ PYEOF
 edit_record() {
   run_py "$1" "$2" <<'EOF'
 run, expr = args
-core = load_lib_module("run_record_core")
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+import programme_records
+programme_records.edit(run, expr, globals())
 print("edited")
 EOF
 }
@@ -417,7 +412,7 @@ CODES=""
 "$PY" "$PROGPY" add-item linear:AI-7 --title "Crop" --kind fix_only >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" amend-term stop_rule never_stop --prompt "$(old_prompt 'stop rule never_stop')" >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" record-instruction --prompt "$(old_prompt 'keep PRs small')" >/dev/null 2>&1; CODES="${CODES}$?"
-"$PY" "$PROGPY" record-decision linear:AI-7 --kind technical_approach --silent --why "smaller" >/dev/null 2>&1; CODES="${CODES}$?"
+"$PY" "$PROGPY" log-decision linear:AI-7 --kind technical_approach --silent --why "smaller" >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" status --json >/dev/null 2>&1; CODES="${CODES}$?"
 check "00000 ['accepted', 'terms']" "${CODES} $(old_agreement_keys)"
 it "the old accepted record refuses a project-term edit and gains nothing"

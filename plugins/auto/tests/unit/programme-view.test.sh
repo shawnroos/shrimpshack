@@ -298,7 +298,7 @@ OUT="$("$PY" "$PROG" status --run "$BLOCKED" --json 2>&1)"
 it "the json model carries the three blocker fields"
 check "merged check on AI-60|runner log tr-1 fails in infra code|infra ships the fix" "$("$PY" -c 'import json,sys; w=json.loads(sys.argv[1])["model"]["items"][0]["waiting_on"]; print("|".join(w[k] for k in ("serves","evidence","unblocks_when")))' "$OUT")"
 
-RESTRICTED="$(new_run w9)"
+RESTRICTED="$(new_run w12)"
 run_py "$RESTRICTED" <<'EOF' >/dev/null
 def seed(p):
     item = ph.new_item("linear:AI-63", "Shot kinds")
@@ -366,7 +366,7 @@ def seed(p):
     ]
     a["corrections"] = [{"id": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm",
                          "previous": None, "prompt_id": "p000009",
-                         "quote": "you pick the tool, key sk-abcdefghijklmnopqrstuvwx", "pm_reading": "PM picks tools",
+                         "quote": "you pick the tool, key [redacted]", "pm_reading": "PM picks tools",
                          "choices_before": 3, "undone": None}]
     p["decisions"] = [
         {"id": "d000001", "at": "2026-10-02T00:00:00Z", "kind": "technical_approach", "by": "pm",
@@ -384,11 +384,12 @@ pj.append(run, "pm_decided", "sess-pm", {"decision_id": "d000001", "term": "t000
 pj.append(run, "term_corrected", "sess-pm",
           {"correction": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm", "previous": None,
            "pm_reading": "PM picks tools", "prompt_id": "p000009",
-           "quote": "you pick the tool, key sk-abcdefghijklmnopqrstuvwx"}, cites=["p000009"])
+           "quote": "you pick the tool, key [redacted]"}, cites=["p000009"])
 EOF
 
 snapshot() { find "$1" -type f -exec shasum {} + 2>/dev/null | sort; }
 
+"$PY" "$PROG" status --run "$TERMS_RUN" >/dev/null 2>&1
 BEFORE="$(snapshot "$TERMS_HOME")"
 TERMS_OUT="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms 2>&1)"
 TERMS_JSON="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms --json 2>&1)"
@@ -498,6 +499,60 @@ check "../../mods/programme-view/register.tsx" "$("$PY" -c 'import json,sys; pri
 it "the mod's slash command does not share a name with a command or skill"
 NAME="$(sed -n "s/^ *name: '\(.*\)',$/\1/p" "${MOD}/register.tsx")"
 check "programme-view|absent" "${NAME}|$([ -e "${AUTO_ROOT}/commands/${NAME}.md" ] || [ -e "${AUTO_ROOT}/skills/${NAME}" ] && echo present || echo absent)"
+
+it "an empty programme renders an Acceptance section with no requirements"
+has "no requirements" "$("$PY" "$PROG" status --run "$QUIET" 2>&1)"
+
+ACC="$(new_run w11)"
+run_py "$ACC" <<'EOF' >/dev/null
+def seed(p):
+    browser = ph.new_item("herdr:browser", "Browser flow", now_iso="2026-10-01T00:00:00Z")
+    browser["matched_rule"] = ["fix-only"]
+    browser["deliverables"] = {"verified": {"result": "confirmed", "checked_at": "2026-10-05T00:00:00Z"}}
+    linux = ph.new_item("herdr:linux", "Linux probe", now_iso="2026-10-01T00:00:00Z")
+    p["items"] = {"herdr:browser": browser, "herdr:linux": linux}
+    p["context"] = {
+        "requirements": {"r-browser": [{"rev": 1, "text": "browser passes", "checks": ["herdr:browser=verified"],
+                                        "decision_id": None, "state": "accepted",
+                                        "accepted": {"at": "2026-10-04T00:00:00Z", "prompt_id": "p1"}},
+                                       {"rev": 2, "text": "browser and mobile pass",
+                                        "checks": ["herdr:browser=verified"], "decision_id": None,
+                                        "state": "pending_acceptance", "accepted": None, "delta": None}]},
+        "pauses": {"s9": {"risk": "data_loss", "reason": "the backfill may drop rows", "items": ["herdr:linux"],
+                          "state": "active"}},
+        "denials": [{"id": "x1", "tool": "Bash", "action": "start_worker", "reason": "permission denied",
+                     "item": "herdr:linux"}]}
+mutate(args[0], seed)
+EOF
+ACC_JSON="$("$PY" "$PROG" status --run "$ACC" --json 2>&1)"
+ACC_TEXT="$("$PY" "$PROG" status --run "$ACC" 2>&1)"
+acc_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); m=d["model"]; print(eval(sys.argv[2]))' "$ACC_JSON" "$1" "${2:-}" 2>&1; }
+
+it "the model carries the predicate's acceptance unchanged (one computation per build)"
+check "True" "$(run_py "$ACC" "$ACC_JSON" <<'EOF'
+pp = load_lib_module("programme_predicate")
+pv = load_lib_module("programme_view")
+rec = record(args[0])
+model = json.loads(args[1])["model"]
+status = pp.compute(rec, inbox_size=0)
+print(model["acceptance"] == pv._clean(status["acceptance"]))
+EOF
+)"
+it "status shows the satisfied requirement with its check result and the pending revision"
+has "r-browser rev 1: satisfied, revision 2 pending (herdr:browser=verified confirmed)" "$ACC_TEXT"
+it "status lists the open item no requirement gates on as a follow-up"
+has "follow-ups (no requirement gates on them): herdr:linux" "$ACC_TEXT"
+it "status shows the safety pause"
+has "safety pause s9 (data_loss): the backfill may drop rows" "$ACC_TEXT"
+it "status shows the denial"
+has "denied start_worker by Bash for herdr:linux: permission denied" "$ACC_TEXT"
+it "decisions for Shawn ask about the pending revision and the pause"
+check "context_pending:r-browser safety_pause:s9" \
+  "$(acc_q '" ".join(d["kind"] + ":" + (d.get("id") or d.get("pause") or "") for d in m["decisions_for_shawn"] if d["kind"] in ("context_pending", "safety_pause"))')"
+it "the header reports the pause as a stop reason"
+has "safety_pause" "$(acc_q 'm["programme"]["reasons"]')"
+it "status text is still the view rows, line for line"
+check "True" "$(acc_q '"\n".join(r["text"] for r in d["rows"]) == sys.argv[3]' "$ACC_TEXT")"
 
 echo "programme-view.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

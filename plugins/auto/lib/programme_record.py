@@ -30,8 +30,8 @@ programme_sanitize = load_lib_module("programme_sanitize")
 driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
 programme_decisions = load_lib_module("programme_decisions")
+programme_context = load_lib_module("programme_context")
 
-CLAIMS_NAME = "claims.jsonl"
 SOURCES = ("herdr", "tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
 CHOICES = ("ship", "decline")
@@ -518,17 +518,19 @@ def _open_ask_for(programme, op):
 
 
 def _h_hand_item(host, argv):
-    positional, opts = host._parse(argv, values=("run", "question", "kind", "op"))
+    positional, opts = host._parse(argv, values=("run", "question", "kind", "operation"))
     if len(positional) != 1:
-        raise ValueError("usage: hand-item <id> --question <text> --kind <decision-kind> [--op <operation>]")
+        raise ValueError("usage: hand-item <id> --question <text> --kind <decision-kind> "
+                         "[--operation <operation>]")
     item_id = check_item_id(positional[0])
     question = _text(opts.get("question"), "question")
     if not opts.get("kind"):
         raise ValueError("hand-item needs --kind <decision-kind>")
     kind = programme_decisions.check_kind(opts["kind"])
-    if (kind == DENIED_OPERATION) != bool(opts.get("op")):
-        raise ValueError(f"--kind {DENIED_OPERATION} needs --op <operation>, and --op goes only with that kind")
-    op = _token(opts.get("op"), "op")
+    if (kind == DENIED_OPERATION) != bool(opts.get("operation")):
+        raise ValueError(f"--kind {DENIED_OPERATION} needs --operation <operation>, and --operation goes only "
+                         "with that kind")
+    op = _token(opts.get("operation"), "operation")
 
     def change(programme, prompt, rec):
         key = _resolve(programme, item_id)
@@ -591,16 +593,8 @@ def _h_answer_handed(host, argv):
     return host._write(opts, change, "handed_answered", prompt_id=opts.get("prompt"), needs_prompt=True)
 
 
-def claims_path(home) -> str:
-    return os.path.join(home, CLAIMS_NAME)
-
-
 def claims_count(home) -> int:
-    try:
-        with open(claims_path(home), "rb") as fh:
-            return sum(1 for _ in fh)
-    except OSError:
-        return 0
+    return programme_journal.claims_count(os.path.basename(os.path.normpath(home)))
 
 
 def _h_claim(host, argv):
@@ -616,15 +610,24 @@ def _h_claim(host, argv):
     programme = programme_home.normalize_programme(record.get("programme") or {})
     if programme.get("ended"):
         raise RecordError("the programme has ended")
+    load_lib_module("programme_archive").pause("claim")
     key = _resolve(programme, item_id)
     deliverable = opts["deliverable"]
     if deliverable not in (programme["items"][key].get("deliverables") or {}):
         raise RecordError(f"{deliverable!r} is not a deliverable of {key!r}")
     sid = programme_sanitize.token(driver_session.driving_session_id() or "")
     payload = {"item": key, "deliverable": deliverable, "ref": ref}
-    programme_journal.append_to(claims_path(home), "claim", sid, payload)
+    programme_journal.append_claim(run_id, sid, payload)
     host._emit({"ok": True, "run": run_id, "kind": "claim", **payload})
     return 0
+
+
+def _h_collect_result(host, argv):
+    return load_lib_module("programme_artifacts").collect_verb(host, argv)
+
+
+def _h_preserve_code(host, argv):
+    return load_lib_module("programme_preserve").preserve_verb(host, argv)
 
 
 def _h_mark_read(host, argv):
@@ -634,7 +637,7 @@ def _h_mark_read(host, argv):
         raise ValueError("--offset must be a whole number")
 
     def change(programme, prompt, rec):
-        size = claims_count(programme_home.home_path(rec["run_id"]))
+        size = programme_journal.claims_count(rec["run_id"])
         target = size if offset is None else int(offset)
         before = programme.get("inbox_offset") or 0
         if target > size or target < before:
@@ -743,39 +746,6 @@ def _h_set_source(host, argv):
     return host._write(opts, change, "source_changed")
 
 
-def tracker_due(item, label) -> bool:
-    return (item.get("tracker_synced") or {}).get("state") != label
-
-
-def _h_tracker_synced(host, argv):
-    positional, opts = host._parse(argv, values=("run", "item", "state", "note"), flags=("check",))
-    if positional or not opts.get("item") or not opts.get("state"):
-        raise ValueError("usage: tracker-synced --item <id> --state <label> [--note <text>] [--check]")
-    item_id = check_item_id(opts["item"])
-    label = opts["state"]
-    if not _ACTION_RE.fullmatch(label) or len(label) > SYNC_LABEL_CAP:
-        raise RecordError(f"--state must be a short lower_snake label: {label!r}")
-    note = programme_sanitize.clean(opts.get("note"), SYNC_NOTE_CAP) or None
-    _, home, record = host._locate(opts)
-    programme = programme_home.normalize_programme(record.get("programme") or {})
-    key = _resolve(programme, item_id)
-    item = programme["items"][key]
-    if opts.get("check") or not tracker_due(item, label):
-        host._guard(home, record, compact_exempt=bool(opts.get("check")))
-        host._emit({"ok": True, "item": key, "state": label, "due": tracker_due(item, label),
-                    "changed": False, "synced": item.get("tracker_synced")})
-        return 0
-
-    def change(programme, prompt, rec):
-        current = programme["items"][_resolve(programme, item_id)]
-        synced = {"state": label, "note": note, "at": _now()}
-        current["tracker_synced"] = synced
-        _history(current, "tracker_synced", state=label, note=note)
-        return {"item": key, "state": label, "note": note, "changed": True}
-
-    return host._write(opts, change, "tracker_synced")
-
-
 def _recorded_issue(raw):
     if not isinstance(raw, dict):
         return None, None
@@ -835,6 +805,39 @@ def _h_record_issues(host, argv):
     return host._write(opts, change, "issues_recorded")
 
 
+def tracker_due(item, label) -> bool:
+    return (item.get("tracker_synced") or {}).get("state") != label
+
+
+def _h_tracker_synced(host, argv):
+    positional, opts = host._parse(argv, values=("run", "item", "state", "note"), flags=("check",))
+    if positional or not opts.get("item") or not opts.get("state"):
+        raise ValueError("usage: tracker-synced --item <id> --state <label> [--note <text>] [--check]")
+    item_id = check_item_id(opts["item"])
+    label = opts["state"]
+    if not _ACTION_RE.fullmatch(label) or len(label) > SYNC_LABEL_CAP:
+        raise RecordError(f"--state must be a short lower_snake label: {label!r}")
+    note = programme_sanitize.clean(opts.get("note"), SYNC_NOTE_CAP) or None
+    _, home, record = host._locate(opts)
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    key = _resolve(programme, item_id)
+    item = programme["items"][key]
+    if opts.get("check") or not tracker_due(item, label):
+        host._guard(home, record, compact_exempt=bool(opts.get("check")))
+        host._emit({"ok": True, "item": key, "state": label, "due": tracker_due(item, label),
+                    "changed": False, "synced": item.get("tracker_synced")})
+        return 0
+
+    def change(programme, prompt, rec):
+        current = programme["items"][_resolve(programme, item_id)]
+        synced = {"state": label, "note": note, "at": _now()}
+        current["tracker_synced"] = synced
+        _history(current, "tracker_synced", state=label, note=note)
+        return {"item": key, "state": label, "note": note, "changed": True}
+
+    return host._write(opts, change, "tracker_synced")
+
+
 _SPECS = (
     ("add-item", _h_add_item,
      "<source:key> [--title <text>] [--kind <change-kind>]... [--repo <path>] [--pane <id>] "
@@ -868,10 +871,10 @@ _SPECS = (
      "armed cron prompt verbatim, so a prompt that equals it is journaled with origin cron. "
      "Exempt from the compact flag; not journaled."),
     ("hand-item", _h_hand_item,
-     "<id> --question <text> --kind <decision-kind> [--op <operation>] [--run <id>]",
+     "<id> --question <text> --kind <decision-kind> [--operation <operation>] [--run <id>]",
      "no --kind, or a kind outside the closed decision kinds (this --kind is a decision kind, not "
      "a change kind); a handed or finished item (it notifies once); kind denied_operation without "
-     "--op, or --op with any other kind; a denied_operation ask for an operation that already has an "
+     "--operation, or --operation with any other kind; a denied_operation ask for an operation that already has an "
      "open ask on any item."),
     ("answer-handed", _h_answer_handed,
      "<id> --choice ship|decline --prompt <id> [--kind <change-kind>]... [--repo <path>] [--run <id>]",
@@ -881,6 +884,18 @@ _SPECS = (
     ("claim", _h_claim, "--run <id> --item <id> --deliverable <name> --ref <reference>",
      "free text; a reference with spaces; an unknown item or a deliverable the item does not "
      "require; an ended programme. Open to any session and exempt from the compact flag."),
+    ("collect-result", _h_collect_result,
+     "--item <id> --attempt <token> --source <relative path> --root <dir> [--media-type <type>] "
+     "[--digest <sha256>] [--run <id>]",
+     "a source outside --root, through a symlink, missing, unreadable, not a regular file or over "
+     "8 MB; secret-bearing or non-text content; a digest mismatch; a sealed programme. A refusal "
+     "is recorded and retains no bytes. Open to any session; a retained result approves nothing."),
+    ("preserve-code", _h_preserve_code,
+     "--source <worktree> [--extra <rev>]... [--ignored <path>]... [--check] [--run <id>]",
+     "a path that is not the top of a git worktree; secret-bearing history, bytes or names; "
+     "submodules, LFS payloads, alternates, partial clones or shallow history; git lock files or "
+     "a source that changes during capture. A refusal is recorded and the source is never touched. "
+     "--check says whether the receipt still covers the source; nothing is ever deleted."),
     ("mark-read", _h_mark_read, "[--offset <n>] [--run <id>]",
      "an offset past the inbox or behind the current read offset."),
     ("set-now", _h_set_now, "<text> [--item <id>] [--run <id>] | --clear",
@@ -907,5 +922,7 @@ _SPECS = (
 
 
 def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
-            for name, handler, args, rejects in _SPECS}
+    verbs = {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+             for name, handler, args, rejects in _SPECS}
+    verbs.update(programme_context.build_verbs(host, sys.modules[__name__]))
+    return verbs

@@ -79,13 +79,7 @@ EOF
 edit() {
   run_py "$RUN" "$1" <<'EOF'
 run, expr = args
-home = ph.home_path(run)
-path = core.run_record_path(home, run)
-with open(path) as fh:
-    rec = json.load(fh)
-exec(expr)
-with open(path, "w") as fh:
-    json.dump(rec, fh)
+core._with_locked_run_record(ph.home_path(run), run, lambda rec: exec(expr, {"rec": rec}))
 EOF
 }
 
@@ -134,28 +128,28 @@ prog add-item linear:AI-2 --title "Which crop?" --kind product_question
 prog add-item linear:AI-3 --title "Another product call" --kind product_question
 prog add-item linear:AI-4 --title "Ask me" --kind fix_only
 
-it "record-decision --silent writes a decision with an id"
-prog record-decision linear:AI-1 --kind technical_approach --silent --why "smaller diff, same outcome"
+it "log-decision --silent writes a decision with an id"
+prog log-decision linear:AI-1 --kind technical_approach --silent --why "smaller diff, same outcome"
 check 0 "$CODE"
 check '["linear:AI-1", "technical_approach", true, null, "pm", "smaller diff, same outcome", true]' \
   "$(field '[prog["decisions"][0][k] for k in ("item", "kind", "silent", "term", "by", "why")] + [bool(__import__("re").fullmatch(r"d[0-9a-f]{6}", prog["decisions"][0]["id"]))]')"
-it "record-decision journals pm_decided carrying the decision id"
+it "log-decision journals pm_decided carrying the decision id"
 check "true" "$(run_py "$RUN" <<'EOF'
 rows = [r for r in pj.read(args[0]) if r["kind"] == "pm_decided"]
 rec = record(args[0])
 print(json.dumps(len(rows) == 1 and rows[0]["payload"]["decision_id"] == rec["programme"]["decisions"][0]["id"]))
 EOF
 )"
-it "record-decision prints the decision id"
+it "log-decision prints the decision id"
 has '"decision_id": "d' "$OUT"
 
-it "record-decision on the programme as a whole records target programme"
-prog record-decision programme --kind work_sequencing --term cadence --why "the cadence term says hourly"
+it "log-decision on the programme as a whole records target programme"
+prog log-decision programme --kind work_sequencing --term cadence --why "the cadence term says hourly"
 check '["programme", "cadence", false]' "$(field '[prog["decisions"][-1][k] for k in ("item", "term", "silent")]')"
 
 it "an unknown kind refuses with the known kinds"
 BEFORE="$(decision_count)"
-prog record-decision linear:AI-1 --kind vibes --silent --why x
+prog log-decision linear:AI-1 --kind vibes --silent --why x
 check 1 "$CODE"
 has "unknown decision kind 'vibes'" "$OUT"
 it "the unknown-kind refusal writes no decision"
@@ -165,33 +159,33 @@ check 2 "$(journal_count pm_decided)"
 
 for kind in unknown agreement; do
   it "the record-only kind ${kind} is refused as input"
-  prog record-decision linear:AI-1 --kind "$kind" --silent --why x
+  prog log-decision linear:AI-1 --kind "$kind" --silent --why x
   check "1 unknown decision kind" "$CODE $(printf '%s' "$OUT" | grep -o 'unknown decision kind' | head -1)"
 done
 
-it "record-decision with neither --term nor --silent refuses"
-prog record-decision linear:AI-1 --kind tool_choice --why x
+it "log-decision with neither --term nor --silent refuses"
+prog log-decision linear:AI-1 --kind tool_choice --why x
 check "2 exactly one of" "$CODE $(printf '%s' "$OUT" | grep -o 'exactly one of' | head -1)"
-it "record-decision with both --term and --silent refuses"
-prog record-decision linear:AI-1 --kind tool_choice --silent --term cadence --why x
+it "log-decision with both --term and --silent refuses"
+prog log-decision linear:AI-1 --kind tool_choice --silent --term cadence --why x
 check "2 exactly one of" "$CODE $(printf '%s' "$OUT" | grep -o 'exactly one of' | head -1)"
-it "record-decision without --why refuses"
-prog record-decision linear:AI-1 --kind tool_choice --silent
+it "log-decision without --why refuses"
+prog log-decision linear:AI-1 --kind tool_choice --silent
 check "2 --why" "$CODE $(printf '%s' "$OUT" | grep -o -- '--why' | head -1)"
-it "record-decision with a term id holding spaces refuses"
-prog record-decision linear:AI-1 --kind tool_choice --term "two words" --why x
+it "log-decision with a term id holding spaces refuses"
+prog log-decision linear:AI-1 --kind tool_choice --term "two words" --why x
 check 1 "$CODE"
-it "record-decision on an unknown item refuses"
-prog record-decision linear:AI-99 --kind tool_choice --silent --why x
+it "log-decision on an unknown item refuses"
+prog log-decision linear:AI-99 --kind tool_choice --silent --why x
 check "1 no item" "$CODE $(printf '%s' "$OUT" | grep -o 'no item' | head -1)"
-it "record-decision on a bad target refuses"
-prog record-decision "not an id" --kind tool_choice --silent --why x
+it "log-decision on a bad target refuses"
+prog log-decision "not an id" --kind tool_choice --silent --why x
 check 1 "$CODE"
 it "none of the refusals wrote a decision"
 check "$BEFORE" "$(decision_count)"
 
-it "record-decision from a session that does not drive the programme is refused"
-CLAUDE_CODE_SESSION_ID="sess-stranger" prog record-decision linear:AI-1 --kind tool_choice --silent --why x --run "$RUN"
+it "log-decision from a session that does not drive the programme is refused"
+CLAUDE_CODE_SESSION_ID="sess-stranger" prog log-decision linear:AI-1 --kind tool_choice --silent --why x --run "$RUN"
 check "1 driving session" "$CODE $(printf '%s' "$OUT" | grep -o 'driving session' | head -1)"
 
 it "hand-item without --kind refuses"
@@ -249,9 +243,9 @@ it "accept-agreement stamps the contract version"
 check 1 "$(field 'prog["agreement"]["contract_version"]')"
 edit 'rec["programme"]["agreement"].pop("contract_version")'
 
-it "on an unstamped programme record-decision on a product question refuses"
+it "on an unstamped programme log-decision on a product question refuses"
 BEFORE="$(decision_count)"
-prog record-decision linear:AI-2 --kind product_call --silent --why "obvious"
+prog log-decision linear:AI-2 --kind product_call --silent --why "obvious"
 check "1 hand-item" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1)"
 it "the unstamped refusal leaves the item open and writes no decision"
 check "\"open\" ${BEFORE}" "$(field 'prog["items"]["linear:AI-2"]["state"]') $(decision_count)"
@@ -261,8 +255,8 @@ check '0 "handed"' "$CODE $(field 'prog["items"]["linear:AI-2"]["state"]')"
 
 edit 'rec["programme"]["agreement"]["contract_version"] = 1'
 FIN_BEFORE="$(finished_count)"
-it "on a stamped programme record-decision closes a product question as decided"
-prog record-decision linear:AI-3 --kind product_call --silent --why "the terms are silent and it does not change acceptance"
+it "on a stamped programme log-decision closes a product question as decided"
+prog log-decision linear:AI-3 --kind product_call --silent --why "the terms are silent and it does not change acceptance"
 check '0 "decided"' "$CODE $(field 'prog["items"]["linear:AI-3"]["state"]')"
 it "the decided item counts as finished for the stop predicate"
 check "$((FIN_BEFORE + 1))" "$(finished_count)"
@@ -282,21 +276,21 @@ it "a decided item is not re-matched by add-item"
 prog add-item linear:AI-3 --kind fix_only
 check 1 "$CODE"
 it "a second decision on a decided product question refuses"
-prog record-decision linear:AI-3 --kind product_call --silent --why "again"
+prog log-decision linear:AI-3 --kind product_call --silent --why "again"
 check "1 decided" "$CODE $(printf '%s' "$OUT" | grep -o 'decided' | head -1)"
 it "on a stamped programme a decision on another item leaves its state alone"
-prog record-decision linear:AI-1 --kind tool_choice --silent --why x
+prog log-decision linear:AI-1 --kind tool_choice --silent --why x
 check '0 "open"' "$CODE $(field 'prog["items"]["linear:AI-1"]["state"]')"
 
 it "deciding a product question that also carries a code change re-matches the code change and stays open"
 prog add-item linear:AI-5 --title "Pick and build" --kind product_question --kind fix_only
-prog record-decision linear:AI-5 --kind product_call --silent --why "the terms are silent"
+prog log-decision linear:AI-5 --kind product_call --silent --why "the terms are silent"
 check '0 "open" ["fix-only"] "decided"' \
   "$CODE $(field 'prog["items"]["linear:AI-5"]["state"]') $(field 'prog["items"]["linear:AI-5"]["matched_rule"]') $(field 'prog["decisions"][-1]["outcome"]')"
 
 prog add-item linear:AI-6 --title "Product ask" --kind product_question
 it "on a stamped programme a non-product kind on a product question records and leaves the item open"
-prog record-decision linear:AI-6 --kind tool_choice --silent --why "use the existing crop helper"
+prog log-decision linear:AI-6 --kind tool_choice --silent --why "use the existing crop helper"
 check '0 "open" ["product-question"] ["product_question"] null' \
   "$CODE $(field 'prog["items"]["linear:AI-6"]["state"]') $(field 'prog["items"]["linear:AI-6"]["matched_rule"]') $(field 'prog["items"]["linear:AI-6"]["change_kinds"]') $(field 'prog["decisions"][-1]["outcome"]')"
 
@@ -304,18 +298,18 @@ for kind in prod_deploy full_release spend_over_cap merge_around_gate eval_waive
   it "the PM cannot record a ${kind} choice itself and is pointed at hand-item"
   BEFORE="$(decision_count)"
   JBEFORE="$(journal_count pm_decided)"
-  prog record-decision programme --kind "$kind" --silent --why "tests passed"
+  prog log-decision programme --kind "$kind" --silent --why "tests passed"
   check "1 hand-item ${BEFORE} ${JBEFORE}" \
     "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count) $(journal_count pm_decided)"
 done
 it "an act-level kind still records"
-prog record-decision programme --kind merge_at_gate --silent --why "gate is green"
+prog log-decision programme --kind merge_at_gate --silent --why "gate is green"
 check '0 "merge_at_gate"' "$CODE $(field 'prog["decisions"][-1]["kind"]')"
 
 edit 'rec["programme"]["agreement"].pop("contract_version")'
 prog add-item linear:AI-7 --title "Unstamped product ask" --kind product_question
 it "on an unstamped programme a non-product kind on a product question records without refusing"
-prog record-decision linear:AI-7 --kind tool_choice --silent --why "use the existing crop helper"
+prog log-decision linear:AI-7 --kind tool_choice --silent --why "use the existing crop helper"
 check '0 "open" ["product-question"]' \
   "$CODE $(field 'prog["items"]["linear:AI-7"]["state"]') $(field 'prog["items"]["linear:AI-7"]["matched_rule"]')"
 edit 'rec["programme"]["agreement"]["contract_version"] = 1'

@@ -172,7 +172,7 @@ prog add-item linear:AI-4 --title "Later ask" --kind fix_only
 prog hand-item linear:AI-1 --question "Crop on the client or the server?" --kind technical_approach
 prog hand-item linear:AI-2 --question "Is crop in scope?" --kind product_scope
 prog hand-item linear:AI-3 --question "Go over the cap?" --kind spend_over_cap
-prog record-decision programme --kind tool_choice --silent --why "pillow is already a dependency"
+prog log-decision programme --kind tool_choice --silent --why "pillow is already a dependency"
 ASK1="$(ask_id linear:AI-1)"
 ASK2="$(ask_id linear:AI-2)"
 ASK3="$(ask_id linear:AI-3)"
@@ -253,7 +253,7 @@ prog_on correct-term --prompt "$P1" --replies-to "$ASK1" --to pm --reading " "
 check 2 "$CODE"
 
 it "before the correction the PM cannot record a choice on the handed item"
-prog record-decision linear:AI-1 --kind technical_approach --silent --why x
+prog log-decision linear:AI-1 --kind technical_approach --silent --why x
 check "1 is handed" "$CODE $(printf '%s' "$OUT" | grep -o 'is handed' | head -1)"
 
 it "AE6: a typed reply to a technical-approach ask moves that kind to the PM"
@@ -283,7 +283,7 @@ prog rules
 has "correction ${CID1}: technical_approach decided by pm (Shawn: \"that didn't need me\"; PM's reading: \"technical choices are mine to make\")" "$OUT"
 
 it "after the correction the PM records its choice on the reopened item without answer-handed"
-prog record-decision linear:AI-1 --kind technical_approach --term "$CID1" --why "server crop keeps the client small"
+prog log-decision linear:AI-1 --kind technical_approach --term "$CID1" --why "server crop keeps the client small"
 check 0 "$CODE"
 DEC2="$(field 'prog["decisions"][-1]["id"]' | tr -d '"')"
 

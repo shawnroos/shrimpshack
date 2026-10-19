@@ -676,7 +676,7 @@ keys and keeps unknown ones.
 | `agreement.corrections[]` | `{id: "c"+6hex, at, kind, anchor, to: pm\|worker\|shawn, previous: pm\|worker\|shawn\|null, prompt_id, quote, pm_reading, choices_before, undone: null \| {at, prompt_id, quote}}`. Written by `correct-term`, oldest first; `undo-correction` fills `undone`. `kind` comes from the anchor (an ask id or a choice id) and is one of the correctable kinds. The owner of a kind is the `to` of the latest entry for it with `undone` null; with none, the contract default applies and `previous` is null. `quote` is the typed prompt's journal text; `pm_reading` is the PM's reading of it. `choices_before` is the length of `decisions[]` at correction time, so undo can list the choices recorded after it. A record without the key reads as `[]` |
 | `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `sources` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off). A record without the term reads as all three on. |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
-| `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). `record-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
+| `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the scoped, revisioned decision records live under `context.decisions` and are written by `record-decision`. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `items` | `{"<source>:<key>": item}` (below) |
 | `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
@@ -809,11 +809,16 @@ Task runs keep a journal too: `<repo>/.claude/auto/journal/<run slug>.jsonl`, on
 ### 10.7 Compaction flag
 
 The PreCompact hook writes `<home>/.compact-flag` (0600) for each programme the
-compacting session drives, with body `{at, session_id, trigger}`. Its presence is
-the signal: write verbs refuse and print the rules in force until
-`programme.py rules --ack` deletes it (`watcher-beat` is exempt), and the Stop hook
+compacting session drives, with body `{at, session_id, trigger, context_digest}`.
+`handover` writes the same flag for the new driving session with trigger
+`handover`. Its presence is the signal: write verbs refuse and print the rules in
+force and the restored context until `programme.py rules --ack` deletes it
+(`watcher-beat` is exempt). An ack whose context digest (given with `--context`,
+or else the flag's) differs from the committed decision context refuses, prints
+the current block and rewrites the flag with the current digest. The Stop hook
 adds to its reason: "Rules in force were reloaded after compaction; run
-`programme.sh rules --ack` before your next write." It does not repeat the block.
+`programme.sh rules --ack` before your next write." (after a handover it says the
+session took the programme over by handover). It does not repeat the block.
 
 ### 10.8 Read model
 

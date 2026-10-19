@@ -88,23 +88,50 @@ session.
 
 - **Read**: `describe`; `rules` prints the rules in force (agreement terms, adopted
   protocol rules, active instructions), rebuilt from the run record and wrapped in
-  an `<auto-rules>` tag as data. `rules --ack` clears the compact flag
-  `<home>/.compact-flag` and prints the block again.
+  an `<auto-rules>` tag as data, followed by the restored context (decisions,
+  requirements, binding pauses and denials, pending questions, assignments,
+  uncertain actions) from the recovery packet, wrapped in an `<auto-context>` tag
+  with its store revision and context digest. SessionStart, the compact refusal and
+  `takeover` print the same block. `rules --ack [--context <digest>]` clears the
+  compact flag `<home>/.compact-flag` and prints the block again. The flag records
+  the context digest when it was set (by PreCompact, or by `handover` for the new
+  driver); an ack whose digest is older than the committed context refuses, prints
+  the current block and rebinds the flag to it. An ack accepts nothing.
+  `inbox` (add `--all` for every claim) prints the unread worker claims from the store with their index,
+  for `mark-read --offset <n>`; `claims.jsonl` is only an export.
 - **Status**: `status [<run>|--run <id>] [--json]` prints the working model: what
   the PM is doing now, its queue, what it watches and why, who waits on whom,
   decisions for Shawn, what it just did, the rules in force, and each item with its
   deliverables, evidence, owner pane, session state and marks (new, stopped
-  unwatched). It also shows ended apart from done. Any session may run it; it
+  unwatched). It also shows ended apart from done, and for an ended programme the
+  resources still owed, the dispositions, and whether it is archived or which
+  archive checks last failed. For an active programme whose view file is missing,
+  `status` rebuilds it; a held authority prints the hold and writes nothing. Any session may run it; it
   writes nothing. Every write through the shared write path then rebuilds the same
   model into `<home>/views/view.json` (mode 0600), which the programme-view mod
   draws. A failed rebuild prints `view refresh failed` on stderr and never fails
-  the write. `claim` writes only `claims.jsonl`, so a new claim shows at the next
-  write or `status`. With `--terms` (or the bare word terms, as
+  the write. `claim` changes only the claims, so a new claim shows in the view at
+  the next write or `status`. With `--terms` (or the bare word terms, as
   `/auto:programme-status terms` sends it) it prints only the terms page: project
-  terms and active corrections, each decision under the term it used (silent ones
-  under "no term"), and the 20 most recent term changes with their source and
-  redacted quote; `--json` then emits `{run, generated_at, terms, rows}`. Viewing
-  never counts as approval.
+  terms and active corrections, each decision-log entry under the term it used
+  (silent ones under "no term"), and the 20 most recent term changes with their
+  source and redacted quote; `--json` then emits `{run, generated_at, terms, rows}`.
+  Viewing never counts as approval.
+- **Storage**: a programme keeps its record, journal and claims in
+  `<home>/programme.db`, and each write commits the record change and its journal
+  entry together. `<home>/.claude/auto/<run>.json` (tagged `projection_of_revision`),
+  `journal.jsonl` and `claims.jsonl` are exports rebuilt after each commit; nothing
+  reads them back as state, and a raw write to one is refused or, from an older
+  auto, recorded as `foreign_write_absorbed` at the next write. A programme made
+  by an auto that predates the database stays on its JSON files until `promote`
+  imports it (`--run <id>`); a prompt imported that way approves nothing new.
+  `reconcile-leases` rewrites a run's leases from its committed remit and driving
+  session. Every write verb except `claim` and the verbs below takes `--op <id>`:
+  a retry with the same id replays the committed result instead of writing
+  again. `claim`, the lifecycle verbs (`start`, `takeover`, `handover`, `end`,
+  `expire`), `promote`, `reconcile-leases`, `reconcile-operations`,
+  `release-resources`, `create-successor` and `sweep` keep no operation id and
+  refuse `--op`.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
   value must be one of that term's options. Wording that fits no option is an
@@ -153,7 +180,7 @@ session.
   owner and the previous owner, and journals `term_corrected`. Its output carries
   one notice line with the quote, the reading and the change. When the anchor is
   a handed ask and the new owner is the PM or a worker, the same write moves the
-  item back to open, so `record-decision --term <correction-id>` works on it
+  item back to open, so `log-decision --term <correction-id>` works on it
   without `answer-handed`. `undo-correction` needs a typed prompt whose journal
   line comes after the correction's prompt. It reverts only the latest active
   correction of that kind, and refuses naming the later correction otherwise. It
@@ -205,6 +232,28 @@ session.
   open deliverable. `reopen-item` reopens a dropped item and always needs a
   typed `--prompt`. No verb sets an item to done: done is derived from confirmed
   evidence.
+- **Decisions and acceptance**: `record-decision` keeps a decision as numbered
+  revisions (scope, reason, limits, the items or programme it applies to, linked
+  requirements, and where it came from). A typed `--prompt` that names the id
+  accepts a revision; one that adds a target or drops a limit waits for
+  `accept-context`, whose typed prompt names the id and each added target, while
+  the prior revision stays in force. The same content again adds nothing.
+  `define-requirement` links a requirement to item checks (`<item-id>=<deliverable>`,
+  a deliverable the protocol requires of that item). `assign-item` binds an item to
+  the decision revision in force, compared by canonical id. `raise-blocker` gates a
+  requirement only when it names the requirement, one of its checks, the dependency
+  item, evidence and the unblock condition; `clear-blocker` clears it. `context`
+  (any session, read-only) prints the decisions, requirements and acceptance, or
+  with `--item` the item's packet, with the store revision it read; context is never
+  approval. `status` shows each requirement as satisfied, unsatisfied, blocked or
+  not accepted, with each check's result (confirmed, refuted, unknown, not_run,
+  stale or missing), the follow-ups no requirement gates on, and completed, handed,
+  dropped, decided and open items apart. Acceptance never changes the stop rule.
+- **Safety pauses and denials**: `pause` (`--risk safety|data_loss`) holds named
+  items or the whole programme, notifies Shawn, holds the stop, and makes
+  `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed
+  prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
+  item then refuses, and requirements stay unchanged.
 - **Waits and watchers**: `set-waiting` sets who an item waits on, with an
   optional named reporter, a watcher (process or task id), the blocker kind and a
   trace or job id; `--clear` returns the item to open. `--blocker` needs
@@ -219,15 +268,15 @@ session.
   task id with no kind counts as cron when a prompt is given and as a Monitor
   otherwise.
 - **Handing**: `hand-item` hands an item to Shawn with a question and a required
-  `--kind <decision-kind>`. Kind `denied_operation` also needs `--op <operation>`
-  (one word, for example git-push), and `--op` goes with no other kind. A
+  `--kind <decision-kind>`. Kind `denied_operation` also needs `--operation <operation>`
+  (one word, for example git-push), and `--operation` goes with no other kind. A
   `denied_operation` ask for an operation that already has an open ask on any
   item is refused, so a denial reaches Shawn once. It notifies
   once: the tracker's needs-you mark for an issue item, else a herdr
-  notification. The ask gets an id ("a" + 6 hex) and carries the decision kind.
-  Its journal entry records the ask id, the kind as `ask_kind`, the op of a
-  denied-operation ask, and both exit
-  statuses as tracker and
+  notification. The ask gets an id ("a" + 6 hex) and carries the decision kind;
+  the `item_handed` entry records the ask id, the kind as `ask_kind`, and the
+  operation of a denied-operation ask in its op field. After the hand commits, an
+  `effects_recorded` journal entry records both exit statuses as tracker and
   herdr (null when not run or not found, "skipped" for the tracker on an item
   with no issue). `answer-handed`
   needs a typed `--prompt` and `--choice ship|decline`. Ship reopens the item with
@@ -235,23 +284,86 @@ session.
   `--kind`); decline drops it. Either way it records a Shawn decision linked to
   the ask id, with the ask's decision kind (unknown for an ask handed before
   kinds existed).
-- **Decisions**: `record-decision <item|programme> --kind <decision-kind>
-  (--term <id> | --silent) --why <text>` records a PM decision: an id ("d" + 6
+- **Decision log**: `log-decision <item|programme> --kind <decision-kind>
+  (--term <id> | --silent) --why <text>` appends a PM decision to the decision
+  log (`programme.decisions`), which is separate from the decision records
+  `record-decision` keeps under `programme.context`. An entry has an id ("d" + 6
   hex), the decision kind, the term it used or silent when no term covered it,
   and why. It journals `pm_decided`. The decision kinds are a closed list in
   `lib/programme_decisions.py`: the plugin autonomy actions plus
   technical_approach, work_sequencing, worker_coordination, tool_choice,
   optimisation_depth, product_scope, acceptance and denied_operation. Any other
   kind is refused. On an item that matched the product-question rule,
-  `record-decision` needs an agreement with the contract stamp; it then closes
+  `log-decision` needs an agreement with the contract stamp; it then closes
   the item as decided, which counts as finished, or re-matches the item's
   other change kinds and leaves it open. Without the stamp it refuses and the
   item still goes to Shawn through `hand-item`. `accept-agreement` also records
   a Shawn decision of kind agreement.
 - **Worker inbox**: `claim --run <id> --item <id> --deliverable <name> --ref <ref>`
-  appends one structured claim to `<home>/claims.jsonl`. Free text and a
+  commits one structured claim, exported to `<home>/claims.jsonl`. Free text and a
   reference with spaces are refused, and a claim never changes evidence. `mark-read`
   moves the programme's inbox read offset to the claim count, or to `--offset`.
+- **Retained results**: `collect-result --item <id> --attempt <token> --source <path>
+  --root <dir>` copies one text result into the home's immutable object area and
+  commits its digest, so the result stays readable after the worker's source is
+  removed. The source must be a regular file inside `--root`, not reached through
+  a symlink, at most 8 MB, and pass privacy admission before any byte is written.
+  A refusal is recorded with its code and retains nothing. It works after `end`
+  and refuses once the home is sealed. A retained result or source copy is never
+  approval and never changes evidence.
+- **Preserved code**: `preserve-code` (`--source <worktree> [--extra <rev>]...
+  [--ignored <path>]...`) keeps a worker worktree recoverable without it: a
+  self-contained git bundle of HEAD, its reflogs and the index blobs, the index
+  entries (all stages), and the worktree and untracked bytes git does not hold.
+  Git runs with no hooks, filters, fsmonitor, user config or network, and the
+  source is never written. A fresh repository rebuilt from the retained copy
+  alone must match the frozen inventory before the receipt is complete.
+  Secret-bearing history or bytes, submodules, LFS payloads, alternates, partial
+  clones, shallow history, git lock files or a source that changes during capture
+  refuse it. `--check` says whether the receipt still covers the source as it is
+  now; it deletes nothing, and a receipt is never deletion approval.
+- **External actions and recovery**: `start-worker` and `prompt-item` commit an
+  admission (the target, the owner epoch and a digest of the request) before
+  spinoff or herdr runs, re-read authority just before the call, and commit the
+  receipt after it. An admission whose outcome is unknown stays uncertain: a
+  later start or prompt on that item refuses unless it names the attempt with
+  `--despite`, and the attempt stays open either way. A launch is never retried
+  just because its agent is missing. `reconcile-operations` (the current driving
+  session, also after `end`) settles an admitted launch when a live agent reports
+  its minted session; a prompt has no delivery receipt, so it stays uncertain.
+  A receipt that arrives after end or a handover is kept on the operation and
+  changes no ownership. `recover` (any session, read-only) prints the replacement
+  PM's packet from one committed revision: pending decisions, decisions with their
+  reasons and binding limits, requirements and acceptance, open actions, retained
+  results, evidence limits, uncertain actions, and holds. Long text is cut in the
+  packet and comes back in full with `recover --get <id>`. A held authority prints
+  a hold and exits 1; a missing retained result holds its item and refuses
+  dispatch for it. `--rebuild-projections` rewrites only the exports and the
+  view. The packet is context, never approval.
+- **End, archive and successor**: `end` commits the stop fence together with
+  what the programme still owes (its leases, watchers and worker sessions); new
+  work, late claims and old watchers' beats refuse from then on. The closure
+  verbs run in the driving session or the session that ended it, with `--run`:
+  `release-resources` removes leftover lease files, probes watcher process ids
+  and worker sessions without stopping anything, and records a receipt for each
+  (`--watcher <id> --stopped|--denied` reports a TaskStop or CronDelete); a live
+  or unreadable one stays unconfirmed. `dispose-item` records how unfinished work
+  stopped (`stopped_unfinished` or `handed_over`) and confirms no requirement.
+  `dispose-action --attempt <id>|--resource <id>` records a human's acceptance of
+  an uncertainty from a typed prompt that names it (`origin_verified` true only
+  when the transcript shows Shawn typed it; any other prompt is refused); the
+  action is never recorded as completed. After end the prompt hook still journals
+  prompts typed in the closing session into each unsealed programme it closes.
+  `check-archive` (read-only) lists the named checks with their remedies, or the
+  sealed manifest. `archive` checks one capture revision, publishes a candidate
+  manifest, then seals in one commit on that revision while every home writer is
+  held out; any failed check leaves the programme ended and unarchived, and a
+  write after the capture supersedes the candidate. A retry returns the one seal.
+  A sealed home is read-only: every write, export, view refresh, prune and import
+  refuses, and reads use a read-only connection; a sealed database with an
+  interrupted journal is a hold that is never repaired in place. `create-successor
+  <run>` starts a new programme linked to the sealed manifest; its agreement waits
+  for acceptance and the archive is never written. Nothing deletes retained data.
 - **Working model and sources**: `set-now` records what the PM is doing now;
   `queue` adds a next action (a worker start is action start_worker with
   `--item`) or removes one; `record-tested-build` stores the tested build's
@@ -334,7 +446,9 @@ session.
 - **Decision links and restrictions**: `start-worker` and `prompt-item` take
   `--decision <id>` (repeatable) and `--restriction <text> --source
   <human|runtime|requirement|pm_choice|worker_assumption>` (repeatable). Each
-  decision id must name a recorded decision; the verb appends its text and the
+  decision id must name a decision-log entry or a decision record with an
+  accepted revision; the verb appends the log entry's text, or the record's
+  `decision:<id>@<rev>` with its scope, reason and limits, and the
   clause "Proceed under this decision. Do not reopen it: if you find new
   evidence that it cannot hold, stop and state that evidence in your pane."
   `start-worker` with a decision or restriction needs `--handoff <file>` among
@@ -411,9 +525,15 @@ Every write verb:
 1. runs only in the driving session: `CLAUDE_CODE_SESSION_ID` must equal the
    record's `driving_session_id`; `agent_session_ids` never count. `claim` is
    the exception: any session may call it, and it names the programme with
-   `--run`;
+   `--run`; `collect-result` is open to any session in the same way;
+   `recover --rebuild-projections` rewrites only exports and the view, from any
+   session; the closure verbs (`release-resources`, `dispose-item`,
+   `dispose-action`, `archive`) also accept the session that ended the programme,
+   and `create-successor` runs from the session that will drive the successor;
 2. refuses while the compact flag exists and prints the rules-in-force block,
-   except `rules --ack`, `claim` and `watcher-beat`;
+   except `rules --ack`, `claim`, `collect-result`, `watcher-beat`, `beat`,
+   `tracker-synced --check`, `reconcile-operations` (which settles admitted
+   actions and starts none) and the closure verbs, which never start work;
 3. revalidates under the run-record lock, then journals after the write commits.
 
 The approval verbs (accepting the agreement, amending a term, amending a project
