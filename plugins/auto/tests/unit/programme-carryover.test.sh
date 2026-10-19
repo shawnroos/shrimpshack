@@ -51,6 +51,8 @@ run_py() {
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
+sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -70,7 +72,7 @@ EOF
 prompt() {
   run_py "$1" "$2" "$3" <<'EOF'
 run, origin, text = args
-print(pj.append_prompt(run, "sess-pm", text, origin)["prompt_id"])
+print(fixture_prompt(run, "sess-pm", text, origin)["prompt_id"])
 EOF
 }
 
@@ -141,9 +143,10 @@ end_programme() {
   local run="$1" p
   p="$(prompt "$run" typed '/auto:programme-end')"
   run_py "$run" "$p" <<'EOF' >/dev/null
+source = pj.find_prompt(args[0], args[1])["payload"]["source"]
 pj.append(args[0], "end_request", "sess-pm",
           {"verb": "end", "text": "/auto:programme-end", "origin": "typed", "space": "x",
-           "lease_status": "live", "driving": True}, cites=[args[1]])
+           "lease_status": "live", "driving": True, "source": source}, cites=[args[1]])
 EOF
   if [ "${2:-}" = on ]; then prog_on end --run "$run"; else prog end --run "$run"; fi
 }

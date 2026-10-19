@@ -27,6 +27,8 @@ run_py() {
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
+sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 args = sys.argv[2:]
 $(cat)
@@ -400,7 +402,7 @@ OLDREC="${OUT#CREATED }"
 edit_record "$OLDREC" 'rec["programme"]["agreement"]["accepted"] = {"at": "2026-10-01T00:00:00Z", "prompt_id": "p000001", "quote": "yes"}' >/dev/null
 old_prompt() {
   run_py "$OLDREC" "$1" <<'EOF'
-print(load_lib_module("programme_journal").append_prompt(args[0], "sess-old", args[1], "typed")["prompt_id"])
+print(fixture_prompt(args[0], "sess-old", args[1], "typed")["prompt_id"])
 EOF
 }
 old_agreement_keys() {

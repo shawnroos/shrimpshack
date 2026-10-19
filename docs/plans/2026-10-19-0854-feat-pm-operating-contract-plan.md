@@ -177,6 +177,11 @@ The plugin defaults send every product call to Shawn (`plugins/auto/protocol/def
 - No always-open live page. The page opens on request.
 - Fixed posture modes (for example "exploratory" or "high-risk") are not part of this work.
 
+#### Deferred to Follow-Up Work
+
+- **PM communication shape (Shawn, 2026-10-19: "it's how I want AUTO to work").** Every PM report, decision request, status output and checkpoint (PR open, merge, handover, end) names each item, PR, session, pane, server or ticket alongside its id; assumes Shawn is juggling a dozen things and has forgotten the previous state; restates that state; and shows a contract checklist (feature flag, code review, tests, PR) plus what is needed from him. Requirement recorded here; built in a follow-up PR so this one stays reviewable.
+- **Decision-ready requests (Shawn, 2026-10-19: "have the details that will help them confidently make that decision right there").** Every handed decision and approval request carries, in place: what is being decided and on which named item, the options, what each option changes and costs, what happens if Shawn does nothing, the recommendation and why, and any risk or unverified fact that bears on it. Never "say X to do Y" without the trade-off beside it. Same follow-up PR as the communication shape.
+
 ### Dependencies / Assumptions
 
 - R14–R18 depend on the approval-origin fix in `docs/plans/2026-10-18-1312-fix-programme-approval-origin-plan.md`. Today, the prompt hook labels every non-cron prompt as typed, so typed origin does not prove Shawn wrote it. R14–R17 act on typed origin and apply immediately, so they must not go live before the fix. R22 keeps corrections chosen by a typed prompt, so it waits too; before the fix, programme end lists no corrections. The shared rules, project terms, page and rollout (R1–R13, R19–R21) do not depend on it.
