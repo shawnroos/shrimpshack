@@ -35,6 +35,8 @@ run_py() {
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
+sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -54,7 +56,7 @@ HOME_DIR="${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}"
 prompt() {
   run_py "$RUN" "$1" "$2" <<'EOF'
 run, origin, text = args
-print(pj.append_prompt(run, "sess-pm", text, origin)["prompt_id"])
+print(fixture_prompt(run, "sess-pm", text, origin)["prompt_id"])
 EOF
 }
 
@@ -111,7 +113,7 @@ check 1 "$CODE"
 has "typed" "$OUT"
 
 P_OTHER="$(run_py "$RUN" <<'EOF'
-print(pj.append_prompt(args[0], "sess-other", "stop only when done", "typed")["prompt_id"])
+print(fixture_prompt(args[0], "sess-other", "stop only when done", "typed")["prompt_id"])
 EOF
 )"
 it "amend-term citing a typed prompt from another session is refused"

@@ -17,7 +17,7 @@ RUN="$(new_programme w2)"
 HOME_DIR="${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}"
 typed() {
   run_py "$RUN" "$1" "${2:-typed}" <<'EOF'
-print(pj.append_prompt(args[0], "sess-pm", args[1], args[2])["prompt_id"])
+print(fixture_prompt(args[0], "sess-pm", args[1], args[2])["prompt_id"])
 EOF
 }
 
@@ -101,8 +101,10 @@ it "AE2: the requirement and its acceptance state are included"
 check "unsatisfied" "$(pyget "$OUT1" '[r["state"] for r in d["acceptance"] if r["id"] == "r-browser"][0]')"
 it "the packet is deterministic for one revision (two sessions, same bytes)"
 check "$OUT1" "$OUT2"
-it "no decision source claims origin verification"
-lacks '"origin_verified": true' "$OUT1"
+it "a decision source claims origin verification only when a verified prompt accepted it"
+check '{"d-browser": true, "d-linux": false}' "$(pyget "$OUT1" '{x["decision_id"]: x["source"]["origin_verified"] for x in d["decisions"]}')"
+it "a requirement source shows the stored verification of the prompt that defined it"
+check '{"r-browser": true}' "$(pyget "$OUT1" '{x["requirement_id"]: x["source"]["origin_verified"] for x in d["requirements"]}')"
 it "nothing in the packet authorizes"
 lacks '"authorizes": true' "$OUT1"
 it "recover writes nothing: the store revision is unchanged"

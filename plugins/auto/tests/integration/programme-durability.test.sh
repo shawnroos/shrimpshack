@@ -486,7 +486,9 @@ if want end; then
     pid="$(typed_in "$1" sess-pm "/auto:programme-end")"
     run_py "$1" sess-pm "$pid" <<'EOF' >/dev/null
 pj.append(args[0], "end_request", args[1], {"verb": "end", "text": "/auto:programme-end", "origin": "typed",
-                                            "driving": True, "lease_status": "live"}, cites=[args[2]])
+                                            "driving": True, "lease_status": "live",
+                                            "source": pj.find_prompt(args[0], args[2])["payload"]["source"]},
+          cites=[args[2]])
 EOF
   }
   end_request "$RUN"
@@ -708,7 +710,7 @@ if [ -z "${DURABILITY_CONTROL:-}" ] && want controls; then
     shift 4
     local copy="${WORK}/control-${name}/plugins/auto" log="${WORK}/control-${name}.log"
     mkdir -p "$copy"
-    (cd "${AUTO_ROOT}" && tar --exclude '__pycache__' -cf - lib .claude protocol tests/helpers 2>/dev/null) | tar -xf - -C "$copy"
+    (cd "${AUTO_ROOT}" && tar --exclude '__pycache__' -cf - lib .claude protocol tests/helpers tests/fixtures 2>/dev/null) | tar -xf - -C "$copy"
     cp "${copy}/lib/${file}" "${copy}/lib/${file}.orig"
     "$PY" - "${copy}/lib/${file}" "$expr" <<'EOF'
 import sys
@@ -737,7 +739,7 @@ EOF
 
   BASE="${WORK}/control-baseline/plugins/auto"
   mkdir -p "$BASE"
-  (cd "${AUTO_ROOT}" && tar --exclude '__pycache__' -cf - lib .claude protocol tests/helpers 2>/dev/null) | tar -xf - -C "$BASE"
+  (cd "${AUTO_ROOT}" && tar --exclude '__pycache__' -cf - lib .claude protocol tests/helpers tests/fixtures 2>/dev/null) | tar -xf - -C "$BASE"
   DURABILITY_CONTROL=1 DURABILITY_AUTO_ROOT="$BASE" DURABILITY_ONLY="commit dispatch capture" DURABILITY_GIT_TOP="$TOP" \
     bash "${SCRIPT_DIR}/programme-durability.test.sh" > "${WORK}/control-baseline.log" 2>&1
   it "control baseline: the unpatched copy passes the sections the controls rerun"

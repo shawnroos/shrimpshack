@@ -110,7 +110,7 @@ def _requests(run, verb, sid) -> list:
     return [r for r in rows
             if r.get("kind") == f"{verb}_request" and r.get("session_id") == sid
             and r.get("provenance") not in unverified
-            and (r.get("payload") or {}).get("origin") == "typed" and _request_ref(r) not in used]
+            and programme_journal.prompt_origin(r) == "typed" and _request_ref(r) not in used]
 
 
 def _cited_typed(run, request, sid) -> bool:
@@ -119,7 +119,7 @@ def _cited_typed(run, request, sid) -> bool:
         return False
     row = programme_journal.find_prompt(run, cites[0])
     return bool(row) and row.get("session_id") == sid and row.get("provenance") not in programme_authority().UNVERIFIED \
-        and (row.get("payload") or {}).get("origin") == "typed"
+        and programme_journal.prompt_origin(row) == "typed"
 
 
 def _journal(run, kind, sid, payload, cites=None) -> None:

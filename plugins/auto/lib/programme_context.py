@@ -242,7 +242,11 @@ def _source(prompt) -> dict:
     return {"class": "human_input" if prompt else "derived",
             "prompt_id": prompt and prompt["prompt_id"],
             "origin_label": "typed" if prompt else None,
-            "origin_verified": False}
+            "origin_verified": _verified(prompt)}
+
+
+def _verified(prompt) -> bool:
+    return bool(prompt) and prompt.get("origin_verified") is True
 
 
 def _accept(revisions, revision, prompt) -> None:
@@ -252,7 +256,8 @@ def _accept(revisions, revision, prompt) -> None:
         current["superseded_by"] = revision["rev"]
         revision["supersedes"] = current["rev"]
     revision["state"] = "accepted"
-    revision["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"], "origin_verified": False}
+    revision["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
+                           "origin_verified": _verified(prompt)}
 
 
 def _append(revisions, content, prompt, *, accept, delta) -> dict:
@@ -513,7 +518,7 @@ def _h_lift_pause(host, record, argv):
             raise record.RecordError(f"no active pause {positional[0]!r}")
         host.require_named(prompt, positional[0])
         entry["state"] = "lifted"
-        entry["lifted"] = {"at": _now(), "prompt_id": prompt["prompt_id"], "origin_verified": False}
+        entry["lifted"] = {"at": _now(), "prompt_id": prompt["prompt_id"], "origin_verified": _verified(prompt)}
         return {"pause": positional[0], "state": "lifted"}
 
     return host._write(opts, change, "pause_lifted", prompt_id=opts.get("prompt"), needs_prompt=True)

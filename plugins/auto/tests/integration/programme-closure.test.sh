@@ -52,7 +52,9 @@ prog watcher-beat w-mon --task-id bh1mon --kind monitor --run "$RUN3"
 PID="$(typed_in "$RUN3" sess-pm "/auto:programme-end")"
 run_py "$RUN3" sess-pm "$PID" <<'EOF' >/dev/null
 pj.append(args[0], "end_request", args[1], {"verb": "end", "text": "/auto:programme-end", "origin": "typed",
-                                            "driving": True, "lease_status": "live"}, cites=[args[2]])
+                                            "driving": True, "lease_status": "live",
+                                            "source": pj.find_prompt(args[0], args[2])["payload"]["source"]},
+          cites=[args[2]])
 EOF
 CLAUDE_AUTO_TEST_ARCHIVE_PAUSE_AFTER_END_COMMIT=1 "$PY" "$PROG" end --run "$RUN3" > "${WORK}/end3.out" 2>&1 &
 BG=$!

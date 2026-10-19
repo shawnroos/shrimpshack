@@ -5,7 +5,7 @@ HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 typed_in() {
   run_py "$1" "$2" "$3" "${4:-typed}" <<'EOF'
-print(pj.append_prompt(args[0], args[1], args[2], args[3])["prompt_id"])
+print(fixture_prompt(args[0], args[1], args[2], args[3])["prompt_id"])
 EOF
 }
 
@@ -15,7 +15,9 @@ end_typed() {
   pid="$(typed_in "$1" "$sid" "/auto:programme-end")"
   run_py "$1" "$sid" "$pid" <<'EOF' >/dev/null
 pj.append(args[0], "end_request", args[1], {"verb": "end", "text": "/auto:programme-end", "origin": "typed",
-                                            "driving": True, "lease_status": "live"}, cites=[args[2]])
+                                            "driving": True, "lease_status": "live",
+                                            "source": pj.find_prompt(args[0], args[2])["payload"]["source"]},
+          cites=[args[2]])
 EOF
   CLAUDE_CODE_SESSION_ID="$sid" prog end --run "$1"
 }
@@ -56,7 +58,7 @@ print(v if isinstance(v, str) else json.dumps(v, sort_keys=True))
 EOF
 }
 
+# Runs the real hook with a transcript row that shows Shawn typed the prompt.
 prompt_hook() {
-  printf '{"session_id": "%s", "prompt": "%s"}' "$1" "$2" \
-    | CLAUDE_PLUGIN_ROOT="$AUTO_ROOT" bash "${HOOKS}/on-user-prompt.sh"
+  CLAUDE_PLUGIN_ROOT="$AUTO_ROOT" "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2"
 }

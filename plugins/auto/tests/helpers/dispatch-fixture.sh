@@ -104,7 +104,9 @@ run_py() {
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
 from _bootstrap import load_lib_module
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")

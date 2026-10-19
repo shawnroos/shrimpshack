@@ -54,7 +54,9 @@ run_py() {
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
 from _bootstrap import load_lib_module
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -73,7 +75,7 @@ HOME_DIR="${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}"
 prompt() {
   run_py "$RUN" "$1" "$2" <<'EOF'
 run, origin, text = args
-print(pj.append_prompt(run, "sess-pm", text, origin)["prompt_id"])
+print(fixture_prompt(run, "sess-pm", text, origin)["prompt_id"])
 EOF
 }
 
@@ -133,11 +135,11 @@ prog record-decision d-browser --scope "ship the browser fix" --reason "customer
   --limit "no prod flag changes" --applies-to herdr:browser-e2e --prompt "$P_DEC" --run "$RUN"
 check "0 accepted 1" "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"]')"
 
-it "the decision revision records its source class without claiming the origin is verified"
+it "the decision revision records its source class"
 SRC="$(pyget "$OUT" 'd["source"]')"
 has '"class": "human_input"' "$SRC"
-it "  ... and origin_verified stays false (the approval-origin verifier is absent)"
-has '"origin_verified": false' "$SRC"
+it "  ... and origin_verified is true: the transcript shows a human typed the prompt"
+has '"origin_verified": true' "$SRC"
 
 it "assign-item binds the item to the in-force decision revision"
 prog assign-item herdr:browser-e2e --decision-id d-browser --run "$RUN"
@@ -236,11 +238,53 @@ prog accept-context d-docs --prompt "$P_LEGACY" --run "$RUN"
 check "1" "$CODE"
 has "legacy" "$OUT"
 
+it "accept-context refuses a prompt the hook journaled as unknown, though its text names the delta"
+P_UNKNOWN="$(prompt unknown 'accept d-docs widened to linux-probe')"
+prog accept-context d-docs --prompt "$P_UNKNOWN" --run "$RUN"
+check "1" "$CODE"
+has "human source unverified" "$OUT"
+
+it "accept-context refuses a typed-labelled prompt with no source record (an old journal row)"
+P_BARE="$(run_py "$RUN" <<'EOF'
+print(pj.append_prompt(args[0], "sess-pm", "accept d-docs widened to linux-probe", "typed")["prompt_id"])
+EOF
+)"
+prog accept-context d-docs --prompt "$P_BARE" --run "$RUN"
+check "1" "$CODE"
+has "human source unverified" "$OUT"
+
+it "a verified prompt row stamped legacy_import reads unknown to every approval check"
+P_LEGACY_SRC="$(run_py "$RUN" <<'EOF'
+from programme_prompts import fixture
+_, source, path, transcript_row = fixture("accept d-docs widened to linux-probe", "sess-pm")
+path.write_text(json.dumps(transcript_row) + "\n")
+pa = load_lib_module("programme_authority")
+ps = load_lib_module("programme_store")
+row = pj.entry("prompt", "sess-pm", {"text": "accept d-docs widened to linux-probe", "origin": "unknown",
+                                     "source": source}, prompt_id="plegsrc1")
+event = {"kind": "legacy_import", "payload": {"channel": pa.HISTORY, "journal": [row], "claims": [], "gaps": []}}
+def body():
+    with pa._open(args[0]) as store:
+        head = ps.head(store)
+        pa.commit(store, args[0], "test-legacy-src", head["revision"], head["state"], event, pa.LEGACY)
+pa._locked(ph.home_path(args[0]), args[0], body)
+stored = pj.find_prompt(args[0], "plegsrc1")
+print(load_lib_module("programme_prompt_source").origin(row), stored.get("provenance"), pj.prompt_origin(stored),
+      load_lib_module("programme").prompt_lookup(args[0], "plegsrc1")["origin"])
+EOF
+)"
+check "typed legacy_import unknown unknown" "$P_LEGACY_SRC"
+prog accept-context d-docs --prompt plegsrc1 --run "$RUN"
+check "1" "$CODE"
+has "legacy" "$OUT"
+
 it "accepting the delta with a prompt naming it makes revision 2 in force and supersedes revision 1"
 P_FULL="$(prompt typed 'accept d-docs widened to linux-probe')"
 prog accept-context d-docs --prompt "$P_FULL" --run "$RUN"
 D="$(CLAUDE_CODE_SESSION_ID=sess-other "$PY" "$PROG" context --run "$RUN" 2>&1)"
 check "0 2 2" "$CODE $(pyget "$D" 'd["decisions"]["d-docs"]["in_force"]["rev"]') $(pyget "$D" 'd["decisions"]["d-docs"]["revisions"][0]["superseded_by"]')"
+it "  ... the acceptance records origin_verified true from the fixture-verified prompt"
+check "true" "$(pyget "$D" 'd["decisions"]["d-docs"]["revisions"][1]["accepted"]["origin_verified"]')"
 it "  ... revision 1 keeps its original scope (the record is immutable)"
 check "[\"herdr:docs-page\"]" "$(pyget "$D" 'd["decisions"]["d-docs"]["revisions"][0]["applies_to"]')"
 

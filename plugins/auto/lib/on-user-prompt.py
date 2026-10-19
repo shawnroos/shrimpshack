@@ -21,6 +21,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 session_registry = load_lib_module("session_registry")
+programme_prompt_source = load_lib_module("programme_prompt_source")
 
 DATA_TAG = "auto-data"
 _REQUEST = re.compile(r"^\s*/auto:programme-(takeover|handover|end)(?=\s|$)")
@@ -37,7 +38,7 @@ def classify_origin(text: str, record: dict) -> str:
         prompt = watcher.get("prompt") if isinstance(watcher, dict) else None
         if wanted and _normalised(prompt) == wanted:
             return "cron"
-    return "typed"
+    return "unknown"
 
 
 def _driving_run(session_id):
@@ -69,11 +70,11 @@ def _closing_runs(session_id) -> list:
     return found
 
 
-def _closing_context(session_id, text, closing, notes) -> dict | None:
+def _closing_context(session_id, text, closing, notes, source) -> dict | None:
     journaled = []
     for run, record in closing:
         origin = classify_origin(text, record)
-        entry = programme_journal.append_prompt(run, session_id, text, origin)
+        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
         journaled.append({"run": run, "prompt_id": entry["prompt_id"], "origin": origin})
     return _context(
         "auto journaled this prompt into each ended programme this session is closing. Cite the "
@@ -101,7 +102,7 @@ def _space_lease(session_id, env):
     return lease
 
 
-def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease):
+def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease, source):
     lease = driving_lease or _space_lease(session_id, env)
     if lease is None:
         return
@@ -113,7 +114,7 @@ def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lea
         lease["run"], f"{verb}_request", session_id,
         {"verb": verb, "text": programme_journal.redact(text), "origin": origin,
          "space": programme_home.space_key(lease.get("server"), lease.get("workspace")),
-         "lease_status": status, "driving": driving},
+         "lease_status": status, "driving": driving, "source": source},
         cites=[prompt_id] if driving and prompt_id else None,
     )
     return lease["run"]
@@ -127,22 +128,23 @@ def handle(raw: str, env) -> dict | None:
     text = data.get("prompt")
     if not isinstance(session_id, str) or not session_id or not isinstance(text, str):
         return None
+    source = programme_prompt_source.capture(data)
     run, record, driving_lease, held = _driving_run(session_id)
     if held is not None:
         return _held_context(held)
     closing = _closing_runs(session_id) if run is None else []
     entry = None
-    origin = "typed"
+    origin = "unknown"
     if run:
         origin = classify_origin(text, record)
-        entry = programme_journal.append_prompt(run, session_id, text, origin)
+        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
     request = _REQUEST.match(text)
     lost = None
     received = None
     if request:
         try:
             received = _journal_request(request.group(1), session_id, text, env, origin,
-                                        entry and entry["prompt_id"], driving_lease)
+                                        entry and entry["prompt_id"], driving_lease, source)
         except Exception as exc:
             lost = _lost_request(request.group(1), exc)
     if closing:
@@ -150,7 +152,7 @@ def handle(raw: str, env) -> dict | None:
         if received:
             notes.append(f"auto journaled this /auto:programme-{request.group(1)} request into programme "
                          f"{received}, the programme leased in this session's space.")
-        return _closing_context(session_id, text, closing, notes)
+        return _closing_context(session_id, text, closing, notes, source)
     if not entry:
         return _context(lost) if lost else None
     payload = {"run": run, "prompt_id": entry["prompt_id"], "origin": origin}

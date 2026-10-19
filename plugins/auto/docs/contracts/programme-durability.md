@@ -122,15 +122,22 @@ Nothing is deleted automatically.
 
 ## 5. Source verification
 
-The approval-origin verifier is not installed. Until it is:
+Every approval uses the prompt-source check in `programme-prompt-source.md`.
+A prompt approves only when the transcript shows a human typed it in the
+driving session, and its text names what it approves.
 
-- Every decision revision, retained result and disposition records
-  `origin_verified: false`.
-- A typed prompt is still checked as before (typed origin, driving session, not
-  imported, and the text names what it approves). That check does not prove a
-  human typed it.
-- A retained or restored copy approves nothing. A use that needs a verified
-  human source refuses, and the source is kept.
+- The prompt hook journals the source record with the prompt. On a promoted
+  home the record goes into `programme.db` with the row, so export, import and
+  recovery keep it.
+- A decision revision, pause lift or disposition records `origin_verified: true`
+  when its prompt passed that check. Rows written before the check record
+  `false`; recovery shows the stored value and never upgrades it.
+- When the check cannot run (the transcript is missing, changed or too large),
+  the approval is refused and nothing changes.
+- A row with `legacy_import` or `foreign_write` provenance approves nothing, even
+  when its source record still verifies. A retained or restored copy approves
+  nothing. A use that needs a verified human source refuses, and the source is
+  kept.
 
 ## 6. What capture does not support
 

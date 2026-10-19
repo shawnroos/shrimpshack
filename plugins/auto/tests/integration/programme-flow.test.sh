@@ -129,9 +129,7 @@ json_of() {
 
 typed() {
   local sid="$1" text="$2"
-  local payload
-  payload="$("$PY" -c 'import json,sys; print(json.dumps({"session_id": sys.argv[1], "prompt": sys.argv[2], "hook_event_name": "UserPromptSubmit"}))' "$sid" "$text")"
-  ( cd "$NOREPO" && HERDR_WORKSPACE_ID="${WS:-w2}" bash "${HOOKS}/on-user-prompt.sh" <<< "$payload" 2>/dev/null )
+  ( cd "$NOREPO" && HERDR_WORKSPACE_ID="${WS:-w2}" "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$sid" "$text" 2>/dev/null )
 }
 
 prompt_id_of() {
@@ -350,13 +348,24 @@ it "after handover the new driver is held"
 check "block" "$(verdict "$(stop_hook sess-d)")"
 
 it "a handover request without a cited prompt is refused"
-run_py "$RUN" <<'EOF' >/dev/null
-pj.append(args[0], "handover_request", "sess-d",
-          {"verb": "handover", "text": "/auto:programme-handover sess-b", "origin": "typed",
-           "space": "default.w2", "lease_status": "live", "driving": True})
+SOURCE_CHECK="$(run_py "$RUN" <<'EOF'
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
+from programme_prompts import fixture
+lifecycle = load_lib_module("programme_lifecycle")
+text = "/auto:programme-handover sess-b"
+_, source, path, row = fixture(text, "sess-d")
+request = pj.append(args[0], "handover_request", "sess-d",
+                    {"verb": "handover", "text": text, "origin": "typed", "source": source,
+                     "space": "default.w2", "lease_status": "live", "driving": True})
+path.write_text(json.dumps(row) + "\n")
+assert request in lifecycle._requests(args[0], "handover", "sess-d")
+print("verified-source request reaches citation check")
 EOF
+)"
+check "verified-source request reaches citation check" "$SOURCE_CHECK"
 as sess-d handover sess-b
 check "1" "$CODE"
+check "sess-d sess-d" "$(lease_session w2) $(driver_of "$RUN")"
 
 it "a typed handover hands the programme back"
 typed sess-d '/auto:programme-handover sess-b' >/dev/null
@@ -529,9 +538,7 @@ as_nospace() {
 }
 
 typed_nospace() {
-  local payload
-  payload="$("$PY" -c 'import json,sys; print(json.dumps({"session_id": sys.argv[1], "prompt": sys.argv[2], "hook_event_name": "UserPromptSubmit"}))' "$1" "$2")"
-  ( cd "$NOREPO" && env -u HERDR_WORKSPACE_ID -u HERDR_PANE_ID bash "${HOOKS}/on-user-prompt.sh" <<< "$payload" 2>/dev/null )
+  ( cd "$NOREPO" && env -u HERDR_WORKSPACE_ID -u HERDR_PANE_ID "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2" 2>/dev/null )
 }
 
 it "a programme started with --space from outside herdr is handed over by its typed request"

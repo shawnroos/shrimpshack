@@ -570,9 +570,10 @@ def _h_dispose_action(host, argv):
             entry = (_closure(programme).get("resources") or {}).get(target)
             if not isinstance(entry, dict) or entry.get("state") == "released":
                 raise ArchiveError(f"no unreleased resource {target!r}", "not_uncertain")
+        verified = prompt.get("origin_verified") is True
         entry["disposition"] = {"as": opts["as"], "prompt_id": prompt["prompt_id"], "quote": prompt["quote"],
-                                "origin_verified": False, "at": _now(), "effect": NOT_COMPLETED}
-        return {"target": target, "as": opts["as"], "state": entry.get("state"), "origin_verified": False,
+                                "origin_verified": verified, "at": _now(), "effect": NOT_COMPLETED}
+        return {"target": target, "as": opts["as"], "state": entry.get("state"), "origin_verified": verified,
                 "effect": NOT_COMPLETED}
 
     return _write(host, opts, change, "uncertainty_accepted", need_ended=False, prompt_id=opts["prompt"])
@@ -690,8 +691,8 @@ _SPECS = (
      "(--attempt <id>|--resource <id>) --as abandoned_unknown|accepted_unknown --prompt <id> --run <id>",
      "a prompt that is not typed in the driving session or does not name the attempt or resource; an "
      "archived programme; an operation that is not admitted or uncertain; a released resource. Records "
-     "a human's acceptance of the uncertainty (origin_verified false); the action is never recorded as "
-     "completed."),
+     "a human's acceptance of the uncertainty (origin_verified true: the transcript shows a human typed "
+     "the prompt); the action is never recorded as completed."),
     ("archive", _h_archive, "--run <id> [--op <id>]",
      "a programme that has not ended; any failed check (named with its remedy; the programme stays "
      "ended and unarchived); a candidate superseded by a later write. Seals once: a retry returns the "

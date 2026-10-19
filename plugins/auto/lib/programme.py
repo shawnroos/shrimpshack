@@ -79,7 +79,7 @@ def prompt_lookup(run_id, prompt_id, journals=None):
     if row is None or row.get("provenance") == programme_authority.FOREIGN:
         return None
     payload = row.get("payload") or {}
-    return {"origin": payload.get("origin"), "text_hash": text_hash(payload.get("text")),
+    return {"origin": programme_journal.prompt_origin(row), "text_hash": text_hash(payload.get("text")),
             "approved": _approved(rows, prompt_id)}
 
 
@@ -233,12 +233,13 @@ def _typed_prompt(run_id, record, prompt_id) -> dict:
     if row.get("provenance") in programme_authority.UNVERIFIED:
         raise ProgrammeError(f"prompt {prompt_id!r} was imported from a legacy journal or appended by an "
                              "obsolete writer; its typed label is unverified, so it approves nothing new")
-    if payload.get("origin") != "typed":
-        raise ProgrammeError(f"prompt {prompt_id!r} is not typed (origin {payload.get('origin')!r})")
+    origin = programme_journal.prompt_origin(row)
+    if origin != "typed":
+        raise ProgrammeError(f"prompt {prompt_id!r} is not typed (origin {origin!r}; human source unverified)")
     if row.get("session_id") != record.get("driving_session_id"):
         raise ProgrammeError(f"prompt {prompt_id!r} was not typed in the driving session")
     return {"prompt_id": prompt_id, "quote": payload.get("text") or "",
-            "text_hash": text_hash(payload.get("text"))}
+            "text_hash": text_hash(payload.get("text")), "origin_verified": True}
 
 
 def _name_words(text) -> list:

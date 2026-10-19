@@ -5,7 +5,8 @@ Payload bytes live in ``<home>/artifacts/objects`` under their sha256, written o
 and never replaced. Privacy admission runs before any byte is staged. A store commit
 references an object only after its bytes and directories are synced. Retained
 copies are context, never approval: every authority-sensitive use of one refuses
-with ``origin_verifier_unavailable`` until a separate origin verifier exists.
+with ``origin_verifier_unavailable``. The prompt-source check verifies only prompts;
+a retained copy has no human source it could verify.
 """
 
 from __future__ import annotations

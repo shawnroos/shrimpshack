@@ -88,10 +88,12 @@ printf 'not json' > "${CLAUDE_AUTO_TASKS_DIR}/sess-w1/4.json"
 printf '{"id":"9","status":"pending"}' > "${CLAUDE_AUTO_TASKS_DIR}/sess-w1/.lock"
 
 lib_py() {
-  "$PY" - "${AUTO_ROOT}/lib" "$@" <<PYEOF 2>&1
+  "$PY" - "$AUTO_ROOT" "$@" <<PYEOF 2>&1
 import json, os, sys
-sys.path.insert(0, sys.argv[1])
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
+sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
+from programme_prompts import append_prompt as fixture_prompt
 args = sys.argv[2:]
 $(cat)
 PYEOF
@@ -230,7 +232,7 @@ EOF
 }
 typed_prompt() {
   lib_py "$RUN" "$1" <<'EOF'
-print(load_lib_module("programme_journal").append_prompt(args[0], "sess-pm", args[1], "typed")["prompt_id"])
+print(fixture_prompt(args[0], "sess-pm", args[1], "typed")["prompt_id"])
 EOF
 }
 predicate_reasons() {

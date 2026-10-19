@@ -247,7 +247,8 @@ session.
   or unreadable one stays unconfirmed. `dispose-item` records how unfinished work
   stopped (`stopped_unfinished` or `handed_over`) and confirms no requirement.
   `dispose-action --attempt <id>|--resource <id>` records a human's acceptance of
-  an uncertainty from a typed prompt that names it (`origin_verified` false); the
+  an uncertainty from a typed prompt that names it (`origin_verified` true only
+  when the transcript shows Shawn typed it; any other prompt is refused); the
   action is never recorded as completed. After end the prompt hook still journals
   prompts typed in the closing session into each unsealed programme it closes.
   `check-archive` (read-only) lists the named checks with their remedies, or the

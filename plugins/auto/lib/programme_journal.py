@@ -22,6 +22,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
+programme_prompt_source = load_lib_module("programme_prompt_source")
 
 JOURNAL_NAME = "journal.jsonl"
 CLAIMS_NAME = "claims.jsonl"
@@ -29,7 +30,7 @@ LOCK_NAME = ".journal.lock"
 SECRETS_ENV = "CLAUDE_AUTO_SECRETS_FILE"
 DEFAULT_SECRETS_FILE = "~/.secrets"
 REDACTED = "[redacted]"
-PROMPT_ORIGINS = ("typed", "cron")
+PROMPT_ORIGINS = ("typed", "cron", "unknown")
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
@@ -297,12 +298,22 @@ def append_claim(run_id: str, session_id, payload) -> dict:
                       provenance="worker_result", guard=_refuse_after_end)
 
 
-def append_prompt(run_id: str, session_id, text: str, origin: str, now=None) -> dict:
+def append_prompt(run_id: str, session_id, text: str, origin: str, now=None, *, source=None) -> dict:
     if origin not in PROMPT_ORIGINS:
         raise JournalError(f"prompt origin must be one of {list(PROMPT_ORIGINS)}; got {origin!r}")
     prompt_id = "p" + secrets.token_hex(3)
-    return append_row(run_id, entry("prompt", session_id, {"text": redact(text), "origin": origin},
-                                    prompt_id=prompt_id, now=now))
+    payload = {"text": redact(text), "origin": origin}
+    if source is not None:
+        payload["source"] = source
+    return append_row(run_id, entry("prompt", session_id, payload, prompt_id=prompt_id, now=now))
+
+
+def prompt_origin(row) -> str:
+    # A restored, legacy or foreign copy carries the label and source record of a row this
+    # writer never journaled; its transcript may still verify, so refuse before reading it.
+    if isinstance(row, dict) and row.get("provenance") in _authority().UNVERIFIED:
+        return "unknown"
+    return programme_prompt_source.origin(row)
 
 
 def read_path(path: str) -> list:

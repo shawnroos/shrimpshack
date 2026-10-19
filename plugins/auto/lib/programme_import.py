@@ -139,7 +139,7 @@ def _label_conflicts(rows) -> list:
     for row in rows:
         cites = row.get("cites") or []
         if row.get("kind") in APPROVAL_KINDS and cites and cites[0] in prompts \
-                and any(origin != "typed" for origin, _ in prompts[cites[0]]):
+                and any(origin not in ("typed", "unknown") for origin, _ in prompts[cites[0]]):
             gaps.append({"kind": "conflicting_approval_label", "prompt_id": cites[0],
                          "approval": row.get("kind")})
     return gaps

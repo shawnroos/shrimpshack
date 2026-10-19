@@ -110,8 +110,20 @@ old_typed() {
   hook_payload "$1" "$2" | HERDR_WORKSPACE_ID="${WS:-w9}" "$PY" "${OLD}/on-user-prompt.py" | prompt_id_of
 }
 
+# Runs the current hook with a transcript row that shows Shawn typed the prompt.
 new_typed() {
-  hook_payload "$1" "$2" | HERDR_WORKSPACE_ID="${WS:-w9}" "$PY" "${LIB}/on-user-prompt.py" | prompt_id_of
+  HERDR_WORKSPACE_ID="${WS:-w9}" "$PY" - "$AUTO_ROOT" "$LIB" "$1" "$2" <<'EOF' | prompt_id_of
+import json, os, subprocess, sys
+root, lib, sid, text = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, "lib"))
+sys.path.insert(0, os.path.join(root, "tests", "fixtures"))
+from programme_prompts import fixture
+payload, _, path, row = fixture(text, sid)
+out = subprocess.run([sys.executable, os.path.join(lib, "on-user-prompt.py")], input=json.dumps(payload),
+                     text=True, capture_output=True)
+path.write_text(json.dumps(row) + "\n")
+sys.stdout.write(out.stdout)
+EOF
 }
 
 json_field() {
@@ -790,12 +802,14 @@ EOF
 cat > "${WORK}/appender.py" <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
 from _bootstrap import load_lib_module
+from programme_prompts import append_prompt as fixture_prompt
 pj = load_lib_module("programme_journal")
 run, mode = sys.argv[2], sys.argv[3]
 try:
     if mode == "prompt":
-        print("appender:prompt_id", pj.append_prompt(run, "sess-t", "please merge it", "typed")["prompt_id"], flush=True)
+        print("appender:prompt_id", fixture_prompt(run, "sess-t", "please merge it")["prompt_id"], flush=True)
     elif mode == "claim":
         pj.append_claim(run, "worker-t", {"item": "racing-claim"})
     else:
@@ -852,6 +866,21 @@ def prov(pred):
     ev = [e for e in snap["events"] if pred(((e["payload"] or {}).get("row") or {}))]
     return ev[0]["provenance"] if len(ev) == 1 else f"events {len(ev)}"
 print(prov(lambda r: r.get("prompt_id") == pid), prov(lambda r: (r.get("payload") or {}).get("item") == "racing-claim"))
+EOF
+)"
+it "the racing prompt's source record is kept in the store and in the journal export"
+check "store-source export-source" "$(run_py "$RUN14" "$P14" <<'EOF'
+run, pid = args
+snap = auth.snapshot(run)
+stored = [r for r in snap["journal"] if r.get("prompt_id") == pid]
+with open(os.path.join(home(run), "journal.jsonl")) as fh:
+    exported = [json.loads(l) for l in fh if l.strip()]
+exported = [r for r in exported if r.get("prompt_id") == pid]
+def has_source(rows):
+    return len(rows) == 1 and isinstance(rows[0]["payload"].get("source"), dict) \
+        and rows[0]["payload"]["source"].get("session_id") == "sess-t"
+print("store-source" if has_source(stored) else f"store {stored}",
+      "export-source" if has_source(exported) else f"export {exported}")
 EOF
 )"
 

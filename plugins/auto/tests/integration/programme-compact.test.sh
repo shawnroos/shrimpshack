@@ -48,6 +48,8 @@ run_py() {
 import datetime, json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
+sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
+from programme_prompts import append_prompt as fixture_prompt
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -103,7 +105,7 @@ FLAG="${HOME_DIR}/.compact-flag"
 typed() {
   run_py "$RUN" "$1" <<'EOF'
 run, text = args
-print(pj.append_prompt(run, "sess-pm", text, "typed")["prompt_id"])
+print(fixture_prompt(run, "sess-pm", text, "typed")["prompt_id"])
 EOF
 }
 
@@ -402,8 +404,7 @@ it "scenario 2: once the new context was printed, the next ack passes"
 check "0 absent" "$CODE $([ -e "$FLAG" ] && echo present || echo absent)"
 
 # ── Handover: the new driver restores the same scope; the old one gets nothing ──
-HAND_PAYLOAD="$("$PY" -c 'import json; print(json.dumps({"session_id": "sess-pm", "prompt": "/auto:programme-handover sess-h"}))')"
-( cd "$NOREPO" && bash "${HOOKS}/on-user-prompt.sh" <<< "$HAND_PAYLOAD" >/dev/null 2>&1 )
+( cd "$NOREPO" && "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" sess-pm "/auto:programme-handover sess-h" >/dev/null 2>&1 )
 prog handover sess-h
 it "handover setup: the typed handover moves the programme to sess-h"
 check "0" "$CODE"
@@ -438,8 +439,7 @@ CLAUDE_CODE_SESSION_ID=sess-h prog accept-agreement --prompt "$P_DEC"
 it "scenario 3: after the ack the old session's prompt still approves nothing"
 check 1 "$CODE"
 has "was not typed in the driving session" "$OUT"
-HAND_BACK="$("$PY" -c 'import json; print(json.dumps({"session_id": "sess-h", "prompt": "/auto:programme-handover sess-pm"}))')"
-( cd "$NOREPO" && bash "${HOOKS}/on-user-prompt.sh" <<< "$HAND_BACK" >/dev/null 2>&1 )
+( cd "$NOREPO" && "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" sess-h "/auto:programme-handover sess-pm" >/dev/null 2>&1 )
 CLAUDE_CODE_SESSION_ID=sess-h prog handover sess-pm
 CLAUDE_CODE_SESSION_ID=sess-pm prog rules --ack >/dev/null
 it "handover back to sess-pm for the remaining checks"

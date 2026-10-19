@@ -75,10 +75,8 @@ session_start() {
 
 prompt_hook() {
   local sid="$1" text="$2"
-  local payload
-  payload="$("$PY" -c 'import json,sys; print(json.dumps({"session_id": sys.argv[1], "prompt": sys.argv[2], "hook_event_name": "UserPromptSubmit"}))' "$sid" "$text")"
   ( cd "$NOREPO" && HERDR_PANE_ID="${PROMPT_PANE:-}" HERDR_WORKSPACE_ID="${PROMPT_WS:-}" \
-    bash "${HOOKS}/on-user-prompt.sh" <<< "$payload" )
+    "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$sid" "$text" )
 }
 
 action_hook_in() {
@@ -167,11 +165,11 @@ print(out["run"])
 EOF
 )"
 
-it "a prompt in the driving session is journaled with a new id and origin typed"
+it "a driving prompt is captured unknown until its appended source row verifies typed"
 OUT="$(prompt_hook sess-pm "please adopt the merge rule")"
 ROW="$(run_py "$RUN" <<'EOF'
 r = [x for x in pj.read(args[0]) if x["kind"] == "prompt"][-1]
-print(r["prompt_id"], r["payload"]["origin"], r["payload"]["text"], r["session_id"])
+print(r["prompt_id"], pj.prompt_origin(r), r["payload"]["text"], r["session_id"])
 EOF
 )"
 PID="${ROW%% *}"
@@ -184,7 +182,7 @@ d = json.load(sys.stdin)["hookSpecificOutput"]
 body = d["additionalContext"].split("\n")
 data = json.loads(body[2])
 print(d["hookEventName"], body[0], body[-1], data["prompt_id"], data["origin"])')"
-check "UserPromptSubmit <auto-data> </auto-data> ${PID} typed" "$CTX"
+check "UserPromptSubmit <auto-data> </auto-data> ${PID} unknown" "$CTX"
 
 it "the same prompt in another session in the same cwd appends nothing"
 BEFORE="$(journal_kinds "$RUN")"

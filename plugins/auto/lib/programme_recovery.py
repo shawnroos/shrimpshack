@@ -333,14 +333,15 @@ def _decision_rows(ctx) -> list:
             row = _capped({k: rev.get(k) for k in ("state", "scope", "reason", "applies_to", "requirements",
                                                   "superseded_by", "supersedes")}, ("scope", "reason"), ref)
             row.update(decision_id=did, rev=rev.get("rev"), limits=limits,
-                       source=dict(_source(rev), origin_verified=False))
+                       source=_source(rev))
             rows.append(row)
     return rows
 
 
 def _source(rev) -> dict:
     src = rev.get("source") if isinstance(rev.get("source"), dict) else {}
-    return {k: src.get(k) for k in ("class", "prompt_id", "origin_label")}
+    return dict({k: src.get(k) for k in ("class", "prompt_id", "origin_label")},
+                origin_verified=src.get("origin_verified") is True)
 
 
 def _requirement_rows(ctx) -> list:
@@ -349,7 +350,7 @@ def _requirement_rows(ctx) -> list:
         for rev in revisions or []:
             ref = f"requirement:{rid}@{rev.get('rev')}"
             row = _capped({k: rev.get(k) for k in ("state", "text", "checks", "decision_id")}, ("text",), ref)
-            row.update(requirement_id=rid, rev=rev.get("rev"), source=dict(_source(rev), origin_verified=False))
+            row.update(requirement_id=rid, rev=rev.get("rev"), source=_source(rev))
             rows.append(row)
     return rows
 
