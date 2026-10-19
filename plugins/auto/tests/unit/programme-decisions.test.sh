@@ -211,8 +211,14 @@ it "the view's decision for Shawn names the ask kind"
 prog status --json
 has '"ask_kind": "product_scope"' "$OUT"
 
-it "answer-handed writes a Shawn decision linked to the ask id"
+it "status --json shows the ask id on the handed item and on its row for Shawn"
 ASK="$(field 'prog["items"]["linear:AI-4"]["handed"]["id"]')"
+check "${ASK} ${ASK}" "$("$PY" -c 'import json,sys; m=json.load(sys.stdin)["model"]; i=[x for x in m["items"] if x["id"]=="linear:AI-4"][0]; d=[x for x in m["decisions_for_shawn"] if x.get("item")=="linear:AI-4"][0]; print(json.dumps(i.get("ask_id")), json.dumps(d.get("ask_id")))' <<< "$OUT")"
+it "the text status names the ask id beside the question"
+prog status
+has "linear:AI-4 (ask $(printf '%s' "$ASK" | tr -d '"')): Ship it?" "$OUT"
+
+it "answer-handed writes a Shawn decision linked to the ask id"
 P_SHIP="$(prompt typed 'ship AI-4')"
 prog answer-handed linear:AI-4 --choice ship --prompt "$P_SHIP"
 check 0 "$CODE"
@@ -222,6 +228,11 @@ it "the answer on the ask points back to the decision"
 check "true" "$(field 'prog["items"]["linear:AI-4"]["handed"]["answered"]["decision_id"] == prog["decisions"][-1]["id"]')"
 it "the handed_answered journal entry carries the decision id"
 has "$(field 'prog["decisions"][-1]["id"]' | tr -d '"')" "$(journal_last handed_answered)"
+it "status --terms shows the ask an answer replies to"
+prog status --terms --json
+has "\"ask\": ${ASK}" "$OUT"
+prog status --terms
+has "(ask $(printf '%s' "$ASK" | tr -d '"'))" "$OUT"
 
 it "accept-agreement writes a Shawn decision of kind agreement"
 P_ACCEPT="$(prompt typed 'yes, accept the agreement')"
@@ -280,6 +291,32 @@ prog add-item linear:AI-5 --title "Pick and build" --kind product_question --kin
 prog record-decision linear:AI-5 --kind product_call --silent --why "the terms are silent"
 check '0 "open" ["fix-only"] "decided"' \
   "$CODE $(field 'prog["items"]["linear:AI-5"]["state"]') $(field 'prog["items"]["linear:AI-5"]["matched_rule"]') $(field 'prog["decisions"][-1]["outcome"]')"
+
+prog add-item linear:AI-6 --title "Product ask" --kind product_question
+it "on a stamped programme a non-product kind on a product question records and leaves the item open"
+prog record-decision linear:AI-6 --kind tool_choice --silent --why "use the existing crop helper"
+check '0 "open" ["product-question"] ["product_question"] null' \
+  "$CODE $(field 'prog["items"]["linear:AI-6"]["state"]') $(field 'prog["items"]["linear:AI-6"]["matched_rule"]') $(field 'prog["items"]["linear:AI-6"]["change_kinds"]') $(field 'prog["decisions"][-1]["outcome"]')"
+
+for kind in prod_deploy full_release spend_over_cap merge_around_gate eval_waiver denied_operation; do
+  it "the PM cannot record a ${kind} choice itself and is pointed at hand-item"
+  BEFORE="$(decision_count)"
+  JBEFORE="$(journal_count pm_decided)"
+  prog record-decision programme --kind "$kind" --silent --why "tests passed"
+  check "1 hand-item ${BEFORE} ${JBEFORE}" \
+    "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count) $(journal_count pm_decided)"
+done
+it "an act-level kind still records"
+prog record-decision programme --kind merge_at_gate --silent --why "gate is green"
+check '0 "merge_at_gate"' "$CODE $(field 'prog["decisions"][-1]["kind"]')"
+
+edit 'rec["programme"]["agreement"].pop("contract_version")'
+prog add-item linear:AI-7 --title "Unstamped product ask" --kind product_question
+it "on an unstamped programme a non-product kind on a product question records without refusing"
+prog record-decision linear:AI-7 --kind tool_choice --silent --why "use the existing crop helper"
+check '0 "open" ["product-question"]' \
+  "$CODE $(field 'prog["items"]["linear:AI-7"]["state"]') $(field 'prog["items"]["linear:AI-7"]["matched_rule"]')"
+edit 'rec["programme"]["agreement"]["contract_version"] = 1'
 
 edit 'rec["programme"].pop("decisions"); rec["programme"]["items"]["linear:AI-1"].update(state="handed", handed={"at": "2026-10-01T00:00:00Z", "question": "old ask?", "answered": None})'
 it "a record written before decisions existed loads with an empty decisions list"

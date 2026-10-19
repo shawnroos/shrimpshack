@@ -125,6 +125,7 @@ def _item_view(item_id, item, status, flagged, sessions, tasks_on=False) -> dict
         "waiting_on": item.get("waiting_on") if effective == "waiting" else None,
         "question": handed.get("question") if effective == "handed" else None,
         "ask_kind": programme_decisions.ask_kind(item) if effective == "handed" else None,
+        "ask_id": programme_decisions.ask_id(item) if effective == "handed" else None,
         "now": _tasks_now(owner, tasks_on) if effective not in programme_home.FINISHED_ITEM_STATES else None,
         "restrictions": [{"text": _dict(r).get("text"), "source": _dict(r).get("source")}
                          for r in item.get("restrictions") or []],
@@ -219,7 +220,8 @@ def _watching_row(w) -> dict:
 
 
 def _decisions(block, items) -> list:
-    out = [{"kind": "handed", "item": i["id"], "question": i["question"], "ask_kind": i["ask_kind"]}
+    out = [{"kind": "handed", "item": i["id"], "question": i["question"], "ask_kind": i["ask_kind"],
+            "ask_id": i["ask_id"]}
            for i in items if i["effective_state"] == "handed" and i["needs_shawn"]]
     out += [{"kind": "stopped_unwatched", "item": i["id"],
              "question": "the PM stopped while this wait had no watcher"}
@@ -264,15 +266,11 @@ def _rules(block, rules) -> dict:
             "rules": [], "autonomy": [], "rejected_rules": [], "instructions": []}
 
 
-def _owner_text(owner) -> str:
-    return owner or "the contract default"
-
-
 def _change_text(kind, p) -> tuple:
     if kind == programme_terms.CORRECTED:
-        return p.get("correction"), f"{p.get('kind')} now decided by {p.get('to')} (was {_owner_text(p.get('previous'))})"
+        return p.get("correction"), f"{p.get('kind')} now decided by {p.get('to')} (was {programme_terms.owner_text(p.get('previous'))})"
     if kind == programme_terms.UNDONE:
-        return p.get("correction"), f"{p.get('kind')} back to {_owner_text(p.get('restored'))}"
+        return p.get("correction"), f"{p.get('kind')} back to {programme_terms.owner_text(p.get('restored'))}"
     was = f"{p['previous']} -> " if p.get("previous") else ""
     return p.get("term_id"), f"{p.get('area')}: {was}{p.get('value')}"
 
@@ -302,7 +300,7 @@ def _terms(block, journal_entries) -> dict:
     for entry in block.get("decisions") or []:
         entry = _dict(entry)
         term = None if entry.get("silent") else entry.get("term")
-        groups.setdefault(term, []).append({k: entry.get(k) for k in ("id", "at", "kind", "by", "item", "why")})
+        groups.setdefault(term, []).append({k: entry.get(k) for k in ("id", "at", "kind", "by", "item", "ask", "why")})
     order = [t for t in labels if t in groups] + sorted(t for t in groups if t is not None and t not in labels)
     by_term = [{"term": t, "label": labels.get(t, "not in the record"), "decisions": groups[t]} for t in order]
     if None in groups:
@@ -425,7 +423,7 @@ def rule_texts(r) -> list:
     return [(programme_sanitize.clean(text, cap=0), style) for text, style in out]
 
 
-def _rules_texts(r) -> list:
+def rules_texts(r) -> list:
     out = rule_texts(r)
     if r.get("operating_contract"):
         out += [(text, "text") for text in programme_terms.contract_lines(r["operating_contract"])]
@@ -494,14 +492,16 @@ def rows(model) -> list:
                                              f"({'watched' if w['watched'] else 'unwatched'})",
                                              "text" if w["watched"] else "warn")
                                         for w in model["waiting_on_whom"]], "nobody")
-    _section(out, "Decisions for Shawn", [_row(f"  {d.get('item') or d['kind']}: {d['question']}", "warn")
+    _section(out, "Decisions for Shawn", [_row(f"  {d.get('item') or d['kind']}"
+                                               + (f" (ask {d['ask_id']})" if d.get("ask_id") else "")
+                                               + f": {d['question']}", "warn")
                                           for d in model["decisions_for_shawn"]], "none")
     _section(out, "Just did", [_row(f"  {j['at']} {j['kind']}"
                                     + (f" {j['item']}" if j.get("item") else "")
                                     + (f": {j['summary']}" if j.get("summary") else "")
                                     + (f" (x{j['repeats']})" if j["repeats"] > 1 else ""), "dim")
                                for j in model["just_did"]], "nothing yet")
-    _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in _rules_texts(model["rules_in_force"])],
+    _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in rules_texts(model["rules_in_force"])],
              "none")
     _section(out, "Items", [line for item in model["items"] for line in _item_lines(item)], "no items")
     return out
@@ -532,7 +532,8 @@ def terms_rows(terms) -> list:
     _section(out, "Decisions by term",
              [line for g in terms["by_term"] for line in
               [_row(f"  {g['term'] + ' ' if g['term'] else ''}{g['label']}")]
-              + [_row(f"    {d['id']} {d['kind']} by {d['by']}: {d['why']}", "dim") for d in g["decisions"]]],
+              + [_row(f"    {d['id']} {d['kind']} by {d['by']}" + (f" (ask {d['ask']})" if d.get("ask") else "")
+                      + f": {d['why']}", "dim") for d in g["decisions"]]],
              "none recorded")
     hidden = terms["changes_total"] - len(terms["changes"])
     _section(out, "Recent term changes", [_change_row(c) for c in terms["changes"]]

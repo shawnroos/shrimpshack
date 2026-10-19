@@ -569,7 +569,8 @@ def _brief_tail(host, programme, decision_ids, restrictions) -> str:
         lines.append("Settled decisions this work carries:")
         for decision_id in decision_ids:
             entry = known[decision_id]
-            lines.append(f"- {decision_id} ({entry.get('kind')}): {entry.get('why') or 'no text recorded'}")
+            lines.append(f"- {decision_id} ({entry.get('kind')}, decided by {entry.get('by') or 'unknown'}): "
+                         f"{entry.get('why') or 'no text recorded'}")
         lines.append(REOPEN_CLAUSE)
     if restrictions:
         lines.append("Restrictions on this work:")

@@ -32,7 +32,7 @@ CONTRACT_VERSION = 1
 PROPOSED = "agreement_proposed"
 EDITED = "project_term_edited"
 AMENDED = "project_term_amended"
-# Matched as substrings of the squashed area, so any spelling that contains a stem is refused.
+# Matched as substrings of the squashed area and text, so any spelling that contains a stem is refused.
 PROTECTED_STEMS = {
     "prod_deploy": ("deploy", "production"),
     "full_release": ("release", "publish"),
@@ -67,12 +67,15 @@ def protected_kind(host, area):
     return next((PROTECTED_WORDS[w] for w in words if w in PROTECTED_WORDS), None)
 
 
-def _check_area(host, area, reserved) -> None:
-    kind = protected_kind(host, area)
-    if kind and not reserved:
-        raise TermsError(
-            f"area {area!r} is a protected escalation ({kind}) and stays with Shawn: no project term "
-            "may give it to the PM or a worker; mark it reserved or leave it out")
+def _check_area(host, area, text, reserved) -> None:
+    if reserved:
+        return
+    for what, words in (("area", area), ("text", text)):
+        kind = protected_kind(host, words)
+        if kind:
+            raise TermsError(
+                f"{what} {words!r} names a protected escalation ({kind}) that stays with Shawn: no "
+                "project term may give it to the PM or a worker; mark it reserved or leave it out")
 
 
 def _text(value, what) -> str:
@@ -109,7 +112,7 @@ def add(host, programme, parsed, source) -> dict:
     taken = {host._squash(e.get("area")) for e in entries}
     added = []
     for area, text, reserved in parsed:
-        _check_area(host, area, reserved)
+        _check_area(host, area, text, reserved)
         if host._squash(area) in taken:
             raise TermsError(f"area {area!r} already has a project term; change it with edit-project-term")
         taken.add(host._squash(area))
@@ -153,11 +156,10 @@ def contract_view(programme):
     }
 
 
-def apply_contract(rules, autonomy) -> tuple:
-    rules = [dict(rule, caveat=CONTRACT_CAVEAT)
-             if rule["id"] == "product-question" and rule["layer"] == "plugin" else rule
-             for rule in rules]
-    return rules, autonomy
+def apply_contract(rules) -> list:
+    return [dict(rule, caveat=CONTRACT_CAVEAT)
+            if rule["id"] == "product-question" and rule["layer"] == "plugin" else rule
+            for rule in rules]
 
 
 def contract_lines(view) -> list:
@@ -183,7 +185,7 @@ def _amend(host, entry, text, source, prompt, reserve) -> dict:
     if reserve is not None and reserve != bool(entry.get("reserved")):
         raise TermsError("the agreement is accepted; a project term's reservation is fixed")
     host.require_named(prompt, entry["area"], text)
-    _check_area(host, entry["area"], entry.get("reserved"))
+    _check_area(host, entry["area"], text, entry.get("reserved"))
     previous = entry.get("value")
     entry.setdefault("history", []).append(
         {k: entry.get(k) for k in ("value", "set_by", "at", "source", "prompt_id")})
@@ -211,7 +213,7 @@ def _h_edit(host, argv):
             extra = _amend(host, entry, text, source, prompt, reserve)
         else:
             reserved = bool(entry.get("reserved")) if reserve is None else reserve
-            _check_area(host, entry["area"], reserved)
+            _check_area(host, entry["area"], text, reserved)
             entry.update(value=text, reserved=reserved, at=run_record_core.now_iso())
             if source:
                 entry["source"] = source
@@ -248,8 +250,14 @@ def owner_of(programme, kind):
     return latest[-1] if latest else None
 
 
-def _owner_text(owner) -> str:
+def owner_text(owner) -> str:
     return owner or "the contract default"
+
+
+def _check_prompt_after(rows, prompt, earlier_id) -> None:
+    if _prompt_index(rows, prompt["prompt_id"]) <= _prompt_index(rows, earlier_id):
+        raise TermsError(f"prompt {prompt['prompt_id']!r} is not later than the correction's prompt "
+                         f"{earlier_id!r}")
 
 
 def correction_lines(entries) -> list:
@@ -336,7 +344,7 @@ def _h_correct(host, argv):
             item.update(state="open", waiting_on=None)
             host.programme_record._history(item, "reopened", correction=entry["id"])
             reopened = item_key
-        notice = (f"correction {entry['id']}: {kind} now decided by {to} (was {_owner_text(previous)}). "
+        notice = (f"correction {entry['id']}: {kind} now decided by {to} (was {owner_text(previous)}). "
                   f"Shawn said \"{prompt['quote']}\"; PM's reading: \"{reading}\"")
         return {"correction": entry["id"], "kind": kind, "anchor": anchor_id, "to": to, "previous": previous,
                 "pm_reading": reading, "reopened": reopened, "notice": programme_sanitize.clean(notice, cap=0)}
@@ -362,14 +370,12 @@ def _h_undo(host, argv):
         if newer is not entry:
             raise TermsError(f"correction {newer.get('id')!r} changed {entry['kind']} later; undo it first")
         rows = programme_journal.read(rec["run_id"])
-        if _prompt_index(rows, prompt["prompt_id"]) <= _prompt_index(rows, entry["prompt_id"]):
-            raise TermsError(f"prompt {prompt['prompt_id']!r} is not later than the correction's prompt "
-                             f"{entry['prompt_id']!r}")
+        _check_prompt_after(rows, prompt, entry["prompt_id"])
         entry["undone"] = {"at": run_record_core.now_iso(), "prompt_id": prompt["prompt_id"],
                            "quote": prompt["quote"]}
         made = [d.get("id") for d in (programme.get("decisions") or [])[entry.get("choices_before", 0):]
                 if isinstance(d, dict) and (d.get("kind") == entry["kind"] or d.get("term") == correction_id)]
-        notice = (f"undid correction {correction_id}: {entry['kind']} back to {_owner_text(entry['previous'])}; "
+        notice = (f"undid correction {correction_id}: {entry['kind']} back to {owner_text(entry['previous'])}; "
                   f"choices made under it stand: {', '.join(made) or 'none'}")
         return {"correction": correction_id, "kind": entry["kind"], "restored": entry["previous"],
                 "made_under": made, "notice": notice}
@@ -404,6 +410,10 @@ def _h_keep(host, argv):
         if not keys:
             raise TermsError("the remit names no repo, so there is no project to keep a correction for")
         kept = [_active(programme, cid) for cid in dict.fromkeys(positional)]
+        rows = programme_journal.read(rec["run_id"])
+        for correction in kept:
+            _check_prompt_after(rows, prompt, correction["prompt_id"])
+        host.require_named(prompt, *(c["id"] for c in kept))
         stored = programme_carryover.store(
             [programme_carryover.entry_for(c, key, rec) for c in kept for key in keys], prompt, rec, "carryover")
         return {"kept": [c["id"] for c in kept], "keys": keys, "stored": stored,
@@ -441,9 +451,7 @@ def _h_promote(host, argv):
         correction = _active(programme, positional[0])
         _check_all_projects(host, prompt)
         rows = programme_journal.read(rec["run_id"])
-        if _prompt_index(rows, prompt["prompt_id"]) <= _prompt_index(rows, correction["prompt_id"]):
-            raise TermsError(f"prompt {prompt['prompt_id']!r} is not later than the correction's prompt "
-                             f"{correction['prompt_id']!r}")
+        _check_prompt_after(rows, prompt, correction["prompt_id"])
         _check_promotion_unused(rows, prompt)
         entry = programme_carryover.entry_for(correction, programme_carryover.ALL, rec)
         stored = programme_carryover.store([entry], prompt, rec, "promotion")
@@ -456,7 +464,7 @@ def _h_promote(host, argv):
 _SPECS = (
     ("edit-project-term", _h_edit,
      "<term-id> <text> [--prompt <id>] [--source <evidence>] [--reserved|--unreserved] [--run <id>]",
-     "an unknown term id; an empty text; both --reserved and --unreserved; a protected area left "
+     "an unknown term id; an empty text; both --reserved and --unreserved; a protected area or text left "
      "unreserved. After acceptance it also rejects no typed --prompt, a prompt that does not name the "
      "area and the new text, and any change of reservation."),
     ("correct-term", _h_correct,
@@ -472,7 +480,8 @@ _SPECS = (
     ("keep-corrections", _h_keep,
      "--prompt <id> <correction-id>... [--run <id>]",
      "every call while corrections are not on yet; no typed prompt from the driving session; an "
-     "unknown or undone correction; a remit with no repo. Stores each kept correction under every "
+     "unknown or undone correction; a prompt not later than every kept correction's, or one that does "
+     "not name each kept id; a remit with no repo. Stores each kept correction under every "
      "remit repo's key for the next programme on that project."),
     ("promote-correction", _h_promote,
      "--prompt <id> <correction-id> [--run <id>]",

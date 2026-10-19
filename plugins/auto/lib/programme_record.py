@@ -510,7 +510,7 @@ def notify_handed(item_id, question) -> dict:
 
 def _open_ask_for(programme, op):
     for key, item in programme["items"].items():
-        handed = item.get("handed") if isinstance(item.get("handed"), dict) else {}
+        handed = programme_decisions.handed(item)
         if (item.get("state") == "handed" and not handed.get("answered")
                 and handed.get("kind") == DENIED_OPERATION and handed.get("op") == op):
             return key

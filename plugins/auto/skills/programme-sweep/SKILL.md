@@ -78,7 +78,8 @@ from this session's lease.
    | Apply a correction to all projects | `P promote-correction <correction-id> --prompt <id>` (only when his message says "all projects" with no negation before it) |
 
    A correction replies to an ask or a decision you recorded: `--replies-to`
-   takes the ask id from the handed item or the decision id. The verb takes
+   takes the ask id from the handed item (`ask_id` in `P status --json`) or
+   the decision id. The verb takes
    the decision kind from it. Show Shawn the one-line notice it prints. When it
    moves a handed item back to open, decide it under the new term:
    `P record-decision <item> --kind <the same kind> --term <correction-id> --why "<why>"`.
@@ -211,10 +212,13 @@ from this session's lease.
       or leave silent, and record each decision:
       `P record-decision <item|programme> --kind <decision-kind> --term <term-id> --why "<why>"`,
       or `--silent` in place of `--term <term-id>` when no term covers it. On a
-      product-question item this closes the item as decided. Hand Shawn only
+      product-question item, a `product_call` or `product_scope` decision
+      closes the item as decided; other kinds leave it open. Hand Shawn only
       the choices on that section's list, with one recommendation each.
+      `record-decision` refuses `denied_operation` and any kind whose autonomy
+      level is propose or never; hand those.
     - With no `operating contract` line, every product question goes to
-      Shawn. `record-decision` refuses a product-question item there.
+      Shawn. `record-decision` refuses a product call there.
     - Hand an item with
       `P hand-item <item> --kind <decision-kind> --question "<one question with your recommendation>"`.
       It notifies him once. A denied operation takes

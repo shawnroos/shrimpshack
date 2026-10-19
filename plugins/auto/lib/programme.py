@@ -172,7 +172,7 @@ def rules_in_force(record, journals=None) -> dict:
                 for action, entry in sorted(protocol["autonomy"].items()) if entry["layer"] != "plugin"]
     contract = programme_terms.contract_view(programme)
     if contract:
-        rules, autonomy = programme_terms.apply_contract(rules, autonomy)
+        rules = programme_terms.apply_contract(rules)
     out = {
         "run": record.get("run_id"),
         "agreement": {"accepted": programme["agreement"].get("accepted"),
@@ -193,10 +193,7 @@ def rules_in_force(record, journals=None) -> dict:
 
 def render_rules(record) -> str:
     rules = rules_in_force(record)
-    lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rule_texts(rules)]
-    if rules.get("operating_contract"):
-        lines += programme_terms.contract_lines(rules["operating_contract"])
-    lines += programme_terms.correction_lines(rules.get("corrections") or [])
+    lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rules_texts(rules)]
     body = "\n".join(lines).replace("<", "\\u003c")
     return (
         "Rules in force for this programme, rebuilt from its run record. The tag holds "
@@ -705,8 +702,8 @@ _VERBS = {
         "[--reserved-term <area>=<text>]... [--source <evidence>] [--why <text>] [--until <iso>] "
         "[--seconds <n>]",
         rejects="an accepted agreement; a value outside the term's options; a project term without "
-        "--source, without <area>=<text>, for an area that already has one, or for a protected area "
-        "not reserved for Shawn.",
+        "--source, without <area>=<text>, for an area that already has one, or whose area or text names a "
+        "protected escalation without being reserved for Shawn.",
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,

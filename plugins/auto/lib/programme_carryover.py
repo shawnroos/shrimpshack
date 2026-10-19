@@ -154,10 +154,10 @@ def prefill(host, programme) -> tuple:
         return [], [programme_sanitize.clean(f"carry-over store unreadable, nothing pre-filled: {exc}", cap=0)]
     terms = programme_home.project_terms(programme)
     taken = {host._squash(t.get("area")) for t in terms}
-    added, notices = [], []
+    added, notices, journals = [], [], {}
     for key in repo_keys(programme) + [ALL]:
         for entry in entries_under(doc, key):
-            reason = _verified(entry, key, host.prompt_lookup)
+            reason = _verified(entry, key, lambda run, prompt: host.prompt_lookup(run, prompt, journals))
             if reason:
                 notices.append(programme_sanitize.clean(
                     f"dropped carried-over entry {entry.get('id')} under {key}: {reason}", cap=0))

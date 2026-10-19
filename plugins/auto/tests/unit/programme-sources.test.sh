@@ -544,13 +544,13 @@ it "prompt-item refuses a session that does not drive the programme"
 check 1 "$CODE"
 
 seed_decision() {
-  run_py "$RUN" "$1" <<'EOF'
-run, why = args
+  run_py "$RUN" "$1" "${2:-shawn}" <<'EOF'
+run, why, by = args
 pd = load_lib_module("programme_decisions")
 out = {}
 def body(rec):
     rec["programme"] = ph.normalize_programme(rec["programme"])
-    out["id"] = pd.add_decision(rec["programme"], kind="product_scope", by="shawn", item="programme", why=why)["id"]
+    out["id"] = pd.add_decision(rec["programme"], kind="product_scope", by=by, item="programme", why=why)["id"]
 core._with_locked_run_record(ph.home_path(run), run, body)
 print(out["id"])
 EOF
@@ -573,10 +573,18 @@ it "prompt-item with a decision sends"
 check 0 "$CODE"
 it "the prompt carries the decision text"
 has "Export stays PNG only this release" "$(calls)"
+it "the prompt names who decided"
+has "(product_scope, decided by shawn)" "$(calls)"
 it "the prompt carries the reopen clause"
 has "stop and state that evidence" "$(calls)"
 it "the prompt_sent row carries the decision ids"
 check "[\"${DEC}\"]" "$(journal_last prompt_sent | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["payload"]["decision_ids"]))')"
+
+DEC_PM="$(seed_decision "Crop helper stays as is" pm)"
+: > "$CALLS"
+prog prompt-item herdr:w2/p31 "carry on" --decision "$DEC_PM"
+it "a PM decision reads as decided by pm in the prompt"
+has "(product_scope, decided by pm)" "$(calls)"
 
 LONG="$("$PY" -c 'print("x" * 3990)')"
 : > "$CALLS"

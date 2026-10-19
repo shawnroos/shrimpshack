@@ -169,6 +169,7 @@ REMIT_A="{\"spaces\":[\"w2\"],\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"sha
 RUN_A="$(new_programme w2)"
 remit "$RUN_A" "$REMIT_A"
 stamp_contract "$RUN_A"
+P_BEFORE="$(prompt "$RUN_A" typed "keep whatever you correct today")"
 C1="$(correct "$RUN_A" linear:A-1 technical_approach pm "that did not need me")"
 C2="$(correct "$RUN_A" linear:A-2 work_sequencing worker "workers can order that")"
 
@@ -191,8 +192,16 @@ BEFORE="$(hashes)"
 prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP_OFF" c000000
 if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "no active correction 'c000000'" "$OUT"; else fail "code $CODE out $OUT"; fi
 
+it "keep-corrections citing a prompt older than the correction refuses and writes nothing"
+BEFORE="$(hashes)"
+prog_on keep-corrections --run "$RUN_A" --prompt "$P_BEFORE" "$C1"
+if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "is not later than the correction's prompt" "$OUT"; else fail "code $CODE out $OUT"; fi
+it "keep-corrections citing a later prompt that does not name the correction refuses and writes nothing"
+prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP_OFF" "$C1"
+if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "does not name what it approves" "$OUT"; else fail "code $CODE out $OUT"; fi
+
 it "AE9: Shawn keeps one of the two corrections for this project"
-P_KEEP="$(prompt "$RUN_A" typed "keep the technical one for this project")"
+P_KEEP="$(prompt "$RUN_A" typed "keep ${C1} for this project")"
 prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP" "$C1"
 check 0 "$CODE"
 it "the kept correction is stored under each remit repo key and not under all"

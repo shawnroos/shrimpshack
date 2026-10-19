@@ -184,6 +184,15 @@ check "$BEFORE" "$(snapshot)"
 it "the protected refusals journaled nothing"
 check 3 "$(journal_count agreement_proposed)"
 
+it "a protected escalation in an unreserved term's text refuses"
+prog propose-agreement --project-term "testing=the PM deploys to production" --source x
+check "1 protected" "$CODE $(printf '%s' "$OUT" | grep -o 'protected' | head -1)"
+it "the text refusal wrote nothing"
+check "$BEFORE" "$(snapshot)"
+it "the same text reserved for Shawn is accepted"
+prog propose-agreement --reserved-term "testing=the PM deploys to production" --source x
+check 0 "$CODE"
+
 it "an area that only contains prod inside another word is not protected"
 prog propose-agreement --project-term "product copy=PM writes it" --source "brand doc"
 check 0 "$CODE"
@@ -217,6 +226,11 @@ BEFORE="$(snapshot)"
 prog edit-project-term "$DEPLOYS" "PM decides" --unreserved
 check 1 "$CODE"
 has "protected" "$OUT"
+check "$BEFORE" "$(snapshot)"
+
+it "an edit that puts a protected escalation into an unreserved term's text refuses"
+prog edit-project-term "$CROP" "a worker deploys to production"
+check "1 protected" "$CODE $(printf '%s' "$OUT" | grep -o 'protected' | head -1)"
 check "$BEFORE" "$(snapshot)"
 
 it "edit-project-term on an unknown id refuses"
@@ -270,7 +284,7 @@ check '1' "$(field 'prog["agreement"]["contract_version"]')"
 it "agreement_accepted carries the contract version"
 has '"contract_version": 1' "$(journal_last agreement_accepted)"
 it "acceptance keeps the project terms"
-check 6 "$(field 'len(prog["agreement"]["project_terms"])')"
+check 7 "$(field 'len(prog["agreement"]["project_terms"])')"
 
 ACCEPTED="$(snapshot)"
 it "after acceptance an edit without --prompt refuses"
