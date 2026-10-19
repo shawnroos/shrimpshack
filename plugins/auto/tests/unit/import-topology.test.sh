@@ -106,6 +106,10 @@
 #                          programme_authority; programme_journal, driver_session [lazy]
 #                          programme_journal, programme_record and programme_evidence
 #                          reach it lazily, so it closes no import-time cycle.
+#   programme_gitio      → programme_store
+#   programme_preserve   → run_record_core, programme_home, programme_store,
+#                          programme_artifacts, programme_gitio; driver_session,
+#                          session_registry [lazy]. programme_record reaches it lazily.
 #   session_registry     → run_record_core, programme_home, driver_session
 #   programme_exec       → programme_sanitize
 #   programme_tracker    → programme_exec, programme_journal, programme_sanitize
@@ -113,7 +117,7 @@
 #   programme_plans      → programme_exec, programme_sanitize, programme_tracker
 #   programme_record     → run_record_core, programme_home, programme_journal,
 #                          programme_protocol, programme_sanitize, driver_session,
-#                          programme_tracker, programme_context; programme_artifacts [lazy]
+#                          programme_tracker, programme_context; programme_artifacts, programme_preserve [lazy]
 #   programme_evidence   → run_record_core, programme_home, programme_journal,
 #                          programme_predicate, programme_record, programme_sanitize,
 #                          programme_protocol, driver_session, verification;
@@ -445,7 +449,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_view.py run_record_evidence.py programme_lifecycle.py \
            programme_exec.py programme_tracker.py programme_tasks.py programme_plans.py \
            programme_store.py programme_authority.py programme_import.py \
-           programme_artifacts.py programme_context.py; do
+           programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -482,7 +486,8 @@ else
   pass
 fi
 
-for _low in programme_store programme_authority programme_import programme_artifacts; do
+for _low in programme_store programme_authority programme_import programme_artifacts \
+            programme_gitio programme_preserve; do
   it "${_low}.py does NOT load programme or a programme verb module"
   if loads_sibling "${_low}.py" "programme" || loads_sibling "${_low}.py" "programme_record" \
      || loads_sibling "${_low}.py" "programme_lifecycle"; then
@@ -505,6 +510,13 @@ it "programme_journal, programme_record and programme_evidence load programme_ar
 if grep -qE '^[a-z_]+ = load_lib_module\("programme_artifacts"\)' "$LIB/programme_journal.py" \
    "$LIB/programme_record.py" "$LIB/programme_evidence.py"; then
   fail "a module-top load of programme_artifacts closes an import-time cycle (it loads the journal)"
+else
+  pass
+fi
+
+it "programme_record loads programme_preserve only lazily"
+if grep -qE '^[a-z_]+ = load_lib_module\("programme_preserve"\)' "$LIB/programme_record.py"; then
+  fail "a module-top load of programme_preserve from programme_record pulls git capture into every verb"
 else
   pass
 fi

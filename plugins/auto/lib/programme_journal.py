@@ -99,6 +99,8 @@ KINDS = (
     "pause_raised",
     "pause_lifted",
     "denial_recorded",
+    "code_captured",
+    "code_capture_failed",
 )
 
 _TOKEN_PATTERNS = [

@@ -578,6 +578,10 @@ def _h_collect_result(host, argv):
     return load_lib_module("programme_artifacts").collect_verb(host, argv)
 
 
+def _h_preserve_code(host, argv):
+    return load_lib_module("programme_preserve").preserve_verb(host, argv)
+
+
 def _h_mark_read(host, argv):
     _, opts = host._parse(argv, values=("run", "offset"))
     offset = opts.get("offset")
@@ -829,6 +833,12 @@ _SPECS = (
      "a source outside --root, through a symlink, missing, unreadable, not a regular file or over "
      "8 MB; secret-bearing or non-text content; a digest mismatch; a sealed programme. A refusal "
      "is recorded and retains no bytes. Open to any session; a retained result approves nothing."),
+    ("preserve-code", _h_preserve_code,
+     "--source <worktree> [--extra <rev>]... [--ignored <path>]... [--check] [--run <id>]",
+     "a path that is not the top of a git worktree; secret-bearing history, bytes or names; "
+     "submodules, LFS payloads, alternates, partial clones or shallow history; git lock files or "
+     "a source that changes during capture. A refusal is recorded and the source is never touched. "
+     "--check says whether the receipt still covers the source; nothing is ever deleted."),
     ("mark-read", _h_mark_read, "[--offset <n>] [--run <id>]",
      "an offset past the inbox or behind the current read offset."),
     ("set-now", _h_set_now, "<text> [--item <id>] [--run <id>] | --clear",

@@ -227,11 +227,27 @@ def _place(run_id, staged, ref) -> None:
         _fsync_dir(synced)
 
 
-def publish(run_id, data, media_type, *, provenance="worker_result", basis="retained payload"):
-    """Admits, stages, verifies and publishes bytes; the caller holds ``publisher``."""
+def _bound(admission, data):
+    if isinstance(admission, programme_store.Admission) and admission.subject_digest == _sha(data):
+        return admission
+    return programme_store.Admission("uncertain", None, "derived", "unbound admission",
+                                     ("the admission is not bound to these bytes",))
+
+
+def publish(run_id, data, media_type, *, provenance="worker_result", basis="retained payload",
+            admission=None):
+    """Admits, stages, verifies and publishes bytes; the caller holds ``publisher``.
+
+    A caller that classified the bytes itself (binary or derived content) passes that
+    ``admission``; it counts only when its subject digest is the sha256 of ``data``.
+    """
     if len(data) > MAX_PAYLOAD_BYTES:
         raise ArtifactError(f"payload is over {MAX_PAYLOAD_BYTES} bytes", "oversized")
-    _refuse_admission(admit_bytes(data, media_type, provenance=provenance, basis=basis))
+    if admission is None:
+        admission = admit_bytes(data, media_type, provenance=provenance, basis=basis)
+    else:
+        admission = _bound(admission, data)
+    _refuse_admission(admission)
     ref = programme_store.payload_ref_for(data, media_type)
     final = object_path(run_id, ref.digest)
     if os.path.lexists(final):

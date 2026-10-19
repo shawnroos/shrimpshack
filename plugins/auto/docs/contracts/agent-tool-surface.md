@@ -192,6 +192,17 @@ session.
   A refusal is recorded with its code and retains nothing. It works after `end`
   and refuses once the home is sealed. A retained result or source copy is never
   approval and never changes evidence.
+- **Preserved code**: `preserve-code` (`--source <worktree> [--extra <rev>]...
+  [--ignored <path>]...`) keeps a worker worktree recoverable without it: a
+  self-contained git bundle of HEAD, its reflogs and the index blobs, the index
+  entries (all stages), and the worktree and untracked bytes git does not hold.
+  Git runs with no hooks, filters, fsmonitor, user config or network, and the
+  source is never written. A fresh repository rebuilt from the retained copy
+  alone must match the frozen inventory before the receipt is complete.
+  Secret-bearing history or bytes, submodules, LFS payloads, alternates, partial
+  clones, shallow history, git lock files or a source that changes during capture
+  refuse it. `--check` says whether the receipt still covers the source as it is
+  now; it deletes nothing, and a receipt is never deletion approval.
 - **Working model and sources**: `set-now` records what the PM is doing now;
   `queue` adds a next action (a worker start is action start_worker with
   `--item`) or removes one; `record-tested-build` stores the tested build's

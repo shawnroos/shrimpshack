@@ -215,6 +215,15 @@ def _secret_bearing(journal, text, values) -> bool:
     return any(m.group(3) != journal.REDACTED for m in journal._ASSIGNMENT.finditer(text))
 
 
+def secret_values(secrets_path=None):
+    """The secrets-file values admission matches, or None when the file is unreadable."""
+    return _secret_values(load_lib_module("programme_journal"), secrets_path)
+
+
+def secret_bearing(text, values) -> bool:
+    return _secret_bearing(load_lib_module("programme_journal"), text, values)
+
+
 def admit(subject, *, provenance: str, basis: str, secrets_path=None) -> Admission:
     if provenance not in PROVENANCE_CLASSES:
         raise StoreError(f"provenance must be one of {list(PROVENANCE_CLASSES)}", "invalid_admission")
