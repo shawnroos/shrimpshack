@@ -208,6 +208,25 @@ it "the late receipt keeps the live resource on the operation"
 check "w2:p40" "$(field "$RUN" "ops['${ATTEMPT_U}']['receipt']['facts']['pane']")"
 it "a settled late receipt clears the archive obligation"
 check "[]" "$(unreconciled "$RUN")"
+REV_R="$(revision "$RUN")"
+again() {
+  run_py "$RUN" "$ATTEMPT_U" "$1" <<'PYEOF'
+run, attempt, outcome = args
+op = record(run)["programme"]["operations"][attempt]
+try:
+    out = pr.record_receipt(run, attempt, digest=op["digest"], target=op["receipt"]["facts"] | op["target"],
+                            outcome=outcome, source="repeat")
+    print("unchanged" if out["unchanged"] else "changed")
+except pr.DispatchError as exc:
+    print(exc.code)
+PYEOF
+}
+it "a repeated receipt for a settled operation is answered unchanged"
+check "unchanged" "$(again completed)"
+it "a repeated receipt commits no revision"
+check "$REV_R" "$(revision "$RUN")"
+it "a receipt with a different outcome for a settled operation is a conflict"
+check "conflict" "$(again failed)"
 move_owner "$RUN" sess-b sess-pm >/dev/null
 
 # Scenario 9: corrupt authority holds; a missing committed artifact holds only its item.

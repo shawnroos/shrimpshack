@@ -729,11 +729,14 @@ def _h_reconcile(host, argv):
     sid = driver_session_id()
     if not session_registry.caller_drives(record, sid):
         raise host.ProgrammeError("only the programme's current driving session reconciles its operations")
-    report = programme_recovery.reconcile(run_id, home, agent_rows=agent_rows, session_of=session_of,
-                                          assign_launch=_reconcile_assign, sid=sid)
+    try:
+        report = programme_recovery.reconcile(run_id, home, agent_rows=agent_rows, session_of=session_of,
+                                              assign_launch=_reconcile_assign, sid=sid)
+        unreconciled = programme_recovery.unreconciled_for(run_id)
+    except programme_recovery.DispatchError as exc:
+        raise host.ProgrammeError(str(exc)) from None
     host.refresh_view(run_id, home)
-    host._emit({"ok": True, "run": run_id, "operations": report,
-                "unreconciled": programme_recovery.unreconciled_for(run_id)})
+    host._emit({"ok": True, "run": run_id, "operations": report, "unreconciled": unreconciled})
     return 0
 
 

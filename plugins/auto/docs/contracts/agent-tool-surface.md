@@ -369,8 +369,11 @@ Every write verb:
    record's `driving_session_id`; `agent_session_ids` never count. `claim` is
    the exception: any session may call it, and it names the programme with
    `--run`; `collect-result` is open to any session in the same way;
+   `recover --rebuild-projections` rewrites only exports and the view, from any
+   session;
 2. refuses while the compact flag exists and prints the rules-in-force block,
-   except `rules --ack`, `claim`, `collect-result` and `watcher-beat`;
+   except `rules --ack`, `claim`, `collect-result`, `watcher-beat` and
+   `reconcile-operations` (which settles admitted actions and starts none);
 3. revalidates under the run-record lock, then journals after the write commits.
 
 The approval verbs (accepting the agreement, amending a term, recording an

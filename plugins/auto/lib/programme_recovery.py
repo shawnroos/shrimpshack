@@ -44,6 +44,10 @@ PAUSE_POINTS = ("before_admission", "after_admission", "before_invoke", "after_i
 NOT_VERIFIED = programme_artifacts.NOT_VERIFIED
 
 
+class _Unchanged(Exception):
+    pass
+
+
 class DispatchError(Exception):
     def __init__(self, message, code="dispatch_refused"):
         super().__init__(message)
@@ -109,11 +113,11 @@ def authority_reason(record, op_like) -> str | None:
     return None
 
 
-def artifact_holds(run_id, programme) -> dict:
+def artifact_holds(run_id, programme, item=None) -> dict:
     holds = {}
     results = ((programme or {}).get("retained") or {}).get("results") or {}
     for identity, entry in sorted(results.items()):
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or (item is not None and entry.get("item") != item):
             continue
         ref = entry.get("ref") or {}
         try:
@@ -141,10 +145,6 @@ def _admission_refusal(run_id, programme, op, despite) -> str | None:
     reason = programme_context.unsafe_reason(programme, op["item"], ACTIONS[op["kind"]])
     if reason:
         return reason
-    held = artifact_holds(run_id, programme).get(op["item"])
-    if held:
-        return (f"recovery hold on {op['item']}: {held[0]['reason']}; continuation waits until the "
-                "committed result is readable")
     for prior in unreconciled_admissions(programme):
         if prior["item"] == op["item"] and prior["kind"] == op["kind"] and prior["attempt"] not in despite:
             return (f"{op['kind']} {prior['attempt']} on {op['item']} is {prior['state']} and not reconciled; "
@@ -158,6 +158,12 @@ def admit(host, opts, run_id, home, *, kind, item, target, request, expect_epoch
     if kind not in KINDS:
         raise DispatchError(f"unknown operation kind {kind!r}")
     _pause(run_id, "before_admission")
+    record = run_record_core.read_run_record(home, run_id)
+    # Checked before the commit, outside the record lock: a concurrent collect-result only adds objects.
+    held = artifact_holds(run_id, (record or {}).get("programme") or {}, item).get(item)
+    if held:
+        raise host.ProgrammeError(f"dispatch refused: recovery hold on {item}: {held[0]['reason']}; "
+                                  "continuation waits until the committed result is readable")
     attempt = "op-" + secrets.token_hex(8)
     seen = {}
 
@@ -214,8 +220,9 @@ def settle(run_id, home, attempt, *, outcome, facts, source, sid=None, journal_k
         if not isinstance(op, dict):
             raise DispatchError(f"no admitted operation {attempt!r}", "unadmitted")
         if op.get("state") in SETTLED:
-            seen.update(op=op, unchanged=True)
-            return
+            # write() commits a revision even for a no-op; raising keeps a repeated receipt from
+            # moving the head, which would invalidate an archive candidate.
+            raise _Unchanged(op)
         current = authority_reason(rec, op) is None
         op["state"] = outcome
         op["reason"] = facts.get("reason")
@@ -225,11 +232,9 @@ def settle(run_id, home, attempt, *, outcome, facts, source, sid=None, journal_k
             op["observations"].append({"at": op["receipt"]["at"], "source": source,
                                        "reason": facts.get("reason")})
         seen["assigned"] = bool(assign and current and assign(programme, op))
-        seen.update(op=op, unchanged=False)
+        seen["op"] = op
 
     def compose(_, rec):
-        if seen["unchanged"]:
-            return None
         op = seen["op"]
         late = not op["receipt"]["authority_current"]
         kind = journal_kind
@@ -239,8 +244,11 @@ def settle(run_id, home, attempt, *, outcome, facts, source, sid=None, journal_k
                     item=op["item"], late=late, source=source)
         return programme_journal.entry(kind, sid, body)
 
-    programme_authority.write(home, run_id, mutate, compose)
-    return dict(seen["op"], unchanged=seen["unchanged"], assigned=seen.get("assigned", False))
+    try:
+        programme_authority.write(home, run_id, mutate, compose)
+    except _Unchanged as same:
+        return dict(same.args[0], unchanged=True, assigned=False)
+    return dict(seen["op"], unchanged=False, assigned=seen.get("assigned", False))
 
 
 def _match_target(op, target) -> str | None:
@@ -406,7 +414,7 @@ def _pending(programme, status) -> list:
 
 
 def packet(run_id, revision, record) -> dict:
-    """Pure over one committed revision: the same revision always renders the same bytes."""
+    """Deterministic over one committed revision plus the check that its retained objects are readable."""
     programme = programme_home.normalize_programme((record or {}).get("programme") or {})
     try:
         ctx = programme_context.block(programme)
