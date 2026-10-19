@@ -108,6 +108,28 @@ session.
   a typed prompt that names each source it turns on or off ("no plans" counts).
   A source turned off is never read by the sweep, never watched, and never holds
   the stop.
+- **Project terms**: `propose-agreement --project-term "<area>=<text>"` (or
+  `--reserved-term` for an area Shawn keeps for himself) adds a free-text project
+  term with `--source <evidence>`; a term without `--source` is refused, and so is
+  a second term for an area that has one. Project terms sit beside the fixed terms,
+  never inside them. A term whose area names a protected escalation (production
+  deploys, releases, spend over cap, merge around the gate, refused permissions,
+  risk or cost limits, settled human decisions) is refused unless it is reserved:
+  no project term gives one of these to the PM or a worker. The check reads the
+  area only, and refuses any area that contains a protected word. Before
+  acceptance, `edit-project-term <id> <text>` replaces the text (and with
+  `--source`, `--reserved` or `--unreserved`, the source or reservation) with no
+  history, and journals `project_term_edited`. After acceptance it needs a typed
+  `--prompt` that names the area and the new text, never changes the reservation,
+  keeps the previous value in the term's history list, and journals
+  `project_term_amended`. A project term is text in the run record: it never
+  changes a permission setting or a protocol layer file, and a preferred tool it
+  names is not a permission.
+- **Contract stamp**: `accept-agreement` writes `contract_version` beside the
+  acceptance; no other verb writes it, and an agreement without it keeps the old
+  rule that every product question goes to Shawn. It refuses a prompt that the
+  journal holds before the last `agreement_proposed` or `project_term_edited`
+  line, so Shawn accepts the terms he last saw.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`).
@@ -321,7 +343,8 @@ Every write verb:
    except `rules --ack`, `claim` and `watcher-beat`;
 3. revalidates under the run-record lock, then journals after the write commits.
 
-The approval verbs (accepting the agreement, amending a term, recording an
+The approval verbs (accepting the agreement, amending a term, amending a project
+term after acceptance, recording an
 instruction, withdrawing one, adopting a rule, an autonomy level or a check
 command, answering a handed item,
 reopening a dropped item, and dropping an issue-backed item with an open
@@ -340,8 +363,10 @@ the repo and the check key (for example `verified.lookup`); for `answer-handed`,
 `drop-item` and `reopen-item`, the item id or its key (for example `AI-753`).
 With `--widening`, the text must also contain "widen", "widening" or "widened". A prompt that does not
 name them is refused, and the refusal lists the missing words.
-`accept-agreement`, `record-instruction` and `close-instruction --as withdrawn`
-accept any typed prompt, because the quote is what they record.
+For `edit-project-term` after acceptance, the text must contain the term's area and
+its new text. `accept-agreement`, `record-instruction` and `close-instruction --as withdrawn`
+accept any typed prompt, because the quote is what they record; `accept-agreement`
+also needs the prompt to come after the last proposal or project-term edit.
 
 The action hook guards each driver's pane. In a session that is not the driving
 session of a live, orphaned or expired lease, it denies any Bash command whose

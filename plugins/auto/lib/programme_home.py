@@ -207,6 +207,11 @@ def enabled_sources(programme) -> set:
     return {name for name in value if name in SWEEP_SOURCES}
 
 
+def project_terms(programme) -> list:
+    entries = ((programme or {}).get("agreement") or {}).get("project_terms")
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
 def source_enabled(programme, name) -> bool:
     return name not in SWEEP_SOURCES or name in enabled_sources(programme)
 

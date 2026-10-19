@@ -47,6 +47,8 @@ KINDS = (
     "agreement_proposed",
     "agreement_accepted",
     "term_amended",
+    "project_term_edited",
+    "project_term_amended",
     "instruction_recorded",
     "instruction_closed",
     "rule_proposed",

@@ -33,6 +33,8 @@ vocabulary to learn, not two.
 | the boundary of a programme | **remit** | What a programme covers — by default one herdr space. One live programme per remit. |
 | one piece of work in a programme | **item** | A namespaced entry (`linear:AI-753`) with a state, owner sessions, and **deliverables** backed by PM-checked evidence. |
 | a run's settled operating terms | **agreement** | Remit, stop rule, autonomy, cadence and budget — set at start, amended in plain chat, reloaded after compaction. |
+| what varies per project in an agreement | **project term** | A free-text entry on the agreement, outside its fixed terms: an area, who decides it or which tool to prefer, and the evidence it came from. It can reserve an area for Shawn; it never gives the PM or a worker a protected escalation (production deploys, releases, spend over cap, merge around the gate, refused permissions, risk or cost limits, settled human decisions). |
+| which contract an agreement was accepted under | **contract stamp** | `contract_version`, written only when the agreement is accepted. An agreement without it keeps the old rule that every product question goes to Shawn. |
 | standing rules across runs | **protocol** | Rules mapping a kind of change to its required deliverables, evidence bar and autonomy level; three layers (plugin, personal, project). |
 | the PM's live state of mind | **working model** | Now, queue, watching, waits, decisions for the human, just did, rules in force — shown in a PM-only mod. |
 | a programme's record of actions | **journal** | An append-only log beside the run-record: Shawn's prompts, items joining, evidence checked, terms amended, rules adopted, ownership changes. |

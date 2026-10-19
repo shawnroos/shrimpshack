@@ -424,7 +424,10 @@ def _h_rules(argv):
 
 
 def _h_propose_agreement(argv):
-    _, opts = _parse(argv, values=("run", "why", "until", "seconds"), multi=("term",))
+    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source"),
+                     multi=("term", "project-term", "reserved-term"))
+    host = sys.modules[__name__]
+    parsed, source = programme_terms.parse_specs(host, opts)
 
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
@@ -438,8 +441,9 @@ def _h_propose_agreement(argv):
             value = _check_value(term, value, opts)
             _set_term(term, value, opts, set_by="proposal", why=opts.get("why"))
             proposed[key] = value
+        added = programme_terms.add(host, programme, parsed, source)
         programme["agreement"]["proposed_at"] = _now()
-        return {"terms": proposed, "why": opts.get("why")}
+        return {"terms": proposed, "why": opts.get("why"), **added}
 
     return _write(opts, change, "agreement_proposed")
 
@@ -452,13 +456,15 @@ def _h_accept_agreement(argv):
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
             raise ProgrammeError("the agreement is already accepted")
+        programme_terms.check_accept_order(rec["run_id"], prompt["prompt_id"])
         programme["agreement"]["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
                                               "quote": prompt["quote"]}
+        version = programme_terms.stamp(programme)
         decision = programme_decisions.shawn_decision(
             programme, kind=programme_decisions.AGREEMENT_KIND,
             item=programme_decisions.PROGRAMME_TARGET, prompt=prompt)
         return {"terms": {k: t.get("value") for k, t in programme["agreement"]["terms"].items()},
-                "decision_id": decision["id"]}
+                "decision_id": decision["id"], "contract_version": version}
 
     return _write(opts, change, "agreement_accepted", prompt_id=opts["prompt"], needs_prompt=True)
 
@@ -683,13 +689,18 @@ _VERBS = {
     ),
     "propose-agreement": _Verb(
         _h_propose_agreement,
-        "[--run <id>] [--term <key>=<value>]... [--why <text>] [--until <iso>] [--seconds <n>]",
-        rejects="an accepted agreement; a value outside the term's options.",
+        "[--run <id>] [--term <key>=<value>]... [--project-term <area>=<text>]... "
+        "[--reserved-term <area>=<text>]... [--source <evidence>] [--why <text>] [--until <iso>] "
+        "[--seconds <n>]",
+        rejects="an accepted agreement; a value outside the term's options; a project term without "
+        "--source, without <area>=<text>, for an area that already has one, or for a protected area "
+        "not reserved for Shawn.",
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,
         "--prompt <id> [--run <id>]",
-        rejects="no --prompt; a prompt that is unknown, not typed, or not from the driving session.",
+        rejects="no --prompt; a prompt that is unknown, not typed, not from the driving session, or "
+        "older than the last proposal or project-term edit.",
     ),
     "amend-term": _Verb(
         _h_amend_term,
@@ -742,6 +753,9 @@ _VERBS.update(programme_record.build_verbs(sys.modules[__name__]))
 
 programme_decisions = load_lib_module("programme_decisions")
 _VERBS.update(programme_decisions.build_verbs(sys.modules[__name__]))
+
+programme_terms = load_lib_module("programme_terms")
+_VERBS.update(programme_terms.build_verbs(sys.modules[__name__]))
 
 programme_evidence = load_lib_module("programme_evidence")
 _VERBS.update(programme_evidence.build_verbs(sys.modules[__name__]))
@@ -810,6 +824,7 @@ _ERRORS = (
     ProgrammeError,
     programme_record.RecordError,
     programme_decisions.DecisionError,
+    programme_terms.TermsError,
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,

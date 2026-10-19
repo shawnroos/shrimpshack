@@ -232,6 +232,10 @@ check "[\"agreement\", \"shawn\", \"programme\", \"${P_ACCEPT}\"]" \
 it "the agreement_accepted journal entry carries the decision id"
 has "$(field 'prog["decisions"][-1]["id"]' | tr -d '"')" "$(journal_last agreement_accepted)"
 
+it "accept-agreement stamps the contract version"
+check 1 "$(field 'prog["agreement"]["contract_version"]')"
+edit 'rec["programme"]["agreement"].pop("contract_version")'
+
 it "on an unstamped programme record-decision on a product question refuses"
 BEFORE="$(decision_count)"
 prog record-decision linear:AI-2 --kind product_call --silent --why "obvious"
