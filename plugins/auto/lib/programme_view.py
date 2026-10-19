@@ -23,7 +23,7 @@ VIEW_FORMAT = 1
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
-HOOK_KINDS = ("permission_denied", "permission_tool_ran", "blocked_settings_write")
+HOOK_KINDS = ("blocked_settings_write",)
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
@@ -102,7 +102,6 @@ def _permission_block(block):
     if not block:
         return None
     return {"cause": block.get("cause"), "proposals": block.get("proposals") or [],
-            "unconfirmed": len(block.get("unconfirmed") or []), "reports": block.get("reports"),
             "detail": programme_sanitize.wrap(block["detail"]) if block.get("detail") else None}
 
 
@@ -413,8 +412,6 @@ def _item_lines(item) -> list:
     block = item.get("permission_block")
     if block:
         bits = [f"permission: {block['cause']}"] + ([block["detail"]] if block.get("detail") else [])
-        if block.get("unconfirmed"):
-            bits.append(f"{block['unconfirmed']} unconfirmed denial rows ignored")
         out.append(_row("    " + " · ".join(bits), "warn"))
     for d in item["deliverables"]:
         ref = f" {d['ref']}" if d.get("ref") else ""

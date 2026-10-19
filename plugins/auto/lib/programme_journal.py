@@ -82,13 +82,10 @@ KINDS = (
     "handed_over",
     "programme_ended",
     "request_refused",
-    "permission_denied",
-    "permission_tool_ran",
     "permission_proposed",
     "permission_answered",
     "permission_verified",
     "permission_settled",
-    "permission_block_reported",
     "blocked_settings_write",
 )
 

@@ -701,7 +701,8 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | deliverable entry | `{result: confirmed\|refuted\|unknown, ref, checked_at, confirmed_at, fields, misses, note, unknown_streak, validate?: {at, result, note}}`. `fields` per checker: merged `{state, merge_commit, head, merged_at, merged_by, url, …}`; recorded `{issue, state, state_type, read_by, root_cause_comment, bot_root_cause_comments}`; flagged `{flag, project, environments: {production\|stage\|development: {on, served, others, rules, targets, contextTargets, bar}}}`; verified `{id, repo, repo_path, merge_commit, build_sha, lookup}`; released `{package, version, tested_shasum, registry_shasum, registry_version, repo_path, waiver, experiment, experiment_project, experiment_id}`. A released ref names an eval as `bt:<project>/<experiment>` |
 | `done_at` | `<iso>` when evidence first became complete; cleared when a check stops confirming |
 | `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, permission?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. `propose-permission` writes `{who: shawn, reporter: shawn, watcher: null, permission: <perm-id>}`; `settle-permissions` clears it when that proposal resolves. `set-waiting` replaces the whole object, so it drops `permission` |
-| `permission_block` | `{cause, detail, at, proposals, unconfirmed, reports?}`: the item's latest permission explanation, written by the permission verbs |
+| `permission_block` | `{cause, detail, at, proposals}`: the item's latest permission explanation, written by the permission verbs |
+| `permission_scan` | `{<session id>: byte offset}`: how far `propose-permission` has read each session's transcript for this item |
 | `handed` | `{at, question, answered: null \| {at, choice: ship\|decline, prompt_id}}` |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
@@ -732,9 +733,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
 `taken_over`, `handed_over`, `programme_ended`, `request_refused`,
-`permission_denied`, `permission_tool_ran`, `permission_proposed`,
-`permission_answered`, `permission_verified`, `permission_settled`,
-`permission_block_reported`, `blocked_settings_write`.
+`permission_proposed`, `permission_answered`, `permission_verified`,
+`permission_settled`, `blocked_settings_write`.
 
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`;
@@ -774,14 +774,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
   PR head. No verb writes it yet.
 - Permission lines (programme-permission-proposals.md gives the full rules):
-  - `permission_denied` and `permission_tool_ran` are written by the
-    `on-permission-event` hook, never by a verb: `{event, tool, tool_use_id,
-    item_ids, transcript_path, transcript_bytes, command}`, and for a denial also
-    `reason` and `layer`. `command` is redacted and capped at 2000 characters.
-    `permission_tool_ran` is written for any command that runs `gh`, only while a
-    proposal is not resolved. A row counts only after the session's own
-    transcript confirms it.
-  - `permission_proposed {items, denials, proposals, notify}`. `notify` maps each
+  - No journal line records a refusal. `propose-permission` reads refusals from
+    the item sessions' transcripts.
+  - `permission_proposed {items, proposals, notify}`. `notify` maps each
     proposal id the call tried to notify to the notifier's exit status.
   - `permission_answered {proposal, choice, state, from, deferred?, noop?}` and
     `permission_verified`, the same plus `{verify, reservation, retry_item,
@@ -792,9 +787,6 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   - `blocked_settings_write {tool, path, item_ids, command?}`, written by the
     PreToolUse hook when it refuses a call that names a proposal's
     `.claude/settings.local.json`.
-  - `permission_block_reported {item, operations, refusal, command_hash}` goes to
-    `<home>/blocks.jsonl`, not to the journal. `report-block` writes it from any
-    session; it never holds the command text.
 
 `<home>/claims.jsonl` is the worker inbox. Each line has the journal line shape with
 kind `claim`, `session_id` = the worker, payload `{item, deliverable, ref}`. Inbox

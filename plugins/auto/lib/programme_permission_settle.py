@@ -23,8 +23,9 @@ programme_journal = load_lib_module("programme_journal")
 programme_record = load_lib_module("programme_record")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_sources = load_lib_module("programme_sources")
-programme_permission = load_lib_module("programme_permission")
 rules = load_lib_module("programme_permission_rules")
+state = load_lib_module("programme_permission_state")
+transcript = load_lib_module("permission_transcript")
 session_registry = load_lib_module("session_registry")
 
 RecordError = programme_record.RecordError
@@ -32,16 +33,7 @@ USER_SETTINGS_ENV = "CLAUDE_AUTO_TEST_USER_SETTINGS"
 SETTINGS_CAP = 1024 * 1024
 WORKTREE_FILE = os.path.join(".claude", "settings.json")
 WORST = ("covered", "not_covered", "blocked_elsewhere")
-OUTCOME_STATE = {"covered": "retrying", "not_covered": "open", "blocked_elsewhere": "ineffective"}
-REASON_LAYERS = {"mode": "mode", "subcommandResults": "deny rule", "classifier": "classifier"}
-NEXT_ACTION = {
-    "deny rule": "remove or narrow the deny rule that matches the command",
-    "mode": "the session's permission mode refuses commands no allow rule covers; check managed settings "
-            "or a --settings flag on that session",
-    "classifier": "the auto-mode classifier refused it; an allow rule in a file it reads would skip it",
-}
-RETRYING = programme_permission.RETRYING
-RESOLVED = programme_permission.RESOLVED
+OUTCOME_STATE = {"covered": state.RETRYING, "not_covered": state.OPEN, "blocked_elsewhere": state.INEFFECTIVE}
 
 
 def user_settings_path() -> str:
@@ -81,13 +73,6 @@ def read_settings(path, label) -> dict:
 
 def _registry(sid) -> dict:
     return session_registry.lookup(sid, include_headless=True) or {} if sid else {}
-
-
-def _transcript_path(sid):
-    path = _registry(sid).get("transcript_path")
-    if isinstance(path, str) and os.path.basename(path) == f"{sid}.jsonl":
-        return path
-    return None
 
 
 def _commands(proposal) -> list:
@@ -166,11 +151,10 @@ def _call_for(proposal, key):
 
 def live_item(record, proposal_id):
     programme = programme_home.normalize_programme(record.get("programme") or {})
-    proposal = next((p for p in programme.get("permission_proposals") or []
-                     if isinstance(p, dict) and p.get("id") == proposal_id), None)
+    proposal = state.find(programme, proposal_id)
     for key in (proposal or {}).get("items") or []:
         owner = (programme["items"].get(key) or {}).get("owner") or {}
-        if not (owner.get("session_id") and _transcript_path(owner["session_id"]) and _call_for(proposal, key)):
+        if not (owner.get("session_id") and transcript.path_for(owner["session_id"]) and _call_for(proposal, key)):
             continue
         if programme_sources.check_target(owner, record)["ok"]:
             return key
@@ -181,12 +165,9 @@ def _reserve(programme, proposal, key):
     item = programme["items"].get(key)
     call = _call_for(proposal, key) if item and key in (proposal.get("items") or []) else None
     sid = ((item or {}).get("owner") or {}).get("session_id")
-    path = _transcript_path(sid)
-    if call is None or path is None:
-        return None
-    try:
-        offset = os.path.getsize(path)
-    except OSError:
+    path = transcript.path_for(sid)
+    offset = transcript.size(path) if path else None
+    if call is None or offset is None:
         return None
     return {"item": key, "session_id": sid, "operation": call["op"], "target": call["target"],
             "normalized": call["normalized"], "at": run_record_core.now_iso(), "transcript_offset": offset}
@@ -197,59 +178,22 @@ def retry_text(proposal_id, reservation) -> str:
 
 
 def apply_answer(programme, proposal, choice, prompt, live) -> dict:
-    state = proposal.get("state")
-    if state == RETRYING:
-        return dict(programme_permission._record_answer(proposal, choice, prompt, RETRYING), noop=True)
-    if state == RESOLVED:
-        raise RecordError(f"{proposal['id']} is resolved; there is nothing to apply")
     check = verify(proposal)
     target = OUTCOME_STATE[check["outcome"]]
-    reservation = _reserve(programme, proposal, live) if target == RETRYING and live else None
-    if target == RETRYING and reservation is None:
-        target = "retry_unobserved"
+    reservation = _reserve(programme, proposal, live) if target == state.RETRYING and live else None
+    if target == state.RETRYING and reservation is None:
+        target = state.RETRY_UNOBSERVED
         check["notes"].append("covered, but no linked item's owner pane has a live agent, so nothing was "
                               f"retried; type applied {proposal['id']} again once a worker is running")
-    out = programme_permission._record_answer(proposal, choice, prompt, target)
+    out = state.record_answer(proposal, choice, prompt, target)
     proposal.update(explanation=explain(check), reservation=reservation, pending_answer=None,
                     verified={"at": run_record_core.now_iso(), "outcome": check["outcome"], "files": check["files"]})
     if reservation:
         proposal["attempts"] = proposal.get("attempts", 0) + 1
-    for key in proposal.get("items") or []:
-        if key in programme["items"]:
-            programme_permission._explain(programme["items"][key], f"verify_{check['outcome']}",
-                                          proposal["explanation"], proposal=proposal["id"])
+    state.note_items(programme, proposal, f"verify_{check['outcome']}", proposal["explanation"])
     out.update(verify=check, reservation=reservation, retry_item=reservation and reservation["item"],
                retry_text=reservation and retry_text(proposal["id"], reservation))
     return out
-
-
-def defer_answer(proposal, choice, prompt) -> dict:
-    out = programme_permission._record_answer(proposal, choice, prompt, RETRYING)
-    proposal["pending_answer"] = {"choice": choice, "prompt_id": prompt["prompt_id"], "at": run_record_core.now_iso()}
-    return dict(out, deferred=True)
-
-
-def _tool_uses(path, offset=0) -> list:
-    try:
-        rows = programme_permission._transcript_rows(path, offset)
-    except OSError:
-        return []
-    uses, order = {}, []
-    for row in rows:
-        if row.get("type") == "assistant":
-            for block in programme_permission._blocks(row, "tool_use"):
-                command = (block.get("input") or {}).get("command")
-                if block.get("name") == "Bash" and isinstance(command, str) and isinstance(block.get("id"), str):
-                    uses[block["id"]] = {"tool_use_id": block["id"], "command": command, "ruling": None,
-                                         "reason_type": None, "denial_kind": None}
-                    order.append(block["id"])
-        elif row.get("type") == "user":
-            ruling = programme_permission.runtime_ruling(row)
-            for block in programme_permission._blocks(row, "tool_result"):
-                use = uses.get(block.get("tool_use_id"))
-                if use is not None and ruling["ruling"]:
-                    use.update(ruling)
-    return [uses[i] for i in order]
 
 
 def _calls(command) -> list:
@@ -261,11 +205,11 @@ def _hits(command, reservation) -> bool:
                for c in _calls(command))
 
 
-def _diagnose(use, hook_layers) -> str:
-    layer = hook_layers.get(use["tool_use_id"]) or REASON_LAYERS.get(use["reason_type"], "unknown")
+def _diagnose(use) -> str:
+    layer = transcript.layer(use)
     text = (f"the retry was refused: {layer} (reasonType {use['reason_type'] or 'none'}, "
             f"toolDenialKind {use['denial_kind'] or 'none'})")
-    return text + (f"; next: {NEXT_ACTION[layer]}" if layer in NEXT_ACTION else "")
+    return text + (f"; next: {transcript.NEXT_ACTION[layer]}" if layer in transcript.NEXT_ACTION else "")
 
 
 def _pane_status(snap, pane):
@@ -289,20 +233,20 @@ def _sent_after(journal, item, at) -> bool:
     return False
 
 
-def _observe_retry(programme, proposal, journal, snap, hook_layers) -> dict:
+def _observe_retry(programme, proposal, journal, snap) -> dict:
     res = proposal["reservation"]
     base = {"proposal": proposal["id"], "reservation_at": res["at"]}
-    path = _transcript_path(res["session_id"])
+    path = transcript.path_for(res["session_id"])
     if path is None:
         return dict(base, pending=f"no registry transcript for session {res['session_id']}")
-    matches = [u for u in _tool_uses(path, res.get("transcript_offset") or 0) if _hits(u["command"], res)]
+    matches = [u for u in transcript.tool_uses(path, res.get("transcript_offset") or 0) if _hits(u["command"], res)]
     decided = next((u for u in matches if u["ruling"]), None)
     if decided and decided["ruling"] == "accept":
-        return dict(base, state=RESOLVED, confirmed=True, tool_use_id=decided["tool_use_id"],
+        return dict(base, state=state.RESOLVED, confirmed=True, tool_use_id=decided["tool_use_id"],
                     detail=f"the retry ran: {res['normalized']}")
     if decided:
-        return dict(base, state="ineffective", tool_use_id=decided["tool_use_id"],
-                    detail=_diagnose(decided, hook_layers))
+        return dict(base, state=state.INEFFECTIVE, tool_use_id=decided["tool_use_id"],
+                    detail=_diagnose(decided))
     unconfirmed = len(matches)
     if snap is None:
         return dict(base, pending="herdr is unavailable, so the owner pane cannot be seen", unconfirmed=unconfirmed)
@@ -312,7 +256,7 @@ def _observe_retry(programme, proposal, journal, snap, hook_layers) -> dict:
     pane = ((programme["items"].get(res["item"]) or {}).get("owner") or {}).get("pane")
     status = _pane_status(snap, pane)
     if status in ("idle", "gone"):
-        return dict(base, state="retry_unobserved", unconfirmed=unconfirmed,
+        return dict(base, state=state.RETRY_UNOBSERVED, unconfirmed=unconfirmed,
                     detail=f"the retry was sent, the owner pane is {status}, and its transcript shows no run; "
                            f"type applied {proposal['id']} to arm one more attempt")
     return dict(base, pending=f"owner pane {pane} is {status}", unconfirmed=unconfirmed)
@@ -324,8 +268,8 @@ def _observe_open(proposal) -> dict | None:
     for entry in proposal.get("evidence") or []:
         last[entry.get("session_id")] = entry.get("tool_use_id")
     for sid, tool_use_id in last.items():
-        path = _transcript_path(sid)
-        uses = _tool_uses(path) if path else []
+        path = transcript.path_for(sid)
+        uses = transcript.tool_uses(path) if path else []
         start = next((i for i in range(len(uses) - 1, -1, -1) if uses[i]["tool_use_id"] == tool_use_id), None)
         if start is None:
             continue
@@ -340,7 +284,7 @@ def _observe_open(proposal) -> dict | None:
     detail = "resolved without your confirmation: the blocked reads ran in an affected session"
     detail += (f"; covered by {covering['rule']} in {covering['source']}" if covering
                else "; no covering rule in the files read")
-    return {"proposal": proposal["id"], "state": RESOLVED, "confirmed": False, "covering": covering,
+    return {"proposal": proposal["id"], "state": state.RESOLVED, "confirmed": False, "covering": covering,
             "detail": f"{detail}. {rules.UNSEEN}", "reservation_at": None}
 
 
@@ -354,49 +298,39 @@ def _unblock(programme, proposal) -> None:
 
 def _apply(programme, proposal, seen) -> dict:
     before = proposal["state"]
-    proposal.update(state=seen["state"], changed_at=run_record_core.now_iso(), explanation=seen["detail"])
-    proposal["outcome"] = {k: seen.get(k) for k in ("state", "tool_use_id", "detail")}
-    proposal["outcome"]["at"] = run_record_core.now_iso()
-    if seen["state"] == RESOLVED:
+    state.move(proposal, state.step(proposal, seen["state"]))
+    proposal.update(explanation=seen["detail"],
+                    outcome={**{k: seen.get(k) for k in ("state", "tool_use_id", "detail")},
+                             "at": run_record_core.now_iso()})
+    if seen["state"] == state.RESOLVED:
         proposal.update(confirmed=seen["confirmed"], covering=seen.get("covering"))
         _unblock(programme, proposal)
-    for key in proposal.get("items") or []:
-        if key in programme["items"]:
-            programme_permission._explain(programme["items"][key], seen["state"], seen["detail"],
-                                          proposal=proposal["id"])
+    state.note_items(programme, proposal, seen["state"], seen["detail"])
     out = {"proposal": proposal["id"], "from": before, "state": seen["state"], "detail": seen["detail"],
            "confirmed": proposal.get("confirmed"), "tool_use_id": seen.get("tool_use_id")}
-    pending = proposal.get("pending_answer")
+    pending, proposal["pending_answer"] = proposal.get("pending_answer"), None
     if pending:
-        proposal["pending_answer"] = None
-        if seen["state"] == RESOLVED:
+        after = state.TRANSITIONS.get((proposal["state"], pending["choice"]))
+        if after:
+            state.move(proposal, after)
+            out.update(state=after, deferred_answer={"choice": pending["choice"], "applied": True})
+        else:
             out["deferred_answer"] = {"choice": pending["choice"], "applied": False,
                                       "why": "the retry ran, so the outcome stands"}
-        else:
-            proposal.update(state=programme_permission.DECLINED_STATE[pending["choice"]],
-                            changed_at=run_record_core.now_iso())
-            out.update(state=proposal["state"],
-                       deferred_answer={"choice": pending["choice"], "applied": True})
     return out
-
-
-def _hook_layers(journal) -> dict:
-    return {(r.get("payload") or {}).get("tool_use_id"): programme_sanitize.token((r.get("payload") or {}).get("layer"))
-            for r in journal if r.get("kind") == "permission_denied"}
 
 
 def observe(run_id, record) -> list:
     programme = programme_home.normalize_programme(record.get("programme") or {})
-    proposals = [p for p in programme.get("permission_proposals") or [] if isinstance(p, dict)]
-    retrying = [p for p in proposals if p.get("state") == RETRYING and isinstance(p.get("reservation"), dict)]
-    if not retrying and not any(p.get("state") == "open" for p in proposals):
+    proposals = state.proposals(programme)
+    retrying = [p for p in proposals if p.get("state") == state.RETRYING and isinstance(p.get("reservation"), dict)]
+    opened = [p for p in proposals if p.get("state") == state.OPEN]
+    if not retrying and not opened:
         return []
-    journal = programme_journal.read(run_id)
+    journal = programme_journal.read(run_id) if retrying else []
     snap = programme_sources.read_herdr()[0] if retrying else None
-    layers = _hook_layers(journal)
-    seen = [_observe_retry(programme, p, journal, snap, layers) for p in retrying]
-    seen += [s for s in (_observe_open(p) for p in proposals if p.get("state") == "open") if s]
-    return seen
+    seen = [_observe_retry(programme, p, journal, snap) for p in retrying]
+    return seen + [s for s in map(_observe_open, opened) if s]
 
 
 def _h_settle_permissions(host, argv):
@@ -415,13 +349,11 @@ def _h_settle_permissions(host, argv):
     def change(programme, prompt, rec):
         settled = []
         for s in decided:
-            proposal = next((p for p in programme.get("permission_proposals") or []
-                             if isinstance(p, dict) and p.get("id") == s["proposal"]), None)
-            if proposal is None:
+            proposal = state.find(programme, s["proposal"])
+            if proposal is None or (proposal["state"], s["state"]) not in state.TRANSITIONS:
                 continue
-            res_at = (proposal.get("reservation") or {}).get("at") if proposal.get("state") == RETRYING else None
-            expected = RETRYING if s["reservation_at"] else "open"
-            if proposal.get("state") != expected or res_at != s["reservation_at"]:
+            res_at = (proposal.get("reservation") or {}).get("at") if proposal["state"] == state.RETRYING else None
+            if res_at != s["reservation_at"]:
                 continue
             settled.append(_apply(programme, proposal, s))
         return {"settled": settled, "pending": pending}

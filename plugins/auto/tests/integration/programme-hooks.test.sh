@@ -113,13 +113,6 @@ rm -f "${WORK}/python-ran"
 ( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"s0","tool_name":"Bash","tool_input":{"command":"eval herdr agent prompt w2:p31 go"}}' )
 if [ ! -e "${WORK}/python-ran" ]; then pass; else fail "python ran"; fi
 
-it "a machine with no leases: the permission shim runs no Python for a denial or a gh run"
-rm -f "${WORK}/python-ran"
-OUT="$( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-permission-event.sh" <<< '{"session_id":"s0","hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"gh pr merge 1"},"reason":"[Merge Without Review] no"}'
-        CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-permission-event.sh" <<< '{"session_id":"s0","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr checks 1"}}' )"
-RC=$?
-if [ ! -e "${WORK}/python-ran" ] && [ "${RC}:${OUT}" = "0:" ]; then pass; else fail "python ran or rc/out ${RC}:${OUT}"; fi
-
 it "under the test harness with no data dir, SessionStart skips the registry"
 rm -f "${WORK}/python-ran"
 ( cd "$NOREPO" && unset CLAUDE_AUTO_DATA_DIR && CLAUDE_AUTO_TEST_HARNESS=1 HERDR_PANE_ID="w2:p1" \
@@ -490,33 +483,6 @@ session_start_tp() {
     bash "${HOOKS}/on-session-start.sh" <<< "{\"session_id\":\"$sid\",\"source\":\"startup\",\"cwd\":\"$NOREPO\",\"transcript_path\":\"$tp\"}" ) >/dev/null
 }
 
-perm_payload() {
-  "$PY" - "$@" <<'EOF'
-import json, sys
-event, sid, tool, tool_input = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
-extra = json.loads(sys.argv[5]) if len(sys.argv) > 5 else {}
-payload = {"session_id": sid, "transcript_path": "/forged/by/payload.jsonl", "cwd": "/srv/repo",
-           "permission_mode": "auto", "hook_event_name": event, "tool_name": tool,
-           "tool_input": tool_input, "tool_use_id": "toolu_01ABC"}
-payload.update(extra)
-print(json.dumps(payload))
-EOF
-}
-
-PERM_OUTS=""
-perm_hook() {
-  local out
-  out="$( cd "$NOREPO" && bash "${HOOKS}/on-permission-event.sh" <<< "$1" )"
-  PERM_OUTS="${PERM_OUTS}${out}"
-}
-
-bash_denial() { perm_payload PermissionDenied "$1" Bash "$(printf '%s' "$2" | "$PY" -c 'import json,sys; print(json.dumps({"command": sys.stdin.read(), "description": "d"}))')" "{\"reason\": $(printf '%s' "$3" | "$PY" -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}"; }
-bash_ran() {
-  local extra="${4:-}"
-  [ -n "$extra" ] || extra='{}'
-  perm_payload "$1" "$2" Bash "$(printf '%s' "$3" | "$PY" -c 'import json,sys; print(json.dumps({"command": sys.stdin.read()}))')" "$extra"
-}
-
 last_row() {
   run_py "$1" <<'EOF'
 r = pj.read(args[0])[-1]
@@ -580,122 +546,6 @@ EOF
 )"
 check "['linear:AI-1', 'linear:AI-2', 'linear:AI-3'] ['pp1']" "$OUT"
 
-it "a classifier denial from an item owner writes one permission_denied row with layer classifier and the item id"
-BEFORE="$(journal_kinds "$RUN5" | wc -w | tr -d ' ')"
-perm_hook "$(bash_denial sess-own 'gh pr merge 12 --squash' '[Merge Without Review] merging without review is not allowed')"
-AFTER="$(journal_kinds "$RUN5" | wc -w | tr -d ' ')"
-ROW="$(last_row "$RUN5")"
-check "1 permission_denied classifier ['linear:AI-1'] Bash gh pr merge 12 --squash toolu_01ABC PermissionDenied" \
-  "$((AFTER - BEFORE)) $(row_field "$ROW" kind layer item_ids tool command tool_use_id event)"
-
-it "the row's transcript path comes from the registry, with its byte length, never from the payload"
-check "${TRANSCRIPTS}/sess-own.jsonl 10" "$(row_field "$ROW" transcript_path transcript_bytes)"
-if grep -q "/forged/by/payload" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN5}/journal.jsonl"; then
-  it "the payload's transcript path never reaches the journal"; fail "payload transcript path journaled"
-fi
-
-it "the reason is cleaned and capped at 300"
-perm_hook "$(bash_denial sess-own 'gh pr merge 13' "[Merge Without Review] $(printf 'x%.0s' $(seq 1 400))")"
-OUT="$(row_field "$(last_row "$RUN5")" reason | "$PY" -c 'import sys; print(len(sys.stdin.read().rstrip("\n")))')"
-check "300" "$OUT"
-
-it "no-verdict, unavailable and other reasons map to their layers"
-OUT=""
-for reason in "Auto mode could not evaluate this action" "Classifier unavailable" "something else denied this"; do
-  perm_hook "$(bash_denial sess-pm5 'gh pr checks 3' "$reason")"
-  OUT="$OUT $(row_field "$(last_row "$RUN5")" layer)"
-done
-check " classifier_no_verdict classifier_unavailable unknown" "$OUT"
-
-it "the driving session's denial carries no item ids"
-check "[] sess-pm5" "$(row_field "$(last_row "$RUN5")" item_ids) $(last_row "$RUN5" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')"
-
-it "a listed session of an open item is journaled"
-perm_hook "$(bash_denial sess-listed 'gh run view 9' '[Something] no')"
-check "permission_denied ['linear:AI-3']" "$(row_field "$(last_row "$RUN5")" kind item_ids)"
-
-it "a session that owns no item and does not drive writes nothing"
-BEFORE="$(journal_kinds "$RUN5")"
-perm_hook "$(bash_denial sess-idle 'gh pr merge 1' '[Merge Without Review] no')"
-check "$BEFORE" "$(journal_kinds "$RUN5")"
-
-it "the owner of a done item writes nothing"
-perm_hook "$(bash_denial sess-done 'gh pr merge 1' '[Merge Without Review] no')"
-check "$BEFORE" "$(journal_kinds "$RUN5")"
-
-it "a command with a ghp_ token or TOKEN=value is stored redacted"
-perm_hook "$(bash_denial sess-own "gh api -H 'Authorization: token ghp_abcdefghijklmnopqrstuvwxyz0123456789' /user" '[X] no')"
-perm_hook "$(bash_denial sess-own 'TOKEN=abc123xyz gh pr merge 2' '[X] no')"
-J="${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN5}/journal.jsonl"
-if grep -q 'ghp_abcdefghij\|abc123xyz' "$J"; then fail "token in journal"; else
-  check "TOKEN=[redacted] gh pr merge 2" "$(row_field "$(last_row "$RUN5")" command)"; fi
-
-it "a Write denial stores no file content and an MCP denial stores no arguments"
-perm_hook "$(perm_payload PermissionDenied sess-own Write '{"file_path": "/srv/repo/x.txt", "content": "WRITE-BODY-77"}' '{"reason": "[X] no"}')"
-W="$(last_row "$RUN5")"
-perm_hook "$(perm_payload PermissionDenied sess-own mcp__linear__save_issue '{"body": "MCP-ARG-88"}' '{"reason": "[X] no"}')"
-M="$(last_row "$RUN5")"
-if grep -q 'WRITE-BODY-77\|MCP-ARG-88\|/srv/repo/x.txt' "$J"; then fail "tool input journaled"; else
-  check "permission_denied Write None permission_denied mcp__linear__save_issue None" \
-    "$(row_field "$W" kind tool command) $(row_field "$M" kind tool command)"; fi
-
-it "malformed JSON on stdin: exit 0, no row, empty output"
-BEFORE="$(journal_kinds "$RUN5")"
-OUT="$( cd "$NOREPO" && bash "${HOOKS}/on-permission-event.sh" <<< '{"session_id":"sess-own","hook_event_name":"PermissionDenied", gh' )"
-RC=$?
-check "0: $BEFORE" "${RC}:${OUT} $(journal_kinds "$RUN5")"
-
-it "with an unresolved proposal, a failed gh pr checks from the owner writes permission_tool_ran"
-perm_hook "$(bash_ran PostToolUseFailure sess-own 'gh pr checks 12' '{"error": "Exit code 8 SECRET-OUT-1 ghp_zyxwvutsrqponmlkjihgfedcba9876543210", "is_interrupt": false}')"
-ROW="$(last_row "$RUN5")"
-check "permission_tool_ran gh pr checks 12 toolu_01ABC PostToolUseFailure ${TRANSCRIPTS}/sess-own.jsonl ['linear:AI-1']" \
-  "$(row_field "$ROW" kind command tool_use_id event transcript_path item_ids)"
-
-it "a successful gh run stores no part of tool_response"
-perm_hook "$(bash_ran PostToolUse sess-own '/usr/local/bin/gh pr view 12' '{"tool_response": {"stdout": "RESP-OUT-2 ghp_zyxwvutsrqponmlkjihgfedcba9876543210", "stderr": ""}}')"
-if grep -q 'SECRET-OUT-1\|RESP-OUT-2\|ghp_zyx' "$J"; then fail "command output journaled"; else
-  check "permission_tool_ran PostToolUse" "$(row_field "$(last_row "$RUN5")" kind event)"; fi
-
-it "a gh run from a session outside scope writes nothing"
-BEFORE="$(journal_kinds "$RUN5")"
-perm_hook "$(bash_ran PostToolUse sess-idle 'gh pr checks 12')"
-perm_hook "$(bash_ran PostToolUse sess-done 'gh pr checks 12')"
-check "$BEFORE" "$(journal_kinds "$RUN5")"
-
-it "a Bash run without gh writes nothing even when stdin mentions gh elsewhere"
-perm_hook "$(bash_ran PostToolUse sess-own 'echo high; ls ./gh/dir' '{"cwd": "/tmp/ghost"}')"
-check "$BEFORE" "$(journal_kinds "$RUN5")"
-
-it "a PostToolUse for ls writes nothing and starts no Python"
-rm -f "${WORK}/python-ran"
-OUT="$( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-permission-event.sh" <<< "$(bash_ran PostToolUse sess-own 'ls -la' "{\"cwd\": \"$NOREPO\"}")" )"
-if [ ! -e "${WORK}/python-ran" ] && [ -z "$OUT" ]; then pass; else fail "python ran or out [$OUT]"; fi
-
-it "with a lease, a denial reaches Python"
-rm -f "${WORK}/python-ran"
-( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-permission-event.sh" <<< "$(bash_denial sess-own 'ls' '[X] no')" )
-if [ -e "${WORK}/python-ran" ]; then pass; else fail "python did not run"; fi
-
-it "with every proposal resolved, or none at all, a gh run writes nothing"
-set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"resolved\", \"destination\": \"${DEST}\"}]"
-perm_hook "$(bash_ran PostToolUseFailure sess-own 'gh pr checks 12')"
-A="$(journal_kinds "$RUN5")"
-run_py "$RUN5" <<'EOF' >/dev/null
-core = load_lib_module("run_record_core")
-def mutate(rec):
-    rec["programme"].pop("permission_proposals", None)
-core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
-EOF
-perm_hook "$(bash_ran PostToolUseFailure sess-own 'gh pr checks 12')"
-check "$BEFORE $BEFORE" "$A $(journal_kinds "$RUN5")"
-
-it "a denial is journaled with no proposals at all"
-perm_hook "$(bash_denial sess-own 'gh pr merge 4' '[X] no')"
-check "permission_denied" "$(row_field "$(last_row "$RUN5")" kind)"
-
-it "hook output is always empty and never says retry"
-case "$PERM_OUTS" in *retry*) fail "retry in output" ;; *) check "" "$PERM_OUTS" ;; esac
-
 file_call() {
   local dir="$1" sid="$2" tool="$3" input="$4"
   local payload
@@ -730,10 +580,19 @@ OUT="$(file_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${SETTINGS}\", \"old_s
 case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"open\", \"destination\": \"${DEST}\"}]"
 
-it "the same calls from a session with no item and no driving role are not refused"
+it "a listed session of an open item is refused too"
+OUT="$(file_call "$DEST" sess-listed Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
+
+it "the same calls from a session with no item and no driving role, or owning only a done item, are not refused"
 OUT=""
 for call in "${GUARDED_CALLS[@]}"; do OUT="${OUT}$(file_call "$DEST" sess-idle "${call%%|*}" "${call#*|}")"; done
+for call in "${GUARDED_CALLS[@]}"; do OUT="${OUT}$(file_call "$DEST" sess-done "${call%%|*}" "${call#*|}")"; done
 check "" "$OUT"
+
+it "malformed JSON on stdin: the action hook exits 0 with no output"
+OUT="$( cd "$DEST" && bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"sess-own","tool_name":"Edit", settings.local.json' )"
+check "0:" "$?:${OUT}"
 
 it "an owner's edit of settings.json, of a look-alike name, or of a repository with no proposal is not refused"
 OUT="$(file_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
@@ -787,26 +646,21 @@ check "True True" "$OUT"
 it "the shims and programme_home agree on the default data dir"
 DEF="$(sed -n 's/^DEFAULT_DATA_DIR = "~\/\(.*\)"$/\1/p' "${AUTO_ROOT}/lib/programme_home.py")"
 N=0
-for s in on-user-prompt.sh on-pretooluse-action.sh on-permission-event.sh; do grep -qF "\${HOME:-}/${DEF}" "${HOOKS}/$s" && N=$((N + 1)); done
-check "3" "$N"
+for s in on-user-prompt.sh on-pretooluse-action.sh; do grep -qF "\${HOME:-}/${DEF}" "${HOOKS}/$s" && N=$((N + 1)); done
+check "2" "$N"
 
-it "hooks.json wires the three permission events to one shim and guards Edit and MultiEdit"
+it "hooks.json registers no per-call permission hooks and guards Edit and MultiEdit"
 OUT="$("$PY" - "${HOOKS}/hooks.json" <<'EOF'
 import json, re, sys
 h = json.load(open(sys.argv[1]))["hooks"]
-out = []
-for event, matcher in (("PermissionDenied", None), ("PostToolUse", "Bash"), ("PostToolUseFailure", "Bash")):
-    entry = h[event][0]
-    hook = entry["hooks"][0]
-    out.append("on-permission-event.sh" in hook["command"] and 0 < hook["timeout"] <= 10
-               and entry.get("matcher") == matcher)
+out = [not any(e in h for e in ("PermissionDenied", "PostToolUse", "PostToolUseFailure"))]
 action = [e for e in h["PreToolUse"] if "on-pretooluse-action.sh" in e["hooks"][0]["command"]][0]
 out.append(all(re.fullmatch(action["matcher"], t) is not None for t in ("Bash", "Write", "Edit", "MultiEdit")))
 out.append(re.fullmatch(action["matcher"], "Read") is None)
 print(*out)
 EOF
 )"
-check "True True True True True" "$OUT"
+check "True True True" "$OUT"
 
 echo ""
 echo "programme-hooks.test.sh: ${PASS} passed, ${FAIL} failed"

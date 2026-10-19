@@ -105,6 +105,18 @@
 #                          session_registry
 #   programme_view       → programme_home, programme_permission_rules, programme_predicate,
 #                          programme_sanitize, programme_tasks, session_registry
+#   permission_transcript → programme_sanitize, session_registry
+#   programme_permission_state → run_record_core, programme_record, programme_permission_rules
+#   programme_permission_settle → run_record_core, programme_home, programme_journal,
+#                          programme_record, programme_sanitize, programme_sources,
+#                          programme_permission_rules, programme_permission_state,
+#                          permission_transcript, session_registry
+#   programme_permission → run_record_core, programme_home, programme_journal,
+#                          programme_record, programme_permission_rules,
+#                          programme_permission_state, permission_transcript,
+#                          programme_permission_settle (never the reverse)
+#   programme_settings_guard → programme_home, programme_journal, session_registry,
+#                          programme_permission_rules
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_protocol, session_registry, driver_session, verb_cli;
 #                          then, after its verb table is built: programme_record,
@@ -127,7 +139,8 @@
 #   on-stop              → phase-grammar; programme_home [lazy], programme_predicate [lazy],
 #                          programme_journal [lazy], programme [lazy]
 #   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
-#                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy]
+#                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy],
+#                          programme_settings_guard [lazy]
 #   auto-spawn           → driver_session; auto-workspace [lazy]
 #
 # format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`
@@ -219,6 +232,23 @@ fi
 it "run_record_producers.py does NOT import the run_record facade (back-edge)"
 if loads_sibling "run_record_producers.py" "run_record"; then
   fail "run_record_producers.py must not import the run_record facade — that closes a cycle"
+else
+  pass
+fi
+
+# ─── permission proposals DAG ───────────────────────────────────────────────────
+for _m in programme_permission.py programme_permission_settle.py programme_permission_state.py \
+          permission_transcript.py; do
+  it "lib/${_m} exists (the permission DAG checks below are vacuous without it)"
+  if [ -f "${LIB}/${_m}" ]; then pass; else fail "lib/${_m} missing"; fi
+done
+
+it "the permission settle, state and transcript modules never load programme_permission (back-edge)"
+if loads_sibling "programme_permission_settle.py" "programme_permission" \
+   || loads_sibling "programme_permission_state.py" "programme_permission" \
+   || loads_sibling "programme_permission_state.py" "programme_permission_settle" \
+   || loads_sibling "permission_transcript.py" "programme_permission"; then
+  fail "only programme_permission loads programme_permission_settle; a load back closes a cycle"
 else
   pass
 fi

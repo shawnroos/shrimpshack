@@ -122,17 +122,14 @@ from this session's lease.
    For a `merged` claim, and before any merge you do yourself, run the merge
    gates in section 4 of [references/sequencing.md](references/sequencing.md).
 9. **Permission blocks.** Turn blocked reads into one proposal Shawn answers.
-   - Read the new `permission_denied` lines of `<home>/journal.jsonl` and the new
-     lines of `<home>/blocks.jsonl`. Skip a denial whose `tool_use_id` is already
-     in the `denials` of a `permission_proposed` line; a repeat does no harm.
-   - For each denial: `P propose-permission --denial <payload.tool_use_id> --item <id>`,
-     with one `--item` for each id in its `item_ids`. Several denials can share
-     one call.
-   - For an item with worker reports and no denial:
-     `P propose-permission --item <payload.item>`. It records an explanation
-     that the denying layer is unknown; it never makes a proposal.
-   - `P propose-permission` with no arguments re-sends open proposals whose
-     notification never went out.
+   - `P propose-permission` every sweep. It reads the transcripts of every
+     unfinished item's sessions for new refusals, turns each eligible one into a
+     proposal or evidence on an existing one, and re-sends open proposals whose
+     notification never went out. A refusal no allow rule can lift (a deny rule
+     or a hook) gets an explanation on the item instead.
+   - When a worker tells you it is blocked:
+     `P propose-permission --item <id>`. If no refusal is found, the item gets an
+     explanation that the denying layer is unknown; it never makes a proposal.
    - When `P answer-permission ... applied` in step 3 returned a `retry_text`,
      send it once, exactly as returned: `P prompt-item <retry_item> "<retry_text>"`.
      The same text is in that answer's `permission_verified` line. Never send it
@@ -147,8 +144,8 @@ from this session's lease.
    - Never pass your own `check-deliverable` or `gh` result to a blocked worker
      as a stand-in for the blocked read, and never tell a worker to split the
      command or run it another way. Both route the blocked read around Shawn.
-   - A denial in your own session has no item. `propose-permission` refuses it,
-     because your session is not on any item. Tell Shawn in one line instead.
+   - A refusal in your own session is never read, because your session is not
+     on any item. Tell Shawn in one line instead.
 10. **Arm retry watchers.** For each queue entry with action `arm_retry_watcher`:
    1. Read the item's `watchers["retry-<item>"].retry.argv`.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
@@ -165,9 +162,8 @@ from this session's lease.
      - "Never prompt the PM's pane. Report with
        `bash <plugin root>/lib/programme.sh claim --run <run> --item <item> --deliverable <name> --ref <ref>`."
      - "When a command is denied permission, do not run it again, and do not try
-       another tool, wrapper or worker for it. Report it with
-       `bash <plugin root>/lib/programme.sh report-block --run <run> --item <item> --command '<command>'`,
-       then continue the work that does not need it."
+       another tool, wrapper or worker for it. Continue the work that does not
+       need it; the PM reads the refusal from your transcript."
 12. **Record waits.** Every wait has a live watcher or a named reporter.
     - A wait the PM watches: Monitor
       `programme-watch.sh --item <item> -- <watch command>` (for example

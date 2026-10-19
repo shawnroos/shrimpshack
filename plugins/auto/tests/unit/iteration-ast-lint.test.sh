@@ -64,9 +64,9 @@ auto_root = sys.argv[1]
 # Optional extra file path (the deliberate-fail control passes a temp module).
 extra = sys.argv[2] if len(sys.argv) > 2 else None
 
-# programme_permission.py reads Claude Code's own transcript field permissionDecision.decision, not iteration state.
+# permission_transcript.py reads Claude Code's own transcript field permissionDecision.decision, not iteration state.
 ALLOWED = {"iteration.py", "run_record_mutators.py", "run_record_producers.py", "on-stop.py",
-           "programme_permission.py"}
+           "permission_transcript.py"}
 LITERAL = "decision"
 
 def offenders_in(path):

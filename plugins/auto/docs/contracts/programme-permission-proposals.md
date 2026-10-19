@@ -2,7 +2,7 @@
 authors: Claude
 type: contract
 project: auto
-topics: [programme, permission, proposal, hooks]
+topics: [programme, permission, proposal, transcript]
 ---
 # Programme permission proposals
 
@@ -15,56 +15,42 @@ transcript.
 Programme never writes a settings file. It opens settings files only to read
 them.
 
-## Hook rows
+## Finding refusals
 
-The plugin hook `on-permission-event` listens to `PermissionDenied`, and to
-`PostToolUse` and `PostToolUseFailure` on Bash. It writes a row only for the
-programme's driving session, and for a session that owns or is listed on an
-unfinished item (state `open` or `waiting`). It prints nothing and always exits 0.
+Claude Code writes its own ruling on every Bash call into the session transcript.
+The result row after a `tool_use` carries `permissionDecision.decision`
+(`accept` or `reject`), `permissionDecision.reasonType` (the layer that decided),
+and `toolDenialKind`. This is the only denial evidence Programme trusts. No hook
+reports refusals: a deny rule and a `dontAsk` refusal fire no hook at all.
 
-| Kind | When | Payload |
-|---|---|---|
-| `permission_denied` | every `PermissionDenied` event | `event`, `tool`, `tool_use_id`, `item_ids`, `transcript_path`, `transcript_bytes`, `command`, `reason`, `layer` |
-| `permission_tool_ran` | a post-tool event for a command that runs `gh`, while any proposal is not resolved | the same, without `reason` and `layer` |
-
-- `item_ids` lists the unfinished items the session owns or is listed on. It is
-  empty for the driving session.
-- `command` is redacted and capped at 2000 characters. `reason` is redacted,
-  cleaned and capped at 300 characters.
-- `transcript_path` and `transcript_bytes` come from the session registry, never
-  from the hook input.
-- `layer` comes from the reason text: `classifier_no_verdict`,
-  `classifier_unavailable`, `classifier` (a reason that starts with a bracketed
-  tag), or `unknown`.
-- The rows never store `tool_response` or `error`, because both can hold command
-  output.
-
-A deny rule and a `dontAsk` refusal fire no hook at all. Only the transcript
-records them. Such a block reaches the PM through a worker's `report-block`.
-
-## Worker reports
-
-`report-block --run <id> --item <id> --command <text>` is open to any session. It
-appends a `permission_block_reported` line to `<home>/blocks.jsonl` with
-`{item, operations, refusal, command_hash}`. It stores the catalog operation ids
-and a hash, never the command text. A report never sets a layer and never creates
-a proposal. `propose-permission --item <id>` turns an item's reports into an
-explanation that the denying layer is unknown.
-
-## Confirming a row
-
-A row changes nothing until the session's own transcript confirms it:
+`propose-permission` reads, for each item, the transcripts of its owner and listed
+sessions:
 
 1. The transcript path comes from the session registry, and its file name is
-   `<session id>.jsonl`. A row that names another path is ignored.
-2. The transcript holds a Bash `tool_use` with the row's `tool_use_id`.
-3. The redacted command from the transcript equals the row's `command`.
-4. The tool result row that follows carries the runtime's own
-   `permissionDecision.decision`: `reject` for a denial, `accept` for a run.
+   `<session id>.jsonl`. Any other path is never read.
+2. Reading starts at the item's scan cursor for that session
+   (`permission_scan[<session id>]`, a byte offset) and the cursor then moves to the
+   end. A call still waiting for its result row is read again next time.
+3. Only rows timed after the session joined the item count (the earliest `at` of
+   that session in the item's `sessions`). A session's earlier history is never
+   replayed.
 
-A row without a matching transcript entry is ignored and counted on the item as
-unconfirmed. It never creates, resolves or reopens a proposal, and it never
-notifies.
+A `reject` row is then routed by its `reasonType`:
+
+| `reasonType` | Layer | Result |
+|---|---|---|
+| `mode` | mode | a proposal, when the command is eligible |
+| `classifier` | classifier | a proposal, when the command is eligible |
+| `subcommandResults` | deny rule | an explanation naming the deny rule; no proposal |
+| `hook` | hook | an explanation; no proposal |
+| anything else | unknown | an unknown-cause explanation; no proposal and no guessed rule |
+
+A named item whose sessions have no readable transcript, or no refusal in them,
+gets an unknown-cause explanation instead of a proposal. That is how a block a
+worker mentions, but the runtime never ruled on, reaches Shawn.
+
+Refusal text and command output are never stored. Evidence keeps the normalized
+command, the layer and the `reasonType`.
 
 ## Eligible commands
 
@@ -106,7 +92,7 @@ instead of a proposal.
 | `exclusions` | what the rules do not allow: merge, comment or review, push, credential access |
 | `key` | `{operations, destination}` |
 | `items` | every linked item |
-| `evidence` | up to 50 confirmed denials: `{tool_use_id, session_id, at, operations, command, reason, layer, items}` |
+| `evidence` | up to 50 refusals: `{tool_use_id, session_id, at, operations, command, layer, reason_type, items}` |
 | `state` | see States |
 | `created_at`, `changed_at` | ISO times; `changed_at` moves on every state change and every fold |
 | `notified_at` | set only after the herdr notifier exits 0 |
@@ -126,8 +112,8 @@ wording does not reopen a decision.
 
 ## One proposal per need
 
-`propose-permission --item <id>... --denial <tool_use_id>...` places each
-confirmed denial:
+`propose-permission [--item <id>]...` places each refusal it finds. With no
+`--item` it reads every unfinished item:
 
 - Operations that a postponed, rejected or otherwise decided proposal for the
   same destination already holds attach as evidence. No notification goes out.
@@ -138,11 +124,9 @@ confirmed denial:
   shows as a decision for Shawn. Its state stays resolved and no notification
   goes out.
 
-The denial's session must be the owner or a listed session of a given item, or
-the verb refuses. When a denial lands on an open proposal, each linked item in
-`open` or `waiting` waits on Shawn, with `waiting_on.permission` set to the
-proposal id. Every call, and a call with no
-arguments, re-sends open proposals whose `notified_at` is empty.
+When a refusal lands on an open proposal, each linked item in `open` or
+`waiting` waits on Shawn, with `waiting_on.permission` set to the proposal id.
+Every call re-sends open proposals whose `notified_at` is empty.
 
 ## States
 
@@ -230,7 +214,7 @@ not.
 | Seen | Result |
 |---|---|
 | the call, decision `accept` | `resolved`, `confirmed: true`; linked items waiting on the proposal return to `open` |
-| the call, decision `reject` | `ineffective`, with the layer from the hook row or the transcript's `reasonType` and the next human action |
+| the call, decision `reject` | `ineffective`, with the layer from the transcript's `reasonType` and the next human action |
 | no call, retry sent, owner pane idle or gone | `retry_unobserved` |
 | no call otherwise | pending, with the reason: no registry transcript, herdr unavailable, retry not sent, or owner pane busy |
 
@@ -260,27 +244,26 @@ unaffected.
 |---|---|
 | `repo` | the item's remit repo path, set by `add-item --repo` |
 | `waiting_on.permission` | the proposal the item waits on |
-| `permission_block` | `{cause, detail, at, proposals, unconfirmed, reports}`, the item's latest explanation |
+| `permission_block` | `{cause, detail, at, proposals}`, the item's latest explanation |
+| `permission_scan` | `{<session id>: byte offset}`, how far each session's transcript has been read |
 
-`cause` is one of `proposal`, `decided`, `unconfirmed`, `ineligible`, `no_repo`,
-`bad_destination`, `unknown_cause`, `verify_covered`, `verify_not_covered`,
-`verify_blocked_elsewhere`, or a settled state.
+`cause` is one of `proposal`, `decided`, `not_proposable`, `ineligible`,
+`no_repo`, `bad_destination`, `unknown_cause`, `verify_covered`,
+`verify_not_covered`, `verify_blocked_elsewhere`, or a settled state.
 
 ## Known limits
 
-- Workers run as the same user. A process that writes both a journal row and a
-  matching transcript entry passes the transcript check. The typed-prompt gate
-  has the same limit. The Bash part of the settings guard is a text match that
-  such a process can get around.
+- Workers run as the same user. A process that writes rows into its own
+  transcript can fake a refusal or a run. The typed-prompt gate has the same
+  limit. The Bash part of the settings guard is a text match that such a process
+  can get around.
 - A session started outside herdr has no session registry row, so it has no
-  transcript path. Its rows can never be confirmed, and it can never take a
-  retry.
-- A denial in the PM's own session is journaled with no items.
-  `propose-permission` refuses it, because the PM's session is not on any item.
-- The `PermissionDenied` payload was not observed live. The hook relies on the
-  documented fields `tool_name`, `tool_input`, `tool_use_id` and `reason`.
-- The classifier's rejection shape in the transcript was not observed. Any
-  `reject` counts as a denial, and an unknown `reasonType` maps to layer
-  `unknown`.
+  transcript path. Its refusals are never read, and it can never take a retry.
+- A refusal in the PM's own session is never read, because the PM's session is
+  not on any item.
+- The classifier's rejection shape in the transcript was not observed live.
+  Programme assumes `reasonType: "classifier"`, the value an observed classifier
+  approval carries. If a classifier refusal carries another value, it maps to
+  layer `unknown` and gets an explanation, not a proposal.
 - Programme does not track whether an applied rule is later removed. A later
-  denial shows as a decision for Shawn and changes nothing else.
+  refusal shows as a decision for Shawn and changes nothing else.

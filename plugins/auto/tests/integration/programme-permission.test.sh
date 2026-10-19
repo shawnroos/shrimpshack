@@ -100,25 +100,9 @@ session() {
     bash "${HOOKS}/on-session-start.sh" <<< "$("$PY" "$FX" session "$sid" "${TX}/${sid}.jsonl" "$cwd")" ) >/dev/null
 }
 
-HOOK_OUTS=""
-perm_hook() {
-  local out
-  out="$( cd "$NOREPO" && bash "${HOOKS}/on-permission-event.sh" <<< "$1" )"
-  HOOK_OUTS="${HOOK_OUTS}${out}"
-}
-
-# A refused call as the runtime leaves it: transcript rows, then the PermissionDenied hook.
-deny() {
-  local sid="$1" tuid="$2" cmd="$3" reason="${4:-[Read Without Approval] reading CI status needs approval}"
-  "$PY" "$FX" transcript "${TX}/${sid}.jsonl" "$sid" "$tuid" "$cmd" reject classifier
-  perm_hook "$("$PY" "$FX" denied "$sid" "$tuid" "$cmd" "$reason")"
-}
-
-ran() {
-  local sid="$1" tuid="$2" cmd="$3" event="${4:-PostToolUseFailure}" shape="${5:-red}"
-  "$PY" "$FX" transcript "${TX}/${sid}.jsonl" "$sid" "$tuid" "$cmd" accept "$shape"
-  perm_hook "$("$PY" "$FX" ran "$event" "$sid" "$tuid" "$cmd")"
-}
+# A refused call as the runtime leaves it: a tool use and a result row carrying the runtime's decision.
+deny() { "$PY" "$FX" transcript "${TX}/${1}.jsonl" "$1" "$2" "$3" reject "${4:-classifier}"; }
+ran() { "$PY" "$FX" transcript "${TX}/${1}.jsonl" "$1" "$2" "$3" accept "${4:-red}"; }
 
 typed() {
   local sid="$1" text="$2"
@@ -209,14 +193,8 @@ check "\"${REPO_A}\"" "$(field 'items["linear:AI-1"]["repo"]')"
 deny sess-w1 tu-a1 "gh pr checks 12"
 deny sess-w2 tu-a2 "gh pr checks 12 --required"
 
-it "the denial hook journals rows whose transcript path comes from the registry, not the payload"
-ROWS="$(journal permission_denied)"
-has "${TX}/sess-w1.jsonl" "$ROWS"
-lacks "/forged/by/payload" "$ROWS"
-check 2 "$(count_kind permission_denied)"
-
-pm propose-permission --item linear:AI-1 --denial tu-a1
-pm propose-permission --item linear:AI-2 --denial tu-a2
+pm propose-permission --item linear:AI-1
+pm propose-permission --item linear:AI-2
 P1="$(pid_for "$REPO_A")"
 
 it "AE1: the proposal holds only the pr_checks rule, for the main checkout's settings.local.json"
@@ -238,7 +216,7 @@ PM="sess-pm2"
 
 it "AE2: a third worker's denial after the handover joins the same proposal with no new notification"
 deny sess-w6 tu-a6 "gh pr checks 12"
-pm propose-permission --item linear:AI-6 --denial tu-a6
+pm propose-permission --item linear:AI-6
 check "0 1 [\"linear:AI-1\", \"linear:AI-2\", \"linear:AI-6\"] 1" \
   "$CODE $(field 'len(props)') $(pf "$P1" '["items"]') $(notices)"
 
@@ -260,12 +238,12 @@ check "1 \"open\" 0" "$CODE $(pf "$P1" '["state"]') $(pf "$P1" '["answers"]' | "
 it "AE6: the peer prompt was captured (so the refusal is the gate, not a missing id)"
 case "$P_PEER" in p*) pass ;; *) fail "no prompt id from the peer message: [$PEER]" ;; esac
 
-it "AE6: a forged denial row with no transcript entry is ignored and counted on the item"
+it "AE6: a refusal written to a transcript the registry does not name is never read"
 EV_BEFORE="$(pf "$P1" '["evidence"]' | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
-perm_hook "$("$PY" "$FX" denied sess-w1 tu-forged "gh pr checks 12" "[X] forged")"
-pm propose-permission --item linear:AI-1 --denial tu-forged
-check "0 ${EV_BEFORE} [\"tu-forged\"] 1" \
-  "$CODE $(pf "$P1" '["evidence"]' | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))') $(field 'items["linear:AI-1"]["permission_block"]["unconfirmed"]') $(notices)"
+"$PY" "$FX" transcript "${TX}/forged.jsonl" sess-w1 tu-forged "gh pr checks 12" reject classifier
+pm propose-permission --item linear:AI-1
+check "0 ${EV_BEFORE} 1" \
+  "$CODE $(pf "$P1" '["evidence"]' | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))') $(notices)"
 
 # ---- F1: applied, retry once, settle from the transcript ----
 it "typed applied before the rule exists keeps the proposal open and reserves nothing"
@@ -291,11 +269,8 @@ pm prompt-item linear:AI-1 "$RETRY_TEXT"
 check 0 "$CODE"
 has "herdr agent prompt" "$(cat "$CALLS")"
 
-it "F1: the worker's red-CI retry runs; the hook journals permission_tool_ran"
 ran sess-w1 tu-a1-retry "gh pr checks 12"
-check 1 "$(count_kind permission_tool_ran)"
-
-it "F1: settle-permissions reads the accept row and resolves the proposal, confirmed"
+it "F1: after the worker's red-CI retry runs, settle-permissions reads the accept row and resolves, confirmed"
 pm settle-permissions
 check '0 "resolved" true' "$CODE $(pf "$P1" '["state"]') $(pf "$P1" '["confirmed"]')"
 it "F1: every linked item returns to open"
@@ -307,7 +282,7 @@ lacks "OUTPUT-SECRET" "$(cat "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.
 
 # ---- AE3: not now stays not now ----
 deny sess-w4 tu-b1 "gh run view 77"
-pm propose-permission --item linear:AI-4 --denial tu-b1
+pm propose-permission --item linear:AI-4
 P2="$(pid_for "$REPO_B")"
 it "AE3: a new destination opens a second proposal and notifies once"
 check "\"open\" 2" "$(pf "$P2" '["state"]') $(notices)"
@@ -319,15 +294,15 @@ check '0 "postponed"' "$CODE $(pf "$P2" '["state"]')"
 it "AE3: two more denials attach as evidence with zero new notifications and no new proposal"
 N_BEFORE="$(notices)"
 deny sess-w4 tu-b2 "gh run view 77"
-pm propose-permission --item linear:AI-4 --denial tu-b2
+pm propose-permission --item linear:AI-4
 deny sess-w4 tu-b3 "gh run view 78 --json status"
-pm propose-permission --item linear:AI-4 --denial tu-b3
+pm propose-permission --item linear:AI-4
 check "\"postponed\" 3 ${N_BEFORE} 2" \
   "$(pf "$P2" '["state"]') $(pf "$P2" '["evidence"]' | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))') $(notices) $(field 'len(props)')"
 
 # ---- AE5: applied does not mean effective ----
 deny sess-w5 tu-c1 "gh pr view 9"
-pm propose-permission --item linear:AI-5 --denial tu-c1
+pm propose-permission --item linear:AI-5
 P3="$(pid_for "$REPO_C")"
 "$PY" "$FX" settings "${REPO_C}/.claude/settings.local.json" '{"permissions": {"allow": ["Bash(gh pr view *)"]}}'
 "$PY" "$FX" settings "$CLAUDE_AUTO_TEST_USER_SETTINGS" '{"permissions": {"deny": ["Bash(gh pr view *)"]}}'
@@ -341,7 +316,7 @@ has "$CLAUDE_AUTO_TEST_USER_SETTINGS" "$(pf "$P3" '["explanation"]')"
 it "AE5: a second denial attaches evidence, reserves nothing and sends nothing"
 N_BEFORE="$(notices)"
 deny sess-w5 tu-c2 "gh pr view 9"
-pm propose-permission --item linear:AI-5 --denial tu-c2
+pm propose-permission --item linear:AI-5
 check "\"ineffective\" null 0 ${N_BEFORE}" \
   "$(pf "$P3" '["state"]') $(pf "$P3" '.get("reservation")') $(pf "$P3" '.get("attempts", 0)') $(notices)"
 
@@ -372,8 +347,6 @@ check "0 0 0 \"done\" \"waiting\" \"${P2}\"" \
 it "AE7: the denied read never ran through another path"
 lacks "gh run view" "$(grep '^gh ' "$CALLS")"
 
-it "hook output is always empty"
-check "" "$HOOK_OUTS"
 it "no verb call crashed with a traceback"
 check "" "$CRASHES"
 
