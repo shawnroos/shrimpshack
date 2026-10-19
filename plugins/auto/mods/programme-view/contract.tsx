@@ -1,5 +1,7 @@
 import type { RenderElement } from 'claude-code'
 
+import { acceptReply, draftReply, instructionTemplate, toolsOf, withdrawReply } from './actions'
+import type { Draft, Outcome } from './actions'
 import { COLOR, GLYPH } from './palette'
 import type { Ui } from './tree'
 
@@ -34,19 +36,45 @@ export type Contract = { terms: Term[]; instructions: Instruction[] }
 
 export type Reread = { last_at: string | null; changed_since: string[]; requested: boolean }
 
+export type ContractActions = {
+  propose: (term: Term) => void
+  clear: (term: Term) => void
+  note: (term: Term) => void
+  saveNote: (term: Term, text: string) => void
+  reread: () => void
+  fulfil: (id: string) => void
+  closeAsFulfilled: (id: string, why: string) => void
+  minutes: (term: Term, text: string) => void
+  space: (term: Term, value: string) => void
+  addTool: (term: Term) => void
+  toolName: (term: Term, text: string) => void
+  toolDescription: (term: Term, text: string) => void
+  focusRow: (key: string) => void
+}
+
 export type ContractProps = {
   contract: Contract
   reread: Reread
   openTerm: string | undefined
   focusedRow: string | undefined
   itemTitles: Record<string, string>
+  selectedItem: string | undefined
+  armed: boolean
+  drafts: Record<string, Draft>
+  editing: string | undefined
+  status: Outcome | undefined
+  spaces: string[]
   onToggle: (key: string) => void
   onOption: (term: string, option: string) => void
-  termActions?: (term: Term) => RenderElement[]
+  act: ContractActions
 }
 
 export const termRowKey = (key: string) => `term:${key}`
 export const optionRowKey = (term: string, option: string) => `option:${term}:${option}`
+export const instructionRowKey = (id: string) => `instruction:${id}`
+export const noteKey = (term: string) => `note:${term}`
+export const whyKey = (id: string) => `why:${id}`
+export const toolEditKey = (term: string) => `tool:${term}`
 
 const BINDING = {
   code: { glyph: GLYPH.code, color: COLOR.done, text: 'Checked in code' },
@@ -74,6 +102,20 @@ function proposalText(proposal: Proposal): string {
   }
 }
 
+export function draftText(term: Term, draft: Draft): string | undefined {
+  const parts: string[] = []
+  const name = draft.add?.name
+  if (draft.tools || name) {
+    const tools = toolsOf(term, draft)
+    parts.push((name && !tools.includes(name) ? [...tools, name] : tools).join(', ') || 'none')
+    if (name) parts.push(`new tool ${name}${draft.add?.description ? ` (${draft.add.description})` : ', needs a description'}`)
+  }
+  if (draft.space) parts.push(`add herdr space ${draft.space}`)
+  if (draft.minutes) parts.push(`fixed, every ${draft.minutes} min`)
+  if (draft.option && !draft.minutes && !draft.space) parts.push(draft.option)
+  return parts.length > 0 ? parts.join(' · ') : undefined
+}
+
 function steps(count: number): string {
   if (count === 0) return 'No step relies on this'
   return count === 1 ? '1 step relies on this' : `${count} steps rely on this`
@@ -86,8 +128,9 @@ function day(iso: string | null): string {
 }
 
 export function ContractView(ui: Ui, props: ContractProps): RenderElement {
-  const { Box, Button, Text } = ui
-  const { contract, reread, openTerm, focusedRow, itemTitles, onToggle, onOption, termActions } = props
+  const { Box, Button, Input, Select, Text } = ui
+  const { contract, reread, openTerm, focusedRow, itemTitles, selectedItem, armed, drafts, editing, status, spaces } = props
+  const { onToggle, onOption, act } = props
   const out: RenderElement[] = []
   const line = (key: string, ...cells: RenderElement[]) =>
     out.push(
@@ -98,6 +141,65 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
   const gap = (key: string) => line(`gap:${key}`, <Text> </Text>)
   const focus = (key: string) => (focusedRow === key ? { autoFocus: true as const } : {})
   const cursor = (key: string, mark: string) => <Text color={COLOR.accent}>{focusedRow === key ? mark : ' '}</Text>
+  const pad = (width: number) => <Text>{' '.repeat(width)}</Text>
+  const typeThis = (key: string, reply: string, width: number, label = 'Type this:') => {
+    line(`${key}:label`, <Text dimColor>{`${' '.repeat(width)}${label}`}</Text>)
+    line(`${key}:reply`, <Text bold>{`${' '.repeat(width)}${reply}`}</Text>)
+  }
+  const action = (key: string, hotkey: string, label: string, onPress: () => void) => (
+    <Button key={key} label={`${hotkey}  ${label}`} plain hotkey={hotkey} onPress={onPress} />
+  )
+
+  function customOptions(term: Term, draft: Draft | undefined) {
+    if (term.key === 'cadence') {
+      line(
+        `${term.key}:minutes`,
+        pad(8),
+        <Input
+          key="custom:cadence:minutes"
+          label="Custom interval, in minutes: "
+          placeholder="15"
+          value={draft?.minutes ? String(draft.minutes) : ''}
+          onSubmit={text => act.minutes(term, text)}
+        />,
+      )
+    }
+    if (term.key === 'remit') {
+      if (spaces.length === 0) {
+        line(`${term.key}:spaces`, <Text dimColor>{'        No herdr spaces are listed for the remit'}</Text>)
+      } else {
+        line(
+          `${term.key}:spaces`,
+          pad(8),
+          <Select
+            key="custom:remit:space"
+            label="Add a herdr space: "
+            options={spaces.map(space => ({ value: space }))}
+            {...(draft?.space ? { value: draft.space } : {})}
+            onSelect={value => act.space(term, value)}
+          />,
+        )
+      }
+    }
+    if (term.key !== 'tools_of_record') return
+    line(`${term.key}:add`, pad(8), <Button key="custom:tools:add" label="Add a tool…" plain onPress={() => act.addTool(term)} />)
+    if (editing !== toolEditKey(term.key)) return
+    line(
+      `${term.key}:tool-name`,
+      pad(8),
+      <Input key="custom:tools:name" label="Tool name: " autoFocus value={draft?.add?.name ?? ''} onSubmit={text => act.toolName(term, text)} />,
+    )
+    line(
+      `${term.key}:tool-description`,
+      pad(8),
+      <Input
+        key="custom:tools:description"
+        label="What it is: "
+        value={draft?.add?.description ?? ''}
+        onSubmit={text => act.toolDescription(term, text)}
+      />,
+    )
+  }
 
   line('head', <Text color={COLOR.accent}>{`${GLYPH.clause}  `}</Text>, <Text bold>Agreement</Text>)
   if (reread.last_at) {
@@ -116,6 +218,14 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
     )
   }
   if (reread.requested) line('requested', <Text color={COLOR.next}>{`   ${GLYPH.history}  `}</Text>, <Text>re-read requested</Text>)
+  if (armed) line('reread:act', pad(3), action('act:reread', 'e', 'ask the PM to re-read the rules', act.reread))
+  if (status) {
+    line(
+      'status',
+      <Text color={status.ok ? COLOR.done : COLOR.refused}>{`   ${status.ok ? '✓' : '✗'}  `}</Text>,
+      <Text color={status.ok ? undefined : COLOR.refused}>{status.message}</Text>,
+    )
+  }
   gap('terms')
   line('terms', <Text bold>Terms  </Text>, <Text dimColor>{'─'.repeat(40)}</Text>)
 
@@ -157,16 +267,19 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
         <Text>{`Proposed: ${valueText(proposal.value)} · ${proposalText(proposal)}`}</Text>,
       )
     }
+    const draft = drafts[term.key]
     const isMulti = Array.isArray(term.value)
+    const ticked = isMulti ? toolsOf(term, draft) : []
     const [on, off] = isMulti ? [GLYPH.checkOn, GLYPH.checkOff] : [GLYPH.radioOn, GLYPH.radioOff]
     line(`${term.key}:options`, <Text dimColor>{`        Options${isMulti ? '  (choose any)' : ''}`}</Text>)
     for (const option of term.options) {
       const key = optionRowKey(term.key, option.name)
+      const isOn = isMulti ? ticked.includes(option.name) : option.active
       line(
         key,
-        <Text>{' '.repeat(7)}</Text>,
+        pad(7),
         cursor(key, '›'),
-        <Text color={option.active ? COLOR.done : undefined}>{` ${option.active ? on : off}  `}</Text>,
+        <Text color={isOn ? COLOR.done : undefined}>{` ${isOn ? on : off}  `}</Text>,
         <Button key={key} label={option.name} plain {...focus(key)} onPress={() => onOption(term.key, option.name)}>
           <Text bold={option.active}>{option.name.padEnd(24)}</Text>
         </Button>,
@@ -174,22 +287,76 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
         option.active ? <Text bold>   active</Text> : <Text>{''}</Text>,
       )
     }
-    for (const action of termActions?.(term) ?? []) out.push(action)
+    customOptions(term, draft)
+    const change = draft ? draftText(term, draft) : undefined
+    if (change) line(`${term.key}:draft`, <Text dimColor>{`        ${GLYPH.draft}  Your change: ${change}`}</Text>)
+    const accept = acceptReply(term)
+    if (accept) typeThis(`${term.key}:accept`, accept, 8)
+    const amend = draftReply(term, draft)
+    if (amend && amend !== accept) typeThis(`${term.key}:amend`, amend, 8)
+    if (armed) {
+      line(
+        `${term.key}:actions`,
+        pad(8),
+        <Box flexDirection="row" gap={3}>
+          {[
+            action('act:propose', 'p', 'propose', () => act.propose(term)),
+            ...(proposal ? [action('act:clear', 'x', 'clear proposal', () => act.clear(term))] : []),
+            action('act:note', 'n', 'note', () => act.note(term)),
+          ]}
+        </Box>,
+      )
+    }
+    if (editing === noteKey(term.key)) {
+      line(
+        `${term.key}:note-input`,
+        pad(8),
+        <Input
+          key={noteKey(term.key)}
+          label="Note (Enter on an empty note clears them all): "
+          autoFocus
+          onSubmit={text => act.saveNote(term, text)}
+        />,
+      )
+    }
     gap(`${term.key}:end`)
   }
 
-  if (contract.instructions.length > 0) {
-    gap('instructions')
-    line('instructions', <Text bold>Instructions  </Text>, <Text dimColor>{'─'.repeat(33)}</Text>)
-    for (const instruction of contract.instructions) {
-      line(`instruction:${instruction.id}`, <Text color={COLOR.warning}>{`    ${GLYPH.clause}  `}</Text>, <Text bold>{`"${instruction.quote}"`}</Text>)
-      const target =
-        instruction.applies_to === 'programme' ? 'the whole programme' : (itemTitles[instruction.applies_to] ?? instruction.applies_to)
+  gap('instructions')
+  line('instructions', <Text bold>Instructions  </Text>, <Text dimColor>{'─'.repeat(33)}</Text>)
+  for (const instruction of contract.instructions) {
+    const key = instructionRowKey(instruction.id)
+    line(
+      key,
+      cursor(key, '▌'),
+      <Text color={COLOR.warning}>{`   ${GLYPH.clause}  `}</Text>,
+      <Button key={key} label={instruction.quote} plain {...focus(key)} onPress={() => act.focusRow(key)}>
+        <Text bold>{`"${instruction.quote}"`}</Text>
+      </Button>,
+    )
+    const target =
+      instruction.applies_to === 'programme' ? 'the whole programme' : (itemTitles[instruction.applies_to] ?? instruction.applies_to)
+    line(
+      `${key}:about`,
+      <Text dimColor>{`         Applies to ${target} (${instruction.scope}) · ${steps(instruction.reliant_steps)}`}</Text>,
+    )
+    if (focusedRow !== key) continue
+    typeThis(`${key}:withdraw`, withdrawReply(instruction.quote), 9)
+    if (armed) line(`${key}:actions`, pad(9), action('act:fulfil', 'f', 'close as fulfilled', () => act.fulfil(instruction.id)))
+    if (editing === whyKey(instruction.id)) {
       line(
-        `instruction:${instruction.id}:about`,
-        <Text dimColor>{`         Applies to ${target} (${instruction.scope}) · ${steps(instruction.reliant_steps)}`}</Text>,
+        `${key}:why`,
+        pad(9),
+        <Input
+          key={whyKey(instruction.id)}
+          label="Why is it fulfilled: "
+          autoFocus
+          onSubmit={text => act.closeAsFulfilled(instruction.id, text)}
+        />,
       )
     }
   }
+  const title = selectedItem ? itemTitles[selectedItem] : undefined
+  typeThis('instruction:new', instructionTemplate(title), 4, 'To add an instruction, type this:')
   return <Box flexDirection="column">{out}</Box>
 }

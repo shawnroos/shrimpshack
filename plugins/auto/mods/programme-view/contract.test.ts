@@ -5,6 +5,7 @@ import {
   LEASES,
   VIEW,
   buttonKeys,
+  contractPane,
   contractPart,
   defaultTerms,
   findNode,
@@ -17,13 +18,6 @@ import {
   viewText,
   world,
 } from './test-world'
-
-async function contractPane($: Parameters<typeof openPane>[0], isFocused = true, bodyRows = 40) {
-  const pane = await openPane($, isFocused, bodyRows)
-  await pane.press({ key: 'view:contract' })
-  await settle()
-  return pane
-}
 
 test('the contract view lists five terms with their setting and description', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })

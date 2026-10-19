@@ -43,5 +43,22 @@ check "0" "$STATUS"
 if [ "$FAIL" -ne 0 ]; then
   printf '%s\n' "$OUT" | grep -E '^\(fail\)' | sed 's/^/      /'
 fi
+
+# The mod test kit has no file access, so the source half of the no-prompt guard runs here.
+MOD_DIR="${AUTO_ROOT}/mods/programme-view"
+SOURCES=()
+while IFS= read -r file; do SOURCES+=("$file"); done < <(
+  find "$MOD_DIR" -type f \( -name '*.ts' -o -name '*.tsx' \) ! -name '*.test.ts' ! -name 'test-world.ts' | sort
+)
+
+it "the no-prompt scan finds the mod's source files"
+if [ "${#SOURCES[@]}" -gt 0 ]; then pass; else fail "no .ts or .tsx source under ${MOD_DIR}"; fi
+
+it "no mod source submits, suggests or fills a prompt"
+HITS=""
+if [ "${#SOURCES[@]}" -gt 0 ]; then
+  HITS="$(grep -nE "prompt[[:space:]]*(\.|\[[[:space:]]*['\"])[[:space:]]*(submit|suggest|fill)" "${SOURCES[@]}")"
+fi
+if [ -z "$HITS" ]; then pass; else fail "$(printf '%s\n' "$HITS" | sed "s|${MOD_DIR}/||" | tr '\n' ' ')"; fi
 echo "programme-view-mod.test.sh: ${PASS} passed, ${FAIL} failed (${RAN:-0} mod tests)"
 [ "$FAIL" -eq 0 ]

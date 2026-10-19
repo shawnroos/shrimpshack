@@ -115,12 +115,15 @@ export function defaultTerms() {
   ]
 }
 
-export function viewText(parts: { work?: unknown[]; contract?: unknown; reread?: unknown; rows?: unknown[] } = {}, format = 2) {
+export function viewText(
+  parts: { work?: unknown[]; contract?: unknown; reread?: unknown; rows?: unknown[]; model?: unknown } = {},
+  format = 2,
+) {
   return JSON.stringify({
     view_format: format,
     run: 'prog-1',
     generated_at: '2026-10-19T10:00:00Z',
-    model: {},
+    model: parts.model ?? {},
     work: parts.work ?? [],
     contract: parts.contract ?? contractPart(),
     reread: parts.reread ?? { last_at: null, changed_since: [], requested: false, requested_at: null },
@@ -183,6 +186,13 @@ export async function openPane($: Engine, isFocused = true, bodyRows = 40): Prom
   return pane as Pane
 }
 
+export async function contractPane($: Engine, isFocused = true, bodyRows = 40): Promise<Pane> {
+  const pane = await openPane($, isFocused, bodyRows)
+  await pane.press({ key: 'view:contract' })
+  await settle()
+  return pane
+}
+
 export function personFocus($: Engine, element: string) {
   return ($.ui as unknown as { focus: (e: unknown) => Promise<unknown> }).focus({
     component: 'Pane',
@@ -237,4 +247,36 @@ export async function findAllNodes(pane: Pane, test: (one: Node) => boolean): Pr
     if (test(one)) found.push(one)
   })
   return found
+}
+
+export type VerbCall = { argv: string[]; env: Record<string, string> }
+export type VerbReply = { exitCode?: number; stdout?: string; stderr?: string } | { deny: string }
+
+export function verbs(on: On, reply: (argv: string[]) => VerbReply = () => ({})) {
+  const calls: VerbCall[] = []
+  on('process.run', (_$, event) => {
+    const argv = [...event.argv]
+    calls.push({ argv, env: { ...event.init?.env } })
+    const answer = reply(argv.slice(1))
+    if ('deny' in answer) return answer as never
+    return { value: { exitCode: answer.exitCode ?? 0, stdout: answer.stdout ?? '{}', stderr: answer.stderr ?? '' } }
+  })
+  return calls
+}
+
+export function prompts(on: On) {
+  const sent: string[] = []
+  on('prompt.submit', (_$, event) => {
+    sent.push('prompt.submit')
+    return { text: event.text }
+  })
+  on('prompt.suggest', () => {
+    sent.push('prompt.suggest')
+    return { isShown: false }
+  })
+  on('prompt.fill', () => {
+    sent.push('prompt.fill')
+    return { text: '', isFilled: false } as never
+  })
+  return sent
 }
