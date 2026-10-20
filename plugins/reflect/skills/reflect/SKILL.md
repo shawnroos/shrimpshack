@@ -197,7 +197,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory/triggers.py report
     ```
 
     If the body does not clearly belong to ONE repo, leave it and say so — a memory rescoped to the wrong repo goes silent exactly where it was needed, which is worse than firing too often.
-  - **`one repo`** → the trigger is in the right place and simply is not useful. Prune or sharpen it.
+  - **`one repo`** → the trigger is in the right place and simply is not useful. Prune it with `triggers.py remove --memory <name>.md`, or sharpen it with `add --replace`. A trigger that is already a specific literal in the right repo cannot be sharpened; remove it.
   - **no annotation** → the log predates repo recording, so there is no evidence yet. Leave it; the next pass has the data.
 
   **This is a fix you make, not a finding you hand over.** Do it quietly and name it in the closing summary — *"rescoped 2 Slate-only memories that were firing in every repo (145 wasted nudges)"* — the count and the reason, not a walkthrough.

@@ -17,7 +17,7 @@ You are working the retro backlog down. Not reading it — working it down. Ever
 Point at the store once, then read every open item:
 
 ```bash
-STORE="${REFLECT_MEMORY_DIR:-$HOME/.claude/projects/-$(printf '%s' "${HOME#/}" | tr / -)/memory}"
+export STORE="${REFLECT_MEMORY_DIR:-$HOME/.claude/projects/-$(printf '%s' "${HOME#/}" | tr / -)/memory}"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/retro.py" "$STORE"
 ```
 
@@ -27,7 +27,7 @@ That prints surface, name, and description for every item at `disposition: open`
 
 ```bash
 python3 -c 'import os, sys
-sys.path.insert(0, os.environ["CLAUDE_PLUGIN_ROOT"] + "/scripts")
+sys.path.insert(0, "${CLAUDE_PLUGIN_ROOT}/scripts")
 import retro
 rows = retro.list_items(os.environ["STORE"], disposition="open")
 for r in sorted(rows, key=lambda r: r["frontmatter"].get("opened", "")):
@@ -97,7 +97,7 @@ ITEM=skill-slate-editor-warmup-hangs \
 DISP=culled \
 PROOF='deleted plugins/slate-editor/skills/warmup; harness green with no references' \
 python3 -c 'import os, sys
-sys.path.insert(0, os.environ["CLAUDE_PLUGIN_ROOT"] + "/scripts")
+sys.path.insert(0, "${CLAUDE_PLUGIN_ROOT}/scripts")
 import retro
 print(retro.set_disposition(os.environ["STORE"], os.environ["ITEM"],
                             os.environ["DISP"], os.environ["PROOF"]))'
@@ -109,7 +109,7 @@ If you touched an item without closing it — reproduced it, narrowed it, learne
 
 ```bash
 ITEM=plugin-spawn-status-stale python3 -c 'import os, sys
-sys.path.insert(0, os.environ["CLAUDE_PLUGIN_ROOT"] + "/scripts")
+sys.path.insert(0, "${CLAUDE_PLUGIN_ROOT}/scripts")
 import retro
 retro.append_session(os.environ["STORE"], os.environ["ITEM"],
                      os.environ.get("CLAUDE_SESSION_ID") or "unknown")'

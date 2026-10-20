@@ -158,6 +158,20 @@ check "a missing memory is not counted as updated" \
 check "a missing memory writes no use-log line" \
   '! grep -q no_such_memory "$D2/mem/MEMORY_USE.log"'
 
+echo "== a repo-scoped memory named by its bare name =="
+DS="$ROOT/scoped"; new_store "$DS"
+mkdir -p "$DS/mem/_scope/-repo-a" "$DS/mem/_scope/-repo-b"
+printf -- '---\nname: scoped_one\nlast_used: 2020-01-01\n---\nbody\n' > "$DS/mem/_scope/-repo-a/scoped_one.md"
+printf -- '---\nname: twin\n---\nbody\n' > "$DS/mem/_scope/-repo-a/twin.md"
+printf -- '---\nname: twin\n---\nbody\n' > "$DS/mem/_scope/-repo-b/twin.md"
+OUTS="$(run_rr "$DS" --applied "scoped_one twin")"
+check "a bare name found in exactly one scope is bumped" \
+  '[ "$(resolve_last_used "$DS/mem/_scope/-repo-a/scoped_one.md")" = "$TODAY" ]'
+check "a bare scoped name is logged as applied" \
+  'grep -q "scoped_one applied" "$DS/mem/MEMORY_USE.log"'
+check "a bare name held by two scopes is reported missing, not guessed" \
+  'echo "$OUTS" | grep -q "missing_memories:.*twin"'
+
 echo "== document capture =="
 D3="$ROOT/c"; new_store "$D3"
 mkdir -p "$D3/wt/docs/solutions/logic-errors" "$D3/wt/docs/brainstorms" "$D3/wt/docs/plans"
@@ -186,6 +200,48 @@ OUT3C="$(run_rr "$D3" --capture-from "$D3/wt")"
 check "an EDITED doc is re-captured" 'echo "$OUT3C" | grep -q "captured=1"'
 check "the store copy actually holds the new bytes" \
   'grep -q changed "$D3/store/solutions/thing.md"'
+
+echo "== module-scoped and nested durable docs =="
+DN="$ROOT/nested"; new_store "$DN"
+M="$DN/wt/src/app/modules/ai/docs"
+mkdir -p "$M/solutions/design-patterns" "$M/brainstorms" "$DN/wt/docs/handoffs" \
+  "$DN/wt/node_modules/pkg/docs/solutions" "$DN/wt/.claude/worktrees/other/docs"
+echo modsol  > "$M/solutions/design-patterns/modsol.md"
+echo modbs   > "$M/brainstorms/modbs.md"
+echo modho   > "$M/handoff.md"
+echo nestho  > "$DN/wt/docs/handoffs/2026-09-18-session-handoff.md"
+mkdir -p "$DN/wt/docs/solutions" && echo rootreadme > "$DN/wt/docs/solutions/README.md"
+echo modreadme > "$M/solutions/README.md"
+echo dep     > "$DN/wt/node_modules/pkg/docs/solutions/dep.md"
+echo other   > "$DN/wt/.claude/worktrees/other/docs/handoff.md"
+OUTN="$(run_rr "$DN" --capture-from "$DN/wt")"
+check "a module-scoped solution is captured" \
+  '[ -f "$DN/store/solutions/src-app-modules-ai-modsol.md" ]'
+check "a module-scoped brainstorm is captured" \
+  '[ -f "$DN/store/brainstorms/src-app-modules-ai-modbs.md" ]'
+check "a root and a module README.md both survive" \
+  'grep -qx rootreadme "$DN/store/solutions/README.md" && grep -qx modreadme "$DN/store/solutions/src-app-modules-ai-README.md"'
+check "a handoff nested under docs/ is captured" \
+  'ls "$DN/store/handoffs/" | grep -q "2026-09-18-session-handoff.md"'
+check "two handoff.md files in one worktree land at two distinct paths" \
+  '[ "$(grep -rlx -e modho -e nestho "$DN/store/handoffs" | wc -l | tr -d " ")" = "2" ]'
+check "node_modules and nested worktrees are not captured" \
+  '! grep -rqx -e dep -e other "$DN/store"'
+check "captured counts the six durable docs" 'echo "$OUTN" | grep -q "captured=6"'
+
+echo "== worktree scan: session scratch is not work =="
+DW="$ROOT/wtscan"; new_store "$DW"
+git -C "$DW" init -q repo && git -C "$DW/repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+mkdir -p "$DW/repo/docs" && echo h > "$DW/repo/docs/handoff.md"
+git -C "$DW/repo" add docs && git -C "$DW/repo" -c user.email=t@t -c user.name=t commit -q -m handoff
+git -C "$DW/repo" worktree add -q -b scratch "$DW/wt-scratch" && git -C "$DW/repo" worktree add -q -b work "$DW/wt-work"
+echo edited > "$DW/wt-scratch/docs/handoff.md"; mkdir -p "$DW/wt-scratch/.claude" && echo x > "$DW/wt-scratch/.claude/notes"
+echo code > "$DW/wt-work/real.ts"
+OUTW="$(PATH="/usr/bin:/bin" run_rr "$DW" --scan-worktrees "$DW/repo")"
+check "a worktree holding only a handoff edit and .claude/ scratch reads clean" \
+  'echo "$OUTW" | grep -q "wt-scratch branch=scratch state=clean"'
+check "a worktree with a real file still reads DIRTY" \
+  'echo "$OUTW" | grep -q "wt-work branch=work state=DIRTY"'
 
 echo "== embedded= is passed through, never derived =="
 # The reconciler is the only thing that can observe an embed. These stubs prove

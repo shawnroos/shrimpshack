@@ -283,7 +283,10 @@ check("exactly ONE fenced block documents the `applied` recording", len(_rec) ==
 if len(_rec) == 1:
     env = env_for("unused")
     env["CLAUDE_SESSION_ID"] = "sess-regroup-1"
-    p = subprocess.run(["bash", "-c", _rec[0].strip()], capture_output=True,
+    # The harness substitutes ${CLAUDE_PLUGIN_ROOT} in command text before the shell
+    # runs it; inside single quotes an env var would never expand.
+    p = subprocess.run(["bash", "-c", _rec[0].strip().replace("${CLAUDE_PLUGIN_ROOT}", REPO)],
+                       capture_output=True,
                        text=True, env=env, cwd=NEUTRAL)
     log = os.path.join(STORE, "MEMORY_USE.log")
     line = ""

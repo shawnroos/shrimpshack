@@ -343,6 +343,42 @@ check("the CLI goes through the shared retrieval module, not its own subprocess"
 check("the CLI never stamps qmd health itself (one signal, retrieval's)",
       "note_failure" not in src, "")
 
+print("== save never clobbers the index ==")
+sv = tempfile.mkdtemp(prefix="save-store-")
+with open(os.path.join(sv, "MEMORY.md"), "w", encoding="utf-8") as fh:
+    fh.write("INDEX\n")
+body_path = os.path.join(sv, "body.txt")
+with open(body_path, "w", encoding="utf-8") as fh:
+    fh.write("from a file\n")
+sv_env = dict(os.environ, REFLECT_MEMORY_DIR=sv)
+
+
+def run_save(*args):
+    return subprocess.run([sys.executable, CLI, "save", *args], capture_output=True,
+                          text=True, env=sv_env, cwd=sv)
+
+
+def index_intact():
+    return open(os.path.join(sv, "MEMORY.md"), encoding="utf-8").read() == "INDEX\n"
+
+
+r = run_save("-h")
+check("save -h prints usage and exits 0", r.returncode == 0 and "usage" in r.stdout, r.stderr)
+check("...and leaves MEMORY.md intact (APFS: memory.md IS MEMORY.md)", index_intact(), "")
+r = run_save("--scope", "global", "--name", "x", body_path)
+check("a path-shaped body is refused", r.returncode == 2 and "path" in r.stderr, r.stderr)
+r = run_save("--scope", "global", "--name", "MEMORY", "text")
+check("the reserved index name is refused", r.returncode == 2 and index_intact(), r.stderr)
+r = run_save("--scope", "global", "text")
+check("a save with no --name is refused", r.returncode == 2 and index_intact(), r.stderr)
+r = run_save("--scope", "global", "--name", "fromfile", "--body-file", body_path)
+check("--body-file writes the file's text",
+      r.returncode == 0 and "from a file" in open(os.path.join(sv, "fromfile.md")).read(),
+      r.stderr)
+r = run_save("--scope", "global", "--name", "fromfile", "again")
+check("an existing memory is not overwritten", r.returncode == 2
+      and "from a file" in open(os.path.join(sv, "fromfile.md")).read(), r.stderr)
+
 print()
 print(f"recall_cli_test: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
