@@ -405,7 +405,25 @@ def read_lease(path: str):
     return lease
 
 
+_READS = None
+
+
+def cache_reads() -> None:
+    # Only for a short-lived process that writes nothing it reads back: a hook reads the same run
+    # once per lease and per guard, and each read of a held store costs a busy wait.
+    global _READS
+    _READS = {} if _READS is None else _READS
+
+
 def read_programme(run_id: str) -> tuple:
+    if _READS is None:
+        return _read_programme(run_id)
+    if run_id not in _READS:
+        _READS[run_id] = _read_programme(run_id)
+    return _READS[run_id]
+
+
+def _read_programme(run_id: str) -> tuple:
     try:
         return run_record_core.read_run_record(home_path(run_id), run_id), None
     except run_record_core.RunRecordError as exc:

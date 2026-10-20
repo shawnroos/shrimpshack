@@ -593,8 +593,9 @@ _SPECS = (
     ("end", _h_end, "[--why <text>] [--run <id>]",
      "no typed /auto:programme-end from the driving session, unless the lease is orphaned or "
      "expired (an agreement never accepted, which ends with reason agreement_unaccepted as "
-     "expire does); an ended programme; an unquoted --why of several words. Prints CronDelete "
-     "for each cron watcher and TaskStop for each Monitor watcher. Refusals are journaled."),
+     "expire does); an ended programme. Prints CronDelete for each cron watcher and TaskStop for "
+     "each Monitor watcher. Refusals are journaled. Exits 2, unjournaled, on words left over "
+     "after an unquoted --why of several words."),
     ("expire", _h_expire, "[--run <id>]",
      "nothing: it ends the programme only when its agreement stayed unaccepted past one cadence."),
     ("set-remit", _h_set_remit, "[--prompt <id>] [--run <id>] < JSON {spaces, repos, tracker}",

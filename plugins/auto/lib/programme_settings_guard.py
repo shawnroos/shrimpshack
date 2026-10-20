@@ -29,23 +29,25 @@ _TOKEN = re.compile(r"[^\s;&|<>()`]*\.claude/settings\.local\.json(?![\w.-])", r
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
 
 
+def _held_read(lease):
+    """(run_id, record) for a lease that holds its space; record None when it cannot be read."""
+    if not lease or lease.get("corrupt") or not isinstance(lease.get("run"), str):
+        return None
+    status, read = programme_home.lease_state(lease)
+    if status not in programme_home.HELD_LEASE_STATES:
+        return None
+    record, _ = read or programme_home.read_programme(lease["run"])
+    return lease["run"], record if isinstance(record, dict) else None
+
+
 def _space_run(session_id, env):
     space = session_registry.space_of_session(session_id, env)
     if not space:
         return None
     try:
-        lease = programme_home.read_lease(programme_home.lease_path(*space))
+        return _held_read(programme_home.read_lease(programme_home.lease_path(*space)))
     except programme_home.ProgrammeHomeError:
         return None
-    if not lease:
-        return None
-    status, read = programme_home.lease_state(lease)
-    if status not in programme_home.HELD_LEASE_STATES or read is None:
-        return None
-    record, hold = read
-    if hold is not None:
-        return lease.get("run"), None
-    return (lease["run"], record) if isinstance(record, dict) else None
 
 
 def _item_ids(programme, session_id) -> list:
@@ -62,11 +64,11 @@ def scope(session_id, env):
     """(run_id, programme, item_ids), or (run_id, None, []) when the run's record cannot be read."""
     if not isinstance(session_id, str) or not session_id:
         return None
-    driven = programme_home.driven_runs(session_id)
-    held = [d["run"] for d in driven if d.get("hold") is not None]
-    if held:
-        return held[0], None, []
-    driven = [d for d in driven if isinstance(d.get("record"), dict)]
+    unreadable = [r for r in map(_held_read, programme_home.leases_for_session(session_id))
+                  if r is not None and r[1] is None]
+    if unreadable:
+        return unreadable[0][0], None, []
+    driven = [d for d in programme_home.driven_runs(session_id) if isinstance(d.get("record"), dict)]
     found = (driven[0]["run"], driven[0]["record"]) if driven else _space_run(session_id, env)
     if found is None:
         return None
@@ -99,20 +101,24 @@ def _target(tool_name, tool_input, cwd, destinations):
     # Casefolded: the macOS file system is case-insensitive, so .claude/Settings.local.json is the same file.
     guarded = {os.path.realpath(os.path.join(d, SETTINGS_FILE)).casefold() for d in destinations or ()}
 
-    def hit(path):
-        return _any_settings_file(path) if destinations is None else path.casefold() in guarded
+    def hit(path, raw):
+        if destinations is not None:
+            return path.casefold() in guarded
+        # A symlinked .claude folder resolves to a path without the settings name; check the name as written too.
+        written = os.path.normpath(os.path.join(cwd, _expanded(raw)))
+        return _any_settings_file(path) or _any_settings_file(written)
 
     if tool_name != "Bash":
-        path = tool_input.get("file_path")
-        path = _resolved(path, cwd) if isinstance(path, str) else None
-        return path if path and hit(path) else None
+        raw = tool_input.get("file_path")
+        path = _resolved(raw, cwd) if isinstance(raw, str) else None
+        return path if path and hit(path, raw) else None
     command = tool_input.get("command")
     if not isinstance(command, str):
         return None
     text = _HIDING_CHARS.sub("", command)
     tokens = _TOKEN.findall(text)
     for token in tokens:
-        if hit(_resolved(token, cwd)):
+        if hit(_resolved(token, cwd), token):
             return _resolved(token, cwd)
     if destinations is None:
         return None
@@ -160,7 +166,7 @@ def decision(stdin_raw: str):
     return _deny(
         f"auto: this call names {target}, the settings file a permission proposal of "
         f"programme {run_id!r} targets. Only Shawn applies permission rules; continue the "
-        "work that does not need this. This attempt is journaled."), \
+        "work that does not need this. The attempt is journaled once the programme is free."), \
         (run_id, "blocked_settings_write", session_id, payload)
 
 

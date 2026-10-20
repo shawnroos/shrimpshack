@@ -901,6 +901,7 @@ def _cli(argv) -> int:
             stdin_raw = ""
     try:
         load_lib_module("programme_store").bound_waits(STORE_WAIT_MS)
+        load_lib_module("programme_home").cache_reads()
     except Exception:
         pass
     tracker_denial, tracker_row = _guarded(tracker_write_denial, stdin_raw)
