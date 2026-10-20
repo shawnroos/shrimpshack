@@ -220,10 +220,10 @@ it "AE9: a PR whose only check runs were all skipped is refuted"
 check '"refuted"' "$(merged_result allskipped)"
 has "no check run succeeded" "$(journal_last evidence_checked)"
 
-ctx_add failbeside "c['nodes'] += [{'__typename': 'CheckRun', 'name': 'e2e', 'status': 'COMPLETED', 'conclusion': 'SKIPPED', 'isRequired': True}, {'__typename': 'CheckRun', 'name': 'unit', 'status': 'COMPLETED', 'conclusion': 'FAILURE', 'isRequired': True}]"
+ctx_add failbeside "c['nodes'] += [{'__typename': 'CheckRun', 'name': 'e2e', 'status': 'COMPLETED', 'conclusion': 'SKIPPED', 'isRequired': True}, {'__typename': 'CheckRun', 'name': 'build', 'status': 'COMPLETED', 'conclusion': 'FAILURE', 'isRequired': True}]"
 it "a required job that failed beside a skipped one is refuted and named"
 check '"refuted"' "$(merged_result failbeside)"
-has "unit FAILURE" "$(journal_last evidence_checked)"
+has "build FAILURE" "$(journal_last evidence_checked)"
 
 ctx_add oddreq "c['nodes'].append({'__typename': 'CheckRun', 'name': 'gate', 'status': 'COMPLETED', 'conclusion': 'SOMETHING_NEW', 'isRequired': True})"
 it "a required job with a conclusion the checker does not know is refuted"
