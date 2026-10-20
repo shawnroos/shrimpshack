@@ -227,7 +227,7 @@ def _ordered_terms(terms) -> list:
     return known + sorted(k for k in terms if k not in programme_home.TERM_GUIDE)
 
 
-def contract(block, journal_entries, entries, instructions) -> dict:
+def contract(block, journal_entries, entries, instructions, behaviours=None) -> dict:
     counts = reliant_counts(entries)
     terms = _dict(_dict(block.get("agreement")).get("terms"))
     out_terms = [_term(key, _dict(terms[key]), counts, journal_entries) for key in _ordered_terms(terms)]
@@ -240,7 +240,7 @@ def contract(block, journal_entries, entries, instructions) -> dict:
             "scope": "inherited" if applies_to == "programme" else "own", "until": entry.get("until"),
             "at": entry.get("at"), "reliant_steps": counts.get(f"instruction:{entry.get('id')}", 0)})
     return {"accepted": _dict(block.get("agreement")).get("accepted"), "terms": out_terms,
-            "instructions": out_instructions}
+            "instructions": out_instructions, "behaviours": [_dict(b) for b in behaviours or []]}
 
 
 def reread(block, journal_entries) -> dict:
@@ -258,10 +258,10 @@ def reread(block, journal_entries) -> dict:
             "requested_at": requested_at if requested else None}
 
 
-def build(record, block, journal_entries, now, instructions) -> dict:
+def build(record, block, journal_entries, now, instructions, behaviours=None) -> dict:
     journal_entries = list(journal_entries or [])
     entries = work(block, journal_entries, now, programme_home.cadence_seconds(record))
-    return {"work": entries, "contract": contract(block, journal_entries, entries, instructions),
+    return {"work": entries, "contract": contract(block, journal_entries, entries, instructions, behaviours),
             "reread": reread(block, journal_entries)}
 
 

@@ -174,8 +174,9 @@ def _terms_view(agreement) -> dict:
 def rules_in_force(record, journals=None) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     journals = {} if journals is None else journals
-    protocol = programme_protocol.load(
-        prompt_lookup=lambda run_id, prompt_id: prompt_lookup(run_id, prompt_id, journals))
+    def lookup(run_id, prompt_id):
+        return prompt_lookup(run_id, prompt_id, journals)
+    protocol = programme_protocol.load(prompt_lookup=lookup)
     rules = [{"id": rid, "layer": rule["layer"], "autonomy": rule["autonomy"],
               "requires": list(rule["requires"]), "caveat": rule["caveat"],
               "adopted_on": rule["adopted_on"]}
@@ -197,6 +198,7 @@ def rules_in_force(record, journals=None) -> dict:
         "instructions": active_instructions(programme),
         "permission_proposals": programme_permission.in_force(programme),
     }
+    out.update(programme_view.behaviours_view(record, lookup))
     corrections = programme_terms.active_corrections(programme)
     if corrections:
         out["corrections"] = corrections
