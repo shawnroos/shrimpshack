@@ -4,6 +4,14 @@ import hashlib
 import json
 import os
 import re
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_lib_module  # noqa: E402
+
+programme_pick_source = load_lib_module("programme_pick_source")
 
 _MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
 _COMMAND = re.compile(
@@ -63,9 +71,11 @@ def _human_text(row):
 def origin(row):
     payload = row.get('payload') or {}
     claimed = payload.get('origin')
-    if claimed not in ('typed', 'unknown'):
+    if claimed not in ('typed', 'unknown', 'picked'):
         return claimed
     source = payload.get('source')
+    if isinstance(source, dict) and source.get('kind') == 'pick':
+        return programme_pick_source.verify(row)
     if not isinstance(source, dict) or type(source.get('version')) is not int or source.get('version') != 1:
         return 'unknown'
     sid = row.get('session_id')
