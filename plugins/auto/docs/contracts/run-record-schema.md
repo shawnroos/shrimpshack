@@ -733,7 +733,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
+`term_amended`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
@@ -770,8 +770,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   only because its text names the driver's pane; `target` is then the pane id or
   terminal id it named. `command` is redacted and capped at 2000 characters.
 - `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
-  `adopt-check` (and, for the carry-over store, by `keep-corrections` and `promote-correction`;
-  see below): `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
+  `adopt-check` (and, for the carry-over store, by `keep-corrections` and `promote-correction`,
+  and for the behaviours store, by `move-behaviour` and `retire-behaviour`; see below): `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
   quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
   autonomy entry, and `repo` and `check` for a check. `target` is `rule:<id>`,
   `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
@@ -808,6 +808,13 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   store_path}`; `correction_promoted` carries `{promoted, kind, stored, store_path}`. Both add the
   approval fields. Before either line, the verb journals one `rule_adopted` line per stored entry
   with `entry: carryover|promotion`, `target: carryover:<key>:<entry id>` and the entry's hash.
+- `behaviour_recorded` carries `{behaviour, layer, when, checks, overrides, from_proposal, related,
+  undo}`; `behaviour_proposed` carries `{behaviour, state, when, checks, from_term}`;
+  `behaviour_moved` carries `{behaviour, from, to, repo_key, target, hash, store_path}`;
+  `behaviour_retired` carries `{behaviour, as, layers, target}`. All but `behaviour_proposed` add
+  the approval fields. After `behaviour_moved` or `behaviour_retired` commits, the verb journals one
+  `rule_adopted` line for the stored entry it wrote, with `entry: move|retire`, `target:
+  behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the entry's hash.
 - `remit_set` adds `carried_over: [{id, area, value, origin, carried}]` when it pre-filled project
   terms, and `notices` naming each store entry it dropped. `accept-agreement` treats a `remit_set`
   line with `carried_over` like a proposal: a prompt older than it does not accept.
@@ -965,6 +972,7 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_SECRETS_FILE` | `~/.secrets` | journal redaction and checker tokens; the path and values are never printed |
 | `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
 | `CLAUDE_AUTO_CARRYOVER_STORE` | `carryover.json` beside the personal protocol | `keep-corrections`, `promote-correction` and the `set-remit` pre-fill. The file is `{format: 1, keys: {<key>: [{id: "k"+6hex, key, correction, kind, to, area, value, reserved, quote, pm_reading, run_id, at, adoption}]}}`; a new entry replaces an older one of the same kind under its key |
+| `CLAUDE_AUTO_BEHAVIOURS_STORE` | `behaviours.json` beside the personal protocol | the behaviour resolver, `move-behaviour` and `retire-behaviour`. The file is `{format: 1, personal: [behaviour], repos: {<key>: [behaviour]}}`; each entry carries an adoption block, and a new entry replaces one with the same id |
 | `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
 | `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |
 | `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, each tracker provider 15 s | every source read in `sweep` |

@@ -63,14 +63,14 @@ def beh(bid, layer="programme", **kw):
         entry["repo_key"] = "acme/alpha"
     entry.update(kw)
     return entry
-def setup(behaviours, items=None):
+def setup(behaviours, items=None, repos="two"):
     counter = os.path.join(os.environ["WORK"], "spaces")
     n = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
     open(counter, "w").write(str(n))
     run = ph.create_programme(["w%d" % n], "sess-pm")["run"]
     def mutate(rec):
         prog = rec["programme"]
-        prog["remit"]["repos"] = [{"path": ALPHA, "github": "acme/alpha"}, {"path": BETA}]
+        prog["remit"]["repos"] = [{"path": ALPHA, "github": "acme/alpha"}] + ([{"path": BETA}] if repos == "two" else [])
         prog["items"] = {"linear:AI-1": ph.new_item("linear:AI-1", "alpha bug"),
                          "linear:AI-2": ph.new_item("linear:AI-2", "beta bug")}
         prog["items"]["linear:AI-1"]["repo"] = ALPHA
@@ -406,6 +406,300 @@ from _bootstrap import load_lib_module
 print(load_lib_module("programme_behaviours").store_path())
 EOF
 )"
+
+fresh_store
+it "a do line about reproduction steps is accepted (a stem counts only at a word start)"
+check "True" "$(run_py <<'EOF'
+print(pb.verdict(beh("g1", do=["attach the reproduction steps"]))["ok"])
+EOF
+)"
+
+it "a do line that keeps paid runs under a cost is accepted (limits stay in code)"
+check "True" "$(run_py <<'EOF'
+print(pb.verdict(beh("g1", do=["keep paid runs under \$1 cost"]))["ok"])
+EOF
+)"
+
+it "AE5: a do line that deploys to production is still refused, and so is merging around the gate"
+check "prod_deploy merge_around_gate prod_deploy" "$(run_py <<'EOF'
+print(pb.verdict(beh("g1", do=["deploy it to production yourself"]))["detail"],
+      pb.verdict(beh("g2", do=["merge around the gate"]))["detail"],
+      pb.verdict(beh("g3", do=["it deployed to prod"]))["detail"])
+EOF
+)"
+
+it "a programme entry moved to a repo needs the repo key it moved to"
+check "bad_value moved_repo_key|True" "$(run_py <<'EOF'
+v = pb.verdict(beh("g1", moved_to="repo"))
+print("%s %s|%s" % (v["reason"], v["detail"], pb.verdict(beh("g1", moved_to="repo", moved_repo_key="acme/alpha"))["ok"]))
+EOF
+)"
+
+fresh_store
+it "a programme entry moved to one repo stays while only another repo's key holds it, then hides"
+check "gmv@programme|gmv@repo" "$(run_py <<'EOF'
+run = setup([beh("gmv", moved_to="repo", moved_repo_key="acme/alpha")])
+keep(run, [beh("gmv", "repo", repo_key=os.path.normpath(BETA))])
+before = ids(run, "linear:AI-1")
+keep(run, [beh("gmv", "repo")], text="keep it for alpha")
+print(before + "|" + ids(run, "linear:AI-1"))
+EOF
+)"
+
+PROG="${AUTO_ROOT}/lib/programme.py"
+OUT=""
+CODE=0
+prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
+new_run() {
+  run_py "${1:-two}" <<'EOF'
+print(setup([], repos=args[0]))
+EOF
+}
+tprompt() {
+  run_py "$1" "$2" "${3:-typed}" <<'EOF'
+print(fixture_prompt(args[0], "sess-pm", args[1], args[2])["prompt_id"])
+EOF
+}
+q() {
+  run_py "$1" "$2" <<'EOF'
+run, expr = args
+rec = record(run)
+prog = rec["programme"]
+def beh_of(bid):
+    return next((b for b in prog["behaviours"] if b["id"] == bid), None)
+def kinds():
+    return [r["kind"] for r in pj.read(run)]
+def count(kind):
+    return kinds().count(kind)
+def stored(bid):
+    doc = pb.read_store()
+    rows = doc["personal"] + [e for es in doc["repos"].values() for e in es]
+    return next((e for e in rows if e["id"] == bid), None)
+def loaded():
+    return pb.load_store()
+print(eval(expr))
+EOF
+}
+jfield() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1].splitlines()[-1]); print(eval(sys.argv[2]))' "$1" "$2" 2>&1; }
+record_one() {
+  local p
+  p="$(tprompt "$1" "always reproduce a reported bug before planning")"
+  prog record-behaviour --run "$1" --prompt "$p" --when "a bug is reported" --pm-check "the item is a bug" \
+    --do "reproduce the bug before planning"
+  jfield "$OUT" 'd["behaviour"]'
+}
+
+fresh_store
+RUN="$(new_run)"
+P1="$(tprompt "$RUN" "always reproduce a reported bug before planning")"
+it "AE1: record-behaviour with a typed prompt succeeds"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "a bug is reported" --pm-check "the item is a bug" \
+  --agent-check "the bug reproduces locally" --do "reproduce the bug before planning"
+check 0 "$CODE"
+BID="$(jfield "$OUT" 'd["behaviour"]')"
+it "AE1: its output lists the drafted checks and the undo command"
+has "the bug reproduces locally" "$OUT"
+has "retire-behaviour ${BID} --as undone" "$OUT"
+it "AE1: the record shows it active at the programme layer, sourced from the prompt"
+check "active programme ${P1} pm,agent" "$(q "$RUN" "' '.join([beh_of('$BID')['state'], beh_of('$BID')['layer'], beh_of('$BID')['source']['prompt_id'], ','.join(c['by'] for c in beh_of('$BID')['when']['checks'])])")"
+it "AE1: one behaviour_recorded row cites the prompt"
+check "[['${P1}']]" "$(q "$RUN" "[r.get('cites') for r in pj.read(run) if r['kind'] == 'behaviour_recorded']")"
+it "AE1: the recorded behaviour is in force for the programme's items at once"
+check "${BID}@programme" "$(q "$RUN" "ids(run)")"
+
+P2="$(tprompt "$RUN" "make ${BID} global")"
+it "AE1: move-behaviour --to personal with a prompt saying global succeeds"
+prog move-behaviour "$BID" --to personal --prompt "$P2" --run "$RUN"
+check 0 "$CODE"
+it "AE1: the store holds it as a personal entry whose adoption verifies"
+check "1 []" "$(q "$RUN" "'%d %s' % (len(loaded()['personal']), loaded()['rejected'])")"
+it "AE1: the programme copy is marked moved and the personal copy is the one in force"
+check "personal ${BID}@personal" "$(q "$RUN" "beh_of('$BID')['moved_to'] + ' ' + ids(run)")"
+it "AE1: the move journals one rule_adopted row for the personal target and one behaviour_moved row"
+check "['behaviour:personal:${BID}'] 1" "$(q "$RUN" "'%s %d' % ([r['payload']['target'] for r in pj.read(run) if r['kind'] == 'rule_adopted'], count('behaviour_moved'))")"
+
+P3="$(tprompt "$RUN" "move ${BID} to the repo")"
+it "a personal behaviour moves to a named repo, re-adopted, with the programme copy following"
+prog move-behaviour "$BID" --to repo --repo acme/alpha --prompt "$P3" --run "$RUN"
+check "0 repo acme/alpha [] acme/alpha ${BID}@repo" "$CODE $(q "$RUN" "' '.join([stored('$BID')['layer'], stored('$BID')['repo_key'], str(loaded()['rejected']), beh_of('$BID')['moved_repo_key'], ids(run)])")"
+
+P4="$(tprompt "$RUN" "retire ${BID}, we do not need it")"
+it "retiring a stored behaviour re-adopts it as retired and it stays visible"
+prog retire-behaviour "$BID" --as retired --prompt "$P4" --run "$RUN"
+check "0 retired [] 3 retired" "$CODE $(q "$RUN" "' '.join([stored('$BID')['state'], str(loaded()['rejected']), str(count('rule_adopted')), beh_of('$BID')['state']])")"
+it "a retired stored behaviour is not in force"
+check "" "$(q "$RUN" "ids(run)")"
+
+fresh_store
+RUN="$(new_run)"
+BID="$(record_one "$RUN")"
+P2="$(tprompt "$RUN" "make ${BID} global")"
+prog move-behaviour "$BID" --to personal --prompt "$P2" --run "$RUN"
+P3="$(tprompt "$RUN" "bring ${BID} back to the programme")"
+it "a personal behaviour moves back to the programme and leaves the store"
+prog move-behaviour "$BID" --to programme --prompt "$P3" --run "$RUN"
+check "0 None None ${BID}@programme" "$CODE $(q "$RUN" "' '.join([str(stored('$BID')), str(beh_of('$BID').get('moved_to')), ids(run)])")"
+P4="$(tprompt "$RUN" "keep ${BID} in the programme")"
+it "moving a behaviour to the layer it is already on is refused"
+prog move-behaviour "$BID" --to programme --prompt "$P4" --run "$RUN"
+check 1 "$CODE"
+has "already" "$OUT"
+
+fresh_store
+RUN="$(new_run)"
+BID="$(record_one "$RUN")"
+mkdir -p "$(dirname "$CLAUDE_AUTO_BEHAVIOURS_STORE")"
+printf '{not json' > "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+P2="$(tprompt "$RUN" "make ${BID} global")"
+BEFORE="$(q "$RUN" "json.dumps(prog['behaviours'], sort_keys=True)")"
+it "with an unreadable behaviours.json, move-behaviour --to personal is refused"
+prog move-behaviour "$BID" --to personal --prompt "$P2" --run "$RUN"
+check 1 "$CODE"
+has "unreadable" "$OUT"
+it "the refused move leaves the programme entry unmoved and in force, and the store untouched"
+check "${BEFORE}|${BID}@programme|{not json" "$(q "$RUN" "json.dumps(prog['behaviours'], sort_keys=True) + '|' + ids(run)")|$(cat "$CLAUDE_AUTO_BEHAVIOURS_STORE")"
+
+fresh_store
+RUN="$(new_run one)"
+BID="$(record_one "$RUN")"
+P2="$(tprompt "$RUN" "keep ${BID} here, not the repo")"
+REC_BEFORE="$(q "$RUN" "json.dumps(prog, sort_keys=True)")"
+ROWS_BEFORE="$(q "$RUN" "[k for k in kinds() if k != 'approval_refused']")"
+REFUSED_BEFORE="$(q "$RUN" "count('approval_refused')")"
+it "move-behaviour --to repo with a prompt saying 'not the repo' is refused"
+prog move-behaviour "$BID" --to repo --prompt "$P2" --run "$RUN"
+check 1 "$CODE"
+has "negates" "$OUT"
+it "the refused move writes nothing: record and non-refusal rows unchanged, no store file"
+check "${REC_BEFORE}|${ROWS_BEFORE}|False" "$(q "$RUN" "json.dumps(prog, sort_keys=True) + '|' + str([k for k in kinds() if k != 'approval_refused']) + '|' + str(os.path.exists(pb.store_path()))")"
+it "the refused move journals exactly one approval_refused row"
+check "$((REFUSED_BEFORE + 1))" "$(q "$RUN" "count('approval_refused')")"
+
+P3="$(tprompt "$RUN" "make it global")"
+it "a move whose prompt does not name the behaviour is refused"
+prog move-behaviour "$BID" --to personal --prompt "$P3" --run "$RUN"
+check 1 "$CODE"
+has "does not name" "$OUT"
+
+P4="$(tprompt "$RUN" "move ${BID} to the repo")"
+it "with one repo in the remit, move-behaviour --to repo takes that repo's key"
+prog move-behaviour "$BID" --to repo --prompt "$P4" --run "$RUN"
+check "0 acme/alpha acme/alpha ${BID}@repo" "$CODE $(q "$RUN" "' '.join([stored('$BID')['repo_key'], beh_of('$BID')['moved_repo_key'], ids(run)])")"
+
+fresh_store
+RUN="$(new_run two)"
+BID="$(record_one "$RUN")"
+P2="$(tprompt "$RUN" "move ${BID} to the repo")"
+it "with two repos in the remit, move-behaviour --to repo without --repo is refused"
+prog move-behaviour "$BID" --to repo --prompt "$P2" --run "$RUN"
+check 1 "$CODE"
+has "--repo" "$OUT"
+it "a --repo that is not in the remit is refused"
+prog move-behaviour "$BID" --to repo --repo acme/other --prompt "$P2" --run "$RUN"
+check 1 "$CODE"
+it "with --repo naming one, the behaviour moves there and leaves the programme"
+prog move-behaviour "$BID" --to repo --repo acme/alpha --prompt "$P2" --run "$RUN"
+check "0 ${BID}@repo|" "$CODE $(q "$RUN" "ids(run, 'linear:AI-1') + '|' + ids(run, 'linear:AI-2')")"
+
+fresh_store
+RUN="$(new_run)"
+run_py "$RUN" <<'EOF' >/dev/null
+keep(args[0], [beh("pdatadog", "personal", do=["prioritise with Datadog"])])
+EOF
+P1="$(tprompt "$RUN" "here, prioritise with Amplitude")"
+it "AE4: record-behaviour --conflicts-with a personal entry sets the programme entry to override it"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "prioritising the queue" --do "prioritise with Amplitude" \
+  --conflicts-with pdatadog
+BID="$(jfield "$OUT" 'd["behaviour"]')"
+check "0 ['pdatadog'] ${BID}@programme" "$CODE $(q "$RUN" "str(beh_of('$BID')['overrides']) + ' ' + ids(run)")"
+it "record-behaviour --conflicts-with an unknown behaviour is refused"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "prioritising" --do "prioritise" --conflicts-with pnope
+check 1 "$CODE"
+has "pnope" "$OUT"
+it "record-behaviour names an in-force behaviour whose when shares words with the new one"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "a bug report comes in" --do "label it"
+has "pdatadog" "$(jfield "$OUT" 'd["related"]')"
+
+fresh_store
+RUN="$(new_run)"
+PC="$(tprompt "$RUN" "wake up and sweep the space" cron)"
+it "record-behaviour citing a cron prompt is refused"
+prog record-behaviour --run "$RUN" --prompt "$PC" --when "a bug is reported" --do "reproduce it"
+check 1 "$CODE"
+has "typed" "$OUT"
+it "record-behaviour with no prompt is refused"
+prog record-behaviour --run "$RUN" --when "a bug is reported" --do "reproduce it"
+check 1 "$CODE"
+it "the refused records write nothing"
+check "[] 0" "$(q "$RUN" "'%s %d' % (prog['behaviours'], count('behaviour_recorded'))")"
+
+P1="$(tprompt "$RUN" "when a fix is ready, deploy it to production yourself")"
+it "AE5: record-behaviour naming a production deploy is refused, writes nothing and journals the refusal"
+REFUSED_BEFORE="$(q "$RUN" "count('approval_refused')")"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "a fix is ready" --do "deploy it to production yourself"
+check "1 [] $((REFUSED_BEFORE + 1))" "$CODE $(q "$RUN" "'%s %d' % (prog['behaviours'], count('approval_refused'))")"
+has "protected_escalation" "$OUT"
+
+fresh_store
+RUN="$(new_run)"
+BID="$(record_one "$RUN")"
+P2="$(tprompt "$RUN" "undo that")"
+it "retire-behaviour --as undone right after recording succeeds"
+prog retire-behaviour "$BID" --as undone --prompt "$P2" --run "$RUN"
+check "0 undone" "$CODE $(jfield "$OUT" 'd["as"]')"
+it "the undone behaviour is out of force and stays visible as retired"
+check "|retired undone" "$(q "$RUN" "ids(run) + '|' + beh_of('$BID')['state'] + ' ' + beh_of('$BID')['history'][-1]['event']")"
+it "retiring it again is refused"
+prog retire-behaviour "$BID" --as retired --prompt "$P2" --run "$RUN"
+check 1 "$CODE"
+
+fresh_store
+RUN="$(new_run)"
+it "propose-behaviour stores a proposal with no prompt"
+prog propose-behaviour --run "$RUN" --when "a PR is opened" --agent-check "the worker opened a PR" \
+  --do "request a CodeRabbit review"
+PID="$(jfield "$OUT" 'd["behaviour"]')"
+check "0 proposed 1 " "$CODE $(q "$RUN" "'%s %d %s' % (beh_of('$PID')['state'], count('behaviour_proposed'), ids(run))")"
+it "record-behaviour --from-proposal without a typed prompt is refused"
+prog record-behaviour --from-proposal "$PID" --run "$RUN"
+check "1 proposed" "$CODE $(q "$RUN" "beh_of('$PID')['state']")"
+P1="$(tprompt "$RUN" "yes, apply ${PID}")"
+it "record-behaviour --from-proposal with a typed prompt makes it active and leaves the proposals"
+prog record-behaviour --from-proposal "$PID" --prompt "$P1" --run "$RUN"
+check "0 active [] ${PID}@programme" "$CODE $(q "$RUN" "' '.join([beh_of('$PID')['state'], str([b['id'] for b in prog['behaviours'] if b['state'] == 'proposed']), ids(run)])")"
+
+fresh_store
+RUN="$(new_run)"
+run_py "$RUN" <<'EOF' >/dev/null
+def add_term(rec):
+    rec["programme"]["agreement"]["project_terms"] = [
+        {"id": "t0a0b0c", "area": "prioritisation", "value": "Amplitude", "source": "x", "set_by": "proposal",
+         "at": "2026-10-20T00:00:00Z", "reserved": False, "history": []}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], add_term)
+EOF
+TERM_BEFORE="$(q "$RUN" "json.dumps(prog['agreement']['project_terms'], sort_keys=True)")"
+it "propose-behaviour --from-term copies the term's area and value into the draft"
+prog propose-behaviour --from-term t0a0b0c --run "$RUN"
+PID="$(jfield "$OUT" 'd["behaviour"]')"
+check "0 True ['Amplitude'] proposed" "$CODE $(q "$RUN" "'%s %s %s' % ('prioritisation' in beh_of('$PID')['when']['text'], beh_of('$PID')['tools'], beh_of('$PID')['state'])")"
+it "propose-behaviour --from-term leaves the project term unchanged"
+check "$TERM_BEFORE" "$(q "$RUN" "json.dumps(prog['agreement']['project_terms'], sort_keys=True)")"
+it "propose-behaviour --from-term with an unknown term is refused"
+prog propose-behaviour --from-term tffffff --run "$RUN"
+check 1 "$CODE"
+
+fresh_store
+RUN="$(new_run)"
+run_py "$RUN" <<'EOF' >/dev/null
+def end(rec):
+    rec["programme"]["ended"] = {"at": "2026-10-20T00:00:00Z", "reason": "ended_by_shawn"}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], end)
+EOF
+P1="$(tprompt "$RUN" "always reproduce a reported bug before planning")"
+it "a behaviour write on an ended programme is refused"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "a bug is reported" --do "reproduce it"
+check 1 "$CODE"
+has "ended" "$OUT"
 
 echo ""
 echo "programme-behaviours.test.sh: ${PASS} passed, ${FAIL} failed"

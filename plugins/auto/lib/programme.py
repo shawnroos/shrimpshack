@@ -307,7 +307,8 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
 
     try:
         out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"])
-    except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError) as exc:
+    except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
+            programme_behaviours.BehaviourError) as exc:
         if (needs_prompt or prompt_id) and "sid" in seen:
             _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
         raise
@@ -920,11 +921,15 @@ _VERBS["status"] = _Verb(
     reads=True,
 )
 
+programme_behaviours = load_lib_module("programme_behaviours")
+_VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
+
 _ERRORS = (
     ProgrammeError,
     programme_record.RecordError,
     programme_decisions.DecisionError,
     programme_terms.TermsError,
+    programme_behaviours.BehaviourError,
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,
