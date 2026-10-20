@@ -261,7 +261,14 @@ _that_ PR is the only place stylesheet and template edits get verified — no lo
 
 ## Delegation
 
-Fanning out works, but only behind the gates above. Observed failure modes, all real:
+Fanning out works, but only behind the gates above. Two pinned agents carry the work:
+
+- **`comment-cut:comment-sweeper`** (Haiku) — Phase 3 on an explicit file list. Pass it the
+  scoped detector command.
+- **`comment-cut:comment-slicer`** (Sonnet) — Phase 4 for one area, only after calibration.
+  Pass it the area's file list and the agreed before/after example.
+
+Calibration, gating and committing stay in this session. Observed failure modes, all real:
 
 - A worker given a whole directory **delegates instead of working** and returns before its
   children finish, reporting success with zero files changed. Give explicit file lists and state

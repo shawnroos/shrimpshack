@@ -49,7 +49,7 @@
     {
       "name": "spinoff",
       "description": "Fork the current thread of work into its own place \u2014 takes the topic/plan/idea just discussed and moves it into a fresh git worktree with a new, already-briefed Claude session, so the current session stays focused and the new one picks up the context. Command-invoked only via /start-session, /start-split, /start-workspace, or the /start alias: branches a worktree (current HEAD or develop), writes a handoff doc linking back to the originating session's transcript, carries over the whole docs/ tree plus local config dotfiles (.env, .envrc, .tool-versions, .nvmrc), and launches Claude with the brief already attached as its opening prompt \u2014 in a new tab, in a split beside the pane you're in, or in a brand-new two-pane workspace with the handoff alongside. The mechanical work runs in a background agent so it doesn't consume the originating session's context. The receiving session is told to treat the handoff as directional author-intent \u2014 enough to orient and start, with the code and tests as the source of truth \u2014 both in the brief and via a self-declaring banner on the doc itself. Launches under herdr, cmux or Ghostty, auto-detected; the Ghostty path is AppleScript-driven, so it needs macOS Automation permission and cannot auto-answer Claude's MCP trust prompt.",
-      "version": "0.10.4",
+      "version": "0.11.0",
       "author": {
         "name": "Shawn Roos"
       },
@@ -69,7 +69,7 @@
     {
       "name": "comment-cut",
       "description": "Cut comment bloat out of a branch without losing the comments that matter \u2014 four keep-rules, each needing a failure that nothing reports AND a tempting edit that would cause it, because a visible bug is a missing test rather than a comment; specs default to zero on the principle that a red test is not a silent failure. Reachable as /comment-cut:cut, and a PreToolUse gate stops a commit or a PR once when the change adds bloat on the lines it touches \u2014 opt-in per repo, fail-open on every path, and the retry always proceeds",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "author": {
         "name": "Shawn Roos"
       },
@@ -79,7 +79,7 @@
     {
       "name": "lint-router",
       "description": "A registry-driven lint router: it picks which linters to run based on WHO the work is for \u2014 matched by git origin or marker files \u2014 then runs that profile's linters on just the files you changed. Profiles live in a routes.json registry (ordered, first match wins); add, configure, remove, or discover linters through the bundled skills \u2014 eslint, ruff, clippy, shellcheck, prettier, or any tool you register, across languages. A profile can layer a linter as an overlay on a repo's own config or run one standalone, and a profile that matches nothing runs nothing \u2014 so it never imposes a lint on code that shouldn't have one. Personal and local by design: it writes only a gitignored overlay or nothing at all, never a repo's committed config, deps, or CI. A SessionStart hook prepares the right profile automatically; invoke the skill to run the check before committing or opening a PR.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "Shawn Roos"
       },
@@ -119,7 +119,7 @@
     {
       "name": "work",
       "description": "Ties each Claude session to its Linear issue through the herdr board. Agents write Linear with Linear's own MCP tools; the plugin's hook tells the board about every write, a SessionStart hook names the session's issue, column and marks, and start and layout create bound worktrees. A rules skill carries the write rules. Needs a herdr-board release with `board linear report`; run `/work setup` to install and connect everything, or see docs/cutover.md to move from 0.5.",
-      "version": "0.6.1",
+      "version": "0.7.0",
       "author": {
         "name": "Shawn Roos"
       },

@@ -18,6 +18,11 @@ bash ${CLAUDE_PLUGIN_ROOT}/tools/lint-router/run.sh <file…>  # or specific fil
 bash ${CLAUDE_PLUGIN_ROOT}/tools/lint-router/run.sh --explain # which linters run here + why (no lint)
 ```
 
+From a main session, dispatch the run to the `lint-router:lint-runner` agent (pinned to
+Haiku) with the resolved `run.sh` command, so raw linter output stays out of your context; it
+returns every error verbatim and warnings grouped by rule. Fixing stays with you. If you are
+already a subagent, or the Agent tool is unavailable, run the command directly.
+
 ## Seeded profiles (editable)
 
 | Profile | Matches | Runs |
