@@ -276,6 +276,68 @@ def driver_panes(now=None) -> list:
     return out
 
 
+def _label(row, key) -> str | None:
+    text = _clean((row or {}).get(key))
+    return " ".join(text.split()) or None if text else None
+
+
+def driver_presence(session_id, snap, reported, *, current_server) -> dict:
+    out = {"state": "unknown", "session_id": session_id, "herdr_reachable": snap is not None,
+           "registry_pane": None, "pane_in_snapshot": None, "session_reported": None,
+           "pane_id": None, "pane_label": None, "tab_label": None, "why": None}
+    row = lookup(session_id, include_headless=True)
+    if row:
+        out["registry_pane"] = row.get("pane_id")
+    if snap is None:
+        out["why"] = "herdr could not be read"
+        return out
+    panes = [p for p in snap.get("panes") or [] if isinstance(p, dict)]
+    agents = [a for a in snap.get("agents") or [] if isinstance(a, dict)]
+    tabs = {t.get("tab_id"): t for t in snap.get("tabs") or [] if isinstance(t, dict)}
+
+    def named(pane):
+        out.update(pane_id=_clean(pane.get("pane_id")), pane_label=_label(pane, "label"),
+                   tab_label=_label(tabs.get(pane.get("tab_id")), "label"))
+
+    hosting = next((p for p in panes + agents if session_id and reported(p) == session_id), None)
+    if hosting is not None:
+        named(next((p for p in panes if p.get("pane_id") == hosting.get("pane_id")), hosting))
+        out.update(state="present", session_reported=session_id, pane_in_snapshot=True,
+                   why=f"herdr reports the session in pane {out['pane_id']}")
+        return out
+    if not row or not row.get("pane_id"):
+        out["why"] = "no herdr pane was ever recorded for the driving session"
+        return out
+    if not row.get("interactive"):
+        out["why"] = "the driving session runs headless, outside a herdr pane"
+        return out
+    if row.get("server") != current_server:
+        out["why"] = f"the driving session's pane is on herdr server {row.get('server')}, not this one"
+        return out
+    # A pane moved to another tab or workspace gets a new id but keeps its terminal.
+    pane = next((p for p in panes if row.get("terminal_id")
+                 and p.get("terminal_id") == row["terminal_id"]), None)
+    pane = pane or next((p for p in panes if p.get("pane_id") == row["pane_id"]), None)
+    out["pane_in_snapshot"] = pane is not None
+    if pane is None:
+        out.update(state="gone", pane_id=row["pane_id"],
+                   why=f"pane {row['pane_id']} that ran the driving session is closed")
+        return out
+    named(pane)
+    agent = next((a for a in agents if a.get("pane_id") == pane.get("pane_id")), None)
+    now_runs = reported(pane) or reported(agent or {})
+    out["session_reported"] = now_runs
+    terminal = _clean(pane.get("terminal_id"))
+    if now_runs and now_runs != session_id:
+        out.update(state="gone", why=f"pane {out['pane_id']} now runs another session")
+    elif row.get("terminal_id") and terminal and terminal != row["terminal_id"]:
+        out.update(state="gone", why=f"pane {out['pane_id']} now holds a different terminal")
+    else:
+        # A live pane that reports no session is ambiguous: herdr loses reported sessions on restart.
+        out["why"] = f"pane {out['pane_id']} is still open and herdr does not say which session it runs"
+    return out
+
+
 def caller_drives(record, session_id=None) -> bool:
     sid = session_id or driver_session.driving_session_id()
     if not sid or not isinstance(record, dict):

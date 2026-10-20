@@ -47,7 +47,7 @@ vocabulary to learn, not two.
 | the PM's live state of mind | **working model** | Now, queue, watching, waits, decisions for the human, just did, rules in force — shown in a PM-only mod. |
 | a programme's record of actions | **journal** | An append-only log beside the run-record: Shawn's prompts, items joining, evidence checked, terms amended, rules adopted, ownership changes. |
 | a standing order from chat | **instruction** | Something Shawn says that is not a term change ("skip full eval"), recorded with his words, what it applies to, and until when. |
-| the claim on a remit | **lease** | The per-space record that makes a programme the only live one in its remit; replaced only by a typed takeover. |
+| the claim on a remit | **lease** | The per-space record that makes a programme the only live one in its remit. Only a typed takeover moves it: at once when herdr shows the old PM's pane closed or running another session, after two missed cadences, or when the typed takeover names the old PM with `--replace`. |
 | which session runs in which pane | **session registry** | A per-space log the SessionStart hook writes inside herdr: each session's id, pane, terminal and whether it is interactive. The PM reads it to know who owns a pane. |
 | a worker's report of finished work | **claim** | A line a worker session adds to the programme's **inbox** (`claims.jsonl`) naming an item, a deliverable and a ref. The PM checks the evidence before it believes it; a claim alone never makes an item done. |
 | when the PM may stop | **stop rule** | An agreement term: stop when nothing is left it can act on (the default), only when every item is done, at a set time, or never. Code computes "may stop" from it; the PM does not decide. |

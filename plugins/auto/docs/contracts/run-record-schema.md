@@ -749,7 +749,10 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
   (a list of decision ids) and `restrictions` (a list of `{text, source}`).
 - Lifecycle payloads: `programme_started {home, leases, session}`;
-  `taken_over` and `handed_over {from_session, to_session, leases, request}`;
+  `taken_over` and `handed_over {from_session, to_session, leases, request}`; `taken_over` adds
+  `reason: orphaned|driver_gone|replaced` and, for the last two, `evidence {state, session_id,
+  herdr_reachable, registry_pane, pane_in_snapshot, session_reported, pane_id, pane_label,
+  tab_label, why}` plus `replace_name` on a replace;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
   monitor_task_ids, process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
   A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
