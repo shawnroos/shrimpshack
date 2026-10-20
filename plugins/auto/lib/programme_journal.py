@@ -65,6 +65,8 @@ KINDS = (
     "behaviour_proposed",
     "behaviour_moved",
     "behaviour_retired",
+    "behaviour_reminded",
+    "behaviours_kept",
     "rule_proposed",
     "rule_adopted",
     "rules_acked",

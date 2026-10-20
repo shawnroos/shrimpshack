@@ -376,12 +376,25 @@ def _held(loaded, entry) -> bool:
     return any(e["id"] == entry["id"] for e in rows or ())
 
 
+# A copy moved to one repo still serves the programme's other repos; only an item in the
+# repo that holds the verified copy reads that copy instead.
+def _held_for(loaded, entry, key) -> bool:
+    if entry.get("moved_to") == "repo" and entry.get("moved_repo_key") != key:
+        return False
+    return _held(loaded, entry)
+
+
+def shown_programme_entries(programme, loaded) -> list:
+    keys = programme_carryover.repo_keys(programme) or [None]
+    return [e for e in _programme_entries(programme, []) if not all(_held_for(loaded, e, k) for k in keys)]
+
+
 def resolve(record, item, repo=None, *, audience=None, lookup=None, store=None) -> dict:
     programme = (record or {}).get("programme") or {}
     loaded = store if store is not None else load_store(lookup)
     rejected = list(loaded["rejected"])
     key = repo_key_for(programme, repo if repo is not None else (item or {}).get("repo"))
-    candidates = [e for e in _programme_entries(programme, rejected) if not _held(loaded, e)]
+    candidates = [e for e in _programme_entries(programme, rejected) if not _held_for(loaded, e, key)]
     candidates += (loaded["repos"].get(key) or []) if key else []
     candidates += loaded["personal"]
     candidates = [e for e in candidates if e.get("state", ACTIVE) == ACTIVE]
@@ -392,6 +405,73 @@ def resolve(record, item, repo=None, *, audience=None, lookup=None, store=None) 
 
 def in_force(record, item, repo=None, *, audience=None, lookup=None, store=None) -> list:
     return resolve(record, item, repo, audience=audience, lookup=lookup, store=store)["in_force"]
+
+
+def _for_workers(record, item, bid, lookup):
+    entry = next((e for e in in_force(record, item, audience="workers", lookup=lookup) if e["id"] == bid), None)
+    if entry is None:
+        raise BehaviourError(f"behaviour {bid!r} is not in force for this item's worker (unknown, retired, "
+                             "overridden, or it applies to the PM only)")
+    return entry
+
+
+def _pm_checked_only(entry) -> bool:
+    checks = entry["when"].get("checks") or []
+    return bool(checks) and all(c["by"] == "pm" for c in checks)
+
+
+# Code cannot test a PM check, so a behaviour gated only by PM checks joins the brief only
+# when the PM names it, having seen its checks hold on the item.
+def brief_entries(record, item, chosen=(), *, lookup=None) -> tuple:
+    for bid in chosen:
+        _for_workers(record, item, bid, lookup)
+    rows = in_force(record, item, audience="workers", lookup=lookup)
+    taken = [e for e in rows if not _pm_checked_only(e) or e["id"] in chosen]
+    return taken, [e["id"] for e in rows if e not in taken]
+
+
+def _short(entry) -> str:
+    parts = [f"- {entry['id']}: when {entry['when']['text']}"]
+    for label, field in (("do", "do"), ("don't", "dont")):
+        if entry.get(field):
+            parts.append(f"{label}: {'; '.join(entry[field])}")
+    if entry.get("evidence"):
+        parts.append(f"evidence: {entry['evidence']}")
+    judged = [c["text"] for c in entry["when"].get("checks") or [] if c["by"] == "agent"]
+    if judged:
+        parts.append(f"you judge: {'; '.join(judged)}")
+    return ". ".join(parts)
+
+
+def brief_lines(entries) -> list:
+    return ["Behaviours this work follows:"] + [_short(e) for e in entries] if entries else []
+
+
+def since(entry):
+    recorded = [h.get("at") for h in entry.get("history") or [] if isinstance(h, dict) and h.get("event") == "recorded"]
+    return recorded[-1] if recorded else entry.get("at")
+
+
+# Same-second or unknown start reads as remind-only: R19 protects work that may already
+# have passed the trigger, so a send-back needs proof the behaviour came first.
+def timing(entry, trigger_at) -> str:
+    if trigger_at is None:
+        return "before_trigger"
+    start, passed = run_record_core.parse_iso(since(entry) or ""), run_record_core.parse_iso(trigger_at)
+    return "send_back" if start and passed and start < passed else "remind_only"
+
+
+def trigger_times(run_id, key, item) -> dict:
+    claims = [r.get("at") for r in programme_journal.claims(run_id)
+              if (r.get("payload") or {}).get("item") == key and r.get("at")]
+    blocks = [h.get("at") for h in item.get("history") or [] if h.get("kind") in ("waiting", "handed")]
+    merged = ((item.get("deliverables") or {}).get("merged") or {}).get("confirmed_at")
+    return {"claim": min(claims, default=None), "merge": merged, "block": min(blocks, default=None)}
+
+
+def record_delivery(item, bid, reason, via, **extra) -> None:
+    item.setdefault("behaviour_deliveries", []).append(
+        dict({"id": bid, "reason": reason, "at": run_record_core.now_iso(), "via": via}, **extra))
 
 
 RECORDED = "behaviour_recorded"
@@ -558,7 +638,7 @@ def _h_propose(host, argv):
 
 def _check_layer_named(host, prompt, bid, to) -> None:
     options = LAYER_WORDS[to]
-    host.require_named(prompt, options, bid)
+    host.require_named(prompt, options, *([bid] if bid else []))
     # require_named looks only at the word just before the name, so "not the repo" would
     # pass it; any negation earlier in the prompt refuses, as for promote-correction.
     words = host._name_words(programme_journal.redact(prompt["quote"]))
@@ -697,6 +777,103 @@ def _h_retire(host, argv):
                        verb="retire-behaviour", target=bid, after=lambda _: _after_store(seen, "retire"))
 
 
+KEPT = "behaviours_kept"
+
+
+def _keep(host, programme, prompt, rec, wanted, to, repo) -> dict:
+    _check_layer_named(host, prompt, None, to)
+    read_store()
+    named = [b for b in wanted if not programme_naming.missing(programme_journal.redact(prompt["quote"]), [b])]
+    if not named:
+        raise BehaviourError(f"prompt {prompt['prompt_id']!r} names none of {', '.join(wanted)}")
+    key = _repo_key(programme, repo) if to == "repo" else None
+    adopted = []
+    for bid in named:
+        local = _programme_entry(programme, bid)
+        if local is None or local.get("state", ACTIVE) != ACTIVE:
+            raise BehaviourError(f"no active programme-layer behaviour {bid!r} to keep")
+        moved = _mark(_placed(local, to, key), "kept", prompt, to=to)
+        adopted.append(adopt(moved, prompt, rec))
+        _refuse(adopted[-1], verdict(adopted[-1]))
+        put_programme_entry(programme, _pointer(local, to, key))
+    return {"kept": named, "not_named": [b for b in wanted if b not in named], "adopted": adopted, "key": key}
+
+
+# Re-running on a kept entry re-adopts it; the store write replaces it by id (_place), so
+# a second offer never duplicates an entry.
+def _h_keep(host, argv):
+    positional, opts = host._parse(argv, values=("run", "prompt", "to", "repo"))
+    if not positional or opts.get("to") not in STORED_LAYERS or (opts.get("repo") and opts["to"] != "repo"):
+        raise ValueError("usage: keep-behaviours <id>... --to repo|personal --prompt <id> [--repo <key>]")
+    wanted, to = list(dict.fromkeys(positional)), opts["to"]
+    seen = {}
+
+    def change(programme, prompt, rec):
+        out = _keep(host, programme, prompt, rec, wanted, to, opts.get("repo"))
+        seen.update(out, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
+        return {"kept": out["kept"], "not_named": out["not_named"], "to": to, "repo_key": out["key"],
+                "targets": [target(a) for a in out["adopted"]], "store_path": store_path()}
+
+    def after(_):
+        store(seen["adopted"], seen["prompt"], seen["run"], seen["sid"], "keep")
+
+    return host._write(opts, change, KEPT, prompt_id=opts.get("prompt"), needs_prompt=True,
+                       verb="keep-behaviours", target=",".join(wanted), after=after)
+
+
+REMINDED = "behaviour_reminded"
+REASONS = ("relevant", "sent_back")
+TRIGGERS = ("claim", "merge", "block")
+_OPENERS = {
+    ("sent_back", "send_back"): "Your claim is sent back: it does not show what this behaviour asks for. "
+                                "Bring the work into line, then claim again.",
+    ("relevant", "remind_only"): "This applies from now on. Work you already finished is not sent back.",
+}
+
+
+def _reminder(entry, reason, when, count, cap) -> str:
+    opener = _OPENERS.get((reason, when), "This applies to your work now.")
+    if reason == "sent_back" and count > 1:
+        opener += f" This is send-back {count} for this behaviour."
+    lines = [f"Behaviour {entry['id']}: {opener}", _short(entry)[2:]]
+    return programme_sanitize.clean("\n".join(lines), cap, keep_newlines=True)
+
+
+def _h_remind(host, argv):
+    positional, opts = host._parse(argv, values=("run", "reason", "trigger"), multi=("despite",))
+    trigger = opts.get("trigger") or "claim"
+    if len(positional) != 2 or opts.get("reason") not in REASONS or trigger not in TRIGGERS:
+        raise ValueError("usage: remind-behaviour <item> <id> --reason relevant|sent_back "
+                         "[--trigger claim|merge|block] [--despite <attempt>]...")
+    sources = load_lib_module("programme_sources")
+    programme_record = load_lib_module("programme_record")
+    item_id, bid, reason = programme_record.check_item_id(positional[0]), positional[1], opts["reason"]
+    run_id, home, record = host._locate(opts)
+    sid = host._guard(home, record)
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    key = programme_record._resolve(programme, item_id)
+    item = programme["items"][key]
+    entry = _for_workers(dict(record, programme=programme), item, bid, host.prompt_lookup)
+    passed = trigger_times(run_id, key, item)[trigger]
+    when = timing(entry, passed)
+    if reason == "sent_back" and when != "send_back":
+        raise BehaviourError(f"behaviour {bid!r} cannot send {key!r} back: " + (
+            f"the item has not passed its {trigger}" if passed is None else
+            f"it started after the item's {trigger} at {passed}; remind only (--reason relevant)"))
+    before = [d for d in item.get("behaviour_deliveries") or [] if d.get("id") == bid]
+    count = sum(d.get("reason") == "sent_back" for d in before) + (reason == "sent_back")
+    facts = {"trigger": trigger, "trigger_at": passed, "timing": when}
+
+    def on_sent(target):
+        record_delivery(target, bid, reason, "remind-behaviour", **facts)
+
+    return sources.send_to_item(
+        host, opts, (run_id, home, record, sid), programme, key, _reminder(entry, reason, when, count, sources.PROMPT_CAP),
+        kind=REMINDED, on_sent=on_sent,
+        extra=dict(facts, behaviour=bid, reason=reason, sent_back_count=count,
+                   already_reminded=any(d.get("reason") in REASONS for d in before)))
+
+
 _SPECS = (
     ("record-behaviour", _h_record,
      "--prompt <id> " + _FIELDS_DOC + " [--conflicts-with <id>]... [--run <id>], or --from-proposal <id> "
@@ -719,6 +896,19 @@ _SPECS = (
      "<id> --as retired|undone --prompt <id> [--run <id>]",
      "no typed prompt from the driving session; an unknown or already retired behaviour; an unreadable "
      "behaviours store when the behaviour lives there. The entry stays visible as retired."),
+    ("keep-behaviours", _h_keep,
+     "<id>... --to repo|personal --prompt <id> [--repo <key>] [--run <id>]",
+     "no typed prompt from the driving session; a prompt that does not name the layer (repo, or personal, "
+     "global or all projects) or negates it, or names none of the ids; a named id that is not an active "
+     "programme-layer behaviour; an unreadable behaviours store; --to repo with several remit repos and no "
+     "--repo; an ended programme. Ids the prompt does not name are left out and listed as not_named."),
+    ("remind-behaviour", _h_remind,
+     "<item> <id> --reason relevant|sent_back [--trigger claim|merge|block] [--despite <attempt>]... [--run <id>]",
+     "a session that does not drive the programme; a behaviour not in force for the item's worker (unknown, "
+     "retired, overridden or PM-only); --reason sent_back when the item has not passed the trigger (default "
+     "claim) or the behaviour started at or after it (remind only); every prompt-item refusal (no owner pane, "
+     "a driver or tracker pane, a session mismatch). Sends through the prompt-item path and records the "
+     "delivery on the item."),
 )
 
 

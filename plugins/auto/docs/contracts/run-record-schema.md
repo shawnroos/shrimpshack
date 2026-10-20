@@ -710,6 +710,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `permission_block` | `{cause, detail, at, proposals}`: the item's latest permission explanation, written by the permission verbs |
 | `permission_scan` | `{<session id>: byte offset}`: how far `propose-permission` has read each session's transcript for this item |
 | `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
+| `behaviour_deliveries` | `[{id, reason, at, via, trigger?, trigger_at?, timing?}]`: each behaviour sent to the item's worker. `reason` is `brief` (`via: start-worker`), `relevant` or `sent_back` (`via: remind-behaviour`, which adds `trigger` (claim, merge or block), `trigger_at` and `timing` (`before_trigger`, `send_back` or `remind_only`)). Absent on items that never had one |
 | `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
@@ -733,7 +734,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `rule_proposed`,
+`term_amended`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviours_kept`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
@@ -747,7 +748,10 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - `trajectory_changed {item, old_hash, new_hash}`: one row per item whose step path changed under the same
   driving session. A first recording, a recording under a new driving session and an unchanged path write no row.
 - `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
-  (a list of decision ids) and `restrictions` (a list of `{text, source}`).
+  (a list of decision ids) and `restrictions` (a list of `{text, source}`). `worker_started` and
+  `worker_start_failed` also add `behaviour_ids` (the behaviours in the brief) and
+  `behaviours_held_back` (worker behaviours gated only by PM checks that the PM did not name with
+  `--behaviour`); the launch's recovery request carries `behaviour_ids` too.
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
@@ -815,6 +819,14 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   the approval fields. After `behaviour_moved` or `behaviour_retired` commits, the verb journals one
   `rule_adopted` line for the stored entry it wrote, with `entry: move|retire`, `target:
   behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the entry's hash.
+- `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
+  field (the send writes no separate `prompt_sent` row) plus `{behaviour, reason, trigger, trigger_at,
+  timing, sent_back_count, already_reminded}`. `trigger_at` is the item's first claim (claims store),
+  its `merged` deliverable's `confirmed_at`, or its first `waiting` or `handed` history row.
+  `sent_back_count` counts this send. A refused send journals `prompt_refused` as `prompt-item` does.
+- `behaviours_kept` carries `{kept, not_named, to, repo_key, targets, store_path}` plus the approval
+  fields. After it commits, the verb journals one `rule_adopted` line per kept entry with
+  `entry: keep`, `target: behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the hash.
 - `remit_set` adds `carried_over: [{id, area, value, origin, carried}]` when it pre-filled project
   terms, and `notices` naming each store entry it dropped. `accept-agreement` treats a `remit_set`
   line with `carried_over` like a proposal: a prompt older than it does not accept.

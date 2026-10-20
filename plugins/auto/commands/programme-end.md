@@ -8,16 +8,25 @@ Shawn typed this to end the programme. The prompt hook has already journaled the
 request. It is accepted when typed in the driving session, or from any session
 when the lease is orphaned.
 
-First offer to keep corrections. `end` releases the lease, and every verb
-refuses an ended programme, so this comes before it.
+First make one carry-over offer: the corrections still applied and the
+programme-layer behaviours. `end` releases the lease, and every verb refuses an
+ended programme, so this comes before it.
 
-1. Run `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --terms --json`
-   and read its `terms.corrections` list (the corrections still applied). While
-   corrections are switched off this list is always empty.
-2. Empty list: go straight to the dispatch line.
-3. Otherwise, list each correction in one line (its id, the kind of choice,
-   who decides it now, and Shawn's quote), and ask which ones to keep for the
-   next programme on this project. Then wait for his typed reply.
+1. Read two lists:
+   - From `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --terms --json`,
+     `terms.corrections` (the corrections still applied). While corrections are
+     switched off this list is always empty.
+   - From `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --json`,
+     `contract.behaviours`, keeping only the rows with `layer` "programme" and
+     `state` "active". These are the behaviours that end with this programme
+     unless Shawn keeps them.
+2. Both lists empty: go straight to the dispatch line.
+3. Otherwise, show both in one message. Each correction gets one line (its id,
+   the kind of choice, who decides it now, and Shawn's quote). Each behaviour
+   gets one line (its id, its "when", its do and don't lines, and Shawn's
+   quote). Ask which to keep for the next programme, and for each behaviour
+   whether it goes to the repo (every programme on this repo) or global (every
+   project). Then wait for his typed reply.
 4. When he names corrections to keep, run
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-corrections --prompt <id> <correction-id>...`,
    citing his reply's prompt id. Keep none when he says none.
@@ -26,6 +35,16 @@ refuses an ended programme, so this comes before it.
    - It refuses because this session does not drive the programme (an
      orphaned lease): tell him in one line that corrections can be kept only
      from the driving session, and go on.
+5. When he names behaviours to keep, run one `keep-behaviours` call per layer
+   he named, citing his reply's prompt id:
+   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-behaviours <behaviour-id>... --to repo|personal --prompt <id>`.
+   "Global" or "all projects" is `--to personal`. When the remit holds several
+   repos, add `--repo <key>` for the repo he named. His reply must name each
+   behaviour id and the layer; the verb leaves out ids it does not name and
+   lists them as `not_named`, so tell him which ones were not kept. Keep none
+   when he says none.
+   - On a refusal (an unreadable behaviours store, a negated layer, an
+     orphaned lease), tell him the reason in one line and go on.
 
 Run the dispatch line below:
 

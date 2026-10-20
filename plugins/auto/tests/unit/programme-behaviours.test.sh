@@ -445,6 +445,14 @@ keep(run, [beh("gmv", "repo")], text="keep it for alpha")
 print(before + "|" + ids(run, "linear:AI-1"))
 EOF
 )"
+it "an item with no repo keeps the programme copy of an entry moved to a repo"
+check "gmv@programme" "$(run_py <<'EOF'
+run = setup([beh("gmv", moved_to="repo", moved_repo_key="acme/alpha")])
+keep(run, [beh("gmv", "repo")])
+rec = record(run)
+print(" ".join("%s@%s" % (b["id"], b["layer"]) for b in pb.in_force(rec, {"repo": None})))
+EOF
+)"
 
 PROG="${AUTO_ROOT}/lib/programme.py"
 OUT=""
@@ -597,9 +605,9 @@ has "--repo" "$OUT"
 it "a --repo that is not in the remit is refused"
 prog move-behaviour "$BID" --to repo --repo acme/other --prompt "$P2" --run "$RUN"
 check 1 "$CODE"
-it "with --repo naming one, the behaviour moves there and leaves the programme"
+it "with --repo naming one, items in that repo get the repo copy and items in the other repo keep the programme copy"
 prog move-behaviour "$BID" --to repo --repo acme/alpha --prompt "$P2" --run "$RUN"
-check "0 ${BID}@repo|" "$CODE $(q "$RUN" "ids(run, 'linear:AI-1') + '|' + ids(run, 'linear:AI-2')")"
+check "0 ${BID}@repo|${BID}@programme" "$CODE $(q "$RUN" "ids(run, 'linear:AI-1') + '|' + ids(run, 'linear:AI-2')")"
 
 fresh_store
 RUN="$(new_run)"
@@ -698,6 +706,189 @@ EOF
 P1="$(tprompt "$RUN" "always reproduce a reported bug before planning")"
 it "a behaviour write on an ended programme is refused"
 prog record-behaviour --run "$RUN" --prompt "$P1" --when "a bug is reported" --do "reproduce it"
+check 1 "$CODE"
+has "ended" "$OUT"
+
+fresh_store
+it "the view list keeps a programme copy moved to one repo while another remit repo still reads it"
+check "gsplit|gsplit|" "$(run_py <<'EOF'
+run = setup([beh("gsplit", moved_to="repo", moved_repo_key="acme/alpha")])
+keep(run, [beh("gsplit", "repo")])
+prog = record(run)["programme"]
+two = " ".join(e["id"] for e in pb.shown_programme_entries(prog, pb.load_store()))
+one = setup([beh("gsplit", moved_to="repo", moved_repo_key="acme/alpha")], repos="one")
+prog1 = record(one)["programme"]
+pers = setup([beh("gper", moved_to="personal")])
+keep(pers, [beh("gper", "personal")])
+print(two + "|" + " ".join(e["id"] for e in pb.shown_programme_entries(prog1, {"personal": [], "repos": {}, "rejected": [], "notices": []}))
+      + "|" + " ".join(e["id"] for e in pb.shown_programme_entries(record(pers)["programme"], pb.load_store())))
+EOF
+)"
+
+fresh_store
+it "the brief takes worker behaviours with no checks or an agent check, and holds back PM-only checks"
+check "wag wnone|wpm" "$(run_py <<'EOF'
+run = setup([beh("wpm", applies_to="workers"),
+             beh("wag", applies_to="workers", when={"text": "UI work", "checks": [{"text": "the diff touches UI", "by": "agent"}]}),
+             beh("wnone", applies_to="workers", when={"text": "always", "checks": []}),
+             beh("pmonly", applies_to="pm", when={"text": "always", "checks": []})])
+rec = record(run)
+got, held = pb.brief_entries(rec, rec["programme"]["items"]["linear:AI-1"], lookup=lambda r, p: None)
+print(" ".join(e["id"] for e in got) + "|" + " ".join(held))
+EOF
+)"
+
+it "a PM-checked behaviour the PM names with --behaviour joins the brief"
+check "wpm wag" "$(run_py <<'EOF'
+run = setup([beh("wpm", applies_to="workers"),
+             beh("wag", applies_to="workers", when={"text": "UI work", "checks": [{"text": "the diff touches UI", "by": "agent"}]})])
+rec = record(run)
+got, held = pb.brief_entries(rec, rec["programme"]["items"]["linear:AI-1"], ["wpm", "wag"], lookup=lambda r, p: None)
+print(" ".join(e["id"] for e in got))
+EOF
+)"
+
+it "a PM-only behaviour, a retired one or an unknown id named for the brief is refused"
+check "BehaviourError BehaviourError BehaviourError" "$(run_py <<'EOF'
+run = setup([beh("pmonly", applies_to="pm"), beh("gone", applies_to="workers", state="retired")])
+rec = record(run)
+out = []
+for bid in ("pmonly", "gone", "nosuch"):
+    try:
+        pb.brief_entries(rec, rec["programme"]["items"]["linear:AI-1"], [bid], lookup=lambda r, p: None)
+        out.append("accepted")
+    except pb.BehaviourError:
+        out.append("BehaviourError")
+print(" ".join(out))
+EOF
+)"
+
+it "brief lines carry the heading and each behaviour's id, when, do, don't and evidence"
+OUTL="$(run_py <<'EOF'
+e = beh("wui", applies_to="workers", do=["record the browser"], dont=["skip the check"], evidence="a browser recording attached",
+        when={"text": "the work changes UI", "checks": [{"text": "the diff touches UI", "by": "agent"}]})
+print("\n".join(pb.brief_lines([e])))
+EOF
+)"
+has "Behaviours this work follows:" "$OUTL"
+has "- wui: when the work changes UI" "$OUTL"
+has "do: record the browser" "$OUTL"
+has "don't: skip the check" "$OUTL"
+has "evidence: a browser recording attached" "$OUTL"
+has "you judge: the diff touches UI" "$OUTL"
+
+it "a behaviour's start is its last recorded event, else its at"
+check "2026-05-02T00:00:00Z 2026-05-01T00:00:00Z None" "$(run_py <<'EOF'
+a = beh("a1", at="2026-05-01T00:00:00Z", history=[{"event": "proposed", "at": "2026-04-01T00:00:00Z"},
+                                                  {"event": "recorded", "at": "2026-05-02T00:00:00Z"},
+                                                  {"event": "moved", "at": "2026-06-01T00:00:00Z"}])
+print(pb.since(a), pb.since(beh("a2", at="2026-05-01T00:00:00Z")), pb.since(beh("a3")))
+EOF
+)"
+
+it "timing: no trigger yet, a trigger after the behaviour, a trigger before or at it, and an unknown start"
+check "before_trigger send_back remind_only remind_only remind_only" "$(run_py <<'EOF'
+e = beh("a1", at="2026-05-01T00:00:00Z")
+print(pb.timing(e, None), pb.timing(e, "2026-05-02T00:00:00Z"), pb.timing(e, "2026-04-30T00:00:00Z"),
+      pb.timing(e, "2026-05-01T00:00:00Z"), pb.timing(beh("a2"), "2026-05-02T00:00:00Z"))
+EOF
+)"
+
+it "trigger times come from the item's first claim, its merged deliverable and its first wait or hand-off"
+check "2026-03-01T00:00:00Z 2026-03-05T00:00:00Z 2026-03-03T00:00:00Z|None None None" "$(run_py <<'EOF'
+import datetime
+run = setup([])
+def claim(item, day):
+    pj.append_row(run, pj.entry("claim", "sess-w", {"item": item, "deliverable": "merged", "ref": "pr:1"},
+                                now=datetime.datetime(2026, 3, day, tzinfo=datetime.timezone.utc)), channel="claims")
+claim("linear:AI-2", 1)
+claim("linear:AI-1", 1)
+claim("linear:AI-1", 4)
+def mutate(rec):
+    item = rec["programme"]["items"]["linear:AI-1"]
+    item["history"] += [{"at": "2026-03-02T00:00:00Z", "kind": "owner"}, {"at": "2026-03-03T00:00:00Z", "kind": "waiting"},
+                        {"at": "2026-03-06T00:00:00Z", "kind": "handed"}]
+    item["deliverables"]["merged"] = {"result": "confirmed", "confirmed_at": "2026-03-05T00:00:00Z"}
+core._with_locked_run_record(ph.home_path(run), run, mutate)
+rec = record(run)
+t = pb.trigger_times(run, "linear:AI-1", rec["programme"]["items"]["linear:AI-1"])
+u = pb.trigger_times(run, "linear:AI-9", ph.new_item("linear:AI-9"))
+print("%s %s %s|%s %s %s" % (t["claim"], t["merge"], t["block"], u["claim"], u["merge"], u["block"]))
+EOF
+)"
+
+fresh_store
+RUN="$(new_run one)"
+B1="$(record_one "$RUN")"
+B2="$(record_one "$RUN")"
+PK="$(tprompt "$RUN" "keep ${B1} and ${B2} for the repo")"
+it "keep-behaviours with a prompt naming two behaviours and repo moves both under the programme's repo key"
+prog keep-behaviours "$B1" "$B2" --to repo --prompt "$PK" --run "$RUN"
+check "0 acme/alpha acme/alpha ${B1}@repo ${B2}@repo" "$CODE $(q "$RUN" "' '.join([stored('$B1')['repo_key'], stored('$B2')['repo_key']]) + ' ' + ' '.join(sorted(ids(run).split(), key=lambda x: x != '${B1}@repo'))")"
+it "the kept entries verify, the programme copies point at the repo, and the verb journals behaviours_kept and two rule_adopted rows"
+check "[] repo repo 1 2" "$(q "$RUN" "'%s %s %s %d %d' % (loaded()['rejected'], beh_of('$B1')['moved_to'], beh_of('$B2')['moved_to'], count('behaviours_kept'), len([r for r in pj.read(run) if r['kind'] == 'rule_adopted' and r['payload']['entry'] == 'keep']))")"
+it "running it twice does not duplicate entries"
+prog keep-behaviours "$B1" "$B2" --to repo --prompt "$PK" --run "$RUN"
+check "0 2" "$CODE $(q "$RUN" "len([e for es in pb.read_store()['repos'].values() for e in es])")"
+it "the second run still leaves both in force once"
+check "${B1}@repo ${B2}@repo" "$(q "$RUN" "' '.join(sorted(ids(run).split(), key=lambda x: x != '${B1}@repo'))")"
+
+fresh_store
+RUN="$(new_run one)"
+B1="$(record_one "$RUN")"
+B2="$(record_one "$RUN")"
+PK="$(tprompt "$RUN" "keep ${B1} globally, all projects")"
+it "a prompt that names only one of two behaviours moves only that one"
+prog keep-behaviours "$B1" "$B2" --to personal --prompt "$PK" --run "$RUN"
+check "0 personal None" "$CODE $(q "$RUN" "'%s %s' % (stored('$B1')['layer'], stored('$B2'))")"
+it "the output names the behaviour the prompt left out"
+check "['${B1}'] ['${B2}']" "$(jfield "$OUT" 'str(d["kept"]) + " " + str(d["not_named"])')"
+
+PK2="$(tprompt "$RUN" "keep ${B2} for the repo")"
+it "keep-behaviours whose prompt names none of the ids is refused and writes nothing"
+STORE_BEFORE="$(q "$RUN" "json.dumps(pb.read_store(), sort_keys=True)")"
+prog keep-behaviours "$B1" --to repo --prompt "$PK2" --run "$RUN"
+check "1 ${STORE_BEFORE}" "$CODE $(q "$RUN" "json.dumps(pb.read_store(), sort_keys=True)")"
+PK3="$(tprompt "$RUN" "do not keep ${B2} in the repo")"
+it "keep-behaviours with a negated layer is refused"
+prog keep-behaviours "$B2" --to repo --prompt "$PK3" --run "$RUN"
+check 1 "$CODE"
+PK4="$(tprompt "$RUN" "keep ${B2} and bnosuch for the repo")"
+it "keep-behaviours naming an id that is not an active programme behaviour is refused"
+prog keep-behaviours "$B2" bnosuch --to repo --prompt "$PK4" --run "$RUN"
+check 1 "$CODE"
+it "keep-behaviours --to programme is a usage error"
+prog keep-behaviours "$B2" --to programme --prompt "$PK4" --run "$RUN"
+check 2 "$CODE"
+it "keep-behaviours without a typed prompt is refused"
+prog keep-behaviours "$B2" --to repo --run "$RUN"
+check 1 "$CODE"
+
+fresh_store
+RUN="$(new_run one)"
+B1="$(record_one "$RUN")"
+raw_store_cmd='raw = open(pb.store_path(), "w"); raw.write("{not json"); raw.close()'
+run_py <<EOF >/dev/null
+os.makedirs(os.path.dirname(pb.store_path()), exist_ok=True)
+${raw_store_cmd}
+EOF
+PK="$(tprompt "$RUN" "keep ${B1} for the repo")"
+it "keep-behaviours with an unreadable store is refused before anything commits"
+REC_BEFORE="$(q "$RUN" "json.dumps(prog['behaviours'], sort_keys=True)")"
+prog keep-behaviours "$B1" --to repo --prompt "$PK" --run "$RUN"
+check "1 ${REC_BEFORE}" "$CODE $(q "$RUN" "json.dumps(prog['behaviours'], sort_keys=True)")"
+
+fresh_store
+RUN="$(new_run one)"
+B1="$(record_one "$RUN")"
+run_py "$RUN" <<'EOF' >/dev/null
+def end(rec):
+    rec["programme"]["ended"] = {"at": "2026-10-20T00:00:00Z", "reason": "ended_by_shawn"}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], end)
+EOF
+PK="$(tprompt "$RUN" "keep ${B1} for the repo")"
+it "after end, keep-behaviours is refused"
+prog keep-behaviours "$B1" --to repo --prompt "$PK" --run "$RUN"
 check 1 "$CODE"
 has "ended" "$OUT"
 

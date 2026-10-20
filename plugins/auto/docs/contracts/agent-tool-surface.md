@@ -254,6 +254,31 @@ session.
   driving session, and a refused one journals `approval_refused`. The store is one
   JSON file per machine beside the personal protocol
   (`CLAUDE_AUTO_BEHAVIOURS_STORE` overrides the path).
+  `start-worker` appends a "Behaviours this work follows:" block to the brief
+  copy: one line per worker behaviour in force for the item (id, when, do, don't,
+  evidence, and the checks the worker judges). A behaviour with no checks or an
+  agent check is included; one gated only by PM checks is included when the PM
+  names it with `--behaviour <id>`, having seen those checks hold. A matching
+  behaviour makes the tail non-empty, so the start needs `--handoff <file>`. The
+  item records each brief behaviour in `behaviour_deliveries` with reason brief,
+  and the ids join the launch's recovery request.
+  `remind-behaviour` (`<item> <id> --reason relevant|sent_back`, optional
+  `--trigger claim|merge|block`, default claim) sends one behaviour to the item's
+  worker through the `prompt-item` path (same owner-pane checks, cut to the
+  4000-character cap with the id first) and records the delivery on the item.
+  It compares the behaviour's start (its last recorded event) with the time the
+  item passed the trigger: `sent_back` is refused when the trigger has not
+  passed or the behaviour started at or after it (remind only, R19). Its output
+  reports the timing and `sent_back_count` (this send included), and it journals
+  `behaviour_reminded` instead of `prompt_sent`.
+  `keep-behaviours` (`<id>... --to repo|personal --prompt <id>`, `--repo <key>`
+  for a remit of several repos) is the end-of-programme carry-over for
+  programme-layer behaviours. The prompt must name the layer with no negation
+  before it; ids the prompt does not name are left out and listed as
+  not_named. Kept entries are adopted into `behaviours.json`, replacing any
+  entry with the same id, so a second run adds nothing; the programme copy is
+  marked moved. It journals `behaviours_kept` and is refused once the programme
+  has ended.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`). Closing as fulfilled
@@ -555,7 +580,7 @@ session.
   `decision:<id>@<rev>` with its scope, reason and limits, and the
   clause "Proceed under this decision. Do not reopen it: if you find new
   evidence that it cannot hold, stop and state that evidence in your pane."
-  `start-worker` with a decision or restriction needs `--handoff <file>` among
+  `start-worker` with a decision, restriction or behaviour block needs `--handoff <file>` among
   the spinoff arguments, appends to a copy under `<programme home>/briefs/` and
   passes the copy; the original is unchanged. `prompt-item` refuses when its
   text plus the appended block exceeds 4000 characters. Unknown ids, bad
