@@ -97,7 +97,7 @@ Lifecycle commands support handover, takeover, and an explicit end:
 |---|---|
 | Handover | The driving session supplies a human request that names the next session. |
 | Takeover | A new session supplies a human request for an orphaned lease. |
-| End | The driving session supplies a human request. Another session supplies one when the lease is orphaned. |
+| End | The driving session supplies a human request. Another session supplies one when the lease is orphaned. An expired lease needs no request. |
 
 A missing heartbeat or an old heartbeat makes a lease orphaned. This state does not prove that the old process stopped.
 

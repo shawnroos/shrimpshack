@@ -6,7 +6,10 @@ allowed-tools: Bash, CronDelete, TaskStop
 
 Shawn typed this to end the programme. The prompt hook has already journaled the
 request. It is accepted when typed in the driving session, or from any session
-when the lease is orphaned.
+when the lease is orphaned. When the lease is expired (the agreement was never
+accepted within one cadence), `end` needs no typed request and ends the programme
+the way `expire` does, with reason agreement_unaccepted: there is no accepted
+agreement to protect. A `--why` of several words must be quoted.
 
 First offer to keep corrections. `end` releases the lease, and every verb
 refuses an ended programme, so this comes before it.

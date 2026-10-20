@@ -13,6 +13,7 @@ import functools
 import json
 import os
 import re
+import shlex
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,8 +51,14 @@ class _Refused(Exception):
 
 
 def _tokens(argv) -> list:
-    # A slash command passes "$ARGUMENTS" as one string; split it back into options.
-    return list(argv[:1]) + [t for arg in argv[1:] for t in str(arg).split()]
+    # A slash command passes "$ARGUMENTS" as one string; split it back into options. Several
+    # arguments came from a shell that already split them, so a quoted --why stays whole.
+    if len(argv) != 2:
+        return list(argv)
+    try:
+        return [argv[0]] + shlex.split(str(argv[1]))
+    except ValueError:
+        return [argv[0]] + str(argv[1]).split()
 
 
 def _caller(host) -> str:
@@ -331,7 +338,9 @@ def _watcher_ids(record) -> dict:
 
 
 def _h_end(host, argv):
-    _, opts = host._parse(_tokens(argv), values=("run", "why"))
+    stray, opts = host._parse(_tokens(argv), values=("run", "why"))
+    if stray:
+        raise ValueError(f"end takes no argument {stray[0]!r}; quote a --why of several words")
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
     run = lease["run"]
@@ -582,9 +591,10 @@ _SPECS = (
      "a caller that is not the driving session; no typed /auto:programme-handover <session-id> in "
      "the driving session. Refusals are journaled as request_refused."),
     ("end", _h_end, "[--why <text>] [--run <id>]",
-     "no typed /auto:programme-end from the driving session, unless the lease is orphaned; an "
-     "ended programme. Prints CronDelete for each cron watcher and TaskStop for each Monitor "
-     "watcher. Refusals are journaled."),
+     "no typed /auto:programme-end from the driving session, unless the lease is orphaned or "
+     "expired (an agreement never accepted, which ends with reason agreement_unaccepted as "
+     "expire does); an ended programme; an unquoted --why of several words. Prints CronDelete "
+     "for each cron watcher and TaskStop for each Monitor watcher. Refusals are journaled."),
     ("expire", _h_expire, "[--run <id>]",
      "nothing: it ends the programme only when its agreement stayed unaccepted past one cadence."),
     ("set-remit", _h_set_remit, "[--prompt <id>] [--run <id>] < JSON {spaces, repos, tracker}",

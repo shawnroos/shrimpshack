@@ -406,9 +406,12 @@ EOF
 
 it "end from a typed request in the driving session releases the lease"
 typed sess-d '/auto:programme-end' >/dev/null
-as sess-d end
+as sess-d end --why "done for today: the queue is empty"
 check "0" "$CODE"
 check "<none>" "$(lease_session w2)"
+
+it "a quoted multi-word --why given as its own argument is kept whole"
+has '"why": "done for today: the queue is empty"' "$(last_entry "$RUN" programme_ended)"
 
 it "with corrections switched off, end lists no applied correction"
 lacks "c0ffee1" "$OUT"
@@ -463,6 +466,35 @@ it "start splits a slash command's single argument string into spaces"
 as sess-z start "--space w6 w7"
 check "0" "$CODE"
 check "sess-z sess-z" "$(lease_session w6) $(lease_session w7)"
+
+WS=w11
+as sess-u start
+RUN11="$(json_of 'd["run"]')"
+run_py "$RUN11" <<'EOF' >/dev/null
+rec = load(args[0])
+rec["programme"]["created_at"] = ago(2)
+save(args[0], rec)
+EOF
+it "end with no typed request ends an expired programme, by the expiry path"
+as sess-u end "--why 'never accepted, so nothing to keep'"
+check "0" "$CODE"
+check "<none>" "$(lease_session w11)"
+ENTRY="$(last_entry "$RUN11" programme_ended)"
+has '"reason": "agreement_unaccepted"' "$ENTRY"
+has '"request": null' "$ENTRY"
+
+it "a slash command's single argument string keeps a quoted --why whole"
+has '"why": "never accepted, so nothing to keep"' "$ENTRY"
+
+WS=w12
+as sess-t start
+RUN12="$(json_of 'd["run"]')"
+typed sess-t '/auto:programme-end' >/dev/null
+it "end refuses words it would otherwise drop after an unquoted --why"
+as sess-t end "--why lane: try end"
+check "2" "$CODE"
+has "quote" "$OUT"
+check "sess-t" "$(lease_session w12)"
 
 WS=w3
 it "set-waiting --due stores the due time for the wait-due watcher"
