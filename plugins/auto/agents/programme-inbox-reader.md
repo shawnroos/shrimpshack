@@ -38,7 +38,7 @@ One JSON object and nothing else:
 {"ok": true, "run": "<run>", "claims": [
   {"index": 0, "item": "<item id>", "item_name": "<title or session name>", "kind": "<claim kind>",
    "summary": "<one plain sentence>", "asks_for": "<what the worker wants from the PM, or null>",
-   "evidence_named": ["<PR, ticket or file the claim cites>"]}
+   "evidence_named": ["<PR, issue or file the claim cites>"]}
 ]}
 ```
 
