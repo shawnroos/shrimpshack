@@ -22,6 +22,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
 programme_terms = load_lib_module("programme_terms")
 programme_view_work = load_lib_module("programme_view_work")
+programme_view_setup = load_lib_module("programme_view_setup")
 session_registry = load_lib_module("session_registry")
 
 VIEW_FORMAT = 3
@@ -434,6 +435,9 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
                                              model["rules_in_force"].get("instructions")))
     view = {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
             "model": model, **parts}
+    setup = programme_view_setup.build(block)
+    if setup is not None:
+        view["setup"] = _clean(setup)
     view["rows"] = rows(model, parts["work"])
     return view
 
