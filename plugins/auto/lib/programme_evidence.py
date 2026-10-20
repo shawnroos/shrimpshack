@@ -537,11 +537,18 @@ def check_released(ref, context) -> dict:
     return {"result": "refuted" if misses else "confirmed", "fields": fields, "misses": misses}
 
 
+def _same_pr(a, b) -> bool:
+    try:
+        return parse_pr_ref(a) == parse_pr_ref(b)
+    except Unknown:
+        return False
+
+
 def _pin_for(run_id, item, ref):
     pin = None
     for row in programme_journal.read(run_id):
         payload = row.get("payload") or {}
-        if row.get("kind") == "merge_pinned" and payload.get("item") == item and payload.get("ref") == ref:
+        if row.get("kind") == "merge_pinned" and payload.get("item") == item and _same_pr(payload.get("ref"), ref):
             pin = payload.get("head")
     return pin
 

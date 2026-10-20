@@ -478,6 +478,15 @@ session.
   writes nothing. Only an item whose step path changed under the same driving
   session gets a `trajectory_changed` journal row; moving the current step to
   done is not a change, and neither is a first recording.
+- **Merge readiness**: `check-mergeable` (args: a PR as owner/repo#N or URL,
+  optional --pin <item>) reads an open PR's state, draft flag, mergeable and merge
+  state, review decision, base branch, head, required checks and unresolved review
+  threads in one GraphQL read. It prints ready, not_ready with the unmet gates, or
+  unknown, plus a fingerprint of those facts. Only CLEAN with no unmet gate is
+  ready; a gh failure, a merge state GitHub has not computed, or a head with no
+  checks is unknown. Without --pin it writes nothing. With --pin and a ready PR it
+  journals `merge_pinned` with the item, the owner/repo#N ref and the head, which
+  the merged check then compares against the merged head.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)
