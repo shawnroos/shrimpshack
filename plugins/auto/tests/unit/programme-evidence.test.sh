@@ -192,6 +192,44 @@ fx
 check '"refuted"' "$(result_of linear:AI-753 merged)"
 has "e2e CANCELLED" "$(journal_last evidence_checked)"
 
+ctx_add() {
+  variant "${FIXTURES}/gh-graphql-clean.json" "${WORK}/fx/$1.json" \
+    "c = pr['commits']['nodes'][0]['commit']['statusCheckRollup']['contexts']; $2; c['totalCount'] = len(c['nodes'])"
+}
+merged_result() {
+  fx FAKE_GH_GRAPHQL="${WORK}/fx/$1.json"
+  prog check-deliverable linear:AI-753 merged
+  fx
+  result_of linear:AI-753 merged
+}
+
+ctx_add skipreq "c['nodes'].append({'__typename': 'CheckRun', 'name': 'e2e', 'status': 'COMPLETED', 'conclusion': 'SKIPPED', 'isRequired': True})"
+it "AE7: a required job skipped on purpose beside passing required checks is confirmed"
+check '"confirmed"' "$(merged_result skipreq)"
+
+ctx_add neutralreq "c['nodes'].append({'__typename': 'CheckRun', 'name': 'lint', 'status': 'COMPLETED', 'conclusion': 'NEUTRAL', 'isRequired': True})"
+it "a required job that ended NEUTRAL beside passing required checks is confirmed"
+check '"confirmed"' "$(merged_result neutralreq)"
+
+ctx_add skipopt "c['nodes'].append({'__typename': 'CheckRun', 'name': 'docs', 'status': 'COMPLETED', 'conclusion': 'SKIPPED', 'isRequired': False})"
+it "AE10: a skipped non-required job does not refute a PR whose required checks passed"
+check '"confirmed"' "$(merged_result skipopt)"
+
+ctx_add allskipped "c['nodes'] = [{'__typename': 'CheckRun', 'name': n, 'status': 'COMPLETED', 'conclusion': 'SKIPPED', 'isRequired': r} for n, r in (('plugin tests', True), ('e2e', False))]"
+it "AE9: a PR whose only check runs were all skipped is refuted"
+check '"refuted"' "$(merged_result allskipped)"
+has "no check run succeeded" "$(journal_last evidence_checked)"
+
+ctx_add failbeside "c['nodes'] += [{'__typename': 'CheckRun', 'name': 'e2e', 'status': 'COMPLETED', 'conclusion': 'SKIPPED', 'isRequired': True}, {'__typename': 'CheckRun', 'name': 'unit', 'status': 'COMPLETED', 'conclusion': 'FAILURE', 'isRequired': True}]"
+it "a required job that failed beside a skipped one is refuted and named"
+check '"refuted"' "$(merged_result failbeside)"
+has "unit FAILURE" "$(journal_last evidence_checked)"
+
+ctx_add oddreq "c['nodes'].append({'__typename': 'CheckRun', 'name': 'gate', 'status': 'COMPLETED', 'conclusion': 'SOMETHING_NEW', 'isRequired': True})"
+it "a required job with a conclusion the checker does not know is refuted"
+check '"refuted"' "$(merged_result oddreq)"
+has "gate" "$(journal_last evidence_checked)"
+
 it "a merged PR with no check run on the merged head (real PR #97 shape) is refuted"
 fx FAKE_GH_GRAPHQL="${FIXTURES}/gh-graphql-pr97-real.json"
 prog check-deliverable linear:AI-753 merged

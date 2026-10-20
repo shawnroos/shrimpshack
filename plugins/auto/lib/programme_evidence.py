@@ -45,8 +45,11 @@ LINEAR_URL = "https://api.linear.app/graphql"
 LINEAR_KEY = "LINEAR_API_KEY"
 GH_KEYS = ("GH_TOKEN", "GITHUB_TOKEN")
 DONE_STATE_TYPES = ("completed",)
-PASSING = ("SUCCESS",)
-BAD_OUTCOMES = ("CANCELLED", "SKIPPED", "FAILURE", "TIMED_OUT", "ACTION_REQUIRED",
+RUN_SUCCEEDED = ("SUCCESS",)
+# GitHub counts a skipped or neutral required check as met; "some run succeeded" stays SUCCESS-only
+# so an all-skipped head never confirms.
+REQUIRED_MET = ("SUCCESS", "SKIPPED", "NEUTRAL")
+BAD_OUTCOMES = ("CANCELLED", "FAILURE", "TIMED_OUT", "ACTION_REQUIRED",
                 "STARTUP_FAILURE", "STALE", "ERROR")
 FROZEN_AT_DONE = ("flagged",)
 CHECKERS = ("merged", "recorded", "flagged", "verified", "released")
@@ -223,10 +226,10 @@ def _merged_bar(view, pr, pin) -> dict:
         misses.append(f"merged head {fields['head']} is not the pinned head {pin}")
     bad = [f"{c['name']} {c['outcome']}" for c in checks if c["outcome"] in BAD_OUTCOMES]
     if bad:
-        misses.append("checks cancelled, skipped or failed on the merged head: " + ", ".join(bad))
-    if not any(c["run"] and c["outcome"] in PASSING for c in checks):
+        misses.append("checks cancelled or failed on the merged head: " + ", ".join(bad))
+    if not any(c["run"] and c["outcome"] in RUN_SUCCEEDED for c in checks):
         misses.append("no check run succeeded on the merged head")
-    unmet = [c["name"] for c in checks if c["required"] and c["outcome"] not in PASSING]
+    unmet = [c["name"] for c in checks if c["required"] and c["outcome"] not in REQUIRED_MET]
     if unmet:
         misses.append("required checks not successful: " + ", ".join(map(str, unmet)))
     if fields["unresolved_threads"]:
