@@ -132,6 +132,9 @@ check "herdr:w2-p3 ci False" "$(view_q '" ".join(str(w[k]) for w in m["waiting_o
 it "watching explains the unwatched wait"
 has "herdr:w2-p3" "$(view_q 'json.dumps(m["watching"])')"
 
+it "the status model lists the unwatched wait as an actionable reason with its target and name"
+check "unwatched_wait|herdr:w2-p3|True" "$(view_q '"|".join([r["kind"] + "|" + str(r["target"]) + "|" + str(bool(r["name"])) for r in m["programme"]["actionable_reasons"] if r["kind"] == "unwatched_wait"])')"
+
 it "decisions for Shawn lists the handed item with its question"
 check "linear:AI-3|Turn the flag on for everyone?" "$(view_q '"|".join([d["item"] + "|" + d["question"] for d in m["decisions_for_shawn"] if d["kind"] == "handed"])')"
 

@@ -416,6 +416,10 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
             "may_stop": status["may_stop"],
             "stop_rule": status["stop_rule"],
             "reasons": [r.get("kind") for r in status["reasons"]],
+            "actionable_reasons": [
+                {"kind": r.get("kind"), "target": r.get("item") or r.get("system") or r.get("count"),
+                 "name": r.get("name")}
+                for r in status.get("actionable_reasons") or [] if isinstance(r, dict)],
             "counts": status["items"],
             "unread_claims": max(inbox_size - offset, 0) if isinstance(inbox_size, int) else None,
         },

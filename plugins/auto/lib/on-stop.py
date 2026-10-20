@@ -318,7 +318,7 @@ def _programme_reason_texts(status) -> list:
     for reason in status.get("reasons") or []:
         if not isinstance(reason, dict):
             continue
-        target = reason.get("item") or reason.get("system") or reason.get("count")
+        target = reason.get("name") or reason.get("item") or reason.get("system") or reason.get("count")
         text = str(reason.get("kind"))
         out.append(f"{text} {target}" if target not in (None, "") else text)
     return sorted(out)
@@ -580,15 +580,15 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
         return {"decision": "block", "reason": "\n\n".join(parts)}
 
     parts = [_programme_reason_for(hold) for hold in programmes]
-    if blocking:
-        parts.append(_reason_for(blocking))
-        message = (
-            f"auto held the stop: {len(blocking)} run(s) have unmet loop exit "
-            "conditions. If you have background work in flight, the harness "
-            "will re-invoke you when a verdict lands — do not poll."
-        )
-    else:
-        message = "auto held the stop: the programme has work it can still act on."
+    if not blocking:
+        # A programme hold is expected bookkeeping, not news for Shawn: the reason reaches the PM only.
+        return {"decision": "block", "reason": "\n\n".join(parts)}
+    parts.append(_reason_for(blocking))
+    message = (
+        f"auto held the stop: {len(blocking)} run(s) have unmet loop exit "
+        "conditions. If you have background work in flight, the harness "
+        "will re-invoke you when a verdict lands — do not poll."
+    )
     return {"decision": "block", "reason": "\n\n".join(parts), "systemMessage": message}
 
 

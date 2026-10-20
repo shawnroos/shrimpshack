@@ -299,6 +299,17 @@ EOF
 check "may_stop=False done=True reasons=never_stop:-
 may_stop=False done=True reasons=never_stop:-" "$OUT"
 
+it "under never_stop the floor reasons stay visible as actionable_reasons, with names"
+OUT="$(scenario <<'EOF'
+out = pp.compute(record(item("linear:AI-6", title="Reframe skill: skills vs code"), stop_rule="never_stop", offset=1), NOW, 3)
+print(out["may_stop"], sorted("%s:%s" % (r["kind"], r.get("name") or "-") for r in out["actionable_reasons"]))
+done_out = pp.compute(record(done("linear:AI-1")), NOW, 0)
+print(done_out["actionable_reasons"])
+EOF
+)"
+check "False ['open_item:Reframe skill: skills vs code (linear:AI-6)', 'unread_claim:-']
+[]" "$OUT"
+
 it "a herdr item still open keeps done false"
 OUT="$(scenario <<'EOF'
 show(record(done("linear:AI-1"), item("herdr:w2/p26")))
