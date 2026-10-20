@@ -6,7 +6,7 @@ allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop, AskUserQu
 
 Start a programme: this session becomes the PM for the herdr space it runs in.
 Do the steps in order. Run every programme verb in your own Bash tool, never from
-a dispatched Agent: a sub-agent has its own session id and every verb refuses it.
+a dispatched Agent.
 
 1. Take the lease first. Run the dispatch line below before anything else:
 
