@@ -400,6 +400,11 @@ def _watcher_ids(opts) -> dict:
     return {"process_id": pid, "task_id": task_id, "kind": kind if task_id else None}
 
 
+def _pm_monitor_beat(ids, entry) -> bool:
+    # Only the watcher process proves a Monitor alive; a PM stamp would hide a dead Monitor's wait.
+    return not ids.get("process_id") and entry.get("kind") == "monitor"
+
+
 def _upsert_watcher(programme, watcher_id, ids, item=None) -> dict:
     watchers = programme.setdefault("watchers", {})
     entry = dict(watchers.get(watcher_id) or {})
@@ -408,7 +413,7 @@ def _upsert_watcher(programme, watcher_id, ids, item=None) -> dict:
             entry[key] = value
     if item is not None:
         entry["item"] = item
-    if any(ids.values()):
+    if any(ids.values()) and not _pm_monitor_beat(ids, entry):
         entry["last_beat_at"] = _now()
     entry.setdefault("last_beat_at", None)
     watchers[watcher_id] = entry
@@ -504,7 +509,10 @@ def _h_watcher_beat(host, argv):
             raise RecordError(f"no watcher {watcher_id!r}; register it with --process-id or --task-id")
         item = _resolve(programme, item_id) if item_id else None
         entry = _upsert_watcher(programme, watcher_id, ids, item=item)
-        entry["last_beat_at"] = _now()
+        if ids["process_id"]:
+            entry["session_id"] = rec.get("driving_session_id")
+        if not _pm_monitor_beat(ids, entry):
+            entry["last_beat_at"] = _now()
         if cron_prompt is not None:
             entry["prompt"] = cron_prompt
         return {"watcher": watcher_id, "last_beat_at": entry["last_beat_at"]}
@@ -900,6 +908,7 @@ _SPECS = (
      "overlong --prompt. A task id is a cron watcher when --prompt is given and a Monitor otherwise, "
      "unless --kind says which. --prompt stores the "
      "armed cron prompt verbatim, so a prompt that equals it is journaled with origin cron. "
+     "A beat without --process-id on a Monitor watcher leaves its heartbeat unchanged. "
      "Exempt from the compact flag; not journaled."),
     ("hand-item", _h_hand_item,
      "<id> --question <text> --kind <decision-kind> [--operation <operation>] [--run <id>]",

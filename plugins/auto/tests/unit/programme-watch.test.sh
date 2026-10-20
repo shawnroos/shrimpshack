@@ -172,20 +172,24 @@ wait_for() {
 
 lines() { if [ -s "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
 count() { grep -c -- "$2" "$1" 2>/dev/null || true; }
+alive() { if kill -0 "$1" 2>/dev/null; then echo yes; else echo no; fi; }
+stop_watch() { kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
 
 reset_state
-it "a herdr snapshot whose sequence moves from 41 to 42 prints remit-changed and exits 0"
+it "a herdr snapshot whose sequence moves from 41 to 42 prints remit-changed and keeps polling"
 start_watch seq
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 snap 42 5 1
-wait_exit "$WPID"
-check 0 "$?"
+wait_for "${WORK}/seq.out" "remit-changed" || true
 has "remit-changed" "$(cat "${WORK}/seq.out")"
+sleep 0.7
+check yes "$(alive "$WPID")"
 it "the seq wake is exactly one line on stdout"
 check 1 "$(lines "${WORK}/seq.out")"
 it "the seq wake names the old and new sequence"
 has "41->42" "$(cat "${WORK}/seq.out")"
+stop_watch "$WPID"
 
 reset_state
 it "a pane added to the remit prints remit-changed naming the pane"
@@ -193,8 +197,17 @@ start_watch pane
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 snap 41 5 1 "w2:p1,w2:p2,w2:p3"
-wait_exit "$WPID"
+wait_for "${WORK}/pane.out" "+w2:p3" || true
 has "+w2:p3" "$(cat "${WORK}/pane.out")"
+it "a second pane change in the same run prints a second line"
+snap 41 5 1 "w2:p1,w2:p2,w2:p3,w2:p4"
+wait_for "${WORK}/pane.out" "+w2:p4" || true
+check 2 "$(lines "${WORK}/pane.out")"
+it "the watcher is still running after both changes"
+sleep 0.7
+check yes "$(alive "$WPID")"
+check 2 "$(lines "${WORK}/pane.out")"
+stop_watch "$WPID"
 
 reset_state
 it "changes outside the remit workspace never wake the watcher"
@@ -226,10 +239,15 @@ start_watch claim
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 add_claim
-wait_exit "$WPID"
+wait_for "${WORK}/claim.out" "claim" || true
 has "claim" "$(cat "${WORK}/claim.out")"
 it "the claim line counts only the new claim"
 has "claim 1 new" "$(cat "${WORK}/claim.out")"
+it "the watcher keeps polling after the claim line"
+sleep 0.7
+check yes "$(alive "$WPID")"
+check 1 "$(lines "${WORK}/claim.out")"
+stop_watch "$WPID"
 
 reset_state
 it "nothing changes for 3 intervals: no stdout"
@@ -269,14 +287,32 @@ it "herdr unavailable keeps beating"
 atleast 4 "$(count "$BEATS" "watcher-beat remit")"
 
 reset_state
-it "herdr coming back after an outage prints source-available and exits"
+it "herdr coming back after an outage prints source-available and keeps polling"
 echo 1 > "$HERDR_EXIT_FILE"
 start_watch back
 wait_for "${WORK}/back.out" "source-unavailable" || true
 rm -f "$HERDR_EXIT_FILE"
-wait_exit "$WPID"
-check 0 "$?"
+wait_for "${WORK}/back.out" "source-available" || true
 has "source-available herdr" "$(tail -n 1 "${WORK}/back.out")"
+sleep 0.7
+check yes "$(alive "$WPID")"
+it "the recovery prints once, not once per poll"
+check 1 "$(count "${WORK}/back.out" "source-available herdr")"
+it "a second outage in the same run prints source-unavailable again"
+echo 1 > "$HERDR_EXIT_FILE"
+sleep 0.9
+check 2 "$(count "${WORK}/back.out" "source-unavailable herdr")"
+it "down, up, down prints unavailable, available, unavailable in that order"
+check "source-unavailable source-available source-unavailable" "$(cut -d' ' -f1 "${WORK}/back.out" | tr '\n' ' ' | sed 's/ $//')"
+stop_watch "$WPID"
+
+reset_state
+it "a recorded outage that recovers prints source-available once across several polls"
+edit 'prog["sources"]["herdr"] = {"unavailable_since": "2026-10-06T10:00:00Z"}'
+start_watch recorded --max-polls 4
+wait_exit "$WPID"
+check 1 "$(count "${WORK}/recorded.out" "source-available herdr")"
+check 1 "$(lines "${WORK}/recorded.out")"
 
 reset_state
 it "an outage already in the record does not wake the PM again"
@@ -294,9 +330,13 @@ it "a wait that comes due prints wait-due with the item"
 DUE="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=3)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 edit "prog['items']['linear:AI-800']['waiting_on']['due_at'] = '${DUE}'"
 start_watch due
-wait_exit "$WPID"
-check 0 "$?"
+wait_for "${WORK}/due.out" "wait-due" 80 || true
 check "wait-due linear:AI-800" "$(cat "${WORK}/due.out")"
+it "the watcher keeps polling after a wait comes due"
+sleep 0.7
+check yes "$(alive "$WPID")"
+check 1 "$(lines "${WORK}/due.out")"
+stop_watch "$WPID"
 it "a wait already past due at start does not wake the PM"
 start_watch pastdue --max-polls 2
 wait_exit "$WPID"
@@ -304,13 +344,13 @@ check 0 "$(lines "${WORK}/pastdue.out")"
 edit "prog['items']['linear:AI-800']['waiting_on'].pop('due_at', None)"
 
 reset_state
-it "a second watcher for the same programme exits with no stdout"
+it "a second watcher for the same programme prints remit-watcher-exit superseded and exits 0"
 start_watch first
 FIRST="$WPID"
 wait_for "$BEATS" "watcher-beat remit" || true
 bash "$WATCH" --run "$RUN" --max-polls 2 > "${WORK}/second.out" 2> "${WORK}/second.err"
 check 0 "$?"
-check 0 "$(lines "${WORK}/second.out")"
+check "remit-watcher-exit superseded" "$(cat "${WORK}/second.out")"
 it "the second watcher says on stderr which watcher is current"
 has "$FIRST" "$(cat "${WORK}/second.err")"
 it "the first watcher keeps beating after the second exits"
@@ -329,6 +369,50 @@ start_watch stale --max-polls 1
 SPID="$WPID"
 wait_exit "$WPID"
 check "\"${SPID}\"" "$(field 'prog["watchers"]["remit"]["process_id"]')"
+it "a process beat records the beating session on the remit watcher"
+check '"sess-pm"' "$(field 'prog["watchers"]["remit"].get("session_id")')"
+
+reset_state
+sleep 300 &
+OLDPID=$!
+BG_PIDS="${BG_PIDS} ${OLDPID}"
+FRESH="$("$PY" -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+edit "prog['watchers']['remit'] = {'process_id': '${OLDPID}', 'last_beat_at': '${FRESH}', 'session_id': 'sess-old'}"
+it "a live remit watcher from a session that no longer drives does not supersede a new one"
+start_watch takeover --max-polls 2
+TPID="$WPID"
+wait_exit "$WPID"
+check 0 "$(count "${WORK}/takeover.out" "remit-watcher-exit")"
+it "the new driving session's watcher takes over the remit entry"
+check "\"${TPID}\"" "$(field 'prog["watchers"]["remit"]["process_id"]')"
+edit "prog['watchers']['remit'] = {'process_id': '${OLDPID}', 'last_beat_at': '${FRESH}', 'session_id': 'sess-pm'}"
+it "the same live watcher from the driving session does supersede a new one"
+start_watch takeover2 --max-polls 2
+wait_exit "$WPID"
+check "remit-watcher-exit superseded" "$(cat "${WORK}/takeover2.out")"
+kill "$OLDPID" 2>/dev/null; wait "$OLDPID" 2>/dev/null
+
+reset_state
+OLD_BEAT="2026-01-01T00:00:00Z"
+edit "prog['watchers']['remit'] = {'process_id': '12345', 'last_beat_at': '${OLD_BEAT}'}"
+it "the PM's watcher-beat --task-id on a monitor watcher leaves its heartbeat unchanged"
+"$PY" "$PROG" watcher-beat remit --task-id bmon1 --kind monitor --run "$RUN" > /dev/null 2>&1
+check "\"${OLD_BEAT}\"" "$(field 'prog["watchers"]["remit"]["last_beat_at"]')"
+it "the monitor task id is still recorded"
+check '["bmon1", "monitor"]' "$(field '[prog["watchers"]["remit"]["task_id"], prog["watchers"]["remit"]["kind"]]')"
+it "a bare PM beat on a monitor watcher leaves its heartbeat unchanged"
+"$PY" "$PROG" watcher-beat remit --run "$RUN" > /dev/null 2>&1
+check "\"${OLD_BEAT}\"" "$(field 'prog["watchers"]["remit"]["last_beat_at"]')"
+it "a new Monitor-only watcher starts with no heartbeat"
+"$PY" "$PROG" watcher-beat w-newmon --task-id bmon2 --kind monitor --run "$RUN" > /dev/null 2>&1
+check 'null' "$(field 'prog["watchers"]["w-newmon"]["last_beat_at"]')"
+it "a process beat on the monitor watcher still stamps its heartbeat"
+"$PY" "$PROG" watcher-beat remit --process-id 12345 --run "$RUN" > /dev/null 2>&1
+lacks "$OLD_BEAT" "$(field 'prog["watchers"]["remit"]["last_beat_at"]')"
+edit "prog['watchers']['cron'] = {'task_id': 'c-9', 'kind': 'cron', 'last_beat_at': '${OLD_BEAT}'}"
+it "the PM's watcher-beat --task-id on a cron watcher still stamps its heartbeat"
+"$PY" "$PROG" watcher-beat cron --task-id c-9 --kind cron --run "$RUN" > /dev/null 2>&1
+lacks "$OLD_BEAT" "$(field 'prog["watchers"]["cron"]["last_beat_at"]')"
 
 reset_state
 it "the tracker is off unless asked for"
@@ -341,8 +425,13 @@ start_watch tracker --tracker
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 board_json "2026-10-06T12:00:00Z"
-wait_exit "$WPID"
+wait_for "${WORK}/tracker.out" "tracker-changed" || true
 has "tracker-changed AI-1" "$(cat "${WORK}/tracker.out")"
+it "the watcher keeps polling after a tracker change"
+sleep 0.7
+check yes "$(alive "$WPID")"
+check 1 "$(lines "${WORK}/tracker.out")"
+stop_watch "$WPID"
 it "--linear is no longer a flag"
 bash "$WATCH" --run "$RUN" --linear --max-polls 1 > /dev/null 2>&1
 check 2 "$?"
@@ -383,8 +472,13 @@ start_watch tasks --max-polls 20
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 printf '{"id":"1","subject":"Write tests","activeForm":"Writing tests","status":"in_progress"}' > "${TASKS}/1.json"
-wait_exit "$WPID"
+wait_for "${WORK}/tasks.out" "tasks-changed" || true
 check "tasks-changed sess-w7 1/0/0->0/1/0" "$(cat "${WORK}/tasks.out")"
+it "the watcher keeps polling after a task change"
+sleep 0.7
+check yes "$(alive "$WPID")"
+check 1 "$(lines "${WORK}/tasks.out")"
+stop_watch "$WPID"
 
 reset_state
 it "a task change is ignored while the agreement turns tasks off"
@@ -410,8 +504,13 @@ start_watch plans --max-polls 20
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 printf '# New plan for AI-830\n' > "${REPO}/docs/plans/new.md"
-wait_exit "$WPID"
+wait_for "${WORK}/plans.out" "plans-changed" || true
 check "plans-changed +planrepo/docs/plans/new.md" "$(cat "${WORK}/plans.out")"
+it "the watcher keeps polling after a plan change"
+sleep 0.7
+check yes "$(alive "$WPID")"
+check 1 "$(lines "${WORK}/plans.out")"
+stop_watch "$WPID"
 
 reset_state
 it "a new plan is ignored while the agreement turns plans off"
@@ -500,11 +599,20 @@ print(oup.classify_origin("wake up and sweep the space", rec), oup.classify_orig
 EOF
 )"
 
-it "a watcher stops when the programme has ended"
+reset_state
+it "a running watcher prints remit-watcher-exit ended and exits 0 when the programme ends"
+start_watch endlive
+wait_for "$BEATS" "watcher-beat remit" || true
 edit 'prog["ended"] = True'
+wait_exit "$WPID"
+check 0 "$?"
+check "remit-watcher-exit ended" "$(cat "${WORK}/endlive.out")"
+
+it "a watcher started after the programme ended prints remit-watcher-exit ended"
 start_watch ended
 wait_exit "$WPID"
-check 0 "$(lines "${WORK}/ended.out")"
+check 0 "$?"
+check "remit-watcher-exit ended" "$(cat "${WORK}/ended.out")"
 has "ended" "$(cat "${WORK}/ended.err")"
 
 echo ""
