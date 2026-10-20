@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import collections
 import datetime
 import json
 import os
@@ -405,6 +406,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
              for w in status["waits"]]
     working = _dict(block.get("working_model"))
     offset = block.get("inbox_offset") or 0
+    # The predicate keeps one reason per item; the model counts each kind once.
+    reason_counts = dict(collections.Counter(r.get("kind") for r in status["reasons"]))
     model = {
         "programme": {
             "run": record.get("run_id"),
@@ -412,7 +415,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
             "done": status["done"],
             "may_stop": status["may_stop"],
             "stop_rule": status["stop_rule"],
-            "reasons": [r.get("kind") for r in status["reasons"]],
+            "reasons": list(reason_counts),
+            "reason_counts": reason_counts,
             "counts": status["items"],
             "unread_claims": max(inbox_size - offset, 0) if isinstance(inbox_size, int) else None,
         },
@@ -499,7 +503,8 @@ def _row(text, style="text") -> dict:
 def _header(p) -> dict:
     stop = f"may stop: {_yes(p['may_stop'])}"
     if p["reasons"]:
-        stop += f" ({', '.join(p['reasons'])})"
+        counts = p.get("reason_counts") or {}
+        stop += " (" + ", ".join(k if counts.get(k, 1) == 1 else f"{k} ×{counts[k]}" for k in p["reasons"]) + ")"
     text = f"Programme {p['run']} · done: {_yes(p['done'])} · {stop}"
     if p["ended"]:
         text += f" · ended: {_dict(p['ended']).get('reason')}"
