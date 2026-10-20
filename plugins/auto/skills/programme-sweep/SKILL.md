@@ -16,9 +16,10 @@ from this session's lease.
 
 ## Ground rules
 
-- Run every programme verb in your own Bash tool. Never run one from a
-  dispatched Agent: a sub-agent has its own session id, and every write verb
-  refuses it.
+- Run every programme write verb in your own Bash tool. A dispatched Agent
+  inherits your session id, so the verbs' own guard cannot refuse it; a hook
+  does instead. It lets a sub-agent run only `status`, `inbox`, `describe` and
+  `check-mergeable` without `--pin`, and never `gh pr merge`.
 - Your context comes from the programme's store, not from this chat. A new
   session, a compaction, a handover or a takeover restores it: the rules in force
   and an `<auto-context>` block with the decisions, their reasons and limits, the
