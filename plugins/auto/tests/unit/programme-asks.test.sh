@@ -125,17 +125,17 @@ it "hand-item takes structured fields"
 prog hand-item "$A" --kind merge_at_gate --question "Merge PR #12 (Crop default) into main?" \
   --option "ship | merges PR #12 into main | 10 minutes of CI on main" \
   --option "decline | closes the PR | the crop fix waits a week" \
-  --if-nothing "the PR stays open and the ticket stays in review" \
+  --if-nothing "the PR stays open and the issue stays in review" \
   --recommend "ship" --recommend-why "all required checks passed and review approved" \
   --risk "the flag default is not verified on prod" \
   --evidence "merge state CLEAN" --evidence "review APPROVED" \
   --pr-url "https://github.com/org/repo/pull/12" --pr-title "Crop default" \
-  --ticket-url "https://linear.app/org/issue/AI-901" --ticket-title "Crop default" \
+  --issue-url "https://linear.app/org/issue/AI-901" --issue-title "Crop default" \
   --readiness "abc123def4567890"
 check 0 "$CODE"
 it "the record keeps every structured field"
-check '[[["ship", "merges PR #12 into main", "10 minutes of CI on main"], ["decline", "closes the PR", "the crop fix waits a week"]], "the PR stays open and the ticket stays in review", "ship", "all required checks passed and review approved", ["the flag default is not verified on prod"], ["merge state CLEAN", "review APPROVED"], {"title": "Crop default", "url": "https://github.com/org/repo/pull/12"}, {"title": "Crop default", "url": "https://linear.app/org/issue/AI-901"}, "abc123def4567890"]' \
-  "$(field "[[[o['label'], o['effect'], o['cost']] for o in items['$A']['handed']['options']]] + [items['$A']['handed'][k] for k in ('if_nothing', 'recommendation', 'recommendation_why', 'risks', 'evidence', 'pr', 'ticket', 'readiness')]")"
+check '[[["ship", "merges PR #12 into main", "10 minutes of CI on main"], ["decline", "closes the PR", "the crop fix waits a week"]], "the PR stays open and the issue stays in review", "ship", "all required checks passed and review approved", ["the flag default is not verified on prod"], ["merge state CLEAN", "review APPROVED"], {"title": "Crop default", "url": "https://github.com/org/repo/pull/12"}, {"title": "Crop default", "url": "https://linear.app/org/issue/AI-901"}, "abc123def4567890"]' \
+  "$(field "[[[o['label'], o['effect'], o['cost']] for o in items['$A']['handed']['options']]] + [items['$A']['handed'][k] for k in ('if_nothing', 'recommendation', 'recommendation_why', 'risks', 'evidence', 'pr', 'issue', 'readiness')]")"
 it "the ask carries a 16-hex fingerprint, facts_at equal to at, no shown mark and no superseded answers"
 check '[16, true, null, []]' "$(field "[len(items['$A']['handed']['fingerprint']), items['$A']['handed']['facts_at'] == items['$A']['handed']['at'], items['$A']['handed']['shown'], items['$A']['handed']['superseded_answers']]")"
 it "the ask stores the exact replies, by the item's unique title"
@@ -145,8 +145,8 @@ has "\"fingerprint\": \"$(fp "$A")\"" "$OUT"
 has '"ship": "ship Crop default"' "$OUT"
 
 it "the view's asks entry carries every field"
-check '["open", "Crop default (linear:AI-901)", 2, "ship", "all required checks passed and review approved", "the PR stays open and the ticket stays in review", ["the flag default is not verified on prod"], 2, "https://github.com/org/repo/pull/12", "https://linear.app/org/issue/AI-901", "abc123def4567890", true, null, false, "ship Crop default"]' \
-  "$(view_q "[asks['$A'][k] for k in ('status', 'name')] + [len(asks['$A']['options']), asks['$A']['recommendation'], asks['$A']['recommendation_why'], asks['$A']['if_nothing'], asks['$A']['risks'], len(asks['$A']['evidence']), asks['$A']['pr']['url'], asks['$A']['ticket']['url'], asks['$A']['readiness'], asks['$A']['facts_at'] == asks['$A']['at'], asks['$A']['shown'], asks['$A']['shown_current'], asks['$A']['replies']['ship']]")"
+check '["open", "Crop default (linear:AI-901)", 2, "ship", "all required checks passed and review approved", "the PR stays open and the issue stays in review", ["the flag default is not verified on prod"], 2, "https://github.com/org/repo/pull/12", "https://linear.app/org/issue/AI-901", "abc123def4567890", true, null, false, "ship Crop default"]' \
+  "$(view_q "[asks['$A'][k] for k in ('status', 'name')] + [len(asks['$A']['options']), asks['$A']['recommendation'], asks['$A']['recommendation_why'], asks['$A']['if_nothing'], asks['$A']['risks'], len(asks['$A']['evidence']), asks['$A']['pr']['url'], asks['$A']['issue']['url'], asks['$A']['readiness'], asks['$A']['facts_at'] == asks['$A']['at'], asks['$A']['shown'], asks['$A']['shown_current'], asks['$A']['replies']['ship']]")"
 it "the view entry stores timestamps and no computed age"
 lacks '"age' "$(view_q "asks['$A']")"
 it "the view keeps view_format 3"
@@ -157,7 +157,7 @@ ROWS="$("$PY" "$PROG" status 2>&1)"
 has "Crop default (linear:AI-901)" "$ROWS"
 has "option ship: merges PR #12 into main (cost: 10 minutes of CI on main)" "$ROWS"
 has "recommend ship: all required checks passed and review approved" "$ROWS"
-has "if nothing: the PR stays open and the ticket stays in review" "$ROWS"
+has "if nothing: the PR stays open and the issue stays in review" "$ROWS"
 has "reply: \"ship Crop default\" or \"decline Crop default\"" "$ROWS"
 
 it "the herdr notification title names the item by name and id"
@@ -202,6 +202,8 @@ it "update-ask with the same facts leaves the fingerprint and facts_at unchanged
 prog update-ask "$A" --evidence "merge state CLEAN" --evidence "review APPROVED"
 check "0 ${FP1} \"2026-01-01T00:00:00Z\"" "$CODE $(fp "$A") $(ask "$A" '["facts_at"]')"
 has '"changed": false' "$OUT"
+it "update-ask with the same facts writes no journal row"
+check 0 "$(journal_count ask_updated)"
 it "the view still marks the ask as shown"
 check true "$(view_q "asks['$A']['shown_current']")"
 it "update-ask with a changed check outcome changes the fingerprint and moves facts_at"

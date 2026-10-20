@@ -26,17 +26,17 @@ run_record_core = load_lib_module("run_record_core")
 REPLY_CHOICES = ("ship", "decline")
 # Every cap stays at or under programme_sanitize.DEFAULT_CAP: the view model re-cleans its strings at that cap.
 TEXT_CAPS = {"question": 500, "if-nothing": 500, "recommend": 300, "recommend-why": 500,
-             "pr-url": 300, "pr-title": 200, "ticket-url": 300, "ticket-title": 200}
+             "pr-url": 300, "pr-title": 200, "issue-url": 300, "issue-title": 200}
 LIST_CAPS = {"risk": (300, 10), "evidence": (400, 12)}
 OPTION_CAPS = (40, 400, 300)
 OPTIONS_MAX = 6
 FACT_VALUES = tuple(TEXT_CAPS) + ("readiness",)
 FACT_MULTI = ("option",) + tuple(LIST_CAPS)
 FACT_KEYS = ("question", "options", "if_nothing", "recommendation", "recommendation_why", "risks",
-             "evidence", "pr", "ticket", "readiness")
+             "evidence", "pr", "issue", "readiness")
 FACT_USAGE = ("[--option '<label> | <effect> [| <cost>]']... [--if-nothing <text>] [--recommend <text>] "
               "[--recommend-why <text>] [--risk <text>]... [--evidence <text>]... [--pr-url <url>] "
-              "[--pr-title <text>] [--ticket-url <url>] [--ticket-title <text>] [--readiness <fingerprint>]")
+              "[--pr-title <text>] [--issue-url <url>] [--issue-title <text>] [--readiness <fingerprint>]")
 
 
 def _capped(value, flag, cap):
@@ -80,7 +80,7 @@ def parse_facts(opts) -> dict:
             if len(opts[flag]) > most:
                 raise ValueError(f"at most {most} --{flag} values")
             facts[key] = [t for t in (_capped(raw, flag, cap) for raw in opts[flag]) if t]
-    for prefix in ("pr", "ticket"):
+    for prefix in ("pr", "issue"):
         link = _link(opts, prefix)
         if link is not None:
             facts[prefix] = link
@@ -102,7 +102,7 @@ def new_ask(kind, facts, op=None) -> dict:
     if op is not None:
         ask["op"] = op
     ask.update({"options": [], "if_nothing": None, "recommendation": None, "recommendation_why": None,
-                "risks": [], "evidence": [], "pr": None, "ticket": None, "readiness": None})
+                "risks": [], "evidence": [], "pr": None, "issue": None, "readiness": None})
     ask.update(facts)
     ask.update(facts_at=ask["at"], shown=None, superseded_answers=[], replies=None)
     ask["fingerprint"] = fingerprint(ask)
@@ -190,7 +190,7 @@ def detail_lines(items, key) -> list:
         out.append(f"if nothing: {ask['if_nothing']}")
     out += [f"risk: {r}" for r in ask.get("risks") or []]
     out += [f"evidence: {e}" for e in ask.get("evidence") or []]
-    for name in ("pr", "ticket"):
+    for name in ("pr", "issue"):
         link = ask.get(name) if isinstance(ask.get(name), dict) else None
         if link:
             out.append(f"{name.upper() if name == 'pr' else name}: "
@@ -227,6 +227,18 @@ def _h_update_ask(host, argv):
     facts = parse_facts(opts)
     if not facts:
         raise ValueError("update-ask needs at least one fact to replace")
+    run_id, _, current = host._locate(opts)
+    try:
+        programme = current.get("programme") or {}
+        _, _, ask = _ask_on(record, programme, item_id)
+        same = structured(ask) and fingerprint(dict(ask, **facts)) == ask.get("fingerprint")
+    except record.RecordError:
+        same = False
+    if same:
+        # A sweep re-checks every open ask; unchanged facts write no row, so a quiet sweep stays one row.
+        host._emit({"ok": True, "run": run_id, "item": item_id, "ask": ask.get("id"),
+                    "fingerprint": ask["fingerprint"], "changed": False, "voided": None})
+        return 0
 
     def change(programme, prompt, rec):
         key, item, ask = _ask_on(record, programme, item_id)
