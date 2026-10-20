@@ -32,6 +32,7 @@ programme_tracker = load_lib_module("programme_tracker")
 programme_decisions = load_lib_module("programme_decisions")
 programme_context = load_lib_module("programme_context")
 programme_naming = load_lib_module("programme_naming")
+programme_asks = load_lib_module("programme_asks")
 
 SOURCES = ("herdr", "tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
@@ -534,14 +535,14 @@ def _run_tool(argv):
     return done.returncode
 
 
-def notify_handed(item_id, question) -> dict:
+def notify_handed(item_id, question, title=None) -> dict:
     source, _, key = item_id.partition(":")
     tracker = "skipped"
     if source == ISSUE_SOURCE:
         tracker = _run_tool(programme_tracker.needs_you_argv(key))
     herdr = None
     if tracker != 0:
-        herdr = _run_tool(["herdr", "notification", "show", f"auto: {item_id} needs you",
+        herdr = _run_tool(["herdr", "notification", "show", f"auto: {programme_naming.label(title, item_id)} needs you",
                            "--body", question, "--sound", "request"])
     return {"tracker": tracker, "herdr": herdr}
 
@@ -556,12 +557,14 @@ def _open_ask_for(programme, op):
 
 
 def _h_hand_item(host, argv):
-    positional, opts = host._parse(argv, values=("run", "question", "kind", "operation"))
+    positional, opts = host._parse(argv, values=("run", "kind", "operation") + programme_asks.FACT_VALUES,
+                                   multi=programme_asks.FACT_MULTI)
     if len(positional) != 1:
         raise ValueError("usage: hand-item <id> --question <text> --kind <decision-kind> "
-                         "[--operation <operation>]")
+                         "[--operation <operation>] " + programme_asks.FACT_USAGE)
     item_id = check_item_id(positional[0])
-    question = _text(opts.get("question"), "question")
+    facts = programme_asks.parse_facts(opts)
+    question = _text(facts.get("question"), "question")
     if not opts.get("kind"):
         raise ValueError("hand-item needs --kind <decision-kind>")
     kind = programme_decisions.check_kind(opts["kind"])
@@ -580,18 +583,18 @@ def _h_hand_item(host, argv):
             if holder is not None:
                 raise RecordError(f"operation {op!r} already has an open ask to Shawn on {holder!r}; "
                                   "wait for that answer instead of asking again")
-        ask = programme_decisions.new_ask(kind, question)
-        if op is not None:
-            ask["op"] = op
+        ask = programme_asks.new_ask(kind, facts, op)
         item.update(state="handed", waiting_on=None, handed=ask)
+        programme_asks.refresh_replies(programme)
         _history(item, "handed", question=question, ask=ask["id"])
-        out = {"item": key, "question": question, "ask": ask["id"], "ask_kind": kind}
+        out = {"item": key, "question": question, "ask": ask["id"], "ask_kind": kind, "title": item.get("title"),
+               "fingerprint": ask["fingerprint"], "replies": ask["replies"]}
         if op is not None:
             out["op"] = op
         return out
 
     def after(payload):
-        return {"notify": notify_handed(payload["item"], question)}
+        return {"notify": notify_handed(payload["item"], question, payload.get("title"))}
 
     return host._write(opts, change, "item_handed", after=after)
 

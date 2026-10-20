@@ -135,6 +135,15 @@ has "herdr:w2-p3" "$(view_q 'json.dumps(m["watching"])')"
 it "decisions for Shawn lists the handed item with its question"
 check "linear:AI-3|Turn the flag on for everyone?" "$(view_q '"|".join([d["item"] + "|" + d["question"] for d in m["decisions_for_shawn"] if d["kind"] == "handed"])')"
 
+it "the top-level asks list carries an ask handed before structured fields, with its live replies"
+check "linear:AI-3|open|Flag rollout (linear:AI-3)|ship Flag rollout|2026-10-03T01:00:00Z|None" \
+  "$(view_q '"|".join(str(a[k]) if not isinstance(a[k], dict) else a[k]["ship"] for a in v["asks"] for k in ("item", "status", "name", "replies", "at", "fingerprint"))')"
+
+it "the Decisions for Shawn row names the item by name and id and gives the reply"
+DECISION_ROWS="$(view_q '"\n".join(r["text"] for r in v["rows"])')"
+has "  Flag rollout (linear:AI-3): Turn the flag on for everyone?" "$DECISION_ROWS"
+has "    reply: \"ship Flag rollout\" or \"decline Flag rollout\"" "$DECISION_ROWS"
+
 it "just did shows the latest journal write first"
 check "working_now" "$(view_q 'm["just_did"][0]["kind"]')"
 

@@ -296,6 +296,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
+        programme_asks.refresh_replies(rec["programme"])
         seen["prompt"] = prompt
         seen["record"] = rec
 
@@ -969,6 +970,8 @@ _VERBS.update(programme_lifecycle.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
+programme_asks = load_lib_module("programme_asks")
+_VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

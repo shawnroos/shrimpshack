@@ -26,6 +26,11 @@ FINAL_ITEM_STATES = ("done", "dropped", "decided")
 MIN_HUMAN_NAME = 6  # a shorter squashed title ("ok", "fix") turns up in ordinary replies
 
 
+def label(name, ident) -> str:
+    name = str(name or "").strip()
+    return f"{name} ({ident})" if name and name != ident else str(ident)
+
+
 def name_words(text) -> list:
     words = (_NAME_JOINERS.sub("", w) for w in _NAME_WORD.findall(str(text or "").casefold()))
     return [w for w in words if w]

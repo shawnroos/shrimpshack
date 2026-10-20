@@ -317,6 +317,27 @@ session.
   `--kind`); decline drops it. Either way it records a Shawn decision linked to
   the ask id, with the ask's decision kind (unknown for an ask handed before
   kinds existed).
+- **Asks**: `hand-item` also takes the ask's structured facts: `--option
+  '<label> | <effect> [| <cost>]'` (up to 6), `--if-nothing`, `--recommend`,
+  `--recommend-why`, `--risk` (up to 10), `--evidence` (up to 12), `--pr-url`,
+  `--pr-title`, `--ticket-url`, `--ticket-title` and `--readiness <fingerprint>`
+  (the `check-mergeable` fingerprint). Each field has its own cap, at most 500
+  characters, and a value over its cap is refused, never cut. The ask stores a
+  16-hex fingerprint of its facts, `facts_at`, a shown mark, `superseded_answers` and
+  replies (`{ship, decline}`: the exact reply to type, by the item's shortest
+  unique title or session name, else its id; recomputed on every write, so a
+  name that became ambiguous falls back to the id). `update-ask` (args: item,
+  the same fact flags) replaces the given facts and keeps the rest. Facts that
+  hash to the current fingerprint change nothing; new facts move `facts_at`, so a
+  name reply typed before them no longer approves. On an answered ask that was
+  not relayed, new facts void the answer: it moves to `superseded_answers`, the
+  decision gets `voided_at`, the item is handed again and the row is
+  `ask_answer_voided` (else `ask_updated`). An ask already relayed is refused.
+  `ask-shown` (args: item, `--fingerprint`) records which facts were posted in
+  chat and refuses a fingerprint that is not current. `ask-relayed` (args: item)
+  sets `answered.relayed_at` after the PM relays Shawn's answer to the worker,
+  and refuses an ask with no recorded answer or one already relayed. The view's
+  top-level asks list carries every open ask and every answered, unrelayed one.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the decision records
