@@ -167,15 +167,15 @@ Planning resolved the questions this section carried; the answers live in the Pl
 
 ## Planning Contract
 
-Product Contract preservation: Product Contract unchanged except Outstanding Questions, whose planning-owned items are answered here (KTD1–KTD6). All paths below are under `plugins/auto/` unless they start with `docs/`.
+Product Contract preservation: Product Contract unchanged except Outstanding Questions, whose planning-owned items are answered here (KTD1–KTD6). R2's "one step per agreement section" is read as one question per setting, grouped by section (KTD5, Assumptions); flagged for Shawn. All paths below are under `plugins/auto/` unless they start with `docs/`.
 
 ### Key Technical Decisions
 
 - KTD1. **A pick is verified from the session transcript, never from the hook payload or a stored label.** A new PostToolUse hook on AskUserQuestion journals a prompt row stored with origin `unknown` and a source record (transcript path, tool-use id, answer-text hash). The row reads as `picked` only when a transcript check finds the result row for that tool use, finds that its assistant `tool_use` input carried no `answers`, and finds a user permission source. Rationale: the PM runs shell, so env vars, caller arguments and hook rows are forgeable (`docs/solutions/` learnings on restraining switches and transcript-read refusals). `programme_prompt_source.origin()` returns any stored label other than `typed`/`unknown` unchecked (`lib/programme_prompt_source.py`, the `cron` path), so storing `picked` directly would trust it. Governs R8, R11.
-- KTD2. **The driving session may not pre-fill a picker.** The existing PreToolUse AskUserQuestion hook denies a call from a programme's driving session whose input already carries `answers`. AskUserQuestion accepts `answers` in its own input, so without this guard the model could answer its own question. Governs R8.
-- KTD3. **Picks change attribution, not gates.** Before acceptance, `propose-agreement`, `set-remit` and `edit-project-term` already take no prompt; only `amend-term` needs one (`lib/programme.py`, `lib/programme_terms.py`, `lib/programme_lifecycle.py`). A new `pick-term` verb applies a picked choice with `set_by` Shawn, the pick cited and origin `picked`, refusing after acceptance and refusing any target R9 keeps typed. It journals under a kind that `programme_terms.check_accept_order` counts, so the typed accept must come after the last pick. Every existing typed gate stays typed: `_typed_prompt`, `programme_archive._write`, the lifecycle request checks, the protocol adoption check and `programme_context._source`. Governs R8–R11 (session-settled: user-directed — chosen over typing every step and over picks that only propose: fewer steps, and the loosening ends at acceptance).
+- KTD2. **The driving session may not pre-fill a picker.** The PreToolUse AskUserQuestion hook is extended to deny a call from a programme's driving session whose input already carries `answers`. It must gate on this session's lease file, as `on-user-prompt.sh` does: today `on-pretooluse-askuser.sh` exits early unless a `.claude/auto` folder sits above the working folder, and programme state lives in the plugin data folder. AskUserQuestion accepts `answers` in its own input, so without this guard the model could answer its own question; the transcript check in KTD1 is the second line. Governs R8.
+- KTD3. **Picks change attribution, not gates.** Before acceptance, `propose-agreement`, `set-remit` and `edit-project-term` already take no prompt; only `amend-term` needs one (`lib/programme.py`, `lib/programme_terms.py`, `lib/programme_lifecycle.py`). A new `pick-term` verb applies a picked choice with `set_by` Shawn, the pick cited and origin `picked`, refusing after acceptance and refusing any target R9 keeps typed. A pick approves only what it answered: the verb refuses when the pick's question is not that term's setup step, when the picked answer does not name the value (the `require_named` check `amend-term` uses), or when the pick id was already cited. `take-recommendations` accepts only a pick whose answer is the "take all recommendations" option. It journals under a kind that `programme_terms.check_accept_order` counts, so the typed accept must come after the last pick. Every existing typed gate stays typed: `_typed_prompt`, `programme_archive._write`, the lifecycle request checks, the protocol adoption check and `programme_context._source`. Governs R8–R11 (session-settled: user-directed — chosen over typing every step and over picks that only propose: fewer steps, and the loosening ends at acceptance).
 - KTD4. **The pane opens inside Shawn's own command.** The mod adds a `command.run` hook for `/auto:programme` that calls `$.ui.open` before passing the command on. A pane opened during the person's command is placed at any width; one opened later by a timer shows only from 144 columns. The pane renders a waiting state until the lease exists, then the existing 2 s poll picks up the first view `start` writes. A second `command.run` hook answers `/auto:programme-status` (no run argument, this session drives a programme) by focusing the pane and returning one line, without passing the command on. Governs R1, R15 (session-settled: user-directed — chosen over the chat asking first and over Shawn typing `/programme-view`).
-- KTD5. **Setup steps are derived from data, not hard-coded.** A new optional `setup` part in `view.json` lists the steps: one per agreement section in the order the agreement exposes (today `programme_view_work._ordered_terms` over `programme_home.TERM_GUIDE`), then rulings and reserved areas, shared settings, items to adopt and accept. Each step's state is derived from the record (`set_by`, remit set, project terms, items adopted, `agreement.accepted`). The one stored value is the step the PM is asking now, written by a non-approval `setup-step` verb in the `_ui_write` style. The part is optional, so `VIEW_FORMAT` stays 3. Governs R2, R5, R6.
+- KTD5. **Setup steps are derived from data, not hard-coded.** A new optional `setup` part in `view.json` lists the steps: one per agreement setting in the order the agreement exposes (today `programme_view_work._ordered_terms` over `programme_home.TERM_GUIDE`), grouped under its section in the pane, so a section holding several settings is walked as several one-question steps rather than one question covering them all; then rulings and reserved areas, shared settings, items to adopt and accept. Each step's state is derived from the record (`set_by`, remit set, project terms, items adopted, `agreement.accepted`). Two values are stored, both by non-approval writes in the `_ui_write` style: the step the PM is asking now (`setup-step`), and what the source probe saw (`setup-seen`: the herdr tabs, repos and tracker scope observed, and the items the sweep proposes to adopt), because `sweep --record-sources` prints these but saves only each source's state. The part is optional, so `VIEW_FORMAT` stays 3. Governs R2, R5, R6.
 - KTD6. **New verbs live in a new module.** `lib/programme.py` is at 966 of 1000 lines (`tests/unit/size-budget.test.sh`). `pick-term`, `take-recommendations` and `setup-step` go in a new `lib/programme_setup.py` registered by `build_verbs(host)`, each with a row in `docs/contracts/agent-tool-surface.md` (enforced by `tests/unit/doc-fence-agent-tool-surface.test.sh`).
 - KTD7. **The sweep's chat rules and the pending-asks data come from Programme noise fixes.** This plan does not edit `skills/programme-sweep/`. It renders whatever pending-ask fields that branch adds to `view.json`, and until those land it renders today's `decisions_for_shawn`. Governs R12–R14, R16.
 
@@ -216,7 +216,9 @@ stateDiagram-v2
 
 ### Assumptions
 
-- R12–R14 are delivered by the Programme noise fixes branch (quiet wakes, pending asks in the view, chat repeats an ask only when new or changed). This PR ships setup, picks, the pane and status; the two branches together meet the brainstorm's "setup and reports together".
+- R12–R14 are delivered by the Programme noise fixes branch (quiet wakes, pending asks in the view, chat repeats an ask only when new or changed). That branch has no plan or commits yet. This PR ships setup, picks, the pane and status; R13 and AE4 are verified only once both branches are on `main`, and the auto 0.16.0 release (already on hold) must not ship one without the other.
+- "The chat shows nothing" (R13, AE4) means no text the PM writes; the wake prompt and tool calls of a woken turn still appear.
+- R2 is read as one question per agreement setting, grouped under its section (KTD5). On `main` each section is one setting, so the two readings agree today; after the consolidation merges six settings into Scope they differ, and one question per setting keeps the walkthrough's one-decision-per-question shape. Flagged for Shawn at handoff.
 - A free-text "Other" answer in a picker is recorded as a pick but applies only when it names one of the step's options; otherwise the PM treats it as a request and shows the reply to type.
 - The setup steps for rulings, reserved areas and shared settings always show a reply to type (R9), so the fast path ends at the accept line plus any of those Shawn wants to change.
 
@@ -234,7 +236,7 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 
 ### Deferred to Implementation
 
-- How the mod tells the PM the pane was not placed (R1 fallback). Default: the walkthrough's first line always names `/programme-view` as the fallback; a placement signal is optional polish.
+- How the mod tells the PM the pane was not placed (R1 fallback). Default: the walkthrough's first line reads "If the Programme pane is not beside this chat, type /programme-view", which meets R1 without a placement signal; a signal is optional polish.
 - Whether `command.run` names the plugin command `auto:programme` or `programme` (U1 settles it).
 
 ---
@@ -264,7 +266,7 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 **Approach:**
 1. Add the PostToolUse hook, gated on a lease file for this session as `on-user-prompt.sh` is; it journals through `append_prompt` with origin `unknown` and a pick source record.
 2. Add `picked` to `PROMPT_ORIGINS` as a resolved value only; `prompt_origin` resolves it through the new verifier, and a stored `picked` label is never trusted.
-3. Extend the PreToolUse AskUserQuestion hook to deny a driving-session call that carries `answers`.
+3. Extend the PreToolUse AskUserQuestion hook to deny a driving-session call that carries `answers`, gating on the lease file (KTD2).
 4. Document the picked rules beside the typed rules.
 **Patterns to follow:** `lib/programme_prompt_source.py` (`capture`, `origin`), `lib/on-user-prompt.py` (journaling, `<auto-data>` prompt id), `tests/integration/programme-origin.test.sh` (fake transcript builders).
 **Test scenarios:**
@@ -273,7 +275,7 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 - A pick whose assistant `tool_use` input carried `answers` resolves to `unknown`.
 - A pick from a session other than the driving session is not journaled for the programme.
 - Setting every test hatch and `CLAUDE_AUTO_*` variable on the PM's route still leaves a forged pick unverified.
-- The PreToolUse hook denies a driving-session AskUserQuestion carrying `answers` and allows one without.
+- The PreToolUse hook denies a driving-session AskUserQuestion carrying `answers` and allows one without, run from a working folder with no `.claude/auto` above it.
 - A session that drives no programme gets no journal row and no denial (hook exits 0).
 **Verification:** the new unit and integration tests pass, and each was seen failing once with its guard line mutated.
 
@@ -286,7 +288,7 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 **Approach:**
 1. `pick-term <key> <value> --pick <id>`: before acceptance only, per-programme terms only; records `set_by` Shawn, the pick quote and origin `picked`; refusals go through the `_write` catch so they journal `approval_refused`.
 2. `take-recommendations --pick <id>`: applies every per-programme term's recommended value in one write, citing the pick.
-3. `setup-step <name>`: non-approval write of the current step (`compact_exempt`, no beat).
+3. `setup-step <name>` and `setup-seen`: non-approval writes of the current step and of what the source probe saw (`compact_exempt`, no beat).
 4. Add the pick-term journal kinds to `check_accept_order`.
 5. Add a refusal test for a `picked` prompt id in each typed gate twin listed in KTD3.
 **Patterns to follow:** `build_verbs(host)` registration in `lib/programme.py`; `_ui_write` in `lib/programme_proposals.py`; `amend-term` in `lib/programme.py` for the term write.
@@ -298,6 +300,9 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 - `accept-agreement` citing a typed prompt older than the last pick refuses.
 - `amend-term`, `record-instruction`, `adopt-rule`, the archive closure verbs and the lifecycle requests each refuse a picked prompt id.
 - `take-recommendations` sets only per-programme terms and leaves reserved and shared settings untouched.
+- `pick-term stop_rule never_stop --pick <id>` refuses when that pick answered the cadence step, or when its answer named a different value.
+- A second `pick-term` citing an already-used pick id refuses.
+- `take-recommendations --pick <id>` refuses when the pick's answer is not the "take all recommendations" option.
 - `setup-step` with an unknown step name refuses; with a known one it updates the view.
 **Verification:** tests pass; the size budget and the agent-tool-surface doc fence pass.
 
@@ -310,8 +315,9 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 **Approach:**
 1. Build steps from the ordered agreement sections, then rulings and reserved areas, shared settings (done when every protocol layer value is set), items to adopt (from the sweep's proposals) and accept.
 2. Each step: name, state, current values, recommendation and its source, and whether it needs a typed reply (R9).
-3. In and out: in from the remit; out from the herdr tabs, repos and tracker scope the source probe saw that the remit does not cover.
-4. Omit the part once the agreement is accepted.
+3. In and out: in from the remit; out from the `setup-seen` record (U3) minus what the remit covers. Items to adopt come from the same record.
+4. A step whose change needs a typed reply (R9) is done when Shawn keeps it as is; only a change needs the typed line.
+5. Omit the part once the agreement is accepted.
 **Patterns to follow:** `programme_view_work.contract` and `_ordered_terms`; keep this builder apart from the pending-asks builder Programme noise fixes adds.
 **Test scenarios:**
 - A fresh proposal yields steps in agreement order, the first unfinished one current.
@@ -326,10 +332,10 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 
 **Goal:** The pane opens during `/auto:programme`, shows setup progress, and `/auto:programme-status` focuses the pane.
 **Requirements:** R1, R5, R6, R7, R15, R16; KTD4, KTD7
-**Dependencies:** U1, U4
+**Dependencies:** U1, U3, U4
 **Files:** `mods/programme-view/register.tsx`, `mods/programme-view/view.ts`, `mods/programme-view/setup.tsx` (new), `mods/programme-view/band.tsx`, `mods/programme-view/setup.test.ts` (new), `mods/programme-view/programme-view.test.ts`, `mods/programme-view/test-world.ts`
 **Approach:**
-1. `command.run` hook for the programme command (name from U1): open the pane, show a waiting state with no lease, start polling, pass the command on.
+1. `command.run` hook for the programme command (name from U1): open the pane, show a waiting state with no lease, start polling, pass the command on. If no view appears within about a minute, the waiting state says setup has not started and names `/auto:programme`.
 2. Parse the optional `setup` part; while it is present the pane opens in a setup mode drawn by `setup.tsx` (steps, values, current step, in and out, the accept line to type).
 3. The band shows setup progress while setup runs and the work track after.
 4. `command.run` hook for `/auto:programme-status`: with no run argument and a lease, focus the pane and return one line; otherwise pass on.
@@ -355,6 +361,9 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 1. Keep steps 1–3 (lease, goal check, propose, probe, remit, project terms) but print nothing beyond one line per step.
 2. Replace step 4 with the walkthrough: first question offers "take all recommendations"; then one AskUserQuestion per step from the view's setup part, recommendation first with its source, followed by `setup-step` and `pick-term`; steps that need a typed reply show the line to type.
 3. End on the typed accept; step 7's "type /programme-view" line becomes the R1 fallback line at the start.
+4. Steps that need a typed reply (R9) offer "keep as is" in the picker; keeping changes nothing and needs no approval, so setup cannot stall there.
+5. When a verb refuses a pick, say why in one line and ask that step again. Shawn can change an earlier answer before the accept by naming the step; the PM re-asks it.
+6. On a re-run, handover or takeover before acceptance, resume at the first unfinished step instead of starting over.
 4. `programme-status.md` keeps printing for another run or when the mod passes the command on.
 **Test scenarios:**
 - The command text no longer instructs printing the full setup screen.
@@ -381,13 +390,14 @@ U4 can run in parallel with U2 and U3 (separate files). Rebase onto `main` (now 
 - Mod: `bash tests/unit/programme-view-mod.test.sh` (needs `claude` on PATH).
 - Run long suites through `~/.claude/tools/honest-run/run.sh` and read its verdict line.
 - Each new guard test is seen failing once with its guarded line mutated.
-- Live check before the PR: one `/auto:programme` run in a scratch herdr space, wide terminal, ending in an accepted agreement; record the pane opening, a pick recorded as `picked`, a refused pick-term after accept, and a quiet chat.
+- Live check before the PR: one `/auto:programme` run in a scratch herdr space, wide terminal, ending in an accepted agreement; record the pane opening, a pick recorded as `picked`, a refused pick-term after accept, and no setup block in the chat.
+- After Programme noise fixes merges: one sweep with nothing for Shawn leaves no PM-written text in the chat (AE4).
 
 ## Definition of Done
 
 - Every unit's tests pass under the commands above, with an honest-run verdict line.
 - A forged or pre-filled pick never approves anything (U2, U3 tests).
 - After acceptance only typed prompts approve (U3 twin tests).
-- The live check above is recorded in the PR body.
+- The live check above is recorded in the PR body, and the PR body states that R12–R14 and AE4 depend on Programme noise fixes.
 - No plugin version bump and no 0.16.0 release in this PR.
 - No dead-end or probe code left in the diff; U1's fixture is the only probe artifact kept.
