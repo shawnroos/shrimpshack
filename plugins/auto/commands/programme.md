@@ -93,8 +93,9 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    - When a verb refuses a pick, say why in one line and ask that step again.
    - Shawn can change an earlier answer before the accept by naming the step;
      ask that step again.
-   - Sources (`tools_of_record`) are a step like any other: each option names
-     the sources that stay on.
+   - Sources (`tools_of_record`) are a step like any other: each option label
+     names only the sources that stay on, never "no X" or "skip X". A pick is
+     refused when its answer names a source the value leaves out.
    - Items to adopt: ask which of the step's items to adopt (multiSelect), then
      adopt them as in step 7.
    - Last step: show "Type this: accept the agreement" and wait for his typed

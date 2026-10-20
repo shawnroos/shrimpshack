@@ -55,6 +55,11 @@ sweep="$(grep -n 'Load the \`auto:programme-sweep\` skill' "$TAKEOVER" | cut -d:
 if [ -n "$resume" ] && [ -n "$sweep" ] && [ "$resume" -lt "$sweep" ] && grep -qF 'has a `setup` part' "$TAKEOVER"; then
   pass; else fail "no setup resume step before the sweep in programme-takeover.md"; fi
 
+it "a takeover resumes setup before it re-arms the cron fallback"
+cron="$(grep -n 'CronCreate the cadence fallback' "$TAKEOVER" | cut -d: -f1)"
+if [ -n "$resume" ] && [ -n "$cron" ] && [ "$resume" -lt "$cron" ]; then
+  pass; else fail "the setup resume step comes after the cron step in programme-takeover.md"; fi
+
 it "lets the takeover use the picker"
 if grep -qE '^allowed-tools:.*AskUserQuestion' "$TAKEOVER"; then pass; else fail "AskUserQuestion is not in takeover allowed-tools"; fi
 

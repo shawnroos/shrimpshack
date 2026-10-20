@@ -299,6 +299,13 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('take-recommendations refuses a negated take-all answer',
           refused(result, 'take all recommendations') and terms(run)['stop_rule']['set_by'] == 'default',
           result.stdout + result.stderr)
+    for other in ('instead of take all recommendations, walk each step',
+                  'not sure, rather than take all recommendations walk each step',
+                  'neither take all recommendations nor walk', 'no to take all recommendations'):
+        result = verb(b_sid, run, 'take-recommendations', '--pick', pick(b_sid, run, {'Setup: how to start?': other}))
+        check(f'take-recommendations refuses an answer that only contains the option: {other!r}',
+              refused(result, 'take all recommendations') and terms(run)['stop_rule']['set_by'] == 'default',
+              result.stdout + result.stderr)
     take = pick(b_sid, run, {'Setup: how to start?': 'Take all recommendations (Recommended)'})
     result = verb(b_sid, run, 'take-recommendations', '--pick', take)
     after = terms(run)
@@ -343,10 +350,16 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(b_sid, run, 'accept-agreement', '--prompt', accept)
     check('a typed accept after take-recommendations and picks is accepted', result.returncode == 0,
           result.stdout + result.stderr)
+    resume_line = 'Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep.'
+    render_rules = load_lib_module('programme').render_rules
+    check('the rules restored for an accepted programme do not resume setup',
+          resume_line not in render_rules(record(run)), render_rules(record(run)))
 
     # Run C: setup-step, setup-seen and setup-keep.
     c_sid = 'setup-c'
     run = programme(c_sid, 'setup-c')
+    check('the rules restored after a handover, takeover or compaction before acceptance resume setup',
+          resume_line in render_rules(record(run)), render_rules(record(run)))
     result = verb(c_sid, run, 'setup-step', 'bogus')
     check('setup-step refuses an unknown step name', refused(result, 'unknown setup step'),
           result.stdout + result.stderr)

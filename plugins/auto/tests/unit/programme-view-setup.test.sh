@@ -99,6 +99,13 @@ check("the new term carries the section its data names", step(p, "handover")["gr
 check("the new term offers the options its data names", step(p, "handover")["options"] == ["slack", "linear"],
       step(p, "handover"))
 
+b = fresh()
+b["agreement"]["terms"]["tools_of_record"]["proposal"] = {"state": "pending", "origin": "pm",
+                                                         "value": ["tracker", "wiki"], "extras": {"add": "wiki"}}
+p = setup.build(b)
+check("a pending proposed new source is offered as an option, as pick-term accepts it",
+      step(p, "tools_of_record")["options"] == ["tracker", "tasks", "plans", "wiki"], step(p, "tools_of_record"))
+
 p = setup.build(fresh())
 check("shared settings with no personal file are not done", step(p, "shared")["state"] != "done"
       and step(p, "shared")["needs_typed"], step(p, "shared"))

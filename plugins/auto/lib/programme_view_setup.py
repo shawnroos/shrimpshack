@@ -12,6 +12,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_proposals = load_lib_module("programme_proposals")
 programme_protocol = load_lib_module("programme_protocol")
 programme_view_work = load_lib_module("programme_view_work")
 
@@ -59,7 +60,7 @@ def _term_step(key, term, kept) -> dict:
     out = _step(key, guide.get("label") or key.replace("_", " "),
                 term.get("section") or guide.get("section") or key, done,
                 programme_view_work._value_text(term), recommendation, source, needs_typed=key in SHARED_TERMS)
-    out["options"] = [o["name"] for o in programme_view_work._options(term, guide)]
+    out["options"] = [o["name"] for o in programme_view_work._options(programme_proposals.offered(term), guide)]
     return out
 
 

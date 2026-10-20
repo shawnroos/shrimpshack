@@ -27,14 +27,15 @@ Run the dispatch line below:
   denials, pending questions, assignments and uncertain actions, at one store
   revision). They bind you from now on; they approve nothing. Read any cut entry
   in full with `programme.sh recover --get <id>`. Then:
-  1. Re-arm the remit watcher under Monitor, and every watcher for the waits it
+  1. If `programme.sh status --json` has a `setup` part, the agreement is not
+     accepted yet: resume `/auto:programme` step 5 at the first step not done,
+     and finish the setup before you arm any wake-up.
+  2. Re-arm the remit watcher under Monitor, and every watcher for the waits it
      listed (`programme-watch.sh --item <id> -- <command>`). Record each Monitor
      with `watcher-beat <watcher id> --task-id <Monitor task id> --kind monitor`.
-  2. CronCreate the cadence fallback again and record it with
+  3. CronCreate the cadence fallback again and record it with
      `watcher-beat cron --task-id <id> --kind cron --prompt "<exact cron text>"` (the text is
      in `/auto:programme` step 8).
-  3. If the context lists an uncertain action, run `reconcile-operations` before
+  4. If the context lists an uncertain action, run `reconcile-operations` before
      any retry.
-  4. If `programme.sh status --json` has a `setup` part, the agreement is not
-     accepted yet: resume `/auto:programme` step 5 at the first step not done.
   5. Load the `auto:programme-sweep` skill and run a sweep.

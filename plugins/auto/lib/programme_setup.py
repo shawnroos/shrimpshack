@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +30,7 @@ SHARED_TERMS = programme_view_setup.SHARED_TERMS
 STEPS = (programme_view_setup.RULINGS, programme_view_setup.SHARED, programme_view_setup.ITEMS,
          programme_view_setup.ACCEPT)
 TAKE_ALL = "take all recommendations"
+_RECOMMENDED_SUFFIX = re.compile(r"\s*\(recommended\)$", re.IGNORECASE)
 PICK_KINDS = (programme_terms.PICKED, programme_terms.RECOMMENDED)
 
 
@@ -155,7 +157,7 @@ def _h_pick_term(host, argv):
     def change(programme, pick):
         term = _pickable(host, programme, key)
         checked = programme_proposals.check_amend(host, term, value, opts)
-        options = programme_proposals._with_tool(term, programme_proposals._proposed_tool(term)).get("options")
+        options = programme_proposals.offered(term).get("options")
         question, answer = _answer_for(host, pick, key, checked, options or ())
         cite = _cite(pick, question, answer)
         return dict(_set(host, term, checked, opts, cite, opts.get("why")), **cite)
@@ -172,13 +174,17 @@ def _recommendation(term) -> tuple:
     return proposal.get("value"), extras, True
 
 
+def _is_take_all(answer) -> bool:
+    return _RECOMMENDED_SUFFIX.sub("", str(answer).strip()).strip().casefold() == TAKE_ALL
+
+
 def _h_take_recommendations(host, argv):
     positional, opts = host._parse(argv, values=("run", "pick"))
     if positional:
         raise ValueError("usage: take-recommendations --pick <id>")
 
     def change(programme, pick):
-        taken = [(q, a) for q, a in pick["answers"].items() if not programme_naming.missing(a, [TAKE_ALL])]
+        taken = [(q, a) for q, a in pick["answers"].items() if _is_take_all(a)]
         if len(taken) != 1:
             raise host.ProgrammeError(f"pick {pick['prompt_id']!r} is not the {TAKE_ALL!r} option; its answers: "
                                       f"{sorted(pick['answers'].values())}")

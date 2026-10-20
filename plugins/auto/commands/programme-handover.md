@@ -23,6 +23,7 @@ Run the dispatch line below:
      prints the restored context (the rules in force, decisions, limits and
      pending questions from the store); it reads them and runs
      `programme.sh rules --ack` before it acts. If the agreement is not
-     accepted yet (`programme.sh status --json` has a `setup` part), the new
-     session must resume `/auto:programme` step 5 at the first step not done
-     before its first sweep. Nothing from this session's chat carries over.
+     accepted yet (`programme.sh status --json` has a `setup` part), that
+     restored context tells the new session to
+     resume `/auto:programme` step 5 at the first step not done before any
+     sweep. Nothing from this session's chat carries over.
