@@ -56,7 +56,7 @@ export type SetupStep = {
   items: SetupItem[]
 }
 
-export type Scope = { in: Record<string, string[]>; out: Record<string, string[]> }
+export type Scope = { in: Record<string, string[]>; out: Record<string, string[]>; probed: boolean }
 
 export type Setup = { current: string | null; steps: SetupStep[]; scope: Scope }
 
@@ -205,7 +205,7 @@ export function readSetup(raw: unknown): Setup | undefined {
   return {
     current: text(raw.current),
     steps: (Array.isArray(raw.steps) ? raw.steps : []).filter(isRaw).flatMap(entry => setupStep(entry)),
-    scope: { in: lists(scope.in), out: lists(scope.out) },
+    scope: { in: lists(scope.in), out: lists(scope.out), probed: scope.probed === true },
   }
 }
 

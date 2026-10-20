@@ -393,7 +393,7 @@ def _terms(block, journal_entries) -> dict:
     }
 
 
-def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> dict:
+def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, protocol=None) -> dict:
     now = now or datetime.datetime.now(datetime.timezone.utc)
     block = programme_home.normalize_programme(_dict(record.get("programme")))
     status = programme_predicate.compute(record, now, inbox_size)
@@ -435,7 +435,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None) -> 
                                              model["rules_in_force"].get("instructions")))
     view = {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
             "model": model, **parts}
-    setup = programme_view_setup.build(block)
+    setup = programme_view_setup.build(block, protocol)
     if setup is not None:
         view["setup"] = _clean(setup)
     view["rows"] = rows(model, parts["work"])

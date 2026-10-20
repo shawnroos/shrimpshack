@@ -33,7 +33,8 @@ PICK_KINDS = (programme_terms.PICKED, programme_terms.RECOMMENDED)
 
 
 def _picked(host, run_id, rec, pick_id) -> dict:
-    row = programme_journal.find_prompt(run_id, pick_id)
+    rows = programme_journal.read(run_id)
+    row = programme_journal.find_prompt(run_id, pick_id, rows)
     if row is None:
         raise host.ProgrammeError(f"no prompt {pick_id!r} in this programme's journal")
     origin = programme_journal.prompt_origin(row)
@@ -43,7 +44,7 @@ def _picked(host, run_id, rec, pick_id) -> dict:
     if row.get("session_id") != rec.get("driving_session_id"):
         raise host.ProgrammeError(f"pick {pick_id!r} was not answered in the driving session")
     source = row["payload"]["source"]
-    for prior in programme_journal.read(run_id):
+    for prior in rows:
         payload = prior.get("payload") or {}
         if prior.get("kind") in PICK_KINDS and (payload.get("path"), payload.get("tool_use_id")) == (
                 source["path"], source["tool_use_id"]):
@@ -75,7 +76,13 @@ def _named(value, answer) -> list:
     return programme_naming.missing(answer, [value])
 
 
-def _answer_for(host, pick, key, value) -> tuple:
+def _also_named(value, answer, options) -> list:
+    if not isinstance(value, list):
+        return []
+    return [o for o in options if o not in value and not programme_naming.missing(answer, [o])]
+
+
+def _answer_for(host, pick, key, value, options=()) -> tuple:
     others = [k for k in programme_home.TERM_GUIDE if k != key]
     asked = [(q, a) for q, a in pick["answers"].items()
              if not programme_naming.missing(q, [key]) and all(programme_naming.missing(q, [o]) for o in others)]
@@ -87,6 +94,10 @@ def _answer_for(host, pick, key, value) -> tuple:
     if missing:
         raise host.ProgrammeError(f"pick {pick['prompt_id']!r} does not name what it approves; its answer "
                                   f"{answer!r} must contain {' and '.join(missing)}")
+    extra = _also_named(value, answer, options)
+    if extra:
+        raise host.ProgrammeError(f"pick {pick['prompt_id']!r} does not match what it approves; its answer "
+                                  f"{answer!r} also names {' and '.join(extra)}, which the value leaves out")
     return question, answer
 
 
@@ -95,10 +106,11 @@ def _cite(pick, question, answer) -> dict:
             "question": question, "answer": answer, "path": pick["path"], "tool_use_id": pick["tool_use_id"]}
 
 
-def _set(host, term, value, extra, cite, why) -> dict:
+def _set(host, term, value, extra, cite, why, settle=True) -> dict:
     out = host._set_term(term, value, extra, set_by="shawn", why=why, prompt=cite)
     term["origin"] = "picked"
-    programme_proposals.settle_amend(term, value)
+    if settle:
+        programme_proposals.settle_amend(term, value)
     return out
 
 
@@ -143,7 +155,8 @@ def _h_pick_term(host, argv):
     def change(programme, pick):
         term = _pickable(host, programme, key)
         checked = programme_proposals.check_amend(host, term, value, opts)
-        question, answer = _answer_for(host, pick, key, checked)
+        options = programme_proposals._with_tool(term, programme_proposals._proposed_tool(term)).get("options")
+        question, answer = _answer_for(host, pick, key, checked, options or ())
         cite = _cite(pick, question, answer)
         return dict(_set(host, term, checked, opts, cite, opts.get("why")), **cite)
 
@@ -165,7 +178,7 @@ def _h_take_recommendations(host, argv):
         raise ValueError("usage: take-recommendations --pick <id>")
 
     def change(programme, pick):
-        taken = [(q, a) for q, a in pick["answers"].items() if TAKE_ALL in a.casefold()]
+        taken = [(q, a) for q, a in pick["answers"].items() if not programme_naming.missing(a, [TAKE_ALL])]
         if len(taken) != 1:
             raise host.ProgrammeError(f"pick {pick['prompt_id']!r} is not the {TAKE_ALL!r} option; its answers: "
                                       f"{sorted(pick['answers'].values())}")
@@ -175,10 +188,7 @@ def _h_take_recommendations(host, argv):
             if key in SHARED_TERMS or not isinstance(term, dict):
                 continue
             value, extras, settle = _recommendation(term)
-            host._set_term(term, value, extras, set_by="shawn", why=TAKE_ALL, prompt=cite)
-            term["origin"] = "picked"
-            if settle:
-                programme_proposals.settle_amend(term, value)
+            _set(host, term, value, extras, cite, TAKE_ALL, settle=settle)
             applied[key] = value
         return dict(cite, terms=applied)
 
@@ -217,7 +227,7 @@ def _h_setup_step(host, argv):
     return _ui_write(host, opts, change, "setup_step_set")
 
 
-def _strings(host, value, what) -> list:
+def _string_list(host, value, what) -> list:
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
@@ -236,16 +246,20 @@ def _seen_items(host, value) -> list:
 
 def _read_seen(host, path) -> dict:
     try:
-        text = sys.stdin.read() if path == "-" else open(path).read()
+        if path == "-":
+            text = sys.stdin.read()
+        else:
+            with open(path) as fh:
+                text = fh.read()
         seen = json.loads(text)
     except (OSError, ValueError) as exc:
         raise host.ProgrammeError(f"setup-seen could not read JSON from {path!r}: {exc}") from None
     if not isinstance(seen, dict):
         raise host.ProgrammeError("setup-seen needs a JSON object")
+    out = {part: _string_list(host, seen.get(part), part) for part in programme_view_setup.SEEN_PARTS}
     items = seen.get("items")
-    if items is not None and not isinstance(items, list):
-        raise host.ProgrammeError("setup-seen items must be a list")
-    out = {part: _strings(host, seen.get(part), part) for part in programme_view_setup.SEEN_PARTS}
+    if not isinstance(items, list):
+        raise host.ProgrammeError("setup-seen needs an items list (empty when the sweep found nothing to adopt)")
     out["items"] = _seen_items(host, items)
     return out
 
@@ -284,17 +298,20 @@ _SPECS = (
      "an accepted agreement; a key that is not a per-programme agreement term (autonomy, rulings, reserved "
      "areas and shared settings stay typed); a value outside the term's options; a prompt that is not a "
      "verified pick from the driving session; a pick already used; a pick whose question does not name "
-     "the term alone, or whose answer does not name the value. A refusal journals approval_refused."),
+     "the term alone, or whose answer does not name the value (for a list, exactly the value's options). "
+     "A refusal journals approval_refused."),
     ("take-recommendations", _h_take_recommendations, "--pick <id> [--run <id>]",
      "an accepted agreement; a prompt that is not a verified pick from the driving session; a pick already "
-     "used; a pick with no answer containing 'take all recommendations'. Sets every per-programme term to "
-     "its pending proposal, else its current value; leaves autonomy, rulings and shared settings alone."),
+     "used; a pick with no answer naming 'take all recommendations' without a negation. Sets every "
+     "per-programme term to its pending proposal, else its current value; leaves autonomy, rulings and "
+     "shared settings alone."),
     ("setup-step", _h_setup_step, "<name> [--run <id>]",
      "an unknown step name (an agreement term key, rulings, shared, items or accept). Needs no prompt; "
      "allowed while the compact flag is set; never counts as a beat."),
     ("setup-seen", _h_setup_seen, "--json <file>|- [--run <id>]",
-     "JSON that is not an object of tabs, repos and tracker string lists and items objects with a string "
-     "item id. Needs no prompt; allowed while the compact flag is set; never counts as a beat."),
+     "JSON that is not an object of tabs, repos and tracker string lists and a required items list (empty "
+     "allowed) of objects with a string item id. Needs no prompt; allowed while the compact flag is set; "
+     "never counts as a beat."),
     ("setup-keep", _h_setup_keep, "<step> [--run <id>]",
      "an unknown step name; accept. Keeping changes nothing, so it needs no prompt; allowed while the "
      "compact flag is set; never counts as a beat."),

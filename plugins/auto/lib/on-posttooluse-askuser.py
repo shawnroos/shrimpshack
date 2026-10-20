@@ -20,7 +20,7 @@ programme_journal = load_lib_module("programme_journal")
 programme_pick_source = load_lib_module("programme_pick_source")
 on_user_prompt = load_lib_module("on-user-prompt")
 
-DATA_TAG = "auto-data"
+DATA_TAG = on_user_prompt.DATA_TAG
 
 
 def handle(raw: str) -> dict | None:

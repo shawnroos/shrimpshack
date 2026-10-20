@@ -46,5 +46,21 @@ if grep -qE '^allowed-tools:.*AskUserQuestion' "$CMD"; then pass; else fail "Ask
 it "names the pane fallback in the first line"
 if has "If the Programme pane is not beside this chat"; then pass; else fail "the /programme-view fallback line is missing"; fi
 
+TAKEOVER="${AUTO_ROOT}/commands/programme-takeover.md"
+HANDOVER="${AUTO_ROOT}/commands/programme-handover.md"
+
+it "a takeover before acceptance resumes the setup walkthrough before the sweep"
+resume="$(grep -n 'resume \`/auto:programme\` step 5 at the first step not done' "$TAKEOVER" | cut -d: -f1)"
+sweep="$(grep -n 'Load the \`auto:programme-sweep\` skill' "$TAKEOVER" | cut -d: -f1)"
+if [ -n "$resume" ] && [ -n "$sweep" ] && [ "$resume" -lt "$sweep" ] && grep -qF 'has a `setup` part' "$TAKEOVER"; then
+  pass; else fail "no setup resume step before the sweep in programme-takeover.md"; fi
+
+it "lets the takeover use the picker"
+if grep -qE '^allowed-tools:.*AskUserQuestion' "$TAKEOVER"; then pass; else fail "AskUserQuestion is not in takeover allowed-tools"; fi
+
+it "a handover before acceptance tells the new session to resume setup"
+if grep -qF 'resume `/auto:programme` step 5 at the first step not done' "$HANDOVER"; then
+  pass; else fail "no setup resume line in programme-handover.md"; fi
+
 printf "\n%d passed, %d failed\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

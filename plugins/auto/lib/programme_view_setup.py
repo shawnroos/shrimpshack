@@ -27,8 +27,7 @@ SEEN_PARTS = ("tabs", "repos", "tracker")
 SHARED_TERMS = ("autonomy",)
 
 
-def _dict(value) -> dict:
-    return value if isinstance(value, dict) else {}
+_dict = programme_view_work._dict
 
 
 def _list(value) -> list:
@@ -57,9 +56,11 @@ def _term_step(key, term, kept) -> dict:
     if isinstance(recommendation, list):
         recommendation = ", ".join(str(v) for v in recommendation) or "none"
     done = term.get("set_by") not in UNSET_BY or key in kept
-    return _step(key, guide.get("label") or key.replace("_", " "),
-                 term.get("section") or guide.get("section") or key, done,
-                 programme_view_work._value_text(term), recommendation, source, needs_typed=key in SHARED_TERMS)
+    out = _step(key, guide.get("label") or key.replace("_", " "),
+                term.get("section") or guide.get("section") or key, done,
+                programme_view_work._value_text(term), recommendation, source, needs_typed=key in SHARED_TERMS)
+    out["options"] = [o["name"] for o in programme_view_work._options(term, guide)]
+    return out
 
 
 def _rulings_step(block, kept) -> dict:
@@ -73,8 +74,7 @@ def _rulings_step(block, kept) -> dict:
                  f"{len(proposed)} proposed" if proposed else "none", source, needs_typed=True, pending=bool(proposed))
 
 
-def _shared_step(block, kept) -> dict:
-    protocol = programme_protocol.load()
+def _shared_step(block, kept, protocol) -> dict:
     personal = next((layer for layer in protocol["layers"] if layer["layer"] == "personal"), {})
     using = personal.get("status") == "loaded"
     proposed = programme_protocol.proposed_rules({"programme": block})
@@ -96,11 +96,16 @@ def _seen_items(seen, block) -> list:
     return out
 
 
+def _probed(seen) -> bool:
+    return isinstance(seen.get("items"), list)
+
+
 def _items_step(seen, block, kept) -> dict:
     items = _seen_items(seen, block)
     waiting = [i for i in items if not i["adopted"]]
-    out = _step(ITEMS, "items to adopt", ITEMS, ITEMS in kept or not waiting,
-                f"{len(items) - len(waiting)} adopted of {len(items)}",
+    probed = _probed(seen)
+    out = _step(ITEMS, "items to adopt", ITEMS, ITEMS in kept or (probed and not waiting),
+                f"{len(items) - len(waiting)} adopted of {len(items)}" if probed else "not probed yet",
                 f"adopt {len(waiting)}" if waiting else "none", "sweep")
     out["items"] = items
     return out
@@ -142,18 +147,21 @@ def _scope(block, seen) -> dict:
         "out": {"tabs": [t for t in seen_parts["tabs"] if tabs_only and t not in tabs],
                 "repos": [r for r in seen_parts["repos"] if covered and r not in covered],
                 "tracker": [t for t in seen_parts["tracker"] if t not in tracked]},
+        "probed": _probed(seen),
     }
 
 
-def build(block) -> dict | None:
+def build(block, protocol=None) -> dict | None:
     agreement = _dict(block.get("agreement"))
     if agreement.get("accepted"):
         return None
+    if protocol is None:
+        protocol = programme_protocol.load()
     setup = _dict(block.get("setup"))
     seen, kept = _dict(setup.get("seen")), set(_strings(setup.get("kept")))
     terms = _dict(agreement.get("terms"))
     steps = [_term_step(key, _dict(terms[key]), kept) for key in programme_view_work._ordered_terms(terms)]
-    steps += [_rulings_step(block, kept), _shared_step(block, kept), _items_step(seen, block, kept),
+    steps += [_rulings_step(block, kept), _shared_step(block, kept, protocol), _items_step(seen, block, kept),
               _step(ACCEPT, "accept", ACCEPT, False, "not accepted", "accept the agreement", None,
                     needs_typed=True, pending=True)]
     unfinished = [s["key"] for s in steps if not s["done"]]

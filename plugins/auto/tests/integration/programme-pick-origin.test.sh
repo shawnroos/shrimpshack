@@ -135,7 +135,52 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
           result.returncode == 0 and result.stdout == '' and len(prompt_rows(run)) == before,
           (result.returncode, result.stdout))
 
-    hatches = sorted(set(re.findall(r'CLAUDE_AUTO_[A-Z0-9_]*[A-Z0-9]',
+    def raw_hook(name, first_sid, last_key, last_sid, body):
+        text = ('{"session_id": "' + first_sid + '", ' + json.dumps(body)[1:-1]
+                + ', "' + last_key + '": "' + last_sid + '"}')
+        return subprocess.run(['bash', str(root / '.claude/hooks' / name)], input=text,
+                              text=True, capture_output=True, cwd=str(plain))
+
+    def denied(result):
+        return result.returncode == 0 and (json.loads(result.stdout or '{}').get('hookSpecificOutput') or {}).get(
+            'permissionDecision') == 'deny'
+
+    pre_body = {'cwd': str(plain), 'hook_event_name': 'PreToolUse', 'tool_name': 'AskUserQuestion',
+                'tool_input': dict(asked, answers=ANSWERS)}
+    for label, last_key, last_sid in (('a second session_id key', 'session_id', 'pick-pm'),
+                                      ('a \\u escape in a session_id key', 'session\\u005fid', 'pick-pm')):
+        result = raw_hook('on-pretooluse-askuser.sh', 'stranger', last_key, last_sid, pre_body)
+        check(f'PreToolUse still denies a pre-filled picker when the stdin carries {label}', denied(result),
+              (result.returncode, result.stdout, result.stderr))
+
+    def post_body(tool_use_id):
+        (work / tool_use_id).mkdir()
+        path = work / tool_use_id / 'pick-pm.jsonl'
+        pick = copy.deepcopy(PICK)
+        pick['message']['content'][0]['id'] = tool_use_id
+        path.write_text(json.dumps(dict(pick, sessionId='pick-pm')) + '\n')
+        return {'transcript_path': str(path), 'cwd': str(plain), 'hook_event_name': 'PostToolUse',
+                'tool_name': 'AskUserQuestion', 'tool_use_id': tool_use_id,
+                'tool_input': PICK['message']['content'][0]['input'],
+                'tool_response': {'questions': [{'question': QUESTION}], 'answers': ANSWERS, 'annotations': {}}}
+
+    for label, last_key, tool_use_id in (('a second session_id key', 'session_id', 'toolu_dup'),
+                                         ('a \\u escape in a session_id key', 'session\\u005fid', 'toolu_esc')):
+        result = raw_hook('on-posttooluse-askuser.sh', 'stranger', last_key, 'pick-pm', post_body(tool_use_id))
+        rows = [r for r in prompt_rows(run) if ((r.get('payload') or {}).get('source') or {}).get('tool_use_id') == tool_use_id]
+        check(f'PostToolUse still journals the driving pick when the stdin carries {label}',
+              result.returncode == 0 and len(rows) == 1 and rows[0].get('session_id') == 'pick-pm',
+              (result.returncode, result.stdout, rows))
+
+    marker = pathlib.Path(ph.home_path(run)) / load_lib_module('programme_authority').IMPORT_MARKER
+    marker.write_text('')
+    held = load_lib_module('on-user-prompt')._driving_run('pick-pm')
+    result = pre('pick-pm', dict(asked, answers=ANSWERS))
+    check('PreToolUse denies a pre-filled picker while the lease is held',
+          held[0] is None and held[3] is not None and denied(result), (held, result.stdout, result.stderr))
+    marker.unlink()
+
+    hatches =sorted(set(re.findall(r'CLAUDE_AUTO_[A-Z0-9_]*[A-Z0-9]',
                                     subprocess.run(['grep', '-rhoE', 'CLAUDE_AUTO_[A-Z0-9_]+', str(root / 'lib'),
                                                     str(root / '.claude/hooks')],
                                                    text=True, capture_output=True).stdout)))

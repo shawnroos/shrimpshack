@@ -14,6 +14,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 
 root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
@@ -198,6 +199,18 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
         check(f'AE2: pick-term refuses {label}', result.returncode != 0 and 'stays typed' in result.stderr,
               result.stdout + result.stderr)
 
+    tools_q = 'Tools of record: which sources stay on?'
+    result = verb(a_sid, run, 'pick-term', 'tools_of_record', 'tracker,tasks', '--pick',
+                  pick(a_sid, run, {tools_q: 'tracker, tasks, plans'}))
+    check('pick-term on a list refuses a value that drops a source the answer names',
+          refused(result, 'plans') and terms(run)['tools_of_record']['set_by'] == 'default',
+          result.stdout + result.stderr)
+    result = verb(a_sid, run, 'pick-term', 'tools_of_record', 'tracker,tasks', '--pick',
+                  pick(a_sid, run, {tools_q: 'tracker, tasks'}))
+    check('pick-term on a list accepts an answer naming exactly the value',
+          result.returncode == 0 and terms(run)['tools_of_record']['value'] == ['tracker', 'tasks'],
+          (result.stdout + result.stderr, terms(run)['tools_of_record']))
+
     result = verb(a_sid, run, 'accept-agreement', '--prompt', early_accept)
     check('accept-agreement citing a typed prompt older than the last pick refuses',
           refused(result, 'older than') and not record(run)['programme']['agreement']['accepted'],
@@ -275,9 +288,15 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
          '--term', 'cadence=fixed', '--seconds', '600')
     verb(b_sid, run, 'propose-term', 'stop_rule', 'only_when_done')
     personal = pathlib.Path(os.environ['CLAUDE_AUTO_PERSONAL_PROTOCOL'])
+    stale_accept = typed_prompt(run, b_sid, 'accept the agreement')['prompt_id']
     result = verb(b_sid, run, 'take-recommendations', '--pick',
                   pick(b_sid, run, {'Setup: how to start?': 'Go step by step'}))
     check('take-recommendations refuses a pick that is not the take-all option',
+          refused(result, 'take all recommendations') and terms(run)['stop_rule']['set_by'] == 'default',
+          result.stdout + result.stderr)
+    result = verb(b_sid, run, 'take-recommendations', '--pick',
+                  pick(b_sid, run, {'Setup: how to start?': "don't take all recommendations, walk each step"}))
+    check('take-recommendations refuses a negated take-all answer',
           refused(result, 'take all recommendations') and terms(run)['stop_rule']['set_by'] == 'default',
           result.stdout + result.stderr)
     take = pick(b_sid, run, {'Setup: how to start?': 'Take all recommendations (Recommended)'})
@@ -296,14 +315,26 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('take-recommendations journals one row citing the pick',
           [r['payload'].get('prompt_id') for r in kinds(run, 'recommendations_taken')] == [take],
           kinds(run, 'recommendations_taken'))
+    result = verb(b_sid, run, 'accept-agreement', '--prompt', stale_accept)
+    check('accept-agreement citing a typed prompt older than take-recommendations refuses',
+          refused(result, 'older than') and not record(run)['programme']['agreement']['accepted'],
+          result.stdout + result.stderr)
     d_sid = 'setup-d'
     d_run = programme(d_sid, 'setup-d')
     verb(d_sid, d_run, 'propose-agreement', '--term', 'stop_rule=until_time', '--until', '2030-01-01T00:00:00Z')
+    widen = verb(d_sid, d_run, 'propose-term', 'remit', '--add', 'default.setup-d-extra')
+    remit_before = terms(d_run)['remit']
     result = verb(d_sid, d_run, 'take-recommendations', '--pick',
                   pick(d_sid, d_run, {'Setup: how to start?': 'Take all recommendations'}))
     check('take-recommendations keeps a proposed stop time',
           result.returncode == 0 and terms(d_run)['stop_rule']['value'] == 'until_time'
           and terms(d_run)['stop_rule']['until'] == '2030-01-01T00:00:00Z', (result.stderr, terms(d_run)['stop_rule']))
+    remit = terms(d_run)['remit']
+    check('take-recommendations leaves a proposed new remit space pending and the remit value unchanged',
+          widen.returncode == 0 and remit_before['proposal']['extras'].get('add')
+          and remit['value'] == remit_before['value'] and remit['proposal']['state'] == 'pending'
+          and not any(s.get('workspace') == 'setup-d-extra' for s in record(d_run)['programme']['remit']['spaces']),
+          (widen.stdout + widen.stderr, remit))
     result = verb(b_sid, run, 'take-recommendations', '--pick', take)
     check('take-recommendations refuses a used pick', refused(result, 'already'), result.stdout + result.stderr)
     later =pick(b_sid, run, {'Cadence: how often?': 'on change'})
@@ -339,6 +370,11 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(c_sid, run, 'setup-seen', '--json', str(seen_file))
     check('setup-seen refuses an item without a string item id', refused(result, 'item'),
           result.stdout + result.stderr)
+    seen_file.write_text(json.dumps({'tabs': [], 'repos': [], 'tracker': []}))
+    result = verb(c_sid, run, 'setup-seen', '--json', str(seen_file))
+    check('setup-seen refuses JSON with no items list', refused(result, 'items')
+          and record(run)['programme']['setup']['seen']['items'] == [{'item': 'gh:x#1', 'title': 'Fix it', 'pane': 'p1', 'session': None}],
+          result.stdout + result.stderr)
     state = lambda: {s['key']: s['state'] for s in view(run)['setup']['steps']}
     check('the rulings step starts unfinished', state()['rulings'] != 'done', state())
     result = verb(c_sid, run, 'setup-keep', 'rulings')
@@ -348,6 +384,23 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('setup-keep accept refuses', refused(result, 'accept'), result.stdout + result.stderr)
     result = verb(c_sid, run, 'setup-keep', 'bogus')
     check('setup-keep refuses an unknown step', refused(result, 'unknown setup step'), result.stdout + result.stderr)
+    flag = pathlib.Path(ph.home_path(run)) / ph.COMPACT_FLAG
+    flag.touch()
+    result = verb(c_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick',
+                  pick(c_sid, run, {'Cadence: how often?': 'fixed'}))
+    check('a pick-term refuses while the compact flag is set (control)', refused(result, 'compacted'),
+          result.stdout + result.stderr)
+    beat_before = record(run).get('loop', {}).get('last_beat_at')
+    time.sleep(1.1)
+    results = [verb(c_sid, run, 'setup-step', 'cadence'),
+               verb(c_sid, run, 'setup-seen', '--json', '-', stdin=json.dumps(dict(seen, items=[]))),
+               verb(c_sid, run, 'setup-keep', 'shared')]
+    check('setup-step, setup-seen and setup-keep run while the compact flag is set',
+          all(r.returncode == 0 for r in results), [r.stdout + r.stderr for r in results])
+    check('setup-step, setup-seen and setup-keep never count as a beat',
+          record(run).get('loop', {}).get('last_beat_at') == beat_before,
+          (beat_before, record(run).get('loop')))
+    flag.unlink()
     check('no verb left the view stale', not refresh_failures, refresh_failures)
     check('setup writes are not approvals', not kinds(run, 'approval_refused'), kinds(run, 'approval_refused'))
 

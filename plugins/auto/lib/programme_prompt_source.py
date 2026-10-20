@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -13,16 +12,13 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_pick_source = load_lib_module("programme_pick_source")
 
-_MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
+_MAX_TRANSCRIPT_BYTES = programme_pick_source._MAX_TRANSCRIPT_BYTES
+_hash = programme_pick_source._hash
 _COMMAND = re.compile(
     r'<command-message>([^<>\n]+)</command-message>\n'
     r'<command-name>(/[^<>\n]+)</command-name>'
     r'(?:\n<command-args>([\s\S]*)</command-args>)?'
 )
-
-
-def _hash(value):
-    return hashlib.sha256(value).hexdigest()
 
 
 def capture(data):
@@ -32,16 +28,10 @@ def capture(data):
     text = data.get('prompt')
     if not all(isinstance(value, str) and value for value in (path, sid, prompt_id)):
         return None
-    if not isinstance(text, str) or not os.path.isabs(path) or os.path.basename(path) != sid + '.jsonl':
+    if not isinstance(text, str):
         return None
-    try:
-        with open(path, 'rb') as stream:
-            prefix = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
-    except FileNotFoundError:
-        prefix = b''
-    except OSError:
-        return None
-    if len(prefix) > _MAX_TRANSCRIPT_BYTES or (prefix and not prefix.endswith(b'\n')):
+    prefix = programme_pick_source.read_prefix(path, sid)
+    if prefix is None:
         return None
     # The runtime appends the source row after UserPromptSubmit returns; older rows cannot authorize this occurrence.
     return {'version': 1, 'path': path, 'session_id': sid, 'prompt_id': prompt_id,

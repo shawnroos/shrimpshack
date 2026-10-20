@@ -57,7 +57,8 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    `programme.sh setup-seen --json -` with `{"tabs": [...], "repos": [...],
    "tracker": [...], "items": [{"item", "title", "pane", "session"}]}` on
    stdin: every herdr tab, repo and tracker scope the sweep saw (in the remit
-   or not), and the items it proposes to adopt. When the tracker is
+   or not), and the items it proposes to adopt (`"items": []` when it found
+   none; the items step stays open until this is recorded). When the tracker is
    unavailable, read the remit's issues through `mcp__linear__list_issues` and
    record them with `programme.sh record-issues` first (see the
    programme-tracker skill).
@@ -68,8 +69,9 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
      type /programme-view."
    - Read the steps from `programme.sh status --json` (its `setup` part: steps
      in order, each with `state`, `values`, `recommendation`,
-     `recommendation_source`, `needs_typed` and `reply`). Re-read it after every
-     write; the pane redraws from the same data.
+     `recommendation_source`, `needs_typed`, `reply` and, for a term,
+     `options`). Re-read it after every write; the pane redraws from the same
+     data.
    - First question (AskUserQuestion): "Take all my recommendations?" with
      "take all recommendations (Recommended)" first and "walk each step" second.
      On take-all, run `programme.sh take-recommendations --pick <id>` and go to
@@ -77,7 +79,8 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    - For each step that is not done: run `programme.sh setup-step <key>`, then
      ask one AskUserQuestion. Name the setting in the question text. Put the
      recommendation first, marked "(Recommended)", with its source in the
-     option description; offer the other options from the step.
+     option description; offer the step's other `options` by their exact
+     names, since a pick must name the value it sets.
      - The answer's `<auto-data>` tag names the pick's prompt id. Apply it with
        `programme.sh pick-term <key> <value> --pick <id>`.
      - Never put answers into the AskUserQuestion call yourself; a pre-filled

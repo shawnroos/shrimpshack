@@ -37,8 +37,8 @@ function groups(steps: SetupStep[]): { group: string; steps: SetupStep[] }[] {
 }
 
 function currentIndex(setup: Setup): number {
-  const marked = setup.steps.findIndex(step => step.state === 'current')
-  if (marked !== -1) return marked
+  const named = setup.steps.findIndex(step => step.key === setup.current)
+  if (named !== -1) return named
   const unfinished = setup.steps.findIndex(step => step.state !== 'done')
   return unfinished === -1 ? setup.steps.length - 1 : unfinished
 }
@@ -99,7 +99,8 @@ export function SetupView(ui: Ui, props: { setup: Setup; decisions: Decision[] }
 
   line('setup:head', <Text bold>Programme setup</Text>, <Text dimColor>{'   draft, not accepted'}</Text>)
   line('setup:in', <Text bold>{'In   '}</Text>, <Text>{scopeText(setup.scope.in) ?? 'nothing chosen yet'}</Text>)
-  line('setup:out', <Text bold>{'Out  '}</Text>, <Text>{scopeText(setup.scope.out) ?? 'nothing seen outside the remit'}</Text>)
+  const outText = setup.scope.probed ? (scopeText(setup.scope.out) ?? 'nothing seen outside the remit') : 'not probed yet'
+  line('setup:out', <Text bold>{'Out  '}</Text>, <Text>{outText}</Text>)
   line('setup:gap', <Text> </Text>)
 
   for (const { group, steps } of groups(setup.steps)) {

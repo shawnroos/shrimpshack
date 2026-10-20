@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -12,10 +13,26 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 _MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
 TOOL = "AskUserQuestion"
+_TOOL_USE_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def _hash(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def read_prefix(path, sid):
+    if not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl":
+        return None
+    try:
+        with open(path, "rb") as stream:
+            prefix = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
+    except FileNotFoundError:
+        prefix = b""
+    except OSError:
+        return None
+    if len(prefix) > _MAX_TRANSCRIPT_BYTES or (prefix and not prefix.endswith(b"\n")):
+        return None
+    return prefix
 
 
 def answers_hash(answers) -> str:
@@ -41,19 +58,13 @@ def capture(data):
     path = data.get("transcript_path")
     sid = data.get("session_id")
     tool_use_id = data.get("tool_use_id")
-    answers = (data.get("tool_response") or {}).get("answers") if isinstance(data.get("tool_response"), dict) else None
-    if not all(isinstance(value, str) and value for value in (path, sid, tool_use_id)) or not _valid_answers(answers):
+    response = data.get("tool_response")
+    answers = response.get("answers") if isinstance(response, dict) else None
+    if (not all(isinstance(value, str) and value for value in (path, sid, tool_use_id))
+            or not _TOOL_USE_ID.fullmatch(tool_use_id) or not _valid_answers(answers)):
         return None
-    if not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl":
-        return None
-    try:
-        with open(path, "rb") as stream:
-            prefix = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
-    except FileNotFoundError:
-        prefix = b""
-    except OSError:
-        return None
-    if len(prefix) > _MAX_TRANSCRIPT_BYTES or (prefix and not prefix.endswith(b"\n")):
+    prefix = read_prefix(path, sid)
+    if prefix is None:
         return None
     return {"version": 1, "kind": "pick", "path": path, "session_id": sid, "tool_use_id": tool_use_id,
             "offset": len(prefix), "prefix_hash": _hash(prefix), "answers_hash": answers_hash(answers),
@@ -69,17 +80,22 @@ def _content(row) -> list:
     return content if isinstance(content, list) else []
 
 
+def _tool_use(row, tool_use_id):
+    return next((block for block in _content(row)
+                 if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") == tool_use_id),
+                None)
+
+
 def _asks(row, tool_use_id) -> bool:
-    return any(isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") == tool_use_id
-               for block in _content(row))
+    return _tool_use(row, tool_use_id) is not None
 
 
 def _unprefilled(row, tool_use_id) -> bool:
-    for block in _content(row):
-        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") == tool_use_id:
-            tool_input = block.get("input")
-            return block.get("name") == TOOL and isinstance(tool_input, dict) and "answers" not in tool_input
-    return False
+    block = _tool_use(row, tool_use_id)
+    if block is None:
+        return False
+    tool_input = block.get("input")
+    return block.get("name") == TOOL and isinstance(tool_input, dict) and "answers" not in tool_input
 
 
 def _answers_row(row, tool_use_id) -> bool:
@@ -90,13 +106,14 @@ def _answers_row(row, tool_use_id) -> bool:
 def _human_result(row, source) -> bool:
     permission = row.get("permissionDecision")
     by = permission.get("source") if isinstance(permission, dict) else None
-    answers = (row.get("toolUseResult") or {}).get("answers") if isinstance(row.get("toolUseResult"), dict) else None
+    result = row.get("toolUseResult")
+    answers = result.get("answers") if isinstance(result, dict) else None
     return (isinstance(by, str) and by.startswith("user") and _valid_answers(answers)
             and answers_hash(answers) == source.get("answers_hash")
             and redacted(answers) == source.get("answers"))
 
 
-def _rows(path, offset, prefix_hash):
+def _rows(path, offset, prefix_hash, tool_use_id):
     with open(path, "rb") as stream:
         prefix = stream.read(offset)
         if len(prefix) != offset or _hash(prefix) != prefix_hash:
@@ -104,10 +121,13 @@ def _rows(path, offset, prefix_hash):
         tail = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
     if len(tail) > _MAX_TRANSCRIPT_BYTES:
         return None
+    needle = tool_use_id.encode("utf-8")
     rows = []
     for line in (prefix + tail).splitlines(keepends=True):
         if not line.endswith(b"\n"):
             break
+        if needle not in line:
+            continue
         row = json.loads(line)
         if isinstance(row, dict):
             rows.append(row)
@@ -128,7 +148,7 @@ def verify(row) -> str:
             or type(offset) is not int or not 0 <= offset <= _MAX_TRANSCRIPT_BYTES):
         return "unknown"
     try:
-        rows = _rows(path, offset, source.get("prefix_hash"))
+        rows = _rows(path, offset, source.get("prefix_hash"), tool_use_id)
         if rows is None:
             return "unknown"
         asked = [r for r in rows if r.get("type") == "assistant" and _asks(r, tool_use_id)]

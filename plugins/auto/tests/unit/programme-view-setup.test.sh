@@ -56,7 +56,11 @@ check("a fresh proposal lists the terms in agreement order, then rulings, shared
       keys(p) == terms + tail, keys(p))
 check("the first unfinished step is current", p["current"] == terms[0] and states(p)[terms[0]] == "current"
       and all(states(p)[k] == "upcoming" for k in keys(p)[1:] if k != "items"), states(p))
-check("with nothing seen to adopt the items step is done", states(p)["items"] == "done", states(p))
+check("with no probe recorded the items step is not done and the scope is not probed",
+      states(p)["items"] != "done" and p["scope"]["probed"] is False, (states(p), p["scope"]))
+check("each term step offers the term's option names",
+      step(p, "cadence")["options"] == ["on_change", "fixed"]
+      and step(p, "tools_of_record")["options"] == ["tracker", "tasks", "plans"], step(p, "cadence"))
 check("a term left at the plugin default recommends it with that source",
       step(p, "cadence")["recommendation"] == "on_change" and step(p, "cadence")["recommendation_source"] == "plugin default",
       step(p, "cadence"))
@@ -92,6 +96,8 @@ p = setup.build(b)
 check("a new term in the agreement data adds a step with no code change",
       keys(p) == terms + ["handover"] + tail, keys(p))
 check("the new term carries the section its data names", step(p, "handover")["group"] == "people", step(p, "handover"))
+check("the new term offers the options its data names", step(p, "handover")["options"] == ["slack", "linear"],
+      step(p, "handover"))
 
 p = setup.build(fresh())
 check("shared settings with no personal file are not done", step(p, "shared")["state"] != "done"
@@ -101,6 +107,9 @@ with open(personal, "w") as fh:
 p = setup.build(fresh())
 check("shared settings already set show as done with using existing",
       step(p, "shared")["state"] == "done" and step(p, "shared")["values"] == "using existing", step(p, "shared"))
+p = setup.build(fresh(proposed_rules=[{"id": "r1", "when": "x", "autonomy": "ask"}]))
+check("shared settings stay undone while a shared rule is proposed, even with a personal file",
+      step(p, "shared")["state"] != "done", step(p, "shared"))
 os.remove(personal)
 
 b = fresh()
@@ -143,6 +152,8 @@ check("in lists the remit's own scope", "org/kept" in p["scope"]["in"]["repos"] 
 b["agreement"]["terms"]["remit"]["value"] = "space"
 p = setup.build(b)
 check("a whole-space remit leaves no tab out", p["scope"]["out"]["tabs"] == [], p["scope"])
+check("a recorded probe with an empty items list is probed and leaves nothing to adopt",
+      p["scope"]["probed"] is True and states(p)["items"] == "done", (p["scope"], states(p)))
 
 b = fresh()
 b["items"] = {"linear:AI-1": ph.new_item("linear:AI-1", "One", now_iso="2026-10-20T00:00:00Z")}
@@ -162,6 +173,8 @@ for label, seen in (("missing", None), ("empty", {}), ("malformed", "junk")):
         p = setup.build(b)
         check(f"{label} setup.seen yields an items step with no items and an empty out list",
               step(p, "items")["items"] == [] and p["scope"]["out"] == {"tabs": [], "repos": [], "tracker": []}, p)
+        check(f"{label} setup.seen is not probed and keeps the items step undone",
+              p["scope"]["probed"] is False and states(p)["items"] != "done", (p["scope"], states(p)))
     except Exception as exc:
         check(f"{label} setup.seen yields an items step with no items and an empty out list", False, repr(exc))
 

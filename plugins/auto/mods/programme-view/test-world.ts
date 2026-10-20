@@ -220,6 +220,7 @@ export function setupPart() {
     scope: {
       in: { spaces: ['default.AI-Editor'], tabs: [], repos: ['shrimpshack', 'ai-chat-backend'], tracker: ['WEB'] },
       out: { tabs: ['Infra'], repos: ['ai-editor-backend'], tracker: [] },
+      probed: true,
     },
   }
 }

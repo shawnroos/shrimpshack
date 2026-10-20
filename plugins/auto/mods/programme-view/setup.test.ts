@@ -124,6 +124,23 @@ test('the setup view marks done, current and upcoming steps, groups them, and li
   expect(text).toContain('Owner history')
 })
 
+test('the Out row says not probed yet until the PM records what the sweep saw', async ($, on) => {
+  const unprobed = setupPart()
+  unprobed.scope = { in: unprobed.scope.in, out: { tabs: [], repos: [], tracker: [] }, probed: false }
+  world(on, { [LEASE]: lease(), [VIEW]: viewText({ setup: unprobed }) })
+  const outLine = (await lines(await openPane($, false, 60))).find(line => line.startsWith('Out'))
+  expect(outLine).toContain('not probed yet')
+  expect(outLine).not.toContain('nothing seen outside the remit')
+})
+
+test('the Out row says nothing seen outside the remit after an empty probe', async ($, on) => {
+  const probed = setupPart()
+  probed.scope = { in: probed.scope.in, out: { tabs: [], repos: [], tracker: [] }, probed: true }
+  world(on, { [LEASE]: lease(), [VIEW]: viewText({ setup: probed }) })
+  const outLine = (await lines(await openPane($, false, 60))).find(line => line.startsWith('Out'))
+  expect(outLine).toContain('nothing seen outside the remit')
+})
+
 test('a step that needs a typed reply shows "Type this:" and the reply, and no picker hint', async ($, on) => {
   const setup = setupPart()
   setup.current = 'rulings'

@@ -1,7 +1,7 @@
 ---
 description: Take over this herdr space's auto programme from this session when its PM is gone, or replace a named PM
 argument-hint: "[--replace <PM pane name>]"
-allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop
+allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop, AskUserQuestion
 ---
 
 Shawn typed this in the session that should become the PM. The prompt hook has
@@ -35,4 +35,6 @@ Run the dispatch line below:
      in `/auto:programme` step 8).
   3. If the context lists an uncertain action, run `reconcile-operations` before
      any retry.
-  4. Load the `auto:programme-sweep` skill and run a sweep.
+  4. If `programme.sh status --json` has a `setup` part, the agreement is not
+     accepted yet: resume `/auto:programme` step 5 at the first step not done.
+  5. Load the `auto:programme-sweep` skill and run a sweep.

@@ -148,6 +148,14 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
                  {'session_id': 'pick-pm', 'transcript_path': str(path), 'tool_response': {'answers': {}}}):
         check('malformed capture records nothing', picks.capture(data), None)
 
+    for odd_id in ('toolu_"x', 'a/b', 'toolu x', 'toolu\\x', 'tóolu'):
+        data = {'session_id': 'pick-pm', 'transcript_path': str(path), 'tool_use_id': odd_id,
+                'tool_response': {'answers': {QUESTION: 'fixed every 15 min'}}}
+        check('a tool_use_id outside [A-Za-z0-9_-] records nothing: ' + odd_id, picks.capture(data), None)
+    data = {'session_id': 'pick-pm', 'transcript_path': str(path), 'tool_use_id': 'toolu_01-Ab_9',
+            'tool_response': {'answers': {QUESTION: 'fixed every 15 min'}}}
+    check('a plain tool_use_id still captures', isinstance(picks.capture(data), dict), True)
+
     ph.end_programme(run, 'isolated pick fixture complete')
 
 print('programme-pick-source.test.sh: {} passed, {} failed'.format(passed, failed))
