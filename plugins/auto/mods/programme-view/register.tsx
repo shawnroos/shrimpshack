@@ -5,6 +5,7 @@ import { ContractView } from './contract'
 import { contractControls, focusContractRow, isContractRow, resetContract } from './contract-state'
 import { getSelection, onSelect, select } from './selection'
 import type { Selection } from './selection'
+import { DecisionsView, SetupBand, SetupView } from './setup'
 import { WorkView, itemRowKey, stepRowKey } from './tree'
 import { leaseHomes, loadView, markViewed, stamp } from './view'
 import type { Found, WorkItem } from './view'
@@ -18,32 +19,65 @@ let band: BandProps | undefined
 let mode: 'work' | 'contract' = 'work'
 let shown: WorkItem[] = []
 
+const SETUP_COMMAND = 'auto:programme'
+const STATUS_COMMAND = 'auto:programme-status'
+const SETUP_WAIT_MS = 60_000
+
+let waitingSince: number | undefined
+let waitExpired = false
+
+async function startPolling($: EngineInterface) {
+  // Every session loads this mod; starting the timer only from a command keeps it out of sessions that drive no programme.
+  if (polling) return
+  polling = true
+  onSelect(() => void $.ui.invalidate('ui.render'))
+  lastStamp = await stamp($)
+  let lastMinute = Math.floor((await $.clock.now()) / 60_000)
+  $.clock.every(POLL_MS, async () => {
+    const current = await stamp($).catch(() => lastStamp)
+    const now = await $.clock.now()
+    const minute = Math.floor(now / 60_000)
+    const expired = waitingSince !== undefined && now - waitingSince >= SETUP_WAIT_MS
+    if (current !== lastStamp || minute !== lastMinute || expired !== waitExpired) {
+      lastStamp = current
+      lastMinute = minute
+      waitExpired = expired
+      await $.ui.invalidate('ui.render')
+    }
+  })
+}
+
+async function showPane($: EngineInterface, focus = false) {
+  const opened = await $.ui.open({ id: PANE, title: 'Programme', ...(focus && { focus: true as const }) })
+  mode = 'work'
+  resetContract()
+  await startPolling($)
+  return opened
+}
+
 async function openView($: EngineInterface): Promise<{ text: string }> {
   const homes = await leaseHomes($)
   if (homes.length === 0) {
     return { text: 'This session drives no auto programme, so there is no programme view to show.' }
   }
-  await $.ui.open({ id: PANE, title: 'Programme' })
-  mode = 'work'
-  resetContract()
-  // Every session loads this mod; starting the timer here keeps it out of sessions that drive no programme.
-  if (!polling) {
-    polling = true
-    onSelect(() => void $.ui.invalidate('ui.render'))
-    lastStamp = await stamp($)
-    let lastMinute = Math.floor((await $.clock.now()) / 60_000)
-    $.clock.every(POLL_MS, async () => {
-      const current = await stamp($).catch(() => lastStamp)
-      const minute = Math.floor((await $.clock.now()) / 60_000)
-      if (current !== lastStamp || minute !== lastMinute) {
-        lastStamp = current
-        lastMinute = minute
-        await $.ui.invalidate('ui.render')
-      }
-    })
-  }
-
+  await showPane($)
   return { text: 'Programme view opened.' }
+}
+
+async function openForSetup($: EngineInterface): Promise<string | undefined> {
+  if ((await leaseHomes($)).length === 0) {
+    waitingSince = await $.clock.now()
+    waitExpired = false
+  }
+  const opened = await showPane($)
+  if (opened.isPlaced) return
+  return `The Programme pane could not open here (${opened.reason}). Make the first line of your reply: "Run /programme-view to open the Programme pane." Then carry on with setup in the chat.`
+}
+
+function waitingText(): string {
+  return waitExpired
+    ? 'Setup has not started. Run /auto:programme to start it.'
+    : 'Waiting for setup to start. The view appears once the PM takes the programme.'
 }
 
 function readPick(data: unknown, work: WorkItem[]): Required<BandSelection> | undefined {
@@ -81,12 +115,28 @@ export const register: Register = on => {
     openView($).catch(error => ({ text: `Programme view failed: ${String(error)}` })),
   )
 
+  on('command.run', { command: SETUP_COMMAND }, async ($, e, next) => {
+    const note = await openForSetup($).catch(() => undefined)
+    const result = await next(e)
+    return note ? { ...result, context: [...(result.context ?? []), note] } : result
+  })
+
+  on('command.run', { command: STATUS_COMMAND }, async ($, e, next) => {
+    if (e.args.trim() !== '' || (await leaseHomes($).catch(() => [])).length === 0) return next(e)
+    const opened = await showPane($, true).catch(() => undefined)
+    if (!opened?.isPlaced) return next(e)
+    return { text: 'Programme status is in the Programme pane beside the chat.' }
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Button, Text } = ui
     const found = await loadView($).catch(
       (error): Found => ({ kind: 'unreadable', path: 'the programme view', why: String(error) }),
     )
+    const waiting = waitingSince !== undefined && (found.kind === 'none' || found.kind === 'missing')
+    if (waiting) return <Text dimColor>{waitingText()}</Text>
+    waitingSince = undefined
     if (found.kind === 'none') return <Text dimColor>This session drives no auto programme.</Text>
     if (found.kind === 'several') {
       return <Text color="warning">This session holds several programmes: {found.homes.join(', ')}</Text>
@@ -115,9 +165,9 @@ export const register: Register = on => {
       )
     }
 
-    const { work } = found
+    const { work, setup, decisions } = found
     const { contract, reread, spaces } = found.parts
-    shown = work
+    shown = setup ? [] : work
     const toggle = (next: typeof mode, hotkey: string, label: string) => (
       <Button
         key={`view:${next}`}
@@ -132,16 +182,30 @@ export const register: Register = on => {
       />
     )
     // Drawn only while the pane holds the keys, so neither hotkey can fire into the prompt.
+    const main = setup ? { hotkey: 's', label: 'setup' } : { hotkey: 'w', label: 'work' }
     const header = e.props.isFocused ? (
       <Box key="line:views" flexDirection="row" gap={2}>
-        {toggle('work', 'w', 'work')}
+        {toggle('work', main.hotkey, main.label)}
         {toggle('contract', 'c', 'contract')}
       </Box>
     ) : (
       <Box key="line:views" flexDirection="row">
-        <Text dimColor>{mode === 'work' ? 'Work' : 'Contract'} · click the pane, then w work · c contract</Text>
+        <Text dimColor>
+          {mode === 'work' ? (setup ? 'Setup' : 'Work') : 'Contract'} · click the pane, then {main.hotkey} {main.label} · c contract
+        </Text>
       </Box>
     )
+    const mainView = () =>
+      setup
+        ? SetupView(ui, { setup, decisions })
+        : [
+            WorkView(ui, {
+              work,
+              selection: getSelection(),
+              onSelect: target => void selectRow($, { ...target, item: target.item ?? '' }),
+            }),
+            DecisionsView(ui, decisions),
+          ]
     const body =
       mode === 'contract'
         ? ContractView(ui, {
@@ -153,11 +217,7 @@ export const register: Register = on => {
             armed: e.props.isFocused === true,
             ...contractControls($, contract),
           })
-        : WorkView(ui, {
-            work,
-            selection: getSelection(),
-            onSelect: target => void selectRow($, { ...target, item: target.item ?? '' }),
-          })
+        : mainView()
     return (
       <Box flexDirection="column">
         {header}
@@ -169,6 +229,10 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!polling || e.surface !== 'terminal' || e.props.hasSurvey) return next(e)
     const found = await loadView($).catch(() => undefined)
+    if (found?.kind === 'view' && found.setup) {
+      band = undefined
+      return SetupBand($.ui.resolve(e), found.setup)
+    }
     const work = found?.kind === 'view' ? found.work : []
     if (work.length === 0) return next(e)
     band = { work, columns: e.props.bodyColumns, maxLines: Math.max(1, Math.min(2, e.props.maxRows)), selection: getSelection() }
