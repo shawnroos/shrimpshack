@@ -960,6 +960,7 @@ def _cli(argv) -> int:
 programme_lifecycle = load_lib_module("programme_lifecycle")
 _VERBS.update(programme_lifecycle.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

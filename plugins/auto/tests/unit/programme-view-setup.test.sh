@@ -62,7 +62,9 @@ check("a term left at the plugin default recommends it with that source",
       step(p, "cadence"))
 check("each term step carries its group", all(step(p, k)["group"] == k for k in terms), [s["group"] for s in p["steps"]])
 check("per-programme term steps need no typed reply", all(not step(p, k)["needs_typed"] and step(p, k)["reply"] is None
-      for k in terms))
+      for k in terms if k != "autonomy"))
+check("autonomy defers to the shared protocol, so changing it needs a typed reply", step(p, "autonomy")["needs_typed"],
+      step(p, "autonomy"))
 check("accept always needs the typed line", step(p, "accept")["needs_typed"] and step(p, "accept")["reply"] == "accept the agreement",
       step(p, "accept"))
 

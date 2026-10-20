@@ -150,6 +150,23 @@ session.
   count as a beat, and take --origin ui as a display label. `amend-term` and
   `set-remit` settle a pending proposal: accepted when the new value matches it,
   else superseded. The rules in force never carry a proposal.
+- **Setup picks**: before acceptance, `pick-term` (`<key> <value> --pick <id>`) sets one
+  per-programme agreement term from a picker answer Shawn gave in the driving session.
+  It takes `--pick`, not `--prompt`: the cited prompt must resolve to origin picked,
+  exactly one of its questions must name the term (and no other term), and that
+  answer must name the value. `take-recommendations` (`--pick <id>`) needs a pick whose
+  answer contains "take all recommendations"; it sets every per-programme term to its
+  pending proposal, else its current value, in one write. Both record `set_by` shawn,
+  origin picked, the question and the answer, and cite the pick. One picker answer
+  (one transcript and tool use) approves one write, however many prompt rows cite it.
+  Both refuse after acceptance, and refuse autonomy, rulings, reserved areas and
+  shared settings: those stay typed. A refusal journals `approval_refused`. A typed
+  accept must come after the last pick. No typed gate accepts a picked prompt.
+- **Setup walkthrough notes**: `setup-step` (`<name>`) records the step the PM asks now,
+  `setup-seen` (`--json <file>|-`) records what the source probe saw (tabs, repos and
+  tracker lists of strings, and items to adopt), and `setup-keep` (`<step>`) marks a step
+  done with its current value (never the accept step). They need no prompt, are allowed
+  while the compact flag is set and never count as a beat.
 - **Re-read requests**: `request-reread` asks the PM to re-read the rules in force
   at its next sweep. It needs no prompt, leaves the compact flag as it is, never
   counts as a beat, and takes --origin ui as a display label.

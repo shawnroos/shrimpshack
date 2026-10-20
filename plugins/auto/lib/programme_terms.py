@@ -32,6 +32,8 @@ CONTRACT_VERSION = 1
 PROPOSED = "agreement_proposed"
 EDITED = "project_term_edited"
 AMENDED = "project_term_amended"
+PICKED = "term_picked"
+RECOMMENDED = "recommendations_taken"
 # Matched as substrings of the squashed area and text, so any spelling that contains a stem is refused.
 PROTECTED_STEMS = {
     "prod_deploy": ("deploy", "production"),
@@ -129,13 +131,13 @@ def check_accept_order(run_id, prompt_id) -> None:
     rows = programme_journal.read(run_id)
     cited = next((i for i, row in enumerate(rows)
                   if row.get("kind") == "prompt" and row.get("prompt_id") == prompt_id), None)
-    last = max((i for i, row in enumerate(rows) if row.get("kind") in (PROPOSED, EDITED)
+    last = max((i for i, row in enumerate(rows) if row.get("kind") in (PROPOSED, EDITED, PICKED, RECOMMENDED)
                 or (row.get("kind") == "remit_set" and (row.get("payload") or {}).get("carried_over"))),
                default=-1)
     if cited is None or cited < last:
         raise TermsError(
-            f"prompt {prompt_id!r} is older than the last proposal, project-term edit or carried-over "
-            "term; Shawn accepts "
+            f"prompt {prompt_id!r} is older than the last proposal, project-term edit, pick or "
+            "carried-over term; Shawn accepts "
             "the terms he last saw, so cite a prompt typed after it")
 
 
