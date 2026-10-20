@@ -13,7 +13,8 @@ Where the sweep uses it:
 | 8 (check claims) and any acceptance call | 1, 5 and 9 |
 | 10 (drive workers): before you start or prompt a worker | 1, 3, 4, 6, 7 and 10 |
 | 11 (record waits): before you record a blocker | 2 and 9 |
-| 12 (decide or hand) | 8 and 11 |
+| 12 (decide or hand) | 8, 11 and 12 |
+| Any message to Shawn | 12 |
 | 13 (update the working model): before more investigation, review or coordination | 3 |
 
 ## 1. Re-check the requirements before you act (R1)
@@ -152,3 +153,34 @@ rules block decide.
 
 With no `operating contract` line, the old rule holds: every product question
 goes to Shawn with `P hand-item`.
+
+## 12. Report so Shawn can act without scrolling back (R6)
+
+Assume Shawn is working on a dozen things and has forgotten what you last said.
+Every message you write him, every ask and every checkpoint (PR open, merge,
+handover, end) follows these rules.
+
+- **Name everything.** Every item, PR, session, pane, server or tracker issue appears
+  by its name with its id beside it: "Reframe skill: skills vs code
+  (herdr:w2/p7G)", "PR #120 Editor places missed crop", "AI-1109 Editor
+  places missed crop". Never a bare id or code.
+- **Restate the state.** Say where the thing stood before and what changed,
+  in one line each. Do not rely on something you said earlier in the chat.
+- **Show the contract checklist** for any change heading to merge or release:
+  feature flag (on, off, not needed), code review (done by whom, open threads),
+  tests (which ran, the result), PR (link, base branch, merge state).
+- **Put the decision details in the ask itself.** An ask states:
+  - what is being decided, on which named item;
+  - the options, and what each one changes and costs;
+  - what happens if Shawn does nothing;
+  - your recommendation and why;
+  - any risk or unverified fact that bears on it;
+  - the exact reply to type, using the item's name.
+  Never write "say X to do Y" without the trade-off beside it.
+- **A merge ask carries readiness evidence.** Run `P check-mergeable <pr>` and
+  cite its result, gates and merge state, with the full PR URL and title and the
+  tracker issue URL and title. Recommend a merge only when the result is
+  `ready`. Before you merge after his approval, run
+  `P check-mergeable <pr> --pin <item>`. If the head or the fingerprint changed
+  since he saw the ask, do not merge: update the ask with the new facts and
+  post it again.

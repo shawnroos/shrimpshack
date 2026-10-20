@@ -16,7 +16,8 @@ where each piece of work stands, so the PM keeps it current. `P` below means
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh"`.
 
 Today the write path is the Linear MCP tools (`mcp__linear__*`). Run them in
-your own session, never from a dispatched Agent.
+your own session, or hand the due writes to `auto:programme-tracker-updater`,
+which writes only the issues you list. Run `tracker-synced` yourself either way.
 
 ## When to write
 
@@ -67,8 +68,10 @@ due and the next sweep tries again.
   --blocker`.
 
 Voice: plain words for a busy reader. One or two short sentences. Say what
-changed and what happens next. No internal ids (no item ids, prompt ids,
-watcher ids, rule ids), no process narration.
+changed and what happens next. Name a PR or issue with its title beside its
+number ("PR #120 Editor places missed crop"). Never write programme-internal
+codes (herdr item codes, prompt ids, watcher ids, rule ids), and no process
+narration.
 
 ## Never write proof
 

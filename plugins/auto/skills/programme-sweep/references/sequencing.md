@@ -60,6 +60,7 @@ or 2 work). Hold the merge if any answer is no or unknown.
 3. **Is the upstream change live where this PR runs?** Read the deployed commit; do not assume it.
 4. **Is the behaviour behind a flag that is off in production?** The `flagged` check reads this. Wording needs no flag. If a flag is missing, send the PR back to its worker. It is a blocker, not a question for Shawn.
 5. **Did an upstream merge move this PR's base?** Then rebase, and review the rebase delta. A clean rebase can still combine two changes badly.
+6. **Is the PR merge-ready on GitHub?** `P check-mergeable <pr>` must print `ready`: merge state CLEAN, no unmet required check, no blocking review, not a draft, no unresolved thread. Pin the head with `--pin <item>` right before the merge.
 
 ## 5. Order Shawn's asks
 
