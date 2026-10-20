@@ -219,11 +219,92 @@ def _h_start(host, argv):
     return 0
 
 
+def _replace_name(text) -> str | None:
+    words = str(text or "").split()
+    if "--replace" not in words:
+        return None
+    rest = words[words.index("--replace") + 1:]
+    name = " ".join(rest[:next((i for i, w in enumerate(rest) if w.startswith("--")), len(rest))])
+    return name.strip("'\"") or None
+
+
+def _names_driver(name, presence) -> bool:
+    wanted = " ".join(name.split()).casefold()
+    return any(v and v.casefold() == wanted
+               for v in (presence.get("session_id"), presence.get("pane_id"), presence.get("pane_label")))
+
+
+def _driver(lease, run):
+    return (programme_home._read_record(run) or {}).get("driving_session_id") or lease.get("session_id")
+
+
+def _since_driver_changed(run, rows) -> list:
+    # A request typed against an earlier PM must not later displace a different one.
+    journal = programme_journal.read(run)
+    last = max((i for i, r in enumerate(journal)
+                if r.get("kind") in ("programme_started",) + CONSUMING_KINDS[:2]
+                and r.get("provenance") not in programme_authority().UNVERIFIED), default=-1)
+    later = [_request_ref(r) for r in journal[last + 1:]]
+    return [r for r in rows if _request_ref(r) in later]
+
+
+def _presence(lease, run) -> dict:
+    sources = load_lib_module("programme_sources")
+    driver = _driver(lease, run)
+    snap, reason = sources.read_herdr()
+    try:
+        found = session_registry.driver_presence(driver, snap, sources.session_of,
+                                                 current_server=sources.current_server())
+    except (TypeError, ValueError, AttributeError) as exc:
+        return {"state": "unknown", "session_id": driver, "herdr_reachable": snap is not None,
+                "why": f"the session registry could not be read ({exc})"}
+    if snap is None:
+        found["why"] = f"herdr could not be read ({reason}), so auto cannot tell whether it is still running"
+    return found
+
+
+def _driver_words(presence) -> str:
+    label, tab, pane = presence.get("pane_label"), presence.get("tab_label"), presence.get("pane_id")
+    in_tab = f' in tab "{tab}"' if tab else ""
+    if label:
+        return f'the PM in pane "{label}"{in_tab} ({pane})'
+    if pane:
+        return f"the PM in pane {pane}{in_tab}"
+    return f"the PM session {presence.get('session_id')}"
+
+
+def _live_driver(lease, presence, name) -> str:
+    label = presence.get("pane_label")
+    typable = label and not any(w.startswith("--") for w in label.split()) and label[0] not in "'\"" \
+        and label[-1] not in "'\""
+    reply = (label if typable else None) or presence.get("pane_id") or presence.get("session_id")
+    wrong = f"--replace {name} does not name the current PM. " if name else ""
+    space = programme_home.space_key(lease.get("server"), lease.get("workspace"))
+    return (f"{wrong}{_driver_words(presence)} is still the live PM for space {space}: "
+            f"{presence.get('why')}. To replace it, type: /auto:programme-takeover --replace {reply}  "
+            "This session then drives the programme, and that PM's next programme write is refused. "
+            "If you type nothing, that PM keeps driving and this session changes nothing.")
+
+
 def _h_takeover(host, argv):
-    _, opts = host._parse(argv, values=("run",))
+    _, opts = host._parse(_tokens(argv), values=("run", "replace"))
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
     run = lease["run"]
+
+    def orphan_asks(status):
+        return [r for r in _since_driver_changed(run, _requests(run, "takeover", sid))
+                if status == "orphaned" and (r.get("payload") or {}).get("lease_status") == "orphaned"]
+
+    # herdr reads take seconds; they run before the leases lock and the driver is re-checked under it.
+    status = _fresh_status(lease)
+    presence = None if orphan_asks(status) or status not in MOVABLE_STATES else _presence(lease, run)
+
+    def move(request, reason, evidence):
+        extra = {"reason": reason, "evidence": evidence} if evidence else {"reason": reason}
+        return _move(run, sid, "taken_over", sid,
+                     lambda moved, rec: dict(_rearm_list(rec), request=_request_ref(request),
+                                             request_text=(request.get("payload") or {}).get("text"), **extra))
 
     def body():
         status = _fresh_status(lease)
@@ -233,25 +314,35 @@ def _h_takeover(host, argv):
             ended.update(reason=EXPIRED_REASON, lease_status=status, request=None)
             raise _Refused("the agreement was never accepted, so the programme has ended; "
                            "run /auto:programme to start a new one", status, ended)
-        if status != "orphaned":
+        if status not in MOVABLE_STATES:
             raise _Refused(f"the lease for {lease.get('key') or run} is {status}; "
-                           "takeover needs an orphaned lease", status)
+                           "takeover needs a live or orphaned lease", status)
         if lease.get("session_id") == sid:
             raise _Refused("this session already holds the lease", status)
-        asked = [r for r in _requests(run, "takeover", sid)
-                 if (r.get("payload") or {}).get("lease_status") == "orphaned"]
+        asked = _since_driver_changed(run, _requests(run, "takeover", sid))
         if not asked:
-            raise _Refused("no typed takeover request from this session while the lease was orphaned; "
+            raise _Refused("no typed takeover request from this session; "
                            "Shawn types /auto:programme-takeover in this session first", status)
-        return _move(run, sid, "taken_over", sid,
-                     lambda moved, rec: dict(_rearm_list(rec), request=_request_ref(asked[-1]),
-                                             request_text=(asked[-1].get("payload") or {}).get("text")))
+        if orphan_asks(status):
+            return move(orphan_asks(status)[-1], "orphaned", None)
+        if presence is None or presence["session_id"] != _driver(lease, run):
+            raise _Refused("the PM changed while auto was checking it; run the takeover again", status)
+        if presence["state"] == "gone":
+            return move(asked[-1], "driver_gone", presence)
+        named = [(r, n) for r in asked for n in [_replace_name((r.get("payload") or {}).get("text"))]
+                 if n and _names_driver(n, presence)]
+        if named:
+            return move(named[-1][0], "replaced", dict(presence, replace_name=named[-1][1]))
+        raise _Refused(_live_driver(lease, presence, _replace_name((asked[-1].get("payload") or {}).get("text"))),
+                       status)
 
     try:
         moved = _locked(body)
     except _Refused as exc:
         _refuse(host, run, "takeover", sid, exc)
     _finish(host, run, "taken_over", sid, moved, journal=False)
+    if moved.get("evidence"):
+        sys.stdout.write(f"Took over from {_driver_words(moved['evidence'])}: {moved['evidence'].get('why')}.\n")
     sys.stdout.write(host.render_restore(run))
     sys.stdout.write("Re-arm the remit watcher, the cron fallback and every watcher listed above "
                      "from this session; the old session's watchers can no longer beat.\n")
@@ -575,9 +666,12 @@ _SPECS = (
     ("start", _h_start, "[<server.workspace>|--space <server.workspace>]...",
      "a session outside a herdr space with no --space; a space whose lease is live, orphaned or "
      "newer (the error names the holding run and session). Takes the lease before anything else."),
-    ("takeover", _h_takeover, "[--run <id>]",
-     "a lease that is not orphaned; no typed /auto:programme-takeover from this session while the "
-     "lease was orphaned; a request already used. Refusals are journaled as request_refused."),
+    ("takeover", _h_takeover, "[--replace <pane name>] [--run <id>]",
+     "no typed /auto:programme-takeover from this session; a request already used; a lease that is "
+     "not live or orphaned; a driver herdr still shows (or cannot rule out) unless the typed request "
+     "says --replace with its pane name, pane id or session id, and a heartbeat-orphaned lease "
+     "needs no proof when the request was typed while it was orphaned. Refusals are journaled as "
+     "request_refused."),
     ("handover", _h_handover, "<session-id> [--run <id>]",
      "a caller that is not the driving session; no typed /auto:programme-handover <session-id> in "
      "the driving session. Refusals are journaled as request_refused."),

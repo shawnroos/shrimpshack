@@ -42,7 +42,7 @@ take a worker's word for it.
   you, what it just did, and the rules in force.
 - **`/auto:programme-status [<run>]`** prints the same view once, as text.
 - **`/auto:programme-takeover`** moves the programme to a new session when the old
-  session is gone. **`/auto:programme-handover`**, typed in the PM session, passes
+  session is gone, or replaces a PM you name with `--replace <pane name>`. **`/auto:programme-handover`**, typed in the PM session, passes
   it to another session. **`/auto:programme-end`** ends it and frees the space.
   Each of these works only from a typed message, and auto records the request.
 

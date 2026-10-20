@@ -550,8 +550,19 @@ session.
   programme_started. It is refused while a space's lease is live, orphaned or
   newer, and the error names the holding run and session. `takeover`, `handover
   <session-id>` and `end` act only on a request that the prompt hook journaled
-  from the caller's own session, and each request is used once. `takeover` needs
-  an orphaned lease and a typed takeover request made while it was orphaned.
+  from the caller's own session, and each request is used once. `takeover`
+  needs a live or orphaned lease and a typed takeover request journaled since the
+  last start, takeover or handover, and one of: the
+  lease is orphaned and the request was typed while it was; herdr proves the
+  driving session gone (the newest registry pane it ran in, found by terminal and
+  then by pane id, is missing from a readable
+  snapshot, or now reports another session or terminal, and no pane reports the
+  driving session); or the typed request text says `--replace <name>` where the
+  name is the driver's pane label, pane id or session id. herdr unreadable, no
+  registry pane, a headless driver, another herdr server, or an open pane that
+  reports no session is not proof. A refusal on a live driver names its pane and
+  tab and gives the `--replace` line to type. `--replace` on the verb itself
+  authorizes nothing.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
   the driving session, or an orphaned lease. Takeover and handover rewrite every

@@ -13,9 +13,10 @@ a dispatched Agent: a sub-agent has its own session id and every verb refuses it
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" start "$ARGUMENTS"`
 
    - Exit 1 naming a run and session means another programme holds this space.
-     Show Shawn that line and stop. A live holder moves only by
-     `/auto:programme-handover` typed in its session; an orphaned one only by
-     `/auto:programme-takeover` typed here.
+     Show Shawn that line and stop. The holder moves by
+     `/auto:programme-handover` typed in its session, or by
+     `/auto:programme-takeover` typed here once its pane is closed or its lease
+     is orphaned (or with `--replace <its pane name>` while it still runs).
    - On success, note the `run` id from the JSON line. The other verbs find the
      programme from this session's lease.
 2. Check for a native goal. If a `/goal` condition is active in this session
