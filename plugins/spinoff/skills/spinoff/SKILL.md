@@ -438,8 +438,9 @@ workspace and split-pane bugs — the script exists so the sequence is determini
 not improvised. Your only mechanical job is to invoke the script (via the bg agent);
 if the script does the wrong thing, FIX THE SCRIPT, don't work around it by hand.
 
-Dispatch that **background agent** (`Agent` with `run_in_background: true`) whose
-entire job is to run the one command below and report back. The agent must NOT
+Dispatch that **background agent** (`Agent` with `subagent_type: "spinoff:spinoff-runner"`
+and `run_in_background: true`; the agent is pinned to Haiku because it only runs a script)
+whose entire job is to run the one command below and report back. The agent must NOT
 re-synthesize anything or do extra work — it runs the script, waits, and returns
 the summary fields.
 
