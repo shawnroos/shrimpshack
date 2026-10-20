@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Programme Visual Directions</title>
+<style>
+/* A reading sheet with expanded ideas and adjacent relationship diagrams. */
+:root{--bg:#f5f8fa;--fg:#18313d;--muted:#526976;--accent:#126779;--line:#c6d5dd;--surface:#e7eff3;--display:"Optima","Candara",sans-serif;--body:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace;color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15252d;--fg:#e3edf2;--muted:#b0c3ce;--accent:#80d1de;--line:#405963;--surface:#213842;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#15252d;--fg:#e3edf2;--muted:#b0c3ce;--accent:#80d1de;--line:#405963;--surface:#213842;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:1rem/1.6 var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:2rem 3rem}main{max-width:60rem;margin-inline:auto}h1,h2,h3{font-family:var(--display);line-height:1.2;text-wrap:balance}h1{font-size:clamp(2rem,5vw,3rem);margin:.35rem 0 1rem}h2{font-size:1.65rem;margin:0 0 1.25rem}h3{font-size:1.4rem;margin:0 0 .75rem}p{max-width:68ch;margin:0 0 1rem}a{color:var(--accent);text-decoration-thickness:.08em;text-underline-offset:.18em}a:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:4px}code{font-family:var(--mono);font-size:.84em;overflow-wrap:anywhere}strong{color:inherit}header{padding-block:0 1.7rem;border-bottom:2px solid var(--line)}.eyebrow{font-size:.77rem;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:650}.lead{font-size:1.2rem;max-width:54ch}.meta{display:flex;flex-wrap:wrap;gap:.4rem 1.6rem;font-size:.82rem;color:var(--muted)}.meta span{min-width:0}.scope{background:var(--surface);padding:1rem 1.2rem;margin-block:1rem;border-radius:.3rem}.scope p:last-child{margin:0}.nav{display:flex;flex-wrap:wrap;gap:.5rem 1.2rem;font-size:.9rem;padding-block:1rem}section{padding-block:2rem;border-bottom:1px solid var(--line)}section:last-child{border:0}.table-wrap{overflow-x:auto;max-width:100%}table{border-collapse:collapse;width:100%;font-size:.9rem;text-align:left}th,td{border-bottom:1px solid var(--line);padding:.7rem .8rem .7rem 0;vertical-align:top}th{color:var(--muted);font-size:.77rem;letter-spacing:.05em;text-transform:uppercase}td:first-child{font-weight:600}ul,ol{padding-left:1.3rem}li{padding-block:.15rem}.axes{display:grid;grid-template-columns:1fr 1fr;gap:1rem 2rem;padding:0;list-style:none}.axes li{min-width:0}.axes strong{display:block}.axes span{font-size:.93rem;color:var(--muted)}.jump-list{display:grid;grid-template-columns:1fr 1fr;gap:.35rem 1.5rem;margin-block:0 1.8rem}.idea{padding-block:1.7rem 2.2rem;border-top:1px solid var(--line)}.idea:first-of-type{border-top:0}.idea-intro{display:grid;grid-template-columns:1.15fr 1fr;gap:1.75rem;align-items:start}.idea-intro>*{min-width:0}.rank-meta{display:flex;flex-wrap:wrap;gap:.4rem 1.2rem;font-size:.79rem;color:var(--muted);margin-bottom:.8rem}.rank-meta b{color:var(--fg)}.fields{display:grid;grid-template-columns:8rem minmax(0,1fr);gap:.8rem 1.2rem;margin:1rem 0 0}.fields dt{font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:650}.fields dd{margin:0;max-width:68ch}.fields p:last-child{margin-bottom:0}.tag{font-family:var(--mono);font-size:.8rem;color:var(--accent)}figure{margin:0;background:var(--surface);padding:1rem;border-radius:.3rem;max-width:100%;overflow-x:auto}svg{width:100%;height:auto;min-width:17rem;display:block}svg .node{fill:var(--bg);stroke:var(--line);stroke-width:1.5}svg .focus{fill:var(--bg);stroke:var(--accent);stroke-width:2}svg .label{fill:var(--fg);font:14px var(--body)}svg .small{fill:var(--muted);font:12px var(--body)}svg .path{fill:none;stroke:var(--accent);stroke-width:1.5}svg .gap{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:4 4}figcaption{font-size:.75rem;color:var(--muted);line-height:1.5;margin-top:.7rem;max-width:52ch}.note{font-size:.88rem;color:var(--muted)}.cut-table td:first-child{width:33%}.sources li{padding-block:.3rem;overflow-wrap:anywhere}footer{font-size:.78rem;color:var(--muted);padding-top:2rem;overflow-wrap:anywhere}summary{cursor:pointer;color:var(--accent)}details{margin-top:1.2rem}details ul{font-size:.9rem}.recommendation{padding:1rem 1.2rem;background:var(--surface);border-radius:.3rem}.recommendation p{margin:0}.nowrap{white-space:nowrap}
+@media(max-width:700px){body{padding-block:1.2rem 2rem}.idea-intro{grid-template-columns:1fr}.fields{grid-template-columns:1fr;gap:.25rem}.fields dd{margin-bottom:.9rem}.axes,.jump-list{grid-template-columns:1fr}.idea{padding-block:1.4rem 1.8rem}section{padding-block:1.5rem}th,td{padding-right:.7rem}.cut-table td:first-child{width:42%}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Programme Visual Directions</h1>
+<p class="lead">Make product results, decisions, and missing evidence easier to inspect without supervising every agent.</p>
+<div class="meta"><span><time datetime="2026-10-18">18 October 2026</time></span><span>Topic: <code>programme-mod-visualizations</code></span><span>Repository study</span></div>
+<p class="note">Focus: Claude mods for Programme/AutoPM, with Peek as navigation inspiration.</p>
+<div class="scope"><p><strong>Six directions, not a specification.</strong> This document proposes visual relationships and interactions. Nothing here authorizes implementation, approval changes, or publication.</p></div>
+<p class="note">36 raw ideas → 18 distinct concepts + 3 combinations → 21 reviewed candidates → 6 survivors. Fifteen candidates were cut.</p>
+<nav class="nav" aria-label="Document sections"><a href="#context">Codebase context</a><a href="#axes">Topic axes</a><a href="#ideas">Ranked ideas</a><a href="#cuts">Rejection summary</a><a href="#sources">Sources</a></nav>
+</header>
+<section id="context">
+<h2>Codebase Context</h2>
+<p><code>/programme-view</code> reads a saved Programme view and displays flat text. Its builder also exports structured items, decisions, actions, waits, and deliverables.</p>
+<div class="table-wrap"><table><thead><tr><th>Established in local source</th><th>Not established</th></tr></thead><tbody>
+<tr><td>Items, current owners, authored next actions, waits, checker results, references, and check dates.</td><td>A complete dependency graph, user-behavior acceptance map, or calibrated confidence.</td></tr>
+<tr><td>Peek collection-to-detail navigation, selection, Back, progressive groups, and focus patterns.</td><td>Durable acknowledgement, automatic evidence following, or a simultaneous split inspector.</td></tr>
+<tr><td>Official mod documentation describes side panes, a prompt band, controls, events, and redraws.</td><td>UI rendering under <code>claude -p</code> or the Agent SDK. A pane does not establish truthful state.</td></tr>
+</tbody></table></div>
+<p class="note">The existing view omits exact worker claims, rich validation details, historical owners, and earlier answers. Several directions need read access beyond <code>view.json</code>.</p>
+<p>The user described repeated questions and supporting investigations that displaced product checks. This is the problem context, not an independently reproduced incident.</p>
+<p>Source checks concern the local working checkout. The approval-origin correction remains local and unreleased. No proposed view is installed or runtime-verified.</p>
+<p><strong>Shared limits:</strong> activity is not progress; a claim is not evidence; an unavailable observation is not a clear result. View generation and evidence collection have different dates.</p>
+<p class="note">Public research supplied patterns, not product validation: AgentLens offers layered inspection; SRE separates routine monitoring from actionable exceptions; HAX warns that explanations sometimes increase trust in wrong results.</p>
+</section>
+<section id="axes">
+<h2>Topic Axes</h2>
+<ul class="axes">
+<li><strong>Outcomes and proof</strong><span>What exists, what supports it, and what remains unverified?</span></li>
+<li><strong>Human decisions</strong><span>What needs an answer, and what does that answer affect?</span></li>
+<li><strong>Work coordination</strong><span>Who owns the next move, and what does a wait affect?</span></li>
+<li><strong>Return and change</strong><span>What changed since inspection, and how fresh is the information?</span></li>
+</ul>
+<p class="note">All four axes have survivors. The set contains two outcome directions, two coordination directions, one decision direction, and one return direction.</p>
+</section>
+<section id="ideas">
+<h2>Ranked Ideas</h2>
+<div class="recommendation"><p><strong>Start the discussion with the outcome-to-proof inspector.</strong> It combines several distinct evidence gaps around one item without requiring a new dependency model.</p></div>
+<p class="note">Confidence estimates whether a direction merits deeper exploration. These percentages are subjective, not measured success probabilities. Complexity is relative implementation burden.</p>
+<ol class="jump-list">
+<li><a href="#proof">Outcome-to-proof inspector</a></li>
+<li><a href="#return">Changes since the last inspection</a></li>
+<li><a href="#decisions">Scoped decisions with earlier answers</a></li>
+<li><a href="#gates">Why is this a gate?</a></li>
+<li><a href="#next-move">Who has the next move?</a></li>
+<li><a href="#product">What can the user do now?</a></li>
+</ol>
+<p class="note">The diagrams illustrate relationships. They are not screen designs, live records, requirements, or implementation instructions.</p>
+<article class="idea" id="proof">
+<h3>1. Outcome-to-proof inspector</h3>
+<div class="rank-meta"><span><b>Axis</b> Outcomes and proof</span><span><b>Confidence</b> 85%</span><span><b>Complexity</b> Medium</span></div>
+<div class="idea-intro"><div><p>Select a stable work item. Unfold its required deliverables into reported completion, checker observations, and missing proof.</p><p>Keep unknown, refuted, and confirmed observations distinct. Show the source reference and check date beside each observation. Confirmed deliverables fold into receipts.</p><p>A result retains its actual coverage. A build-ancestry check does not prove the user-facing behavior works.</p></div>
+<figure><svg viewBox="0 0 360 250" role="img" aria-label="One item opens reported completion and checked evidence, then exposes unresolved proof."><rect class="focus" x="80" y="8" width="200" height="38" rx="4"/><text class="label" x="180" y="32" text-anchor="middle">One work item</text><path class="path" d="M180 46 V65 M82 65 H278 M82 65 V82 M278 65 V82"/><rect class="node" x="8" y="82" width="150" height="64" rx="4"/><rect class="node" x="202" y="82" width="150" height="64" rx="4"/><text class="label" x="83" y="108" text-anchor="middle">Reported</text><text class="small" x="83" y="128" text-anchor="middle">completion claim</text><text class="label" x="277" y="108" text-anchor="middle">Observed</text><text class="small" x="277" y="128" text-anchor="middle">result · source · date</text><path class="gap" d="M158 114 H202"/><path class="path" d="M180 146 V170"/><rect class="focus" x="48" y="170" width="264" height="48" rx="4"/><text class="label" x="180" y="199" text-anchor="middle">Unresolved proof stays visible</text><text class="small" x="180" y="241" text-anchor="middle">Saved-view date stays separate</text></svg><figcaption>Conceptual relationship: reported completion and observed evidence stay separate within one inspection.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> The sweep states, “A worker’s ‘done’ is a claim, never evidence.” <code>programme_predicate.py:101–108</code> retains <code>unproven_done</code>. <code>programme_view.py:98–123</code> exposes deliverables and their observations.</dd>
+<dt>Rationale</dt><dd>One inspection connects a reassuring claim to the observation that supports or contradicts it. The reader does not reconstruct that relationship from activity.</dd>
+<dt>Existing / new</dt><dd>Most item fields exist. Selection, unfolding, exact claim access, and richer validation display are proposals. They are not existing mod behavior.</dd>
+<dt>Downsides</dt><dd>More detail does not guarantee correct checks. An old <code>validate</code> unknown survives some later usable readings. Compare <code>validate.at</code> with <code>checked_at</code> before naming the latest observation.</dd>
+<dt>Discussion test</dt><dd>Does one inspection distinguish an earlier confirmation, a later observation gap, and an old saved view?</dd>
+</dl>
+</article>
+<article class="idea" id="return">
+<h3>2. Changes since the last inspection</h3>
+<div class="rank-meta"><span><b>Axis</b> Return and change</span><span><b>Confidence</b> 80%</span><span><b>Complexity</b> Medium</span></div>
+<div class="idea-intro"><div><p>Return to a comparison, not a transcript. Show changes to evidence, owners, waits, and human questions against a labelled inspection snapshot.</p><p>Keep the selected item and reading position stable. Open a changed fact into before-and-after detail, then return to the same place.</p><p>Snapshot endpoints show differences, not everything that happened between visits. A missing baseline or incomplete history stays explicit.</p></div>
+<figure><svg viewBox="0 0 360 222" role="img" aria-label="Compare a previous inspection with the current view, then inspect changed facts."><rect class="node" x="8" y="15" width="146" height="70" rx="4"/><rect class="focus" x="206" y="15" width="146" height="70" rx="4"/><text class="label" x="81" y="43" text-anchor="middle">Last inspection</text><text class="small" x="81" y="64" text-anchor="middle">labelled baseline</text><text class="label" x="279" y="43" text-anchor="middle">Current view</text><text class="small" x="279" y="64" text-anchor="middle">dated observation</text><path class="path" d="M154 50 H206 M180 85 V111"/><rect class="focus" x="48" y="111" width="264" height="63" rx="4"/><text class="label" x="180" y="137" text-anchor="middle">Changed facts</text><text class="small" x="180" y="158" text-anchor="middle">evidence · owner · wait · question</text><text class="small" x="180" y="201" text-anchor="middle">No baseline ≠ no change</text></svg><figcaption>Conceptual comparison: preserve orientation while exposing changes. Inspection does not establish acknowledgement.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> <code>programme_view.py:22,227–244</code> limits recent activity to eight entries. <code>programme_view.py:293</code> records generation time. Peek <code>navigation.ts:168–194</code> restores location on Back.</dd>
+<dt>Rationale</dt><dd>A short activity window does not explain a long absence. Comparing inspected facts reduces repeated orientation without requiring another PM briefing.</dd>
+<dt>Existing / new</dt><dd>Current observations and navigation precedents exist. A per-viewer inspection baseline, comparison logic, and reversal detail are proposals. No durable read-receipt model exists.</dd>
+<dt>Downsides</dt><dd>Baselines need clear scope and lifecycle. An item might change and return to its earlier state between snapshots. History gaps prevent claims of complete coverage.</dd>
+<dt>Discussion test</dt><dd>After more than eight events, does the reader find a changed conclusion and see the comparison’s limits?</dd>
+</dl>
+</article>
+<article class="idea" id="decisions">
+<h3>3. Scoped decisions with earlier answers</h3>
+<div class="rank-meta"><span><b>Axis</b> Human decisions</span><span><b>Confidence</b> 80%</span><span><b>Complexity</b> Medium</span></div>
+<div class="idea-intro"><div><p>Place a human question beside the relevant earlier answer, its original words, and its named target. Show changed scope instead of presenting a fresh blank question.</p><p>Keep related work outside the answer’s boundary unless the recorded scope includes it. Similarity suggests reading material; it never transfers authority.</p><p>Opening, selecting, or leaving a question does not answer it. The existing human approval path stays separate.</p></div>
+<figure><svg viewBox="0 0 360 238" role="img" aria-label="A decision has an explicit scope; related work outside that scope receives no inherited answer."><rect class="focus" x="12" y="12" width="336" height="148" rx="4"/><text class="small" x="30" y="35">Recorded target and scope</text><rect class="node" x="30" y="51" width="138" height="77" rx="4"/><rect class="node" x="192" y="51" width="138" height="77" rx="4"/><text class="label" x="99" y="79" text-anchor="middle">Earlier answer</text><text class="small" x="99" y="103" text-anchor="middle">source words</text><text class="label" x="261" y="79" text-anchor="middle">New question</text><text class="small" x="261" y="103" text-anchor="middle">what changed?</text><rect class="node" x="65" y="183" width="230" height="37" rx="4"/><text class="label" x="180" y="207" text-anchor="middle">Related work outside scope</text></svg><figcaption>Conceptual boundary: an earlier answer informs a new judgment without approving neighbouring work.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> Sequencing guidance says, “Do not ask again about an item he has answered.” <code>programme_record.py:502–538</code> stores questions, choices, and prompt references. <code>programme.py:483–490</code> retains instruction scope and quoted source words.</dd>
+<dt>Rationale</dt><dd>The user distinguishes forgotten context from genuinely changed scope without rebuilding the earlier conversation.</dd>
+<dt>Existing / new</dt><dd>Questions, answers, and scoped instructions are separate records. Joining them and suggesting related questions are proposals, not a unified authority model.</dd>
+<dt>Downsides</dt><dd>Re-handing replaces the current handed object. Older answers need journal or history access. Similar wording does not establish equivalent scope; ambiguous matches remain labelled.</dd>
+<dt>Discussion test</dt><dd>Does the reader understand why a new answer is necessary without accidentally extending an earlier answer?</dd>
+</dl>
+</article>
+<article class="idea" id="gates">
+<h3>4. Why is this a gate?</h3>
+<div class="rank-meta"><span><b>Axis</b> Work coordination</span><span><b>Confidence</b> 60%</span><span><b>Complexity</b> High</span></div>
+<div class="idea-intro"><div><p>Select a wait or supporting investigation. Inspect the required product check it serves, the recorded dependency reason, the restriction source, and the stopping condition.</p><p>Show an absent connection as an absent connection. Do not infer that supporting work is necessary, irrelevant, or wasteful from the layout.</p><p>Separate a human boundary, a runtime refusal, a PM assignment choice, and a worker assumption when source records establish that distinction.</p></div>
+<figure><svg viewBox="0 0 360 242" role="img" aria-label="A supporting investigation needs an established reason to block a required product check; absent links remain unknown."><rect class="node" x="49" y="8" width="262" height="43" rx="4"/><text class="label" x="180" y="35" text-anchor="middle">Supporting investigation</text><path class="gap" d="M180 51 V81 M180 124 V151"/><text class="label" x="180" y="105" text-anchor="middle">Required connection?</text><rect class="focus" x="49" y="151" width="262" height="43" rx="4"/><text class="label" x="180" y="178" text-anchor="middle">Required product check</text><text class="small" x="180" y="224" text-anchor="middle">Source · reason · owner · stopping condition</text></svg><figcaption>Conceptual inquiry, not a computed dependency. An unknown link stays unknown.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> The user said the PM does not stop to “assess or validate its own requirements.” <code>programme_record.py:598–636</code> stores optional item links and queue reasons. Sequencing guidance explicitly says dependency gates are not built.</dd>
+<dt>Rationale</dt><dd>Making a blocking assumption inspectable addresses process drift before supporting work displaces the required product check.</dd>
+<dt>Existing / new</dt><dd>Authored actions, some item links, waits, and instruction scope exist. A complete gate-source, dependency-reason, or stopping-condition model does not. Those associations are proposed data.</dd>
+<dt>Downsides</dt><dd>The view risks creating more reporting work. Start from available records and expose gaps; do not require every action to acquire a justification record. The reported Linux and source-only incidents were not independently replayed.</dd>
+<dt>Confidence limit</dt><dd>The independent critique marked the basis weak because its supplied sources lacked the concrete anecdotes and complete link model. The direction remains because the user explicitly identified the problem. No runtime or data-model claim follows from that report.</dd>
+<dt>Discussion test</dt><dd>Does inspection reveal an unestablished acceptance dependency without declaring that the investigation has no value?</dd>
+</dl>
+</article>
+<article class="idea" id="next-move">
+<h3>5. Who has the next move?</h3>
+<div class="rank-meta"><span><b>Axis</b> Work coordination</span><span><b>Confidence</b> 80%</span><span><b>Complexity</b> Medium</span></div>
+<div class="idea-intro"><div><p>Show a wait through its separate roles: the party producing the result, the current item owner, and the watcher or reporter noticing the result.</p><p>Attach the next recorded action. Leave missing responsibility or movement conditions visibly empty rather than inferring a complete chain.</p><p>Keep work-item identity stable when workers change. Inspection does not dispatch work or prompt an old pane.</p></div>
+<figure><svg viewBox="0 0 360 248" role="img" aria-label="The result producer, observer, and item owner are distinct coordination roles."><rect class="node" x="8" y="16" width="150" height="61" rx="4"/><rect class="node" x="202" y="16" width="150" height="61" rx="4"/><text class="label" x="83" y="42" text-anchor="middle">Produces result</text><text class="small" x="83" y="62" text-anchor="middle">recorded party</text><text class="label" x="277" y="42" text-anchor="middle">Notices result</text><text class="small" x="277" y="62" text-anchor="middle">watcher or reporter</text><path class="path" d="M83 77 V100 H277 V77 M180 100 V124"/><rect class="focus" x="62" y="124" width="236" height="64" rx="4"/><text class="label" x="180" y="150" text-anchor="middle">Item owner’s next action</text><text class="small" x="180" y="172" text-anchor="middle">if recorded</text><text class="small" x="180" y="221" text-anchor="middle">Coverage ≠ observation ≠ resolution</text></svg><figcaption>Conceptual roles: someone producing a result differs from someone noticing it.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> <code>programme_record.py:389–401</code> records <code>who</code>, <code>watcher</code>, and <code>reporter</code>. <code>programme_predicate.py:78–87</code> treats a named reporter as coverage without proving a live observation.</dd>
+<dt>Rationale</dt><dd>The reader distinguishes an owned wait from an abandoned next move without checking every active worker.</dd>
+<dt>Existing / new</dt><dd>Current ownership and wait roles exist. The joined visual chain, historical ownership display, and navigation are proposals. A general movement-condition field does not exist.</dd>
+<dt>Downsides</dt><dd>Recorded coverage might be old. A heartbeat does not establish success. Do not turn adjacent roles into dependency edges or treat one reporter as a shared cause.</dd>
+<dt>Discussion test</dt><dd>Does the reader identify who produces the result, who observes it, and which role is missing?</dd>
+</dl>
+</article>
+<article class="idea" id="product">
+<h3>6. What can the user do now?</h3>
+<div class="rank-meta"><span><b>Axis</b> Outcomes and proof</span><span><b>Confidence</b> 60%</span><span><b>Complexity</b> High</span></div>
+<div class="idea-intro"><div><p>Organize work around a user-visible product moment instead of a worker or task. Show what a user now does, its supporting observations, and unobserved behavior.</p><p>Unfold that moment into related work and required checks. Keep merged code, deployment, checker confirmation, and observed product behavior distinct.</p><p>This is the most product-focused direction. It also needs the largest new semantic connection between work and acceptance.</p></div>
+<figure><svg viewBox="0 0 360 237" role="img" aria-label="A user-visible product moment connects supporting work and behavior observations; unobserved behavior remains explicit."><rect class="focus" x="37" y="9" width="286" height="46" rx="4"/><text class="label" x="180" y="37" text-anchor="middle">User-visible product moment</text><path class="gap" d="M180 55 V77 M86 77 H274 M86 77 V96 M274 77 V96"/><rect class="node" x="8" y="96" width="155" height="61" rx="4"/><rect class="node" x="197" y="96" width="155" height="61" rx="4"/><text class="label" x="85" y="122" text-anchor="middle">Supporting work</text><text class="small" x="85" y="143" text-anchor="middle">items · deliverables</text><text class="label" x="275" y="122" text-anchor="middle">Behavior evidence</text><text class="small" x="275" y="143" text-anchor="middle">observed or unobserved</text><text class="small" x="180" y="191" text-anchor="middle">Dotted links need new source associations</text><text class="small" x="180" y="216" text-anchor="middle">Deployed ≠ behavior verified</text></svg><figcaption>Conceptual product lens: a useful connection to establish, not an existing acceptance map.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> The user wants product checks rather than supporting activity. Existing item observations appear in <code>programme_view.py:98–123</code>. The observed-effects learning states, “Count observed effects, or say <code>unknown</code>.”</dd>
+<dt>Rationale</dt><dd>A task board answers what moved. This lens asks whether the product became more useful and exposes where that claim has no observation.</dd>
+<dt>Existing / new</dt><dd>Item deliverables exist. Product-moment grouping, user-behavior acceptance links, and inferred associations are proposals. Inferred links need clear labels and source inspection.</dd>
+<dt>Downsides</dt><dd>Generated product stories risk sounding persuasive without evidence. Mapping work to behavior costs effort and risks another reporting ritual. Do not invent completed acceptance from a deployment receipt.</dd>
+<dt>Discussion test</dt><dd>Does the reader name one newly possible user action and identify exactly what nobody has observed?</dd>
+</dl>
+</article>
+</section>
+<section id="cuts">
+<h2>Rejection Summary</h2>
+<p>The critique weighed source support, expected value, novelty, burden, reuse, and overlap. Meeting-level value mattered more than feasible presentation.</p>
+<p class="note">The independent review found 16 sound bases and five weak bases. Thirteen candidates passed its discussion floor. No failed-floor candidate was promoted.</p>
+<div class="table-wrap"><table class="cut-table"><thead><tr><th>Considered and cut</th><th>Reason</th></tr></thead><tbody>
+<tr><td>Claim beside checked evidence</td><td>Combined into the outcome-to-proof inspector; not a distinct competing direction.</td></tr>
+<tr><td>Coordination tied to its intended result</td><td>Combined into “Why is this a gate?” Authored purpose does not establish necessity.</td></tr>
+<tr><td>Missing-proof inspector</td><td>Combined into the outcome-to-proof inspector, which also preserves contradictory claims and observation limits.</td></tr>
+<tr><td>One question with its context</td><td>A contextual card alone is routine. Facts-versus-premises labels lack established relevance associations; retain context within scoped decisions.</td></tr>
+<tr><td>Automatically staged evidence inspector</td><td>No demonstrated need for automatic following. New evidence risks moving the reader’s focus.</td></tr>
+<tr><td>Quiet exception line</td><td>A useful compact surface variant, not a separate direction at the discussion floor.</td></tr>
+<tr><td>Reuse verification routes, not verdicts</td><td>A matching reference does not establish equivalent commands, scope, or checker configuration.</td></tr>
+<tr><td>Stable items and owner handoff history</td><td>Stable identity supports the return and next-move directions. A historical relay is not a separate product here.</td></tr>
+<tr><td>Recurring gaps in observation</td><td>Matching notes do not establish shared causes or reusable diagnosis. Unknown observations sometimes have empty miss lists.</td></tr>
+<tr><td>History of overturned conclusions</td><td>Retain reversal detail within the return direction rather than create a separate archive.</td></tr>
+<tr><td>Result and observation health separated</td><td>An essential honesty condition inside the proof inspector, not a separate screen.</td></tr>
+<tr><td>Intention beside observed change</td><td>Retain within the gate inquiry. The contrast does not independently establish waste or causation.</td></tr>
+<tr><td>Shared waiting rooms</td><td>Routine grouping. A shared reporter does not imply a shared cause or unblock condition.</td></tr>
+<tr><td>Dated view and separate evidence clocks</td><td>Baseline honesty across every direction, not a standalone product idea.</td></tr>
+<tr><td>A programme comparison sheet</td><td>A conventional table with narrow-pane burden and no distinct value beyond retained inspection and change views.</td></tr>
+</tbody></table></div>
+<details><summary>How the 36 raw ideas were combined into 18 concepts</summary>
+<ul>
+<li><strong>User-visible product moments:</strong> “Show me what the user can do now.”</li>
+<li><strong>Scoped decisions with earlier answers:</strong> “A question arrives with its earlier answer”; “A precedent with its scope cut out”; “A jurisdiction envelope around every answer”; “A revised-question docket”; “Make scope the frame around the question.”</li>
+<li><strong>Changes since the last inspection:</strong> “Resume the inspection, not the transcript”; “Return to the difference, not the history”; “Resume at the broken assumption”; “The restoration overlay”; “Return to a changed scene”; “Design for the pane being closed.”</li>
+<li><strong>Next-move responsibility chains:</strong> “Who has the next move?”; “Show the empty chair”; “The relay exchange zone”; “Show the next hand, not the busiest worker.”</li>
+<li><strong>Claim beside checked evidence:</strong> “Put the claim beside the thing that could disprove it”; “Put the claim beside its witness.”</li>
+<li><strong>Coordination tied to its intended result:</strong> “What is all this coordination buying?”</li>
+<li><strong>Missing-proof inspector:</strong> “Make missing proof the main view”; “The assurance stencil”; “Read the programme backwards from the result.”</li>
+<li><strong>One question with its context:</strong> “Put the question on trial, not the whole programme”; “A reading room for one consequential question.”</li>
+<li><strong>Automatically staged evidence inspector:</strong> “Let the proof arrive at your seat.”</li>
+<li><strong>Quiet exception line:</strong> “A quiet pane must explain its quiet”; “A programme that folds to one line.”</li>
+<li><strong>Reuse verification routes, not verdicts:</strong> “Reuse the proof path, not the green result.”</li>
+<li><strong>Stable items and owner handoff history:</strong> “Pass the unresolved test with the work”; “Keep an item in view when its worker disappears.”</li>
+<li><strong>Recurring gaps in observation:</strong> “Find the recurring hole in the evidence.”</li>
+<li><strong>History of overturned conclusions:</strong> “Keep the moment the plan changed.”</li>
+<li><strong>Result and observation health separated:</strong> “A control sample beside the result.”</li>
+<li><strong>Intention beside observed change:</strong> “Give the PM two facing pages.”</li>
+<li><strong>Shared waiting rooms:</strong> “Hundreds of items, one shared waiting room.”</li>
+<li><strong>Dated view and separate evidence clocks:</strong> “Let the pane admit it is a photograph.”</li>
+</ul>
+<p class="note">Duplicates were combined because they address the same decision through different presentation metaphors. Each resulting concept received critique. Three additional combinations were also reviewed: the proof inspector, gate inquiry, and comparison sheet.</p>
+</details>
+</section>
+<section id="sources">
+<h2>Sources and Limits</h2>
+<p>Original-source spot-checks support the retained bases. They are static checks, not runtime tests or usability evidence. Public prior art informed exploration, not acceptance claims.</p>
+<p class="note">Repository links below open local files because the working checkout contains unreleased changes. They are not claims about published code.</p>
+<ul class="sources">
+<li><a href="../../plugins/auto/lib/programme_view.py">Programme view builder</a> · <code>programme_view.py:98–123,212–244,258–294</code> · item fields, decisions, short activity window, and generation time.</li>
+<li><a href="../../plugins/auto/mods/programme-view/register.tsx">Current Programme mod</a> · <code>register.tsx:60–147</code> · snapshot polling and flat rendering.</li>
+<li><a href="../../plugins/auto/lib/programme_evidence.py">Evidence storage and validation</a> · <code>programme_evidence.py:437–459,571–574,693–702,786–795</code> · check coverage, unknown results, and retained validation detail.</li>
+<li><a href="../../plugins/auto/lib/programme_predicate.py">Completion and wait predicates</a> · <code>programme_predicate.py:52–127</code> · evidence completeness, unproven completion, and wait coverage.</li>
+<li><a href="../../plugins/auto/lib/programme_record.py">Programme records</a> · <code>programme_record.py:127–141,389–401,502–538,598–636</code> · owners, waits, questions, answers, and authored actions.</li>
+<li><a href="../../plugins/auto/lib/programme.py">Programme commands and saved views</a> · <code>programme.py:483–490,751–793</code> · instruction scope and snapshot writes.</li>
+<li><a href="../../plugins/auto/skills/programme-sweep/SKILL.md">Sweep instructions</a> and <a href="../../plugins/auto/skills/programme-sweep/references/sequencing.md">sequencing guidance</a> · claim/evidence boundary, repeated questions, and dependency limitations.</li>
+<li><a href="../solutions/logic-errors/a-tally-keyed-on-exit-status-reports-work-that-never-happened.md">Observed-effects learning</a> · <code>44–76</code> · count effects rather than successful commands.</li>
+<li><a href="file:///Users/shawnroos/projects/peek/hooks/navigation.ts">Peek navigation</a> · <code>168–194</code> · Back restoration; <a href="file:///Users/shawnroos/projects/peek/README.md">Peek README</a> · <code>123–148</code> · progressive groups.</li>
+<li><a href="https://code.claude.com/docs/en/plugins/mods/overview">Official mod overview</a>, <a href="https://code.claude.com/docs/en/plugins/mods/interface">interface documentation</a>, and <a href="https://claude.dev/mods/">public examples</a> · supported visual surfaces, not new authority.</li>
+<li><a href="https://arxiv.org/abs/2402.08995">AgentLens</a> · hierarchical temporal inspection; no established coding-PM accuracy guarantee.</li>
+<li><a href="https://sre.google/sre-book/monitoring-distributed-systems/">Google SRE monitoring</a> · actionable exceptions as an analogy; <a href="https://www.microsoft.com/en-us/haxtoolkit/guideline/make-clear-why-the-system-did-what-it-did/">HAX explanations</a> · explanation does not establish correctness.</li>
+</ul>
+<p class="note">Five generation agents covered six lenses. Each read the evidence dossiers; additional source scrutiny was not uniform per idea. One fresh-context critic reviewed all 21 candidates and spot-checked original source. No implementation, live probes, settings changes, commits, or publication occurred.</p>
+</section>
+<footer>Composed 2026-10-18T17:20Z by Claude using ce-ideate from the user’s Programme visualization request. Local file is the authoritative copy.</footer>
+</main>
+</body>
+</html>
