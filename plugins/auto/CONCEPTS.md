@@ -50,6 +50,22 @@ vocabulary to learn, not two.
 | the claim on a remit | **lease** | The per-space record that makes a programme the only live one in its remit; replaced only by a typed takeover. |
 | which session runs in which pane | **session registry** | A per-space log the SessionStart hook writes inside herdr: each session's id, pane, terminal and whether it is interactive. The PM reads it to know who owns a pane. |
 | a worker's report of finished work | **claim** | A line a worker session adds to the programme's **inbox** (`claims.jsonl`) naming an item, a deliverable and a ref. The PM checks the evidence before it believes it; a claim alone never makes an item done. |
+| when the PM may stop | **stop rule** | An agreement term: stop when nothing is left it can act on (the default), only when every item is done, at a set time, or never. Code computes "may stop" from it; the PM does not decide. |
+| how far the PM may act alone | **autonomy** | An agreement term. Its one option today, `protocol`, means the protocol rules decide action by action. No code reads it before the PM queues a step. |
+| how often the PM sweeps | **cadence** | An agreement term: sweep on change (the default) or on a fixed interval, with a daily eval budget and quiet hours. A lease whose heartbeat misses two cadences counts as orphaned. |
+| where the PM looks for state | **tools of record** | An agreement term listing the sources the PM reads each sweep: the tracker, each session's task list, and plan files in the remit's repos. Formerly the `sources` term. |
+| one PM pass over the programme | **sweep** | Prune prompts, re-check evidence, read the remit and the inbox, check claims, drive workers, record waits with watchers, update the working model, re-arm the wake-ups, then stop. |
+| the PM's own check of a deliverable | **evidence** | A deliverable's result read from the source system by the PM's checker: `confirmed`, `refuted` or `unknown`, with a ref and the check time. A worker's claim is not evidence. |
+| what observes a wait | **watcher** | A process or task that watches one wait and beats. It counts as live only while its heartbeat is newer than the cadence. A wait with a named reporter and no watcher still counts as covered. |
+| a programme's durable state | **programme store** | `<home>/programme.db`, one SQLite file per programme. Every acknowledged change commits its state, journal row and outcome in one transaction; the JSON files are exports rebuilt from it. Not the memory store in the repo glossary. |
+| a replacement PM's briefing | **recovery packet** | A revision-bound view of the agreement, decisions, requirements, actions and results that `recover` prints. It restores context and grants no approval. |
+| a sealed programme | **archive** | A read-only programme record whose result and code captures were checked before sealing. Archiving does not mean every requirement passed, and it never deletes anything. |
+| the follow-on to an archive | **successor** | A new programme linked to an archived one. It needs its own accepted agreement and never reopens the archive. |
+| moving a programme into the store | **promotion** | The one-way move of a programme's home from plain files to the programme store. Afterwards the store is the only source of truth. |
+| a change the store did not make | **foreign write** | A change found in a promoted programme's exports, such as a write from old plugin code. Appended rows are kept as a record but never count as approval; rewritten files are set aside. |
+| a request to allow a refused read | **permission proposal** | The PM asks Shawn once to apply a narrow native allow rule after a worker's read is refused. It grants nothing itself; Shawn applies the rule. Not a protocol proposal, which changes completion rules. |
+| an item's path through its steps | **trajectory** | Steps done, the current step, the planned steps and the finish, as the PM writes them each sweep. It belongs to the item, not the session doing it, and fades once it is older than about two sweeps. |
+| the rule a step relies on | **clause** | The term, protocol rule or active instruction a step cites. A step with no clause is shown as such; that is a warning, never a block. |
 
 ## The shape in one line
 
