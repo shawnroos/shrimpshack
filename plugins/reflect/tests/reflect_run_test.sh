@@ -210,18 +210,24 @@ echo modsol  > "$M/solutions/design-patterns/modsol.md"
 echo modbs   > "$M/brainstorms/modbs.md"
 echo modho   > "$M/handoff.md"
 echo nestho  > "$DN/wt/docs/handoffs/2026-09-18-session-handoff.md"
+mkdir -p "$DN/wt/docs/solutions" && echo rootreadme > "$DN/wt/docs/solutions/README.md"
+echo modreadme > "$M/solutions/README.md"
 echo dep     > "$DN/wt/node_modules/pkg/docs/solutions/dep.md"
 echo other   > "$DN/wt/.claude/worktrees/other/docs/handoff.md"
 OUTN="$(run_rr "$DN" --capture-from "$DN/wt")"
-check "a module-scoped solution is captured" '[ -f "$DN/store/solutions/modsol.md" ]'
-check "a module-scoped brainstorm is captured" '[ -f "$DN/store/brainstorms/modbs.md" ]'
+check "a module-scoped solution is captured" \
+  '[ -f "$DN/store/solutions/src-app-modules-ai-modsol.md" ]'
+check "a module-scoped brainstorm is captured" \
+  '[ -f "$DN/store/brainstorms/src-app-modules-ai-modbs.md" ]'
+check "a root and a module README.md both survive" \
+  'grep -qx rootreadme "$DN/store/solutions/README.md" && grep -qx modreadme "$DN/store/solutions/src-app-modules-ai-README.md"'
 check "a handoff nested under docs/ is captured" \
   'ls "$DN/store/handoffs/" | grep -q "2026-09-18-session-handoff.md"'
 check "two handoff.md files in one worktree land at two distinct paths" \
   '[ "$(grep -rlx -e modho -e nestho "$DN/store/handoffs" | wc -l | tr -d " ")" = "2" ]'
 check "node_modules and nested worktrees are not captured" \
   '! grep -rqx -e dep -e other "$DN/store"'
-check "captured counts the four durable docs" 'echo "$OUTN" | grep -q "captured=4"'
+check "captured counts the six durable docs" 'echo "$OUTN" | grep -q "captured=6"'
 
 echo "== worktree scan: session scratch is not work =="
 DW="$ROOT/wtscan"; new_store "$DW"

@@ -292,11 +292,17 @@ for src_root in ${CAPTURE_FROM+"${CAPTURE_FROM[@]}"}; do
   # captured from their own --capture-from, not twice through their parent.
   while IFS= read -r f; do
     rel="${f#"$src_root"/}"
+    # Root docs keep the basename they always had; a module's docs carry their path,
+    # since two modules routinely hold a README.md.
     case "$rel" in
-      */docs/solutions/*|docs/solutions/*)
+      docs/solutions/*)
         capture_file "$f" "$DOC_STORE/solutions/$(basename "$f")" ;;
-      */docs/brainstorms/*|docs/brainstorms/*)
+      */docs/solutions/*)
+        capture_file "$f" "$DOC_STORE/solutions/$(printf '%s' "${rel%%/docs/solutions/*}" | tr / -)-$(basename "$f")" ;;
+      docs/brainstorms/*)
         capture_file "$f" "$DOC_STORE/brainstorms/$(basename "$f")" ;;
+      */docs/brainstorms/*)
+        capture_file "$f" "$DOC_STORE/brainstorms/$(printf '%s' "${rel%%/docs/brainstorms/*}" | tr / -)-$(basename "$f")" ;;
       *handoff*)
         # The path inside the worktree keeps two handoff.md files apart; the root
         # one keeps the name it always had.
