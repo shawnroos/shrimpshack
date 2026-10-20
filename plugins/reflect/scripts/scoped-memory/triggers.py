@@ -136,6 +136,8 @@ CLI:
                        # lifecycle reports; both sections by default
     triggers.py add    --memory RELPATH [--store DIR] [--literal V]... [--regex V]...
                        [--replace] [--no-compile]     # the mtime-preserving writer
+    triggers.py remove --memory RELPATH [--store DIR] [--no-compile]
+                       # deletes a body's triggers block, mtime preserved
 """
 import hashlib
 import json
@@ -1304,6 +1306,10 @@ def _splice_triggers(text, entries, replace):
                 break
         break
 
+    if entries is None:
+        if start is None:
+            return None, "declares no triggers"
+        return "\n".join(lines[:start] + lines[end:]), None
     block = render_block(entries, indent)
     if start is None:
         return "\n".join(lines[:close] + block + lines[close:]), None
@@ -1337,7 +1343,24 @@ def add_triggers(path, entries, replace=False):
     new_text, reason = _splice_triggers(text, entries, replace)
     if reason:
         return False, reason
+    return _write_keeping_stat(path, original, new_text)
 
+
+def remove_triggers(path):
+    """Delete a body's `triggers:` block, preserving mtime + mode like `add_triggers`."""
+    try:
+        original = os.stat(path)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return False, "unreadable: %s" % exc
+    new_text, reason = _splice_triggers(text, None, True)
+    if reason:
+        return False, reason
+    return _write_keeping_stat(path, original, new_text)
+
+
+def _write_keeping_stat(path, original, new_text):
     directory = os.path.dirname(os.path.abspath(path))
     tmp = None
     try:
@@ -1564,6 +1587,26 @@ def cmd_add(argv):
     return cmd_compile(["compile", "--store", store])
 
 
+def cmd_remove(argv):
+    """Delete one body's triggers without touching its mtime (KTD14)."""
+    store = _arg(argv, "--store") or os.environ.get("MEMORY_DIR") or default_store()
+    relpath = _arg(argv, "--memory")
+    if not relpath:
+        print("triggers: remove needs --memory RELPATH", file=sys.stderr)
+        return 2
+    if not relpath.endswith(".md"):
+        relpath += ".md"
+    path = relpath if os.path.isabs(relpath) else os.path.join(store, relpath)
+    ok, reason = remove_triggers(path)
+    if not ok:
+        print("triggers: %s: not removed — %s" % (relpath, reason), file=sys.stderr)
+        return 1
+    print("triggers: %s: triggers removed (mtime preserved)" % relpath)
+    if "--no-compile" in argv:
+        return 0
+    return cmd_compile(["compile", "--store", store])
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if args and args[0] == "match":
@@ -1574,7 +1617,9 @@ if __name__ == "__main__":
         sys.exit(cmd_report(args))
     if args and args[0] == "add":
         sys.exit(cmd_add(args))
+    if args and args[0] == "remove":
+        sys.exit(cmd_remove(args))
     print(__doc__.strip().splitlines()[0], file=sys.stderr)
-    print("usage: triggers.py {match|compile|report|add} [--store DIR] ...",
+    print("usage: triggers.py {match|compile|report|add|remove} [--store DIR] ...",
           file=sys.stderr)
     sys.exit(2)

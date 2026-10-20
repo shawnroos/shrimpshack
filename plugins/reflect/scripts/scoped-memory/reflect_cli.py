@@ -8,7 +8,7 @@ overrides; default is the $HOME-derived store):
                                   THE mid-session recall call: declared triggers,
                                   then qmd vsearch, then the local BM25 index —
                                   with bodies and an always-printed status line
-  save    --scope S "<body>" [--name N]   save a memory at an explicit scope
+  save    --scope S --name N ("<body>" | --body-file F)   save a memory at an explicit scope
   promote <file>                  re-scope a memory to global (repo -> flat root)
   rescope <file> <scope>          move a memory to scope S (repo:<slug> | global)
   list    [--here|--scope S|--cross-repo]   inspect what's stored at a scope
@@ -94,15 +94,38 @@ def _scope_val(scope_slug):
     return "global" if scope_slug == "global" else "repo:" + scope_slug
 
 
+_SAVE_USAGE = ('usage: reflect_cli.py save --scope S --name N ("<body>" | --body-file F)\n')
+
+#: Files the store root holds that are not memories. APFS is case-insensitive, so a
+#: memory named `memory` lands on MEMORY.md and replaces the index.
+_RESERVED_FILENAMES = {"memory.md", "memory_use.log", "reflect.log"}
+
+
 def cmd_save(args):
+    if "-h" in args or "--help" in args:
+        sys.stdout.write(_SAVE_USAGE); return 0
     store = store_dir()
     scope_slug = _resolve_scope(_opt(args, "--scope"), _opt(args, "--cwd"))
-    name = _opt(args, "--name") or "memory"
-    body = _positional(args)
+    name = _opt(args, "--name")
+    if not name:
+        sys.stderr.write("save: needs --name\n" + _SAVE_USAGE); return 2
+    body_file = _opt(args, "--body-file")
+    if body_file:
+        body = open(body_file, encoding="utf-8").read()
+    else:
+        body = _positional(args)
+        if body and (body.startswith("-") or os.path.exists(body)):
+            sys.stderr.write("save: body %r looks like a flag or a path; pass the text, "
+                             "or --body-file F\n" % body[:80]); return 2
     if not body:
-        sys.stderr.write("save: needs a body\n"); return 2
+        sys.stderr.write("save: needs a body\n" + _SAVE_USAGE); return 2
     fn = "".join(c if c.isalnum() or c in "-_" else "-" for c in name.lower())[:60] + ".md"
+    if fn.lower() in _RESERVED_FILENAMES:
+        sys.stderr.write("save: %s is reserved for the store's index; pick another --name\n" % fn)
+        return 2
     dest = _path_for(store, scope_slug, fn)
+    if os.path.exists(dest):
+        sys.stderr.write("save: %s already exists; pick another --name\n" % dest); return 2
     text = _scope.set_scope("---\nname: %s\n---\n%s\n" % (name, body), _scope_val(scope_slug))
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     open(dest, "w", encoding="utf-8").write(text)
@@ -445,7 +468,7 @@ def cmd_recall(args):
 #: has its value read as a positional — which is how `recall --store /x "query"`
 #: would end up searching for `/x`. Valueless flags (`--here`, `--deliberate`) need
 #: no entry: the generic `--` skip below covers them.
-_VALUE_FLAGS = {"--scope", "--name", "--cwd", "--query", "--store"}
+_VALUE_FLAGS = {"--scope", "--name", "--cwd", "--query", "--store", "--body-file"}
 
 
 def _opt(args, flag):

@@ -297,6 +297,37 @@ def test_writer_preserves_mtime():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_remove_deletes_the_block():
+    print("== remove deletes a triggers block, mtime preserved ==")
+    root = store_with({
+        "feedback_declared.md": memory(
+            "declared", triggers_block="triggers:\n  - literal: old pattern\n"),
+        "feedback_target.md": memory("target"),
+    })
+    declared = os.path.join(root, "feedback_declared.md")
+    try:
+        before = os.stat(declared)
+        time.sleep(0.02)
+        ok, reason = tg.remove_triggers(declared)
+        after = os.stat(declared)
+        text = open(declared, encoding="utf-8").read()
+        check("remove succeeds", ok and reason is None)
+        check("the block is gone", "triggers:" not in text and "old pattern" not in text)
+        check("the parser reads no triggers back",
+              tg.parse_triggers(tg.frontmatter_lines(text)) == [])
+        check("the rest of the frontmatter and the body survive",
+              "name: declared" in text and "Some body text." in text)
+        check("st_mtime is UNCHANGED (KTD14)", after.st_mtime == before.st_mtime)
+        target = os.path.join(root, "feedback_target.md")
+        original = open(target, encoding="utf-8").read()
+        ok, reason = tg.remove_triggers(target)
+        check("a body with no triggers is refused, not rewritten",
+              not ok and "no triggers" in reason
+              and open(target, encoding="utf-8").read() == original)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_writer_refuses_bad_input():
     print("== the writer validates before it writes ==")
     root = store_with({
@@ -508,6 +539,7 @@ if __name__ == "__main__":
     test_misfire_cross_session_not_credited()
     test_misfire_threshold_and_empty()
     test_writer_preserves_mtime()
+    test_remove_deletes_the_block()
     test_writer_refuses_bad_input()
     test_write_reaches_the_manifest()
     test_scoped_body_is_writable()

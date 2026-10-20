@@ -71,7 +71,7 @@ For each memory that **actually changed your approach** — never for a memory y
 
 ```bash
 MEMORY_NAME=feedback_example_memory python3 -c 'import os, sys
-sys.path.insert(0, os.environ["CLAUDE_PLUGIN_ROOT"] + "/scripts/scoped-memory")
+sys.path.insert(0, "${CLAUDE_PLUGIN_ROOT}/scripts/scoped-memory")
 import telemetry
 store = os.environ.get("REFLECT_MEMORY_DIR") or os.path.expanduser(
     "~/.claude/projects/-Users-shawnroos/memory")

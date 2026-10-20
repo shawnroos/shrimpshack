@@ -197,8 +197,15 @@ _reflect_checkpoint
 for mem in $APPLIED; do
   f="$MEMORY_DIR/${mem%.md}.md"
   if [ ! -f "$f" ]; then
-    MISSING="$MISSING $mem"
-    continue
+    # Repo-scoped memories live under _scope/<slug>/; a bare name resolves there
+    # only when exactly one scope holds it.
+    set -- "$MEMORY_DIR"/_scope/*/"${mem%.md}.md"
+    if [ "$#" = 1 ] && [ -f "$1" ]; then
+      f="$1"
+    else
+      MISSING="$MISSING $mem"
+      continue
+    fi
   fi
   before_sum="$(cksum < "$f")"
   MEM_FILE="$f" TODAY="$TODAY" python3 - <<'PY'
@@ -280,17 +287,26 @@ for src_root in ${CAPTURE_FROM+"${CAPTURE_FROM[@]}"}; do
   repo_name="$(basename "$(dirname "$src_root")")"
   [ "$repo_name" = "worktrees" ] && repo_name="$(basename "$(dirname "$(dirname "$src_root")")")"
 
+  # Durable docs live under ANY docs/ dir, not just the root one: a repo whose root
+  # docs/ is gitignored keeps its corpus module-scoped. Nested worktrees are
+  # captured from their own --capture-from, not twice through their parent.
   while IFS= read -r f; do
-    capture_file "$f" "$DOC_STORE/solutions/$(basename "$f")"
-  done < <(find "$src_root/docs/solutions" -type f -name '*.md' 2>/dev/null)
-
-  while IFS= read -r f; do
-    capture_file "$f" "$DOC_STORE/brainstorms/$(basename "$f")"
-  done < <(find "$src_root/docs/brainstorms" -type f -name '*.md' 2>/dev/null)
-
-  while IFS= read -r f; do
-    capture_file "$f" "$DOC_STORE/handoffs/${repo_name}-${wt_name}-$(basename "$f")"
-  done < <(find "$src_root/docs" -maxdepth 1 -type f -name '*handoff*.md' 2>/dev/null)
+    rel="${f#"$src_root"/}"
+    case "$rel" in
+      */docs/solutions/*|docs/solutions/*)
+        capture_file "$f" "$DOC_STORE/solutions/$(basename "$f")" ;;
+      */docs/brainstorms/*|docs/brainstorms/*)
+        capture_file "$f" "$DOC_STORE/brainstorms/$(basename "$f")" ;;
+      *handoff*)
+        # The path inside the worktree keeps two handoff.md files apart; the root
+        # one keeps the name it always had.
+        rel_name="$(printf '%s' "${rel#docs/}" | tr / -)"
+        capture_file "$f" "$DOC_STORE/handoffs/${repo_name}-${wt_name}-${rel_name}" ;;
+    esac
+  done < <(find "$src_root" \( -name node_modules -o -name .git -o -name dist -o -name build \
+             -o -path "$src_root/worktrees" -o -path "$src_root/.claude/worktrees" \) -prune \
+           -o -type f -name '*.md' \( -path '*/docs/solutions/*' -o -path '*/docs/brainstorms/*' \
+             -o \( -path '*/docs/*' -name '*handoff*' \) \) -print 2>/dev/null)
 done
 
 _reflect_checkpoint
@@ -323,7 +339,11 @@ for root in ${SCAN_ROOTS+"${SCAN_ROOTS[@]}"}; do
     [ -d "$wt" ] || continue
     branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
     dirty=clean
-    [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ] && dirty=DIRTY
+    # A handoff/discovery note or untracked session scratch is not work: docs/handoff.md
+    # alone made 18 of 39 empty worktrees read as occupied.
+    [ -n "$(git -C "$wt" status --porcelain 2>/dev/null \
+            | grep -vE '^.. docs/(handoff|discovery)\.md$|^\?\? (\.claude|\.spawn|\.bt|\.rulesync)/')" ] \
+      && dirty=DIRTY
     pr=none
     if command -v gh >/dev/null 2>&1 && [ "$branch" != "HEAD" ] && [ "$branch" != "?" ]; then
       # Run gh from inside the worktree so it resolves the repo itself — `--repo`
