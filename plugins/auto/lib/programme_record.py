@@ -31,6 +31,7 @@ driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
 programme_decisions = load_lib_module("programme_decisions")
 programme_context = load_lib_module("programme_context")
+programme_naming = load_lib_module("programme_naming")
 
 SOURCES = ("herdr", "tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
@@ -333,13 +334,13 @@ def _open_deliverables(item) -> list:
                   if (d or {}).get("result") != "confirmed")
 
 
-def _item_names(given, key) -> list:
-    names = []
-    for item_id in (given, key):
-        for name in (item_id.split(":", 1)[-1], item_id):
-            if name not in names:
-                names.append(name)
-    return names
+def _require_item_named(prompt, programme, key, choice, ask=None) -> None:
+    if prompt is None:
+        return
+    why = programme_naming.item_refusal(programme_journal.redact(prompt["quote"]), programme["items"], key,
+                                        choice, prompt_at=prompt.get("at"), ask=ask)
+    if why:
+        raise RecordError(f"prompt {prompt['prompt_id']!r} does not approve {key!r}: {why}")
 
 
 def _h_drop_item(host, argv):
@@ -355,7 +356,7 @@ def _h_drop_item(host, argv):
         if item["state"] not in WAITABLE_STATES:
             raise RecordError(f"item {key!r} is {item['state']}; only an open or waiting item drops")
         still_open = _open_deliverables(item)
-        host.require_named(prompt, _item_names(item_id, key))
+        _require_item_named(prompt, programme, key, "drop")
         if _issue_backed(key) and still_open and not prompt:
             raise RecordError(
                 f"item {key!r} is issue-backed with open deliverables {still_open}; "
@@ -378,7 +379,7 @@ def _h_reopen_item(host, argv):
         item = programme["items"][key]
         if item["state"] != "dropped":
             raise RecordError(f"item {key!r} is {item['state']}, not dropped")
-        host.require_named(prompt, _item_names(item_id, key))
+        _require_item_named(prompt, programme, key, "reopen")
         item.update(state="open", dropped_reason=None)
         _history(item, "reopened", prompt_id=prompt["prompt_id"])
         return {"item": key}
@@ -600,7 +601,7 @@ def _h_answer_handed(host, argv):
         item = programme["items"][key]
         if item["state"] != "handed":
             raise RecordError(f"item {key!r} is {item['state']}, not handed")
-        host.require_named(prompt, _item_names(item_id, key))
+        _require_item_named(prompt, programme, key, opts["choice"], item.get("handed") or {})
         decision = programme_decisions.shawn_decision(
             programme, kind=programme_decisions.ask_kind(item), item=key, prompt=prompt,
             ask=programme_decisions.ask_id(item), choice=opts["choice"])

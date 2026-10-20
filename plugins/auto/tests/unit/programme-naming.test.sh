@@ -75,6 +75,8 @@ expect PASS "adopt auto-merge" '["auto-merge"]'
 expect REFUSE "adopt auto-merge-docs-only" '["auto-merge"]'
 expect PASS "adopt verified.lookup for shrimpshack" '["shrimpshack", "verified.lookup"]'
 expect REFUSE "adopt verified.lookups for shrimpshack" '["shrimpshack", "verified.lookup"]'
+expect REFUSE "drop Файл правка" '[["Файл правка"]]'
+expect REFUSE "drop it" '["!!!"]'
 
 it "a missing prompt approves nothing to check"
 check "PASS" "$("$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1

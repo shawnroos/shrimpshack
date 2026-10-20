@@ -597,6 +597,99 @@ it "dropping the item does not accept the requirement"
 prog drop-item herdr:acc-b --reason "no longer needed"
 check "0 unsatisfied ['refuted'] ['dropped']" "$CODE $(acc r-acc)"
 
+prompt_at() {
+  run_py "$RUN" "$1" "$2" "$3" <<'EOF'
+import datetime
+run, origin, minutes, text = args
+when = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=int(minutes))
+print(fixture_prompt(run, "sess-pm", text, origin, now=when)["prompt_id"])
+EOF
+}
+state() { field "items[\"$1\"][\"state\"]" | tr -d '"'; }
+handed_ask() { prog add-item "$1" --title "$2" --kind fix_only "${@:3}"; prog hand-item "$1" --question "Ship it?" --kind product_call; }
+
+REFRAME="Reframe skill: skills vs code"
+handed_ask linear:AI-920 "Skill reframe work" --session s-920 --session-name "$REFRAME"
+ANSWERS="$(journal_count handed_answered)"
+it "a negated name approves nothing"
+prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt_at typed 1 "don't ship ${REFRAME}")"
+check "1 handed" "$CODE $(state linear:AI-920)"
+it "a question that names the session approves nothing"
+prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt_at typed 1 "what is left on ${REFRAME}?")"
+check "1 handed" "$CODE $(state linear:AI-920)"
+it "a name after the other choice word approves nothing"
+prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt_at typed 1 "decline ${REFRAME}")"
+check "1 handed" "$CODE $(state linear:AI-920)"
+it "a name typed before the ask was set approves nothing"
+prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt_at typed -5 "ship ${REFRAME}")"
+check "1 handed" "$CODE $(state linear:AI-920)"
+it "a cron prompt naming the session approves nothing"
+prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt_at cron 1 "ship ${REFRAME}")"
+check "1 handed" "$CODE $(state linear:AI-920)"
+it "none of the refusals recorded an answer"
+check "$ANSWERS" "$(journal_count handed_answered)"
+it "a typed choice and session name approves the one ask it names"
+prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt_at typed 1 "ship ${REFRAME}")"
+check "0 open" "$CODE $(state linear:AI-920)"
+
+handed_ask linear:AI-921 "Crop Export: Retry Logic"
+it "a title typed in another case and punctuation approves"
+prog answer-handed linear:AI-921 --choice ship --prompt "$(prompt_at typed 1 "Ship crop-export, retry logic!")"
+check "0 open" "$CODE $(state linear:AI-921)"
+
+handed_ask linear:AI-922 "Alpha thing one" --session s-922 --session-name "Continue previous session"
+handed_ask linear:AI-923 "Beta thing two" --session s-923 --session-name "Continue previous session"
+it "a session name two open items share approves nothing"
+prog answer-handed linear:AI-922 --choice ship --prompt "$(prompt_at typed 1 "ship Continue previous session")"
+check "1 handed handed" "$CODE $(state linear:AI-922) $(state linear:AI-923)"
+it "the ambiguous refusal lists each candidate's exact reply"
+has "ship Alpha thing one" "$OUT"
+has "ship Beta thing two" "$OUT"
+
+handed_ask linear:AI-924 "Fix crop"
+handed_ask linear:AI-925 "Fix crop export"
+it "a title that contains another item's title approves nothing"
+prog answer-handed linear:AI-925 --choice ship --prompt "$(prompt_at typed 1 "ship Fix crop export")"
+check "1 handed" "$CODE $(state linear:AI-925)"
+it "the refusal falls back to the id when the title is not unique"
+has "ship linear:AI-925" "$OUT"
+it "the same ask approves by id"
+prog answer-handed linear:AI-925 --choice ship --prompt "$(prompt_at typed 1 "ship AI-925")"
+check "0 open" "$CODE $(state linear:AI-925)"
+
+ANSWERS="$(journal_count handed_answered)"
+it "plain words that name no item approve nothing"
+prog answer-handed linear:AI-924 --choice ship --prompt "$(prompt_at typed 1 "ive given the skill agent the go ahead")"
+check "1 handed $ANSWERS" "$CODE $(state linear:AI-924) $(journal_count handed_answered)"
+it "the refusal shows the exact reply to type by name"
+has "ship Fix crop" "$OUT"
+
+handed_ask linear:AI-927 "Файл правка"
+it "a title with no usable words approves nothing"
+prog answer-handed linear:AI-927 --choice ship --prompt "$(prompt_at typed 1 "ship Файл правка")"
+check "1 handed" "$CODE $(state linear:AI-927)"
+it "the refusal for an unusable title gives the id reply"
+has "ship linear:AI-927" "$OUT"
+
+handed_ask linear:AI-928 "ok"
+it "a title shorter than a usable name approves nothing"
+prog answer-handed linear:AI-928 --choice ship --prompt "$(prompt_at typed 1 "ship ok")"
+check "1 handed" "$CODE $(state linear:AI-928)"
+it "an item titled ok approves by id"
+prog answer-handed linear:AI-928 --choice ship --prompt "$(prompt_at typed 1 "ship AI-928")"
+check "0 open" "$CODE $(state linear:AI-928)"
+
+prog add-item linear:AI-929 --title "Stale branch cleanup"
+it "drop-item accepts a typed title after the verb"
+prog drop-item linear:AI-929 --reason "not needed" --prompt "$(prompt typed 'drop Stale branch cleanup')"
+check "0 dropped" "$CODE $(state linear:AI-929)"
+it "reopen-item refuses a title with no verb before it"
+prog reopen-item linear:AI-929 --prompt "$(prompt typed 'Stale branch cleanup is back')"
+check "1 dropped" "$CODE $(state linear:AI-929)"
+it "reopen-item accepts a typed title after the verb"
+prog reopen-item linear:AI-929 --prompt "$(prompt typed 'reopen Stale branch cleanup')"
+check "0 open" "$CODE $(state linear:AI-929)"
+
 it "no item ever reached a stored done state"
 check '[]' "$(field 'sorted(k for k, v in items.items() if v["state"] == "done")')"
 
