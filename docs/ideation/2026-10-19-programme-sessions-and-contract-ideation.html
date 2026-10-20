@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Sessions and the Contract</title>
+<style>
+:root{--bg:#f6f7f4;--fg:#1f2a24;--muted:#56645b;--accent:#2f6b4f;--line:#c9d3cb;--surface:#e8ede8;--warn:#8a5a12;--warn-soft:#f3e9d6;--display:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;--body:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace;color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171d1a;--fg:#e2e9e4;--muted:#a9b8ae;--accent:#86c9a6;--line:#3c4a42;--surface:#222b26;--warn:#e7bd78;--warn-soft:#3a3122;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171d1a;--fg:#e2e9e4;--muted:#a9b8ae;--accent:#86c9a6;--line:#3c4a42;--surface:#222b26;--warn:#e7bd78;--warn-soft:#3a3122;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:1rem/1.6 var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:2rem 3rem}
+main{max-width:60rem;margin-inline:auto}
+h1,h2,h3{font-family:var(--display);line-height:1.2;text-wrap:balance}
+h1{font-size:clamp(2rem,5vw,2.9rem);margin:0 0 1rem}
+h2{font-size:1.6rem;margin:0 0 1.2rem}
+h3{font-size:1.35rem;margin:0 0 .7rem}
+p{max-width:68ch;margin:0 0 1rem}
+a{color:var(--accent);text-underline-offset:.18em}
+a:focus-visible{outline:3px solid var(--accent);outline-offset:4px}
+code{font-family:var(--mono);font-size:.84em;overflow-wrap:anywhere}
+strong{color:inherit}
+header{padding-bottom:1.6rem;border-bottom:2px solid var(--line)}
+.lead{font-size:1.15rem;max-width:56ch}
+.meta{display:flex;flex-wrap:wrap;gap:.4rem 1.6rem;font-size:.82rem;color:var(--muted);margin-bottom:.6rem}
+.note{font-size:.88rem;color:var(--muted)}
+.callout{background:var(--surface);padding:1rem 1.2rem;border-radius:.3rem;margin-block:1rem}
+.callout p:last-child{margin:0}
+.warn{background:var(--warn-soft)}
+.warn .label{color:var(--warn)}
+.label{font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;font-weight:650;display:block;margin-bottom:.3rem}
+nav.toc{display:flex;flex-wrap:wrap;gap:.5rem 1.2rem;font-size:.9rem;padding-top:1rem}
+section{padding-block:2rem;border-bottom:1px solid var(--line)}
+section:last-of-type{border:0}
+.table-wrap{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;width:100%;font-size:.9rem;text-align:left}
+th,td{border-bottom:1px solid var(--line);padding:.65rem .8rem .65rem 0;vertical-align:top}
+th{color:var(--muted);font-size:.75rem;letter-spacing:.05em;text-transform:uppercase}
+ol.axes{padding-left:1.3rem}
+ol.axes li{padding-block:.25rem;max-width:70ch}
+ol.jump{columns:2;column-gap:2rem;margin:0 0 1.6rem;padding-left:1.3rem}
+.idea{padding-block:1.6rem 2rem;border-top:1px solid var(--line)}
+.idea:first-of-type{border-top:0}
+.idea-intro{display:grid;grid-template-columns:1.1fr 1fr;gap:1.6rem;align-items:start}
+.idea-intro>*{min-width:0}
+.chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.9rem}
+.chip{font-size:.75rem;padding:.15rem .55rem;border-radius:999px;background:var(--surface);color:var(--fg);border:1px solid var(--line)}
+.fields{display:grid;grid-template-columns:8.5rem minmax(0,1fr);gap:.8rem 1.2rem;margin:1.1rem 0 0}
+.fields dt{font-size:.76rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:650}
+.fields dd{margin:0;max-width:68ch}
+.tag{font-family:var(--mono);font-size:.8rem;color:var(--accent)}
+figure{margin:0;background:var(--surface);padding:1rem;border-radius:.3rem;overflow-x:auto}
+svg{width:100%;height:auto;min-width:17rem;display:block}
+svg .box{fill:var(--bg);stroke:var(--line);stroke-width:1.5}
+svg .hot{fill:var(--bg);stroke:var(--accent);stroke-width:2}
+svg .dash{fill:var(--bg);stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
+svg .t{fill:var(--fg);font:13px var(--body)}
+svg .s{fill:var(--muted);font:12px var(--body)}
+svg .ln{fill:none;stroke:var(--accent);stroke-width:1.5}
+svg .gap{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:4 4}
+svg .red{fill:none;stroke:var(--warn);stroke-width:1.8}
+svg .tw{fill:var(--warn);font:12px var(--body)}
+figcaption{font-size:.75rem;color:var(--muted);margin-top:.6rem;max-width:52ch}
+details{margin-top:1.2rem}
+summary{cursor:pointer;color:var(--accent)}
+.sources li{padding-block:.25rem;overflow-wrap:anywhere}
+footer{font-size:.78rem;color:var(--muted);padding-top:2rem;overflow-wrap:anywhere}
+@media(max-width:700px){body{padding-block:1.2rem 2rem}.idea-intro{grid-template-columns:1fr}.fields{grid-template-columns:1fr;gap:.2rem}.fields dd{margin-bottom:.8rem}ol.jump{columns:1}section{padding-block:1.5rem}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Sessions and the Contract</h1>
+<p class="lead">How the Programme pane could show each managed session, its next step, and the contract terms that step relies on.</p>
+<div class="meta"><span><time datetime="2026-10-19">19 October 2026</time></span><span>Topic: <code>programme-sessions-and-contract</code></span><span>Repository study</span></div>
+<p class="note">Focus: sessions under PM management and their next steps; the operating contract as something consulted during work and amended with care.</p>
+<div class="callout"><p><strong>Five directions, not a specification.</strong> Each keeps three acts apart: <em>annotate</em> (write a note), <em>propose</em> (draft a change), and <em>approve</em> (a prompt you type, cited in the journal). No click, pane gesture, worker message, or peer report becomes approval.</p></div>
+<p class="note">40 raw ideas → 21 distinct concepts + 4 combinations → 25 reviewed candidates → 5 survivors.</p>
+<nav class="toc" aria-label="Sections"><a href="#context">Codebase Context</a><a href="#axes">Topic Axes</a><a href="#ideas">Ranked Ideas</a><a href="#cuts">Rejection Summary</a><a href="#sources">Sources</a></nav>
+</header>
+
+<section id="context">
+<h2>Codebase Context</h2>
+<p>A Programme has one driving PM session, which holds the space's lease. Workers have no record of their own: a worker is the owner of a work item. The PM keeps one "doing now" slot and a queue of next actions for the whole programme. No session has a next step of its own.</p>
+<div class="table-wrap"><table><thead><tr><th>Recorded and shown in the pane today</th><th>Recorded but not shown</th><th>Not recorded</th></tr></thead><tbody>
+<tr><td>Item owner pane and session label; per-item waits; queue entries <code>{id, action, item, why}</code>; contract terms as value and who set them</td><td>Owner history per item; why, options, and change time for each term; journal beyond the last 8 events</td><td>Any link from a next step to the term or rule that permits it; per-session next steps; past pane sightings; earlier term values</td></tr>
+</tbody></table></div>
+<p><strong>The contract today.</strong> Terms (remit, stop rule, autonomy, cadence, sources) keep only their current value. Proposing, accepting, and amending write journal rows; acceptance and amendment cite a typed prompt. Rules and autonomy live in a personal file.</p>
+<p><strong>Where the contract binds and where it does not.</strong> Code reads the stop rule, the remit, and the cadence. No code reads autonomy before the PM queues a next step. The rule matcher computes an autonomy level, and the caller discards it. The sweep consults the contract through written instructions only. After compaction, the PM cannot write until it re-acknowledges the rules. That acknowledgement is the only point where code makes the PM re-read the contract.</p>
+<p><strong>Liveness.</strong> The lease is live while the run's heartbeat is recent. "Orphaned" means the heartbeat is old, not that the process stopped. A wait counts as watched when someone is named as reporter, with no check that anyone is watching.</p>
+<p class="note">Past lessons in this repository: a scoped answer must not govern sibling work; a stated agreement is not the same as effective authority; command success is not progress. Outside prior art: air-traffic flight strips travel with the aircraft, and passing the strip is the handoff. Policy-as-code systems check boundaries at the moment of action. No source found shows a human–agent agreement that is inspectable, cited per decision, and amendable from the interface.</p>
+<p class="note">A separate broad study covered outcomes and proof, decisions, gates, next-move roles, and product moments. This study goes narrower.</p>
+</section>
+
+<section id="axes">
+<h2>Topic Axes</h2>
+<ol class="axes">
+<li><strong>Who holds a session</strong> — item owner, owner history, pane, driver lease, reporter and watcher.</li>
+<li><strong>What moves next</strong> — the single doing slot, the queue, per-item waits, handed questions.</li>
+<li><strong>Control passing and liveness</strong> — lease states, heartbeat-only liveness, handover, takeover, compaction.</li>
+<li><strong>The contract as a working surface</strong> — terms, amendments, rules and autonomy, and how the PM consults them.</li>
+</ol>
+<p class="note">Survivors: two on the contract, one on each other axis.</p>
+</section>
+
+<section id="ideas">
+<h2>Ranked Ideas</h2>
+<div class="callout"><p><strong>Start with the contract that cites and is cited.</strong> It closes the gap the evidence shows most clearly: the autonomy level is computed and then thrown away, so nothing connects what the PM does next to the term that allows it.</p></div>
+<p class="note">Confidence is a subjective judgment that a direction merits deeper exploration, not a measured probability. Diagrams illustrate relationships; they are not screen designs.</p>
+<ol class="jump">
+<li><a href="#i1">A contract that cites and is cited</a></li>
+<li><a href="#i2">The session strip</a></li>
+<li><a href="#i3">Amendment with consequences</a></li>
+<li><a href="#i4">Contract read receipt and read-back</a></li>
+<li><a href="#i5">Waits that show whether anyone is watching</a></li>
+</ol>
+
+<article class="idea" id="i1">
+<h3>1. A contract that cites and is cited</h3>
+<div class="chips"><span class="chip">Axis: The contract as a working surface</span><span class="chip">Confidence 80%</span><span class="chip">Complexity Medium</span></div>
+<div class="idea-intro"><div>
+<p>Each queued next step and the doing slot carry a small "because" label naming the contract entry they rely on, with its autonomy level, or "no clause recorded". Opening the label shows the clause text; it changes nothing.</p>
+<p>In the other direction, each term card shows how many next steps cited it, which instructions narrow it, and how it takes effect: <em>checked by code</em>, <em>written guidance only</em>, or <em>read by nothing</em>. Today autonomy would show "written guidance only" on the queue path.</p>
+</div>
+<figure><svg viewBox="0 0 360 230" role="img" aria-label="A queued step points to a clause; the clause card counts its citations and shows whether code enforces it."><rect class="hot" x="8" y="20" width="150" height="70" rx="4"/><text class="t" x="83" y="46" text-anchor="middle">Queued next step</text><text class="s" x="83" y="68" text-anchor="middle">because: autonomy · act</text><rect class="box" x="202" y="20" width="150" height="70" rx="4"/><text class="t" x="277" y="46" text-anchor="middle">Contract clause</text><text class="s" x="277" y="68" text-anchor="middle">cited by 6 steps</text><path class="ln" d="M158 55 H202"/><rect class="dash" x="8" y="130" width="150" height="56" rx="4"/><text class="t" x="83" y="154" text-anchor="middle">Step with no clause</text><text class="s" x="83" y="174" text-anchor="middle">"no clause recorded"</text><rect class="box" x="202" y="130" width="150" height="56" rx="4"/><text class="t" x="277" y="154" text-anchor="middle">How it binds</text><text class="s" x="277" y="174" text-anchor="middle">code · guidance · unread</text><path class="ln" d="M277 90 V130"/></svg><figcaption>Illustrative: links run both ways, and a missing link stays visible instead of disappearing.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> <code>programme_protocol.py:469</code> computes an autonomy level; <code>_apply_match</code> (<code>programme_record.py:116–123</code>) does not keep it. <code>_h_queue</code> (<code>programme_record.py:614–637</code>) stores <code>{id, action, item, why, at}</code> and reads no contract. A search of <code>plugins/auto/lib/</code> found no code reading autonomy before a queue write. The stop rule and remit do have code readers. <span class="tag">external:</span> railway interlocking (a signal cannot clear without a set route) and legal citators (each statute lists the decisions that relied on it).</dd>
+<dt>Rationale</dt><dd>You can see, per step, whether the PM acted under a term you agreed, and, per term, whether it governs anything. That turns the contract from a document read once into a record the work keeps citing.</dd>
+<dt>Recorded / new</dt><dd>Recorded: the queue entry, the matcher's result at match time, term values. New: a citation field written when the PM queues a step; per-term citation counts; the binding label.</dd>
+<dt>Downsides</dt><dd>Two autonomy structures exist. Action-keyed autonomy (<code>adopt-autonomy &lt;action&gt;</code>) is the natural link for a queue row's action. Rule autonomy is keyed by change kind, applies per item, and <code>matched_rule</code> is a list. Steps without an item have no matched rule. Pick the link deliberately. Keep the label warn-only: a "no clause" label that blocks the write would change enforcement, which belongs to the separate contract-design work.</dd>
+</dl>
+</article>
+
+<article class="idea" id="i2">
+<h3>2. The session strip</h3>
+<div class="chips"><span class="chip">Axis: Who holds a session</span><span class="chip">Confidence 80%</span><span class="chip">Complexity Medium</span></div>
+<div class="idea-intro"><div>
+<p>The pane shows one strip per managed session, borrowed from air-traffic flight strips. Each strip carries who holds it (owner session, pane, and whether they agree), its owner history, its next line, its waits, and the slice of the contract that applies to it.</p>
+<p>The next line is joined from queue entries whose item the session owns and is labelled as derived. Contract terms on the strip are marked <em>own</em> (instructions scoped to its item) or <em>inherited</em> (programme-wide). You can write a margin note on a strip; the note is an annotation and no approval path reads it.</p>
+</div>
+<figure><svg viewBox="0 0 360 220" role="img" aria-label="One strip per session with holder, next line, waits and contract slice."><rect class="hot" x="8" y="12" width="344" height="196" rx="4"/><text class="t" x="22" y="36">Session · item gh:142</text><text class="s" x="22" y="56">holder: pane w2:p5 · session agrees</text><path class="gap" d="M22 68 H338"/><text class="s" x="22" y="88">owners: s-a → s-c (history)</text><text class="s" x="22" y="110">next (derived): run CI check</text><text class="s" x="22" y="132">waits on: CI · watcher live</text><path class="gap" d="M22 144 H338"/><text class="s" x="22" y="164">contract: own 1 instruction · inherited 4 terms</text><text class="tw" x="22" y="190">margin note — annotation only</text></svg><figcaption>Illustrative strip. The session, not the item, is the unit on screen.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> owner <code>{pane, terminal_id, session_id}</code> and owner history in <code>item.sessions</code> are written at <code>programme_record.py:127–142</code> and not exported by <code>programme_view.py</code>. Instructions filter by <code>applies_to</code> at <code>programme.py:141–150</code>. The sweep flags a pane that reports a different session (<code>programme_sources.py</code>, around line 605). <span class="tag">external:</span> flight progress strips travel with the aircraft; controllers write on them.</dd>
+<dt>Rationale</dt><dd>Today a worker exists only as an item's owner, and the pane lists items, not sessions. A strip per session answers "who is this, what are they on, what are they waiting for, and what may they do" in one place.</dd>
+<dt>Recorded / new</dt><dd>Recorded: owner, owner history, waits, instructions, queue. New: exporting owner history; the queue-to-owner join; the margin-note record.</dd>
+<dt>Downsides</dt><dd>Gaps in custody (spans with no owner or another session in the pane) cannot be drawn, because past pane sightings are not stored. The margin-note record is new data; it must stay unreadable by any approval verb.</dd>
+</dl>
+</article>
+
+<article class="idea" id="i3">
+<h3>3. Amendment with consequences</h3>
+<div class="chips"><span class="chip">Axis: The contract as a working surface</span><span class="chip">Confidence 60%</span><span class="chip">Complexity High</span></div>
+<div class="idea-intro"><div>
+<p>The contract pane uses three inks: the clause (current value, who set it, when), a redline (a proposed change), and a margin note (an annotation with no force).</p>
+<p>A redline shows the current and proposed values, the open items whose autonomy would change if the matcher ran under the proposal, and the words your typed approval must contain. Nothing submits or fills the prompt for you. Acceptance stays a prompt you type, cited in the journal.</p>
+</div>
+<figure><svg viewBox="0 0 360 222" role="img" aria-label="Clause, redline with consequences, and margin note as three distinct marks."><rect class="box" x="8" y="12" width="344" height="48" rx="4"/><text class="t" x="22" y="34">Clause: autonomy = ask first</text><text class="s" x="22" y="52">set by you · 12 Oct</text><rect class="box" x="8" y="74" width="344" height="92" rx="4"/><path class="red" d="M22 96 H170"/><text class="tw" x="22" y="92">Redline: ask first → act and tell</text><text class="s" x="22" y="118">would change 3 open items</text><text class="s" x="22" y="138">your typed reply must name: autonomy, act_and_tell</text><text class="s" x="22" y="156">nothing is sent from here</text><rect class="dash" x="8" y="178" width="344" height="34" rx="4"/><text class="s" x="22" y="200">Margin note — no force</text></svg><figcaption>Illustrative: the three inks keep annotate, propose and approve visually distinct.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> proposing writes <code>agreement_proposed</code> (<code>programme.py:445</code>); accepting writes <code>agreement_accepted</code> (<code>:460</code>); amending writes <code>term_amended</code> with <code>set_by="shawn"</code> (<code>:478</code>), citing a typed prompt. Refusal text already lists missing required words. The matcher is a pure function, so a dry run is plausible. <span class="tag">external:</span> maker–checker dual control in banking; policy changes as reviewable diffs.</dd>
+<dt>Rationale</dt><dd>This is the "considered" reading of your request: a change to the contract shows what it would do before you agree to it, and the act of agreeing stays yours.</dd>
+<dt>Recorded / new</dt><dd>Recorded: proposals, acceptances, amendments, required-word checks. New: the redline view, the dry-run consequence list, the margin-note record.</dd>
+<dt>Downsides</dt><dd>Unverified: whether a mod can read an unsent prompt draft, and whether a dry run can merge rule layers from the personal file. A green checklist must never submit or auto-fill. Highest complexity of the five.</dd>
+</dl>
+</article>
+
+<article class="idea" id="i4">
+<h3>4. Contract read receipt and read-back</h3>
+<div class="chips"><span class="chip">Axis: Control passing and liveness</span><span class="chip">Confidence 75%</span><span class="chip">Complexity Low–Medium</span></div>
+<div class="idea-intro"><div>
+<p>The prompt band shows one line: when the PM last re-read the contract and how many terms changed since. After compaction, handover, or takeover, the PM restates the contract in its own words, and the pane shows where that restatement differs from the record.</p>
+<p>The restatement is a journaled note. It never clears the compaction lock and never grants authority.</p>
+</div>
+<figure><svg viewBox="0 0 360 200" role="img" aria-label="Timeline: PM re-reads the contract, a term changes, the receipt shows one change unread."><path class="ln" d="M20 60 H340"/><circle cx="60" cy="60" r="6" fill="var(--accent)"/><text class="s" x="60" y="38" text-anchor="middle">PM re-read</text><circle cx="180" cy="60" r="6" fill="var(--warn)"/><text class="tw" x="180" y="38" text-anchor="middle">term amended</text><circle cx="300" cy="60" r="6" fill="var(--muted)"/><text class="s" x="300" y="38" text-anchor="middle">now</text><rect class="hot" x="20" y="100" width="320" height="76" rx="4"/><text class="t" x="34" y="124">Band: re-read 09:10 · 1 term changed since</text><text class="s" x="34" y="146">read-back: PM says "ask first" · record says</text><text class="s" x="34" y="164">"act and tell" → differs</text></svg><figcaption>Illustrative: the receipt makes a stale reading visible; the read-back shows what the PM understood.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> after compaction, write verbs refuse until <code>rules --ack</code> (<code>programme.py:196–206</code>), journaled as <code>rules_acked</code>. Amending a term does not set that lock. <span class="tag">external:</span> hospital I-PASS handover ends with the receiver restating the plan. Past lesson: a stated agreement is not effective authority.</dd>
+<dt>Rationale</dt><dd>This is the "consulted during work" reading of your request. An acknowledgement proves a command ran, not that the PM holds the current terms. The receipt shows drift; the read-back shows misunderstanding.</dd>
+<dt>Recorded / new</dt><dd>Recorded: ack rows, amendment rows. New: exporting ack time and per-term change time; the read-back note and its comparison.</dd>
+<dt>Downsides</dt><dd>Comparing a free-text restatement to terms is approximate. Making an amendment raise the same re-read lock would change enforcement; that is a discussion for the contract-design work, not this view.</dd>
+</dl>
+</article>
+
+<article class="idea" id="i5">
+<h3>5. Waits that show whether anyone is watching</h3>
+<div class="chips"><span class="chip">Axis: What moves next</span><span class="chip">Confidence 80%</span><span class="chip">Complexity Low</span></div>
+<div class="idea-intro"><div>
+<p>Each wait shows one of three states: a live watcher (a pulse with its heartbeat age), a named reporter only (an open promise that ages), or a retry watcher queued but never started.</p>
+<p>Today all three count as covered. Showing them apart tells you which waits will move without you and which depend on someone remembering.</p>
+</div>
+<figure><svg viewBox="0 0 360 170" role="img" aria-label="Three wait states: live watcher, promise only, unarmed."><rect class="hot" x="8" y="14" width="108" height="120" rx="4"/><text class="t" x="62" y="44" text-anchor="middle">Live</text><text class="s" x="62" y="70" text-anchor="middle">watcher beat</text><text class="s" x="62" y="88" text-anchor="middle">40s ago</text><rect class="dash" x="126" y="14" width="108" height="120" rx="4"/><text class="t" x="180" y="44" text-anchor="middle">Promise</text><text class="s" x="180" y="70" text-anchor="middle">reporter named</text><text class="s" x="180" y="88" text-anchor="middle">no watcher · 2 d</text><rect class="box" x="244" y="14" width="108" height="120" rx="4"/><text class="t" x="298" y="44" text-anchor="middle">Unarmed</text><text class="s" x="298" y="70" text-anchor="middle">retry queued</text><text class="s" x="298" y="88" text-anchor="middle">never started</text><text class="s" x="180" y="158" text-anchor="middle">all three count as "watched" today</text></svg><figcaption>Illustrative: one word today, three different situations.</figcaption></figure></div>
+<dl class="fields">
+<dt>Basis</dt><dd><span class="tag">direct:</span> <code>programme_predicate.py:78–80</code> treats a named reporter as watched with no liveness check. The sweep falls back to <code>--who shawn --reporter shawn</code> when no reporter fits. Retry watchers are queued as <code>arm_retry_watcher</code> and started by the PM by hand. <span class="tag">external:</span> immune "missing self" detection, where an absent signal is the alarm.</dd>
+<dt>Rationale</dt><dd>A wait that silently depends on you is the most likely way work stalls unnoticed. This is cheap and uses data already recorded.</dd>
+<dt>Recorded / new</dt><dd>Recorded: wait fields, watcher heartbeats, queued retry entries. New: only the display distinction.</dd>
+<dt>Downsides</dt><dd>Small on its own. Changing what counts as "watched" for the stop rule would be a separate decision; this direction only shows the difference.</dd>
+</dl>
+</article>
+</section>
+
+<section id="cuts">
+<h2>Rejection Summary</h2>
+<p class="note">An independent critic checked all 25 candidates against the code: 15 sound, 10 weak, none refuted; 14 passed its discussion bar. No candidate let a click or message approve anything.</p>
+<div class="table-wrap"><table><thead><tr><th>Idea</th><th>Reason</th></tr></thead><tbody>
+<tr><td>Next step names its clause; term citator; enforced-versus-guidance map</td><td>Combined into idea 1. The citator alone depends on the citation link.</td></tr>
+<tr><td>Strip per session; next line per session; contract slice per session</td><td>Combined into idea 2. The slice alone fell below the discussion bar.</td></tr>
+<tr><td>Chain-of-custody ribbon</td><td>Gaps need past pane sightings, which are not stored. Owner history stays inside idea 2.</td></tr>
+<tr><td>Identity confidence across records</td><td>Sound but small alone; the agreement check folds into idea 2's holder row.</td></tr>
+<tr><td>Liveness split into separate signals</td><td>Sound but small alone; its caveat ("orphaned does not mean stopped") belongs on ideas 2 and 4.</td></tr>
+<tr><td>Takeover and handover preflight</td><td>Takeover already prints the re-arm steps; little added.</td></tr>
+<tr><td>Weekly lease relay log</td><td>Needs heartbeat history, which is not stored.</td></tr>
+<tr><td>Incoming PM read-back</td><td>Merged into idea 4.</td></tr>
+<tr><td>Per-item permit suspended at each handover</td><td>Changes enforcement, which is outside this study; takeover already prints the rules.</td></tr>
+<tr><td>Amendment composer; three inks; amendment blast radius</td><td>Combined into idea 3.</td></tr>
+<tr><td>"The contract just said no" feed</td><td>Only takeover, handover and end refusals are journaled; others are not. Small alone.</td></tr>
+<tr><td>One prompt-band line naming next action and clause</td><td>A rendering of ideas 1 and 2, not a separate direction.</td></tr>
+<tr><td>Contract revision stripe</td><td>Earlier term values are not stored, so a derived revision number is unreliable.</td></tr>
+<tr><td>Change-of-hands ritual (combination)</td><td>Rests on the per-item permit; its sound parts survive as idea 4.</td></tr>
+</tbody></table></div>
+<p class="note">One enabling change recurs across several ideas: exporting fields already stored but hidden from the pane (owner history, term change time and reason, journal beyond eight events).</p>
+</section>
+
+<section id="sources">
+<h2>Sources</h2>
+<p class="note">Local files in the working checkout, which includes unreleased changes.</p>
+<ul class="sources">
+<li><a href="../../plugins/auto/lib/programme_record.py">programme_record.py</a> · owner and history writes, <code>_apply_match</code>, <code>_h_queue</code>, wait fields</li>
+<li><a href="../../plugins/auto/lib/programme_protocol.py">programme_protocol.py</a> · rule matcher and autonomy</li>
+<li><a href="../../plugins/auto/lib/programme.py">programme.py</a> · write lock after compaction, proposal, acceptance and amendment rows, instructions</li>
+<li><a href="../../plugins/auto/lib/programme_predicate.py">programme_predicate.py</a> · watched-wait rule, stop predicate</li>
+<li><a href="../../plugins/auto/lib/programme_home.py">programme_home.py</a> · lease states and orphan threshold</li>
+<li><a href="../../plugins/auto/lib/programme_view.py">programme_view.py</a> · what the pane receives</li>
+<li><a href="../../plugins/auto/skills/programme-sweep/SKILL.md">programme-sweep skill</a> · how the PM consults the contract</li>
+<li><a href="2026-10-18-programme-mod-visualizations-ideation.html">Programme Visual Directions</a> · the broader prior study</li>
+<li><a href="https://arxiv.org/abs/2605.20874">IBM CUGA policy-as-code</a> and <a href="https://arxiv.org/abs/2509.23994">governance documents compiled to runtime checks</a> · boundaries checked at the moment of action</li>
+</ul>
+</section>
+
+<footer>Composed 2026-10-19T09:40Z by Claude using ce-ideate from the request to represent PM-managed sessions and next steps, with the added focus on an interactive, considered contract.</footer>
+</main>
+</body>
+</html>
