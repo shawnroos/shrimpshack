@@ -8,8 +8,8 @@ import re
 _MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
 _COMMAND = re.compile(
     r'<command-message>([^<>\n]+)</command-message>\n'
-    r'<command-name>(/[^<>\n]+)</command-name>\n'
-    r'<command-args>([\s\S]*)</command-args>'
+    r'<command-name>(/[^<>\n]+)</command-name>'
+    r'(?:\n<command-args>([\s\S]*)</command-args>)?'
 )
 
 

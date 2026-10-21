@@ -101,6 +101,24 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
                  dict(payload, transcript_path='relative.jsonl'), dict(payload, prompt_id=None)):
         check('malformed capture cannot invent authority', source_module.capture(data), None)
 
+    for name, text, content, expected in [
+        ('bare slash command resolves typed', '/auto:programme-takeover',
+         '<command-message>auto:programme-takeover</command-message>\n'
+         '<command-name>/auto:programme-takeover</command-name>', 'typed'),
+        ('slash command with args resolves typed', '/auto:programme-takeover now',
+         '<command-message>auto:programme-takeover</command-message>\n'
+         '<command-name>/auto:programme-takeover</command-name>\n'
+         '<command-args>now</command-args>', 'typed'),
+        ('slash command whose name and message differ refuses', '/auto:programme-takeover',
+         '<command-message>auto:programme-end</command-message>\n'
+         '<command-name>/auto:programme-takeover</command-name>', 'unknown'),
+    ]:
+        cmd_payload, cmd_source, cmd_path, cmd_human = fixture(text, 'source-pm')
+        cmd_row = pj.append_prompt(run, 'source-pm', text, 'unknown', source=cmd_source)
+        cmd_human = dict(cmd_human, promptSource=None, message={'role': 'user', 'content': content})
+        cmd_path.write_text(json.dumps(cmd_human) + '\n')
+        check(name, pj.prompt_origin(cmd_row), expected)
+
     ph.end_programme(run, 'isolated source fixture complete')
 
 print('programme-prompt-source.test.sh: {} passed, {} failed'.format(passed, failed))
