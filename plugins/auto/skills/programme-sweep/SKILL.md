@@ -214,13 +214,12 @@ from this session's lease.
      rank it and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
    - Behaviours on changed items. Only for an item whose state changed since
      the last sweep (a claim arrived, a worker started, a PR merged, the item was
-     blocked or handed), test the PM checks of each behaviour in force (`P rules`).
-     A behaviour's checks are in the record export
-     (`<home>/.claude/auto/<run>.json`, `programme.behaviours`) or, for a repo or
-     personal behaviour, in the behaviours store beside the personal protocol.
-     Skip a behaviour when the item's `behaviour_deliveries` (same export)
-     already holds a `relevant` or `sent_back` delivery for it; a `brief`
-     delivery does not count. When its PM checks hold, send a worker behaviour
+     blocked or handed), test the PM checks of each behaviour in force. `P rules`
+     prints each behaviour's PM checks, agent checks, evidence and stop, and
+     `P status --json` lists the same behaviours under `contract.behaviours`,
+     each with its `deliveries` per item. Skip a behaviour for an item whose
+     deliveries already hold `relevant` or `sent_back`; a `brief` delivery does
+     not count. When its PM checks hold, send a worker behaviour
      with `P remind-behaviour <item> <behaviour-id> --reason relevant --trigger claim|merge|block`,
      naming the change you saw. Apply a behaviour for the PM yourself:
      `remind-behaviour` refuses one that applies to the PM only.

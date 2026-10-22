@@ -35,6 +35,7 @@ programme_tasks = load_lib_module("programme_tasks")
 programme_plans = load_lib_module("programme_plans")
 programme_recovery = load_lib_module("programme_recovery")
 session_registry = load_lib_module("session_registry")
+programme_behaviours = load_lib_module("programme_behaviours")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -596,7 +597,7 @@ def _brief_tail(host, programme, decision_ids, restrictions, behaviours=()) -> s
     if restrictions:
         lines.append("Restrictions on this work:")
         lines += [f"- {r['text']} (source: {r['source']})" for r in restrictions]
-    lines += load_lib_module("programme_behaviours").brief_lines(behaviours)
+    lines += programme_behaviours.brief_lines(behaviours)
     return "\n\n" + "\n".join(lines) if lines else ""
 
 
@@ -638,7 +639,7 @@ def _launch_assign(started, session_name, restrictions=(), behaviour_ids=()):
                                                "session-name": session_name})
             _record_restrictions(item, restrictions, "start-worker")
             for bid in behaviour_ids:
-                load_lib_module("programme_behaviours").record_delivery(item, bid, "brief", "start-worker")
+                programme_behaviours.record_delivery(item, bid, "brief", "start-worker")
         item["history"].append({"at": entry["at"], "kind": "started" if started.get("ok") else "start_failed",
                                 "session_id": started["session_id"]})
         return True
@@ -696,7 +697,7 @@ def _h_start_worker(host, argv):
     key = programme_record._resolve(programme, item_id)
     if programme["items"][key]["state"] in programme_home.FINISHED_ITEM_STATES:
         raise host.ProgrammeError(f"item {key!r} is {programme['items'][key]['state']}")
-    behaviours, held_back = load_lib_module("programme_behaviours").brief_entries(
+    behaviours, held_back = programme_behaviours.brief_entries(
         dict(record, programme=programme), programme["items"][key], chosen, lookup=host.prompt_lookup)
     behaviour_ids = [b["id"] for b in behaviours]
     tail = _brief_tail(host, programme, decision_ids, restrictions, behaviours)

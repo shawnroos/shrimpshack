@@ -84,7 +84,7 @@ For one item, the behaviours in force are built in this order:
 
 Then entries that are not `active` drop out, every entry named in another candidate's `overrides` drops out, and an audience filter keeps the entries whose `applies_to` is the audience or `both`.
 
-`overrides` is set when the PM names a conflict (`record-behaviour --conflicts-with <id>`): the new programme entry overrides the other one, because the narrower layer wins. Shawn's typed reply can undo the new entry instead.
+`overrides` is set when the PM names a conflict (`record-behaviour --conflicts-with <id>`): the new programme entry overrides the other one, because the narrower layer wins. Shawn's typed reply can undo the new entry instead. A move or keep keeps only links to a strictly broader layer (a repo entry may override a personal one; a personal entry overrides nothing) and reports the dropped links as `dropped_overrides`, so the PM can raise the conflict again.
 
 ## 7. Moves
 
@@ -99,8 +99,8 @@ Then entries that are not `active` drop out, every entry named in another candid
 
 - A worker's brief carries a "Behaviours this work follows:" block: one line per worker behaviour in force for the item (id, when, do, don't, evidence and the checks the worker judges). A behaviour with no checks or with an agent check joins by itself. One gated only by PM checks joins only when the PM names it with `start-worker --behaviour <id>`, because code cannot test a PM check.
 - `remind-behaviour` sends one behaviour to an item's worker later, with reason `relevant` or `sent_back`.
-- Each delivery is recorded on the item in `behaviour_deliveries` (run-record-schema.md §10.5). A `brief` delivery does not stop a later reminder; the PM skips a behaviour on an item only when that item already has a `relevant` or `sent_back` delivery for it.
-- A send-back needs the behaviour to have started before the item passed its trigger (the first claim, the first confirmed merge, or the first wait or hand). A behaviour's start is its last `recorded` history event, else `at`. A behaviour that started at or after the trigger, or at an unknown time, reaches the work as a reminder only.
+- Each delivery is recorded on the item in `behaviour_deliveries` (run-record-schema.md §10.5). A `brief` delivery does not stop a later reminder; the PM skips a behaviour on an item only when that item already has a `relevant` or `sent_back` delivery for it. `P status --json` shows each behaviour's PM checks, agent checks, evidence, stop and per-item deliveries under `contract.behaviours`.
+- A send-back needs the behaviour to have started before the item passed its trigger (the first claim, the first confirmed merge, or the first wait or hand). A behaviour's start is its last `recorded`, `moved` or `kept` history event, else `at`, because a move or keep is when it began reaching other items. A behaviour that started at or after the trigger, or at an unknown time, reaches the work as a reminder only.
 
 ## 9. Rejection reasons
 

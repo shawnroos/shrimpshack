@@ -777,12 +777,37 @@ has "don't: skip the check" "$OUTL"
 has "evidence: a browser recording attached" "$OUTL"
 has "you judge: the diff touches UI" "$OUTL"
 
-it "a behaviour's start is its last recorded event, else its at"
-check "2026-05-02T00:00:00Z 2026-05-01T00:00:00Z None" "$(run_py <<'EOF'
+it "a behaviour's start is its last recorded, moved or kept event, else its at"
+check "2026-06-01T00:00:00Z 2026-07-01T00:00:00Z 2026-05-02T00:00:00Z 2026-05-01T00:00:00Z None" "$(run_py <<'EOF'
 a = beh("a1", at="2026-05-01T00:00:00Z", history=[{"event": "proposed", "at": "2026-04-01T00:00:00Z"},
                                                   {"event": "recorded", "at": "2026-05-02T00:00:00Z"},
                                                   {"event": "moved", "at": "2026-06-01T00:00:00Z"}])
-print(pb.since(a), pb.since(beh("a2", at="2026-05-01T00:00:00Z")), pb.since(beh("a3")))
+k = beh("a4", at="2026-05-01T00:00:00Z", history=[{"event": "recorded", "at": "2026-05-02T00:00:00Z"},
+                                                  {"event": "kept", "at": "2026-07-01T00:00:00Z"}])
+r = beh("a5", at="2026-05-01T00:00:00Z", history=[{"event": "recorded", "at": "2026-05-02T00:00:00Z"},
+                                                  {"event": "retired", "at": "2026-07-01T00:00:00Z"}])
+print(pb.since(a), pb.since(k), pb.since(r), pb.since(beh("a2", at="2026-05-01T00:00:00Z")), pb.since(beh("a3")))
+EOF
+)"
+
+it "a behaviour kept after an item's claim can only remind that item, never send it back"
+check "remind_only" "$(run_py <<'EOF'
+k = beh("a6", at="2026-05-01T00:00:00Z", history=[{"event": "recorded", "at": "2026-05-01T00:00:00Z"},
+                                                  {"event": "kept", "at": "2026-05-10T00:00:00Z"}])
+print(pb.timing(k, "2026-05-05T00:00:00Z"))
+EOF
+)"
+
+it "moving an overriding behaviour keeps only links to a broader layer and reports the rest"
+check "repo:['pa'] lost:['rb'] personal:- lost:['pa', 'rb'] programme:['pa', 'rb'] lost:[]" "$(run_py <<'EOF'
+loaded = {"personal": [beh("pa", "personal")], "repos": {"acme/alpha": [beh("rb", "repo", repo_key="acme/alpha")]},
+          "rejected": [], "notices": []}
+e = beh("gx", overrides=["pa", "rb"])
+rp, rlost = pb._placed(e, "repo", "acme/alpha", loaded)
+up, ulost = pb._placed(e, "personal", None, loaded)
+pg, plost = pb._placed(dict(e, layer="repo", repo_key="acme/alpha"), "programme", None, loaded)
+print("repo:%s lost:%s personal:%s lost:%s programme:%s lost:%s" % (
+    rp.get("overrides"), rlost, up.get("overrides", "-"), ulost, pg.get("overrides"), plost))
 EOF
 )"
 

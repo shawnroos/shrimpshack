@@ -171,7 +171,7 @@ def _terms_view(agreement) -> dict:
     return view
 
 
-def rules_in_force(record, journals=None) -> dict:
+def rules_in_force(record, journals=None, *, behaviours=True) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     journals = {} if journals is None else journals
     def lookup(run_id, prompt_id):
@@ -198,7 +198,8 @@ def rules_in_force(record, journals=None) -> dict:
         "instructions": active_instructions(programme),
         "permission_proposals": programme_permission.in_force(programme),
     }
-    out.update(programme_view.behaviours_view(record, lookup))
+    if behaviours:
+        out.update(programme_view.behaviours_view(record, lookup))
     corrections = programme_terms.active_corrections(programme)
     if corrections:
         out["corrections"] = corrections

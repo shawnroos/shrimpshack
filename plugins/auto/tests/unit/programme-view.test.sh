@@ -899,9 +899,9 @@ BEH_TERMS="$("$PY" "$PROG" status terms --run "$BEH_RUN" 2>&1)"
 BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUN" --json 2>&1)"
 beh_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.argv[2]))' "$BEH_JSON" "$1" 2>&1; }
 
-BEH_THREE='behaviour bprog (programme, active, applies to both): when a bug is reported; do: reproduce it first; don'"'"'t: guess the cause; source: Shawn: "always reproduce bugs"
-behaviour brepo (repo acme/alpha, active, applies to workers): when a bug is reported; do: reproduce it first; source: none recorded
-behaviour bper (personal, active, applies to pm): when a bug is reported; do: reproduce it first; source: none recorded'
+BEH_THREE='behaviour bprog (programme, active, applies to both): when a bug is reported; do: reproduce it first; don'"'"'t: guess the cause; PM checks: the item is a bug; source: Shawn: "always reproduce bugs"
+behaviour brepo (repo acme/alpha, active, applies to workers): when a bug is reported; do: reproduce it first; PM checks: the item is a bug; source: none recorded
+behaviour bper (personal, active, applies to pm): when a bug is reported; do: reproduce it first; PM checks: the item is a bug; source: none recorded'
 it "a programme with one behaviour at each layer renders three lines with the right layer names"
 check "$BEH_THREE" "$(beh_lines "$BEH_STATUS")"
 it "the <auto-rules> block contains the behaviour lines"
@@ -918,6 +918,9 @@ check "bprog:programme:active:always reproduce bugs brepo:repo:active:None bper:
   "$(beh_q '" ".join("%s:%s:%s:%s" % (b["id"], b["layer"], b["state"], b["quote"]) for b in d["contract"]["behaviours"])')"
 it "the rules in force in the view model carry the same behaviours"
 check "True" "$(beh_q 'd["model"]["rules_in_force"]["behaviours"] == d["contract"]["behaviours"]')"
+it "each behaviour in the contract carries its PM checks, agent checks, evidence, stop and deliveries"
+check "bprog:['the item is a bug']:[]:None:None:[]" \
+  "$(beh_q '" ".join("%s:%s:%s:%s:%s:%s" % (b["id"], b["pm_checks"], b["agent_checks"], b["evidence"], b["stop"], b["deliveries"]) for b in d["contract"]["behaviours"] if b["id"] == "bprog")')"
 it "the view format stays the same"
 check "3" "$(beh_q 'd["view_format"]')"
 

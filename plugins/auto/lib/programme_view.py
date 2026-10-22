@@ -529,11 +529,16 @@ def _instruction_text(entry) -> str:
     return f"instruction {entry.get('id')}: \"{entry.get('quote')}\" ({scope})"
 
 
-def _behaviour_row(entry, forced, overriders) -> dict:
+def _behaviour_row(entry, forced, overriders, deliveries) -> dict:
     source = _dict(entry.get("source"))
+    checks = entry["when"].get("checks") or []
     row = {"id": entry["id"], "layer": entry["layer"], "repo_key": entry.get("repo_key"),
            "state": entry.get("state", programme_behaviours.ACTIVE), "applies_to": entry["applies_to"],
            "when": entry["when"]["text"], "do": list(entry.get("do") or []), "dont": list(entry.get("dont") or []),
+           "pm_checks": [c["text"] for c in checks if c["by"] == "pm"],
+           "agent_checks": [c["text"] for c in checks if c["by"] == "agent"],
+           "evidence": entry.get("evidence"), "stop": entry.get("stop"),
+           "deliveries": deliveries.get(entry["id"], []),
            "prompt_id": source.get("prompt_id"),
            "quote": programme_journal.redact(source["quote"]) if source.get("quote") else None,
            "in_force": (entry["layer"], entry.get("repo_key"), entry["id"]) in forced}
@@ -552,13 +557,21 @@ def behaviours_view(record, lookup) -> dict:
               for e in programme_behaviours.resolve(record, None, repo, store=loaded)["in_force"]]
     rejected = [r for r in base["rejected"] if r.get("layer") != "repo" or r.get("key") in keys]
     entries = programme_behaviours.shown_programme_entries(programme, loaded)
-    entries +=[e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
+    entries += [e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
     overriders = {}
     for e in forced:
         for name in e.get("overrides") or ():
             overriders.setdefault(name, set()).add(e["id"])
     seen = {(e["layer"], e.get("repo_key"), e["id"]) for e in forced}
-    out = {"behaviours": [_behaviour_row(e, seen, overriders) for e in entries]}
+    deliveries = {}
+    for key, item in sorted(_dict(programme.get("items")).items()):
+        reasons = {}
+        for d in _dict(item).get("behaviour_deliveries") or []:
+            if isinstance(d, dict) and d.get("id"):
+                reasons.setdefault(d["id"], []).append(d.get("reason"))
+        for bid, rs in reasons.items():
+            deliveries.setdefault(bid, []).append({"item": key, "reasons": rs})
+    out = {"behaviours": [_behaviour_row(e, seen, overriders, deliveries) for e in entries]}
     if rejected:
         out["rejected_behaviours"] = [{k: r.get(k) for k in ("id", "layer", "key", "reason")} for r in rejected]
     if base["notices"]:
@@ -573,7 +586,9 @@ def _behaviour_text(b) -> str:
         status.append(f"overridden by {', '.join(b['overridden_by'])}")
     status.append(f"applies to {b.get('applies_to')}")
     parts = [f"when {b.get('when')}"] + [f"{label}: {' / '.join(b[key])}" for key, label in
-                                         (("do", "do"), ("dont", "don't")) if b.get(key)]
+                                         (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"),
+                                          ("agent_checks", "agent checks")) if b.get(key)]
+    parts += [f"{key}: {b[key]}" for key in ("evidence", "stop") if b.get(key)]
     parts.append(f"source: Shawn: \"{b['quote']}\"" if b.get("quote") else "source: none recorded")
     return f"behaviour {b.get('id')} ({', '.join(status)}): " + "; ".join(parts)
 

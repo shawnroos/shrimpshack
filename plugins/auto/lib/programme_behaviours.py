@@ -184,7 +184,7 @@ def put_programme_entry(programme, entry) -> dict:
     _refuse(entry, check)
     if entry["layer"] != "programme":
         raise BehaviourError(f"behaviour {entry['id']!r} is a {entry['layer']} entry, not a programme one")
-    rows = [e for e in programme.get("behaviours") or [] if not (isinstance(e, dict) and e.get("id") == entry["id"])]
+    rows = [e for e in programme.get("behaviours") or [] if not _is(e, entry["id"])]
     programme["behaviours"] = rows + [entry]
     return entry
 
@@ -247,20 +247,21 @@ def target(entry) -> str:
     return f"behaviour:personal:{entry.get('id')}"
 
 
-def adopt(entry, prompt, rec) -> dict:
-    adoption = {"machine": programme_protocol.machine_name(), "run_id": rec["run_id"],
-                "prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"]),
-                "prompt_hash": prompt["text_hash"], "hash": programme_protocol.content_hash(entry)}
-    return dict(entry, adoption=adoption)
+adopt = programme_carryover.adopt
+
+
+def _is(e, bid) -> bool:
+    return isinstance(e, dict) and e.get("id") == bid
+
+
+def _without(doc, bid) -> None:
+    doc["personal"] = [e for e in doc["personal"] if not _is(e, bid)]
+    doc["repos"] = {k: [e for e in rows if not _is(e, bid)] for k, rows in doc["repos"].items()}
+    doc["repos"] = {k: rows for k, rows in doc["repos"].items() if rows}
 
 
 def _place(doc, entry) -> None:
-    def other(e):
-        return not (isinstance(e, dict) and e.get("id") == entry["id"])
-
-    doc["personal"] = [e for e in doc["personal"] if other(e)]
-    doc["repos"] = {k: [e for e in rows if other(e)] for k, rows in doc["repos"].items()}
-    doc["repos"] = {k: rows for k, rows in doc["repos"].items() if rows}
+    _without(doc, entry["id"])
     if entry["layer"] == "personal":
         doc["personal"].append(entry)
     else:
@@ -407,8 +408,9 @@ def in_force(record, item, repo=None, *, audience=None, lookup=None, store=None)
     return resolve(record, item, repo, audience=audience, lookup=lookup, store=store)["in_force"]
 
 
-def _for_workers(record, item, bid, lookup):
-    entry = next((e for e in in_force(record, item, audience="workers", lookup=lookup) if e["id"] == bid), None)
+def _for_workers(record, item, bid, lookup, store=None):
+    entry = next((e for e in in_force(record, item, audience="workers", lookup=lookup, store=store)
+                  if e["id"] == bid), None)
     if entry is None:
         raise BehaviourError(f"behaviour {bid!r} is not in force for this item's worker (unknown, retired, "
                              "overridden, or it applies to the PM only)")
@@ -423,15 +425,16 @@ def _pm_checked_only(entry) -> bool:
 # Code cannot test a PM check, so a behaviour gated only by PM checks joins the brief only
 # when the PM names it, having seen its checks hold on the item.
 def brief_entries(record, item, chosen=(), *, lookup=None) -> tuple:
+    loaded = load_store(lookup)
     for bid in chosen:
-        _for_workers(record, item, bid, lookup)
-    rows = in_force(record, item, audience="workers", lookup=lookup)
+        _for_workers(record, item, bid, lookup, store=loaded)
+    rows = in_force(record, item, audience="workers", store=loaded)
     taken = [e for e in rows if not _pm_checked_only(e) or e["id"] in chosen]
     return taken, [e["id"] for e in rows if e not in taken]
 
 
 def _short(entry) -> str:
-    parts = [f"- {entry['id']}: when {entry['when']['text']}"]
+    parts = [f"{entry['id']}: when {entry['when']['text']}"]
     for label, field in (("do", "do"), ("don't", "dont")):
         if entry.get(field):
             parts.append(f"{label}: {'; '.join(entry[field])}")
@@ -444,16 +447,19 @@ def _short(entry) -> str:
 
 
 def brief_lines(entries) -> list:
-    return ["Behaviours this work follows:"] + [_short(e) for e in entries] if entries else []
+    return ["Behaviours this work follows:"] + ["- " + _short(e) for e in entries] if entries else []
 
 
+# A move or keep is when the behaviour began reaching other items, so it counts as a start
+# too; otherwise a behaviour kept from another programme could send back earlier claims.
 def since(entry):
-    recorded = [h.get("at") for h in entry.get("history") or [] if isinstance(h, dict) and h.get("event") == "recorded"]
-    return recorded[-1] if recorded else entry.get("at")
+    starts = [h.get("at") for h in entry.get("history") or []
+              if isinstance(h, dict) and h.get("event") in ("recorded", "moved", "kept")]
+    return starts[-1] if starts else entry.get("at")
 
 
-# Same-second or unknown start reads as remind-only: R19 protects work that may already
-# have passed the trigger, so a send-back needs proof the behaviour came first.
+# Same-second or unknown start reads as remind-only: work that may already have passed
+# the trigger is never sent back without proof the behaviour came first.
 def timing(entry, trigger_at) -> str:
     if trigger_at is None:
         return "before_trigger"
@@ -536,17 +542,20 @@ def _mark(entry, event, prompt=None, **extra) -> dict:
 
 
 def _programme_entry(programme, bid):
-    return next((e for e in programme.get("behaviours") or [] if isinstance(e, dict) and e.get("id") == bid), None)
+    return next((e for e in programme.get("behaviours") or [] if _is(e, bid)), None)
+
+
+def _stored_rows(loaded) -> list:
+    return loaded["personal"] + [e for es in loaded["repos"].values() for e in es]
 
 
 def _stored_entry(loaded, bid):
-    rows = loaded["personal"] + [e for es in loaded["repos"].values() for e in es]
-    return next((e for e in rows if e["id"] == bid), None)
+    return next((e for e in _stored_rows(loaded) if e["id"] == bid), None)
 
 
 def _active(programme, loaded) -> list:
     rows = [e for e in _programme_entries(programme, []) if not _held(loaded, e)]
-    rows += loaded["personal"] + [e for es in loaded["repos"].values() for e in es]
+    rows += _stored_rows(loaded)
     return [e for e in rows if e.get("state", ACTIVE) == ACTIVE]
 
 
@@ -668,12 +677,19 @@ def _current(programme, loaded, bid) -> tuple:
     return entry, local
 
 
-def _placed(entry, to, key) -> dict:
-    out = {k: v for k, v in entry.items() if k not in ("adoption", "moved_to", "moved_repo_key", "repo_key")}
+# An override may only point at a broader layer, or moving it up would let the broader
+# entry beat a narrower one. Dropped links are reported so the PM can raise them again.
+def _placed(entry, to, key, loaded) -> tuple:
+    out = {k: v for k, v in entry.items() if k not in ("adoption", "moved_to", "moved_repo_key", "repo_key", "overrides")}
     out["layer"] = to
     if to == "repo":
         out["repo_key"] = key
-    return out
+    wanted = list(entry.get("overrides") or ())
+    broader = {e["id"] for e in loaded["personal"]} if to == "repo" else set()
+    kept = wanted if to == "programme" else [b for b in wanted if b in broader]
+    if kept:
+        out["overrides"] = kept
+    return out, [b for b in wanted if b not in kept]
 
 
 def _pointer(local, to, key) -> dict:
@@ -692,29 +708,24 @@ def _move(host, programme, prompt, rec, bid, to, wanted) -> dict:
     key = _repo_key(programme, wanted) if to == "repo" else None
     if entry["layer"] == to and entry.get("repo_key") == key:
         raise BehaviourError(f"behaviour {bid!r} is already on the {to} layer")
-    moved = _mark(_placed(entry, to, key), "moved", prompt, **{"from": entry["layer"], "to": to})
+    placed, dropped = _placed(entry, to, key, loaded)
+    moved = _mark(placed, "moved", prompt, **{"from": entry["layer"], "to": to})
     if to == "programme":
         return {"from": entry["layer"], "programme": put_programme_entry(programme, moved), "adopted": None,
-                "unstore": entry["layer"] != "programme"}
+                "unstore": entry["layer"] != "programme", "dropped_overrides": dropped}
     adopted = adopt(moved, prompt, rec)
     _refuse(adopted, verdict(adopted))
     if local is not None:
         put_programme_entry(programme, _pointer(local, to, key))
-    return {"from": entry["layer"], "adopted": adopted, "unstore": False, "key": key}
+    return {"from": entry["layer"], "adopted": adopted, "unstore": False, "key": key, "dropped_overrides": dropped}
 
 
 def _unstore(bid) -> None:
-    def update(doc):
-        doc["personal"] = [e for e in doc["personal"] if not (isinstance(e, dict) and e.get("id") == bid)]
-        doc["repos"] = {k: [e for e in rows if not (isinstance(e, dict) and e.get("id") == bid)]
-                        for k, rows in doc["repos"].items()}
-        doc["repos"] = {k: rows for k, rows in doc["repos"].items() if rows}
-
-    write_store(update)
+    write_store(lambda doc: _without(doc, bid))
 
 
 # The store write and its rule_adopted rows run after the programme write commits; until
-# the store holds a verified copy, resolve keeps the programme copy in force (KTD12).
+# the store holds a verified copy, resolve keeps the programme copy in force.
 def _after_store(seen, how) -> None:
     if seen.get("adopted"):
         store([seen["adopted"]], seen["prompt"], seen["run"], seen["sid"], how)
@@ -737,7 +748,7 @@ def _h_move(host, argv):
         adopted = out["adopted"]
         return {"behaviour": bid, "from": out["from"], "to": to, "repo_key": out.get("key"),
                 "target": adopted and target(adopted), "hash": adopted and adopted["adoption"]["hash"],
-                "store_path": store_path()}
+                "store_path": store_path(), "dropped_overrides": out["dropped_overrides"]}
 
     return host._write(opts, change, MOVED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="move-behaviour", target=bid, after=lambda _: _after_store(seen, "move"))
@@ -783,20 +794,25 @@ KEPT = "behaviours_kept"
 def _keep(host, programme, prompt, rec, wanted, to, repo) -> dict:
     _check_layer_named(host, prompt, None, to)
     read_store()
+    loaded = load_store(host.prompt_lookup)
     named = [b for b in wanted if not programme_naming.missing(programme_journal.redact(prompt["quote"]), [b])]
     if not named:
         raise BehaviourError(f"prompt {prompt['prompt_id']!r} names none of {', '.join(wanted)}")
     key = _repo_key(programme, repo) if to == "repo" else None
-    adopted = []
+    adopted, dropped = [], {}
     for bid in named:
         local = _programme_entry(programme, bid)
         if local is None or local.get("state", ACTIVE) != ACTIVE:
             raise BehaviourError(f"no active programme-layer behaviour {bid!r} to keep")
-        moved = _mark(_placed(local, to, key), "kept", prompt, to=to)
+        placed, lost = _placed(local, to, key, loaded)
+        if lost:
+            dropped[bid] = lost
+        moved = _mark(placed, "kept", prompt, to=to)
         adopted.append(adopt(moved, prompt, rec))
         _refuse(adopted[-1], verdict(adopted[-1]))
         put_programme_entry(programme, _pointer(local, to, key))
-    return {"kept": named, "not_named": [b for b in wanted if b not in named], "adopted": adopted, "key": key}
+    return {"kept": named, "not_named": [b for b in wanted if b not in named], "adopted": adopted, "key": key,
+            "dropped_overrides": dropped}
 
 
 # Re-running on a kept entry re-adopts it; the store write replaces it by id (_place), so
@@ -812,7 +828,8 @@ def _h_keep(host, argv):
         out = _keep(host, programme, prompt, rec, wanted, to, opts.get("repo"))
         seen.update(out, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
         return {"kept": out["kept"], "not_named": out["not_named"], "to": to, "repo_key": out["key"],
-                "targets": [target(a) for a in out["adopted"]], "store_path": store_path()}
+                "targets": [target(a) for a in out["adopted"]], "store_path": store_path(),
+                "dropped_overrides": out["dropped_overrides"]}
 
     def after(_):
         store(seen["adopted"], seen["prompt"], seen["run"], seen["sid"], "keep")
@@ -835,7 +852,7 @@ def _reminder(entry, reason, when, count, cap) -> str:
     opener = _OPENERS.get((reason, when), "This applies to your work now.")
     if reason == "sent_back" and count > 1:
         opener += f" This is send-back {count} for this behaviour."
-    lines = [f"Behaviour {entry['id']}: {opener}", _short(entry)[2:]]
+    lines = [f"Behaviour {entry['id']}: {opener}", _short(entry)]
     return programme_sanitize.clean("\n".join(lines), cap, keep_newlines=True)
 
 
@@ -864,8 +881,8 @@ def _h_remind(host, argv):
     count = sum(d.get("reason") == "sent_back" for d in before) + (reason == "sent_back")
     facts = {"trigger": trigger, "trigger_at": passed, "timing": when}
 
-    def on_sent(target):
-        record_delivery(target, bid, reason, "remind-behaviour", **facts)
+    def on_sent(sent_item):
+        record_delivery(sent_item, bid, reason, "remind-behaviour", **facts)
 
     return sources.send_to_item(
         host, opts, (run_id, home, record, sid), programme, key, _reminder(entry, reason, when, count, sources.PROMPT_CAP),
