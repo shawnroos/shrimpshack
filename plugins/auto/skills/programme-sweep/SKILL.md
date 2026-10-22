@@ -86,7 +86,7 @@ from this session's lease.
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
    | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
    | He corrects who decides a kind of choice ("that didn't need me") | `P record-ruling <id> --effect grant\|restrict --scope <text> --replies-to <ask-or-decision-id> --prompt <id>`, then see below |
-   | He names a project term and its new text | `P edit-project-term <term-id> "<new text>" --prompt <id>` (the term ids are in `P status --terms`) |
+   | He names a project term and its new text | `P edit-project-term <term-id> "<new text>" --prompt <id>` (the term ids are in `P status --agreement`) |
    | Accept a pending decision or requirement | `P accept-context <decision-or-requirement-id> --prompt <id>` |
    | Lift a safety pause | `P lift-pause <pause-id> --prompt <id>` |
    | Settle an uncertain action after end | `P dispose-action (--attempt <id>\|--resource <id>) --as abandoned_unknown\|accepted_unknown --prompt <id>` |
