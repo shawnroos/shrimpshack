@@ -34,7 +34,8 @@ from this session's lease.
 - Only a checker writes evidence. A worker's "done" is a claim, never evidence.
 - An approval (accept, amend, instruction, adopt a rule, an autonomy level or a
   check command, answer a handed item, drop or reopen an issue item, edit a
-  project term, apply, undo or keep a correction) cites the
+  project term, apply, undo or keep a correction, record, move or retire a
+  behaviour) cites the
   prompt id from the `<auto-data>` tag of Shawn's typed message. Never cite a
   cron prompt.
 - Apply the shared judgment rules in
@@ -73,7 +74,8 @@ from this session's lease.
    | Shawn's answer | Verb |
    | --- | --- |
    | Ship or decline a handed item | `P answer-handed <item> --choice ship\|decline --prompt <id>` (ship also needs `--kind <change-kind>`) |
-   | A standing instruction ("always...", "until...") | `P record-instruction --prompt <id> [--applies-to <item>] [--until <text>]` |
+   | How work is done ("always X", "never Y", "when X, do Y") | `P record-behaviour --prompt <id> --when "<the situation>" --do <line> --dont <line> [--pm-check <text>] [--agent-check <text>]`, then see "Behaviours" below |
+   | A dated or one-off order ("until Friday", "skip the full eval on AI-753") | `P record-instruction --prompt <id> [--applies-to <item>] [--until <text>]` |
    | Withdraw an instruction | `P close-instruction <instruction-id> --as withdrawn --prompt <id>` |
    | A message that starts "Instruction for <item title>:" | `P record-instruction --prompt <id> --applies-to <item>` |
    | A message that starts "Withdraw instruction" and quotes it | `P close-instruction <instruction-id> --as withdrawn --prompt <id>` |
@@ -88,7 +90,15 @@ from this session's lease.
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
    | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
    | He corrects who decides a kind of choice ("that didn't need me") | `P correct-term --prompt <id> --replies-to <ask-or-decision-id> --to pm\|worker\|shawn --reading "<your reading>"`, then see below |
-   | He corrects a preferred tool or what acceptance means, in passing | `P record-instruction --prompt <id>` |
+   | He corrects a preferred tool, in passing | `P record-behaviour --prompt <id> --when "<the kind of job>" --tool <name> --do "use <name> for <the job>"`, then see "Behaviours" below |
+   | He corrects what acceptance means, in passing | `P record-instruction --prompt <id>` |
+   | Keep a behaviour where it is | Nothing to run |
+   | Move a behaviour to the repo, make it global, or bring it back to this programme | `P move-behaviour <behaviour-id> --to repo\|personal\|programme --prompt <id>` (add `--repo <key>` when the remit has several repos) |
+   | Apply a behaviour you proposed | `P record-behaviour --from-proposal <behaviour-id> --prompt <id>` |
+   | Retire a behaviour | `P retire-behaviour <behaviour-id> --as retired --prompt <id>` |
+   | Undo a behaviour you just recorded | `P retire-behaviour <behaviour-id> --as undone --prompt <id>` |
+   | Settle a conflict you named: the new behaviour wins | Nothing to run: you recorded it with `--conflicts-with` |
+   | Settle a conflict you named: the older behaviour wins | `P retire-behaviour <new-id> --as undone --prompt <id>` |
    | He names a project term and its new text | `P edit-project-term <term-id> "<new text>" --prompt <id>` (the term ids are in `P status --terms`) |
    | Undo a correction | `P undo-correction <correction-id> --prompt <id>` |
    | Apply a correction to all projects | `P promote-correction <correction-id> --prompt <id>` (only when his message says "all projects" with no negation before it) |
@@ -110,12 +120,51 @@ from this session's lease.
    (`P record-instruction --prompt <id>`), and tell Shawn in one line:
    "Corrections are not on yet, so I recorded this as a standing instruction."
 
+   **Behaviours.** A behaviour is Shawn's standing guidance on how the work is
+   done. It carries no authority and no done bar: who decides stays with the
+   terms and corrections, and acceptance stays with Done standards.
+   - Before you record one, read the behaviours in force (`P rules`). When the
+     new one overlaps or disagrees with one of them, pass `--conflicts-with <id>`.
+     The new one wins, because the narrower layer wins (programme over repo over
+     personal).
+   - Draft the checks from his words. A check you can test from what the sweep
+     sees (item state, a claim, a merge, a block, the tracker) is `--pm-check`.
+     One only the agent doing the work can judge is `--agent-check`. Keep as many
+     PM checks as you can. You cannot see a PR being opened unless the worker
+     reports it, so ask the worker to name the PR in its claim or make that check
+     an agent check.
+   - In one message, show Shawn the checks it printed, the ones you cannot test
+     and why, the `undo` line it printed, any conflict and which one wins, and
+     ask: "Keep it for this programme, move it to the repo, or make it global?"
+     It moves only on his typed answer naming the layer.
+   - When the output's `related` list shows a disagreement you did not link, name
+     it the same way. If he wants it linked, undo the new one and record it again
+     with `--conflicts-with`.
+   - A new or changed behaviour reaches work in progress as a reminder from now
+     on (step 5). Never send back work that already passed its trigger.
+   - A do line, skill, tool or agent that names a protected escalation
+     (production deploys, releases, spend over cap, merging around the gate,
+     refused permissions) is refused. Tell Shawn those still come to him.
+   - When Shawn corrects you twice on the same thing, you may draft a behaviour
+     from his words with `P propose-behaviour`. Tell him its id. It applies only
+     when his typed reply names it (the "Apply a behaviour you proposed" row).
+   - Once per programme, offer to move tool preferences out of the project
+     terms. For each term in `P status --terms` that names a preferred tool, run
+     `P propose-behaviour --from-term <term-id>`. Show him each term with its
+     drafted behaviour id and ask which are tool preferences. Apply the ids his
+     typed reply names with `--from-proposal`, and retire the rest with
+     `--as retired`, citing the same reply. The term itself stays as it is; from
+     then on, read the preferred tool from the behaviour.
+
    The cited message must name what it approves, or the verb refuses it and
    lists the missing words: the item id or key (`AI-753`) for the item rows, the
    rule id for `adopt-rule`, the action and the level for `adopt-autonomy`, the
    repo and the check key (`verified.lookup`) for `adopt-check`, the decision or
    requirement id for `accept-context`, the pause id for `lift-pause`, the attempt
-   or resource for `dispose-action`, the proposal id
+   or resource for `dispose-action`, the behaviour id and the layer word
+   ("programme", "repo", or "personal", "global" or "all projects") with no
+   negation before it for `move-behaviour`, the proposal id for
+   `record-behaviour --from-proposal`, the proposal id
    (`perm-1`) and exactly one answer word for `answer-permission`: "applied" or
    "apply" for applied, "not now", "later" or "postpone" for not-now, "reject" or
    "decline" for no. Shawn types, for example, "applied perm-1". A `--widening`
@@ -163,6 +212,18 @@ from this session's lease.
      again each sweep while the board and the key stay down.
    - New work the sweep finds (a new issue, a failed check, a review finding):
      rank it and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
+   - Behaviours on changed items. Only for an item whose state changed since
+     the last sweep (a claim arrived, a worker started, a PR merged, the item was
+     blocked or handed), test the PM checks of each behaviour in force (`P rules`).
+     A behaviour's checks are in the record export
+     (`<home>/.claude/auto/<run>.json`, `programme.behaviours`) or, for a repo or
+     personal behaviour, in the behaviours store beside the personal protocol.
+     Skip a behaviour when the item's `behaviour_deliveries` (same export)
+     already holds a `relevant` or `sent_back` delivery for it; a `brief`
+     delivery does not count. When its PM checks hold, send a worker behaviour
+     with `P remind-behaviour <item> <behaviour-id> --reason relevant --trigger claim|merge|block`,
+     naming the change you saw. Apply a behaviour for the PM yourself:
+     `remind-behaviour` refuses one that applies to the PM only.
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;
@@ -178,7 +239,19 @@ from this session's lease.
 7. **Read the inbox.** `P inbox` prints the unread claims from the store, each
    with its index. Act on them, then `P mark-read --offset <n>` with the offset
    it names. Never read `claims.jsonl`: it is an export and can be stale.
-8. **Check claims.** For each claimed deliverable, run
+8. **Check claims.** First send back work that skips a behaviour. For each
+   claim, take each worker behaviour in force for the item that names evidence
+   and whose checks held for this work. Look for that evidence in the claim's
+   ref and the worker's pane.
+   - Missing: `P remind-behaviour <item> <behaviour-id> --reason sent_back`. The
+     message quotes the behaviour. If it refuses because the behaviour started
+     after the claim, send `--reason relevant` instead.
+   - A `sent_back_count` of 2 or more in its output is a repeat on that item.
+     Tell Shawn in one line, with the item and the behaviour id.
+
+   Then check the claim as below, whatever the send-back did: acceptance reads
+   only Done standards, and a behaviour never adds to it.
+   For each claimed deliverable, run
    `P check-deliverable <item> <deliverable>`. Pass `--repo <clone>` for
    verified and released (the local clone of the item's repo). Confirmed closes
    the deliverable; unknown or refuted leaves it open, and the item's history
@@ -239,6 +312,13 @@ from this session's lease.
      on `start-worker` and on `prompt-item`. On `start-worker` they need
      `--handoff <file>` among the spinoff arguments: the verb appends them to a
      copy of the brief.
+   - Before `start-worker`, read the behaviours in force (`P rules`). When a
+     worker behaviour matches the item, pass `--handoff <file>` too: the verb
+     appends a "Behaviours this work follows:" block and refuses the start
+     without it. A behaviour with no checks or with an agent check joins by
+     itself. One gated only by PM checks joins when you pass `--behaviour <id>`,
+     having seen its checks hold. The output's `behaviours_held_back` lists the
+     ones you left out; send one with `P remind-behaviour` when its checks hold.
    - A worker that finds new evidence against a linked decision stops and
      states it in its pane. Weigh it with section 6 of
      [references/judgment.md](references/judgment.md). Send no message that
@@ -330,6 +410,7 @@ from this session's lease.
       sweep's remit read, never ids. Leave it out when you do not know them.
 15. **Update the tracker.** For each issue item whose state changed in this
     sweep (worker started, PR opened or merged, blocked, handed, unblocked),
+    first test its behaviours as in step 5, unless step 5 already did. Then
     load the `auto:programme-tracker` skill and follow it. It writes only when
     `P tracker-synced --item <item> --state <label> --check` says the item is
     due, and it never writes a done state or a root-cause comment.
