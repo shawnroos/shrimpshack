@@ -237,10 +237,11 @@ The programme-wide set of tools where work and evidence live and that the PM che
 sweep. It replaces the agreement's "sources" term.
 
 ### Behaviour
-A standing instruction on how the PM or its workers go about the work: when a situation is
+Standing guidance on how the PM or its workers go about the work: when a situation is
 true, what to do and not do, which skills, tools and agents to prefer, how to communicate,
-and when to stop. It lives at the personal, repo or programme layer. It carries no
-authority and no done bar; Authority, Done standards and Rulings answer those.
+and when to stop. It lives at the personal, repo or programme layer, and the narrower layer
+wins. It carries no authority and no done bar; Authority, Done standards and Rulings answer
+those. The auto glossary (`plugins/auto/CONCEPTS.md`) holds its full entry.
 
 ## Peek
 
