@@ -180,7 +180,7 @@ def rules_in_force(record, journals=None, protocol=None) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     journals = {} if journals is None else journals
     protocol = _protocol(journals) if protocol is None else protocol
-    rules = [{"id": rid, "layer": rule["layer"], "autonomy": rule["autonomy"],
+    rules = [{"id": rid, "layer": rule["layer"],
               "requires": list(rule["requires"]), "caveat": rule["caveat"],
               "adopted_on": rule["adopted_on"]}
              for rid, rule in sorted(protocol["rules"].items())]
@@ -622,15 +622,14 @@ def _write_personal(update) -> None:
     run_record_core._flock_run(lock, body)
 
 
-def _check_widening(section, name, level, widening) -> None:
+def _check_widening(name, level, widening) -> None:
     # The loader judges a personal entry against the plugin layer alone, so the verb must too.
-    prior = programme_protocol.plugin_layer()[section].get(name)
-    field = "autonomy" if section == "rules" else "level"
+    prior = programme_protocol.plugin_layer()["autonomy"].get(name)
     if prior is None or widening:
         return
-    if programme_protocol._wider(level, prior[field]):
+    if programme_protocol._wider(level, prior["level"]):
         raise ProgrammeError(
-            f"{name!r} widens autonomy {prior[field]} to {level}; "
+            f"{name!r} widens autonomy {prior['level']} to {level}; "
             "rerun with --widening only if the cited prompt approves the widening"
         )
 
@@ -646,7 +645,7 @@ def _adoption(entry, prompt, rec, widening) -> dict:
 
 
 def _h_adopt_rule(argv):
-    positional, opts = _parse(argv, values=("run", "prompt"), flags=("widening",))
+    positional, opts = _parse(argv, values=("run", "prompt"))
     if len(positional) != 1:
         raise ValueError("usage: adopt-rule <rule-id> --prompt <id>")
     rule_id = positional[0]
@@ -660,9 +659,10 @@ def _h_adopt_rule(argv):
         verdict = programme_protocol.validate_proposal(rule)
         if not verdict["ok"]:
             raise ProgrammeError(f"rule refused: {verdict['reason']} ({verdict['detail']})")
-        _check_widening("rules", rule["id"], rule["autonomy"], opts.get("widening"))
-        require_named(prompt, rule_id, *_widen_word(opts))
-        adoption = _adoption(rule, prompt, rec, opts.get("widening"))
+        # An older plugin reading the synced personal file requires this field and rejects a widening.
+        rule[programme_protocol.LEGACY_RULE_FIELD] = programme_protocol.legacy_autonomy(rule_id)
+        require_named(prompt, rule_id)
+        adoption = _adoption(rule, prompt, rec, False)
         _write_personal(_put_rule(dict(rule, adoption=adoption)))
         programme["proposed_rules"] = [r for r in proposals if r is not hits[0]]
         return {"rule": rule_id, "entry": "rule", "target": programme_protocol.target_of("rules", rule_id),
@@ -681,7 +681,7 @@ def _h_adopt_autonomy(argv):
     verdict = programme_protocol.validate_autonomy(action, entry)
     if not verdict["ok"]:
         raise ProgrammeError(f"autonomy entry refused: {verdict['reason']} ({verdict['detail']})")
-    _check_widening("autonomy", action, level, opts.get("widening"))
+    _check_widening(action, level, opts.get("widening"))
 
     def change(programme, prompt, rec):
         require_named(prompt, action, level, *_widen_word(opts))

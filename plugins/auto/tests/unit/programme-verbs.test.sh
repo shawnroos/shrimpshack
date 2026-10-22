@@ -331,6 +331,15 @@ EOF
 )"
 check "False True studio True True True" "$GOT"
 
+it "adopt-rule writes the legacy autonomy of a new rule id as propose, not the proposal's level, and no widening mark"
+check '"propose" false' "$(run_py <<'EOF'
+with open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]) as fh:
+    doc = json.load(fh)
+rule = [r for r in doc["rules"] if r["id"] == "docs-verified"][0]
+print(json.dumps(rule["autonomy"]), json.dumps("widening" in rule["adoption"]))
+EOF
+)"
+
 it "the personal file write left no temp file behind"
 check "protocol.json" "$(ls -A "$(dirname "$CLAUDE_AUTO_PERSONAL_PROTOCOL")" | tr '\n' ' ' | sed 's/ $//')"
 
@@ -376,31 +385,38 @@ EOF
 
 it "adopt-autonomy without a typed prompt is refused and writes nothing"
 BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
-prog adopt-autonomy prod_deploy never --prompt "$P_CRON"
+prog adopt-autonomy prod_off_flag never --prompt "$P_CRON"
 check "1" "$CODE"
 check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
-prog adopt-autonomy prod_deploy never
+prog adopt-autonomy prod_off_flag never
 check "1" "$CODE"
 
 it "adopt-autonomy refuses an unknown level and a bad action"
-P_AUTO="$(prompt typed 'yes, set prod deploy to never')"
-prog adopt-autonomy prod_deploy sometimes --prompt "$P_AUTO"
+P_AUTO="$(prompt typed 'yes, set prod off flag to never')"
+prog adopt-autonomy prod_off_flag sometimes --prompt "$P_AUTO"
 check "1" "$CODE"
 prog adopt-autonomy 'Bad Action' never --prompt "$P_AUTO"
 check "1" "$CODE"
 
 it "adopt-autonomy citing a typed prompt that does not name the action and level is refused"
-prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, never deploy prod')"
+prog adopt-autonomy prod_off_flag never --prompt "$(prompt typed 'yes, never flag prod')"
 check 1 "$CODE"
-has "prod_deploy" "$OUT"
-prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, prod_deploy')"
+has "prod_off_flag" "$OUT"
+prog adopt-autonomy prod_off_flag never --prompt "$(prompt typed 'yes, prod_off_flag')"
 check 1 "$CODE"
 has "never" "$OUT"
 
 it "adopt-autonomy narrowing a level loads from the personal layer"
-prog adopt-autonomy prod_deploy never --prompt "$P_AUTO"
+prog adopt-autonomy prod_off_flag never --prompt "$P_AUTO"
 check "0" "$CODE"
-check '["never", "personal", []]' "$(load_personal '[loaded["autonomy"]["prod_deploy"]["level"], loaded["autonomy"]["prod_deploy"]["layer"], [r["id"] for r in loaded["rejected"]]]')"
+check '["never", "personal", []]' "$(load_personal '[loaded["autonomy"]["prod_off_flag"]["level"], loaded["autonomy"]["prod_off_flag"]["layer"], [r["id"] for r in loaded["rejected"]]]')"
+
+it "adopt-autonomy on a protected kind is refused and writes nothing"
+BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, set prod_deploy to never')"
+check "1" "$CODE"
+has "protected_kind" "$OUT"
+check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
 it "adopt-autonomy journals an approval record with entry kind and hash"
 GOT="$(run_py "$RUN" "$P_AUTO" <<'EOF'
@@ -408,42 +424,42 @@ run, pid = args
 pp = load_lib_module("programme_protocol")
 row = [r for r in pj.read(run) if r["kind"] == "rule_adopted"][-1]
 doc = json.load(open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]))
-entry = doc["autonomy"]["prod_deploy"]
+entry = doc["autonomy"]["prod_off_flag"]
 p = row["payload"]
 print(p["entry"], p["action"], p["level"], p["hash"] == entry["adoption"]["hash"] == pp.content_hash(entry), row["cites"] == [pid], p["prompt_id"] == pid)
 EOF
 )"
-check "autonomy prod_deploy never True True True" "$GOT"
+check "autonomy prod_off_flag never True True True" "$GOT"
 
 it "adopt-autonomy widening a level without --widening is refused and writes nothing"
 BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
-prog adopt-autonomy merge_around_gate act --prompt "$(prompt typed 'widen merge around gate to act')"
+prog adopt-autonomy fix_other_team_code act --prompt "$(prompt typed 'widen fix other team code to act')"
 check "1" "$CODE"
 has "--widening" "$OUT"
 check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
 it "adopt-autonomy --widening citing a prompt without the word widen is refused"
-prog adopt-autonomy merge_around_gate act --widening --prompt "$(prompt typed 'merge around gate: act')"
+prog adopt-autonomy fix_other_team_code act --widening --prompt "$(prompt typed 'fix other team code: act')"
 check 1 "$CODE"
 has "widen" "$OUT"
 
 it "adopt-autonomy widening with --widening loads"
-prog adopt-autonomy merge_around_gate act --widening --prompt "$(prompt typed 'yes, widen merge_around_gate to act')"
+prog adopt-autonomy fix_other_team_code act --widening --prompt "$(prompt typed 'yes, widen fix_other_team_code to act')"
 check "0" "$CODE"
-check '["act", "personal"]' "$(load_personal '[loaded["autonomy"]["merge_around_gate"][k] for k in ("level", "layer")]')"
+check '["act", "personal"]' "$(load_personal '[loaded["autonomy"]["fix_other_team_code"][k] for k in ("level", "layer")]')"
 
 it "an autonomy entry written by hand with a recomputed hash does not load"
 personal_doc '
 pp = load_lib_module("programme_protocol")
 forged = {"level": "act"}
-adoption = dict(doc["autonomy"]["prod_deploy"]["adoption"])
+adoption = dict(doc["autonomy"]["prod_off_flag"]["adoption"])
 adoption["hash"] = pp.content_hash(forged)
 adoption["widening"] = True
 forged["adoption"] = adoption
-doc["autonomy"]["full_release"] = forged
+doc["autonomy"]["eval_waiver"] = forged
 '
-check '["propose", "plugin", [["full_release", "adoption_unverified"]]]' "$(load_personal '[loaded["autonomy"]["full_release"]["level"], loaded["autonomy"]["full_release"]["layer"], [[r["id"], r["reason"]] for r in loaded["rejected"]]]')"
-personal_doc 'del doc["autonomy"]["full_release"]'
+check '["propose", "plugin", [["eval_waiver", "adoption_unverified"]]]' "$(load_personal '[loaded["autonomy"]["eval_waiver"]["level"], loaded["autonomy"]["eval_waiver"]["layer"], [[r["id"], r["reason"]] for r in loaded["rejected"]]]')"
+personal_doc 'del doc["autonomy"]["eval_waiver"]'
 
 LOOKUP_ARGV='["trace-cli","show","{id}"]'
 it "adopt-check without a typed prompt is refused"
@@ -504,7 +520,7 @@ check '[false, [["acme/api:verified.lookup", "adoption_unverified"]]]' "$(load_p
 personal_doc 'del doc["checks"]["acme/api"]'
 
 it "the personal file keeps the adopted rule, autonomy entries and check together"
-check '[["docs-verified"], ["merge_around_gate", "prod_deploy"], ["acme/web"]]' "$(load_personal '[sorted(r for r, v in loaded["rules"].items() if v["layer"] == "personal"), sorted(a for a, v in loaded["autonomy"].items() if v["layer"] == "personal"), sorted(loaded["checks"])]')"
+check '[["docs-verified"], ["fix_other_team_code", "prod_off_flag"], ["acme/web"]]' "$(load_personal '[sorted(r for r, v in loaded["rules"].items() if v["layer"] == "personal"), sorted(a for a, v in loaded["autonomy"].items() if v["layer"] == "personal"), sorted(loaded["checks"])]')"
 
 it "each approval journals its own kind"
 GOT="$(journal_kinds)"
@@ -526,9 +542,10 @@ doc["rules"].append(rule)
 doc["autonomy"]["merge_at_gate"] = gate
 '
 prog status
-has "rule laptop-docs: propose, requires merged, adopted on laptop" "$OUT"
+has "rule laptop-docs: " "$OUT"
+has ", requires merged, adopted on laptop" "$OUT"
 has "autonomy merge_at_gate: propose, adopted on laptop" "$OUT"
-lacks "docs-verified: act_and_tell, requires merged, adopted on" "$OUT"
+lacks "adopted on studio" "$OUT"
 personal_doc 'doc["rules"] = [r for r in doc["rules"] if r["id"] != "laptop-docs"]; del doc["autonomy"]["merge_at_gate"]'
 
 it "rules without --run and with no lease for the session is refused"

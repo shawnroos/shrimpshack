@@ -161,13 +161,34 @@
       "level": "propose"
     },
     "product_call": {
-      "level": "propose"
+      "level": "act"
     },
     "fix_other_team_code": {
       "level": "never"
     },
     "merge_around_gate": {
       "level": "never"
+    },
+    "technical_approach": {
+      "level": "act"
+    },
+    "work_sequencing": {
+      "level": "act"
+    },
+    "worker_coordination": {
+      "level": "act"
+    },
+    "tool_choice": {
+      "level": "act"
+    },
+    "optimisation_depth": {
+      "level": "act"
+    },
+    "product_scope": {
+      "level": "act"
+    },
+    "acceptance": {
+      "level": "act"
     }
   }
 }

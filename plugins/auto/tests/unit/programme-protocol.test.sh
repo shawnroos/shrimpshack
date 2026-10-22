@@ -128,17 +128,57 @@ print(a["merge_at_gate"]["level"], a["file_issue"]["level"], a["eval_backed_prer
       a["prod_deploy"]["level"], a["fix_other_team_code"]["level"], a["merge_around_gate"]["level"], len(a))
 EOF
 )"
-check "act act act_and_tell propose never never 12" "$OUT"
+check "act act act_and_tell propose never never 19" "$OUT"
 
-it "two change kinds on one item union their deliverables in a fixed order"
+it "the defaults give the seven kinds the PM decides today, and product calls, the act level"
 OUT="$(run_py <<'EOF'
-m = pp.match(pp.load(), ["shared_package", "flagged_code"])
-print(m["matched_rule"], m["deliverables"], m["autonomy"])
+a = pp.load()["autonomy"]
+print([a[k]["level"] for k in ("technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
+                                "optimisation_depth", "product_scope", "acceptance", "product_call")])
 EOF
 )"
-check "['flagged-code', 'shared-package'] ['merged', 'flagged', 'verified', 'released', 'recorded'] act_and_tell" "$OUT"
+check "['act', 'act', 'act', 'act', 'act', 'act', 'act', 'act']" "$OUT"
 
-for FIELD in id applies_when requires evidence_bar caveat autonomy added_by added_at why; do
+it "every decision kind that is not protected has an Authority row after load"
+OUT="$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+a = pp.load()["autonomy"]
+print([k for k in pd.DECISION_KINDS if k not in a and k not in pp.PROTECTED_KINDS], len(pd.DECISION_KINDS) > 0)
+EOF
+)"
+check "[] True" "$OUT"
+
+it "two change kinds on one item union their deliverables in a fixed order, with no autonomy in the match"
+OUT="$(run_py <<'EOF'
+m = pp.match(pp.load(), ["shared_package", "flagged_code"])
+none = pp.match(pp.load(), ["infra_migration"])
+print(m["matched_rule"], m["deliverables"], "autonomy" in m, "autonomy" in none)
+EOF
+)"
+check "['flagged-code', 'shared-package'] ['merged', 'flagged', 'verified', 'released', 'recorded'] False False" "$OUT"
+
+it "the summary rows carry no autonomy"
+OUT="$(run_py <<'EOF'
+print(sorted({k for row in pp.summary(pp.load()) for k in row}))
+EOF
+)"
+check "['adopted_on', 'id', 'layer', 'requires', 'status']" "$OUT"
+
+fresh
+it "a rule with no autonomy validates as a proposal and loads, while an unknown key still fails"
+OUT="$(run_py <<'EOF'
+r = rule("docs-verified", ["evals_or_docs"], ["verified"])
+del r["autonomy"]
+bad = dict(r, severity="high")
+personal({"rules": [adopt(r)]})
+p = pp.load(prompt_lookup=lookup)
+print(pp.validate_proposal(r)["ok"], pp.validate_proposal(bad)["reason"], p["rejected"],
+      p["rules"]["docs-verified"]["layer"], "autonomy" in p["rules"]["docs-verified"])
+EOF
+)"
+check "True unknown_key [] personal False" "$OUT"
+
+for FIELD in id applies_when requires evidence_bar caveat added_by added_at why; do
   fresh
   it "a personal rule missing ${FIELD} is rejected and the reason names the field"
   OUT="$(run_py "$FIELD" <<'EOF'
@@ -252,14 +292,14 @@ EOF
 check "['personal/None/unknown_key'] False" "$OUT"
 
 fresh
-it "a personal rule may narrow a default rule's autonomy with a plain adoption"
+it "a personal rule carrying a legacy autonomy wider than the default loads, and the merged rule drops it"
 OUT="$(run_py <<'EOF'
-personal({"rules": [adopt(rule("fix-only", ["fix_only"], ["merged", "verified", "recorded"], autonomy="propose"))]})
+personal({"rules": [adopt(rule("shared-blocker", ["shared_blocker"], ["debugged"], autonomy="act"))]})
 p = pp.load(prompt_lookup=lookup)
-print(p["rules"]["fix-only"]["autonomy"], p["rules"]["fix-only"]["layer"], p["rejected"])
+print(p["rules"]["shared-blocker"]["layer"], "autonomy" in p["rules"]["shared-blocker"], p["rejected"])
 EOF
 )"
-check "propose personal []" "$OUT"
+check "personal False []" "$OUT"
 
 fresh
 run_py <<'EOF' >/dev/null
@@ -267,13 +307,13 @@ seed("widen", {"autonomy": {"fix_other_team_code": adopt({"level": "act"}, targe
                "rules": [adopt(rule("shared-blocker", ["shared_blocker"], ["debugged"], autonomy="act"))]})
 EOF
 REPO_W="$(publish widen)"
-it "a project layer that widens fixing another team's code from never to act, unmarked, is rejected"
+it "a project layer that widens fixing another team's code from never to act, unmarked, is rejected; its rule loads"
 OUT="$(run_py "$REPO_W" <<'EOF'
 p = pp.load(repo_path=args[0], prompt_lookup=lookup)
-print(reasons(p), p["autonomy"]["fix_other_team_code"]["level"], p["rules"]["shared-blocker"]["autonomy"])
+print(reasons(p), p["autonomy"]["fix_other_team_code"]["level"], p["rules"]["shared-blocker"]["layer"])
 EOF
 )"
-check "['project/fix_other_team_code/widening_unmarked', 'project/shared-blocker/widening_unmarked'] never never" "$OUT"
+check "['project/fix_other_team_code/widening_unmarked'] never project" "$OUT"
 
 run_py <<'EOF' >/dev/null
 seed("widen2", {"autonomy": {"fix_other_team_code": adopt({"level": "act"}, widening=True, target="autonomy:fix_other_team_code")},
@@ -283,10 +323,199 @@ REPO_W2="$(publish widen2)"
 it "the same widening with a widening adoption record loads"
 OUT="$(run_py "$REPO_W2" <<'EOF'
 p = pp.load(repo_path=args[0], prompt_lookup=lookup)
-print(p["rejected"], p["autonomy"]["fix_other_team_code"]["level"], p["autonomy"]["fix_other_team_code"]["layer"], p["rules"]["shared-blocker"]["autonomy"])
+print(p["rejected"], p["autonomy"]["fix_other_team_code"]["level"], p["autonomy"]["fix_other_team_code"]["layer"], p["rules"]["shared-blocker"]["layer"])
 EOF
 )"
-check "[] act project act" "$OUT"
+check "[] act project project" "$OUT"
+
+fresh
+it "Covers AE5. The U1 personal protocol loads with its adopted rule verified; only the protected autonomy entry is refused"
+OUT="$(run_py "$AUTO_ROOT" <<'EOF'
+fix = os.path.join(args[0], "tests", "fixtures", "agreement-legacy")
+manifest = json.load(open(os.path.join(fix, "manifest.json")))
+doc = json.load(open(os.path.join(fix, "personal", "protocol.json")))
+personal(doc)
+entry = doc["autonomy"]["prod_deploy"]
+rule_doc = doc["rules"][0]
+def fixture_lookup(run_id, prompt_id):
+    for raw in (rule_doc, entry):
+        a = raw["adoption"]
+        if (a["run_id"], a["prompt_id"]) == (run_id, prompt_id):
+            target = pp.target_of("rules", raw["id"]) if "id" in raw else pp.target_of("autonomy", "prod_deploy")
+            return {"origin": "typed", "text_hash": a["prompt_hash"], "approved": [pp.approval_key(target, a["hash"])]}
+    return None
+os.environ["CLAUDE_AUTO_MACHINE"] = manifest["machine"]
+p = pp.load(prompt_lookup=fixture_lookup)
+r = p["rules"][manifest["personal"]["rule"]]
+print(reasons(p), r["layer"], r["adopted_on"], "autonomy" in r, p["autonomy"]["prod_deploy"]["layer"])
+EOF
+)"
+check "['personal/prod_deploy/protected_kind'] personal None False plugin" "$OUT"
+
+OLD="${WORK}/base-snapshot"
+mkdir -p "${OLD}/lib" "${OLD}/protocol"
+git -C "$AUTO_ROOT" show 33dd8573:plugins/auto/lib/programme_protocol.py > "${OLD}/lib/programme_protocol_base.py"
+git -C "$AUTO_ROOT" show 33dd8573:plugins/auto/protocol/defaults.json > "${OLD}/protocol/defaults.json"
+export OLD
+OLD_LOAD='
+import importlib.util
+spec = importlib.util.spec_from_file_location("programme_protocol_base", os.path.join(os.environ["OLD"], "lib", "programme_protocol_base.py"))
+old = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(old)
+'
+
+fresh
+it "the legacy autonomy a new adoption writes is the overridden default rule's level, or propose for a new id"
+OUT="$(run_py <<'EOF'
+print(pp.legacy_autonomy("fix-only"), pp.legacy_autonomy("shared-blocker"), pp.legacy_autonomy("shared-package"), pp.legacy_autonomy("docs-verified"))
+EOF
+)"
+check "act never act_and_tell propose" "$OUT"
+
+it "rules adopted by the new code load through today's validator and merge path with no rejection"
+OUT="$(run_py "$OLD_LOAD" <<'EOF'
+exec(args[0])
+rules = []
+for rid, kinds, req in (("shared-blocker", ["shared_blocker"], ["debugged"]),
+                        ("product-question", ["product_question"], ["handed"]),
+                        ("docs-verified", ["evals_or_docs"], ["verified"])):
+    r = rule(rid, kinds, req)
+    del r["autonomy"]
+    r["autonomy"] = pp.legacy_autonomy(rid)
+    rules.append(adopt(r))
+personal({"rules": rules})
+same = old.load(prompt_lookup=lookup)
+os.environ["CLAUDE_AUTO_MACHINE"] = "laptop"
+other = old.load(prompt_lookup=lookup)
+print(same["rejected"], other["rejected"], sorted(r for r in same["rules"] if same["rules"][r]["layer"] == "personal"))
+EOF
+)"
+check "[] [] ['docs-verified', 'product-question', 'shared-blocker']" "$OUT"
+
+it "today's validator, as snapshotted, rejects a rule with no autonomy and one that widens past its default"
+OUT="$(run_py "$OLD_LOAD" <<'EOF'
+exec(args[0])
+bare = rule("docs-verified", ["evals_or_docs"], ["verified"])
+del bare["autonomy"]
+personal({"rules": [adopt(bare), adopt(rule("shared-blocker", ["shared_blocker"], ["debugged"], autonomy="act"))]})
+print(reasons(old.load(prompt_lookup=lookup)))
+EOF
+)"
+check "['personal/docs-verified/missing_field', 'personal/shared-blocker/widening_unmarked']" "$OUT"
+
+fresh
+it "a hand-edited personal rule that drops a requires entry is listed as rejected"
+OUT="$(run_py <<'EOF'
+r = adopt(rule("fix-only", ["fix_only"], ["merged", "verified", "recorded"]))
+r["requires"] = ["merged", "recorded"]
+del r["evidence_bar"]["verified"]
+personal({"rules": [r]})
+p = pp.load(prompt_lookup=lookup)
+print(reasons(p), p["rules"]["fix-only"]["layer"], p["rules"]["fix-only"]["requires"])
+EOF
+)"
+check "['personal/fix-only/adoption_unverified'] plugin ['merged', 'verified', 'recorded']" "$OUT"
+
+fresh
+it "Covers AE1. A hand-edited personal entry narrowing prod_off_flag from act to propose applies with no typed prompt"
+OUT="$(run_py <<'EOF'
+personal({"autonomy": {"prod_off_flag": {"level": "propose"}}})
+p = pp.load(prompt_lookup=lookup)
+a = p["autonomy"]["prod_off_flag"]
+print(p["rejected"], a["level"], a["layer"], a["adopted_on"], a["verified"],
+      [(n["kind"], n["id"], n["reason"]) for n in p["notices"]])
+EOF
+)"
+check "[] propose personal None False [('unverified_narrowing', 'prod_off_flag', 'not_adopted')]" "$OUT"
+
+it "a narrowing whose adoption no longer matches its hash also applies, and a verified entry is marked verified"
+OUT="$(run_py <<'EOF'
+stale = adopt({"level": "act_and_tell"}, target="autonomy:file_issue")
+stale["level"] = "never"
+personal({"autonomy": {"file_issue": stale,
+                       "merge_at_gate": adopt({"level": "propose"}, target="autonomy:merge_at_gate")}})
+p = pp.load(prompt_lookup=lookup)
+a, b = p["autonomy"]["file_issue"], p["autonomy"]["merge_at_gate"]
+print(p["rejected"], a["level"], a["verified"], b["level"], b["verified"], p["autonomy"]["tool_choice"]["verified"])
+EOF
+)"
+check "[] never False propose True True" "$OUT"
+
+it "a hand-edited entry widening a kind past the plugin default is rejected"
+OUT="$(run_py <<'EOF'
+personal({"autonomy": {"eval_waiver": {"level": "act"}, "canary_deploy": {"level": "never"}}})
+p = pp.load(prompt_lookup=lookup)
+print(reasons(p), p["autonomy"]["eval_waiver"]["level"], p["autonomy"]["eval_waiver"]["layer"], "canary_deploy" in p["autonomy"], p["notices"])
+EOF
+)"
+check "['personal/canary_deploy/not_adopted', 'personal/eval_waiver/not_adopted'] propose plugin False []" "$OUT"
+
+it "a hand-edited rule or check is still rejected, even when it only narrows"
+OUT="$(run_py <<'EOF'
+personal({"rules": [rule("fix-only", ["fix_only"], ["merged", "verified", "recorded", "flagged"])],
+          "checks": {"acme/web": {"verified.lookup": {"argv": ["dd-trace", "{id}"]}}}})
+p = pp.load(repo_key="acme/web", prompt_lookup=lookup)
+print(reasons(p), p["rules"]["fix-only"]["layer"], p["checks"])
+EOF
+)"
+check "['personal/acme/web:verified.lookup/check_not_adopted', 'personal/fix-only/not_adopted'] plugin {}" "$OUT"
+
+fresh
+run_py <<'EOF' >/dev/null
+seed("protected", {"autonomy": {"prod_deploy": adopt({"level": "act"}, widening=True, target="autonomy:prod_deploy"),
+                                "spend_over_cap": {"level": "never"}}})
+EOF
+REPO_PROT="$(publish protected)"
+it "Covers AE3. A project-layer entry setting prod_deploy is refused at load and listed as rejected"
+OUT="$(run_py "$REPO_PROT" <<'EOF'
+p = pp.load(repo_path=args[0], prompt_lookup=lookup)
+print(reasons(p), p["autonomy"]["prod_deploy"]["level"], p["autonomy"]["prod_deploy"]["layer"], p["autonomy"]["spend_over_cap"]["layer"])
+EOF
+)"
+check "['project/prod_deploy/protected_kind', 'project/spend_over_cap/protected_kind'] propose plugin plugin" "$OUT"
+
+it "a personal entry setting any protected kind is refused at load"
+OUT="$(run_py <<'EOF'
+personal({"autonomy": {k: adopt({"level": "never"}, target="autonomy:" + k) for k in pp.PROTECTED_KINDS}})
+p = pp.load(prompt_lookup=lookup)
+print(reasons(p), "denied_operation" in p["autonomy"])
+EOF
+)"
+check "['personal/denied_operation/protected_kind', 'personal/full_release/protected_kind', 'personal/merge_around_gate/protected_kind', 'personal/prod_deploy/protected_kind', 'personal/spend_over_cap/protected_kind'] False" "$OUT"
+
+fresh
+run_py <<'EOF' >/dev/null
+seed("tool-act", {"autonomy": {"tool_choice": adopt({"level": "act"}, target="autonomy:tool_choice"),
+                               "file_issue": adopt({"level": "propose"}, target="autonomy:file_issue")},
+                  "checks": {"verified.lookup": adopt({"argv": ["act-lookup", "{id}"]}, target="check:acme/act:verified.lookup")}})
+seed("tool-propose", {"autonomy": {"tool_choice": adopt({"level": "propose"}, target="autonomy:tool_choice"),
+                                   "fix_other_team_code": adopt({"level": "act"}, target="autonomy:fix_other_team_code")}})
+EOF
+REPO_TA="$(publish tool-act)"
+REPO_TP="$(publish tool-propose)"
+it "two repos whose project layers set tool_choice to act and propose merge to propose, in either order"
+OUT="$(run_py "$REPO_TA" "$REPO_TP" <<'EOF'
+a, b = args
+one = pp.load(repos=[(a, "acme/act"), (b, "acme/propose")], prompt_lookup=lookup)
+two = pp.load(repos=[b, (a, "acme/act")], prompt_lookup=lookup)
+for p in (one, two):
+    t = p["autonomy"]["tool_choice"]
+    print(t["level"], t["layer"], p["autonomy"]["file_issue"]["level"], p["autonomy"]["fix_other_team_code"]["level"],
+          reasons(p), [l["layer"] for l in p["layers"]])
+print(one["checks"]["acme/act"]["verified.lookup"]["argv"][0])
+EOF
+)"
+check "propose project propose never ['project/fix_other_team_code/widening_unmarked'] ['plugin', 'personal', 'project', 'project']
+propose project propose never ['project/fix_other_team_code/widening_unmarked'] ['plugin', 'personal', 'project', 'project']
+act-lookup" "$OUT"
+
+it "a single repo path still loads its project layer alone"
+OUT="$(run_py "$REPO_TA" <<'EOF'
+p = pp.load(repo_path=args[0], repo_key="acme/act", prompt_lookup=lookup)
+print(p["autonomy"]["tool_choice"]["level"], p["autonomy"]["file_issue"]["level"], p["rejected"])
+EOF
+)"
+check "act propose []" "$OUT"
 
 fresh
 run_py <<'EOF' >/dev/null
@@ -537,23 +766,23 @@ check "[] laptop []" "$OUT"
 
 it "a personal autonomy entry adopted on another machine that widens is rejected as widening_not_adopted_here"
 OUT="$(run_py <<'EOF'
-personal({"autonomy": {"merge_around_gate": adopt({"level": "act"}, machine="laptop", widening=True, target="autonomy:merge_around_gate"),
+personal({"autonomy": {"fix_other_team_code": adopt({"level": "act"}, machine="laptop", widening=True, target="autonomy:fix_other_team_code"),
                         "canary_deploy": adopt({"level": "act"}, machine="laptop", widening=True, target="autonomy:canary_deploy")}})
 p = pp.load(prompt_lookup=lookup)
-print(reasons(p), p["autonomy"]["merge_around_gate"]["level"], p["autonomy"]["merge_around_gate"]["layer"], "canary_deploy" in p["autonomy"])
+print(reasons(p), p["autonomy"]["fix_other_team_code"]["level"], p["autonomy"]["fix_other_team_code"]["layer"], "canary_deploy" in p["autonomy"])
 EOF
 )"
-check "['personal/canary_deploy/widening_not_adopted_here', 'personal/merge_around_gate/widening_not_adopted_here'] never plugin False" "$OUT"
+check "['personal/canary_deploy/widening_not_adopted_here', 'personal/fix_other_team_code/widening_not_adopted_here'] never plugin False" "$OUT"
 
-it "a personal rule adopted on another machine that widens is rejected, with or without the widening mark"
+it "a personal rule adopted on another machine loads whatever its legacy autonomy or widening mark"
 OUT="$(run_py <<'EOF'
 personal({"rules": [adopt(rule("shared-blocker", ["shared_blocker"], ["debugged"], autonomy="act"), machine="laptop", widening=True),
-                    adopt(rule("product-question", ["product_question"], ["debugged"], autonomy="act"), machine="laptop")]})
+                    adopt(rule("product-question", ["product_question"], ["handed"], autonomy="act"), machine="laptop")]})
 p = pp.load(prompt_lookup=lookup)
-print(reasons(p), p["rules"]["shared-blocker"]["autonomy"], p["rules"]["product-question"]["autonomy"])
+print(p["rejected"], p["rules"]["shared-blocker"]["adopted_on"], p["rules"]["product-question"]["adopted_on"])
 EOF
 )"
-check "['personal/product-question/widening_not_adopted_here', 'personal/shared-blocker/widening_not_adopted_here'] never propose" "$OUT"
+check "[] laptop laptop" "$OUT"
 
 it "a personal autonomy entry adopted on another machine that narrows loads, marked with its machine"
 OUT="$(run_py <<'EOF'
@@ -568,16 +797,16 @@ check "[] propose personal laptop" "$OUT"
 fresh
 run_py <<'EOF' >/dev/null
 seed("foreign", {"rules": [adopt(rule("flagged-code", ["flagged_code"], ["merged"]), machine="nowhere")],
-                 "autonomy": {"merge_around_gate": adopt({"level": "act"}, machine="nowhere", widening=True, target="autonomy:merge_around_gate")}})
+                 "autonomy": {"fix_other_team_code": adopt({"level": "act"}, machine="nowhere", widening=True, target="autonomy:fix_other_team_code")}})
 EOF
 REPO_F="$(publish foreign)"
 it "a project rule and autonomy entry adopted on another machine are rejected"
 OUT="$(run_py "$REPO_F" <<'EOF'
 p = pp.load(repo_path=args[0], prompt_lookup=lookup)
-print(reasons(p), p["rules"]["flagged-code"]["requires"], p["autonomy"]["merge_around_gate"]["level"])
+print(reasons(p), p["rules"]["flagged-code"]["requires"], p["autonomy"]["fix_other_team_code"]["level"])
 EOF
 )"
-check "['project/flagged-code/not_adopted_here', 'project/merge_around_gate/not_adopted_here'] ['merged', 'flagged', 'verified', 'recorded'] never" "$OUT"
+check "['project/fix_other_team_code/not_adopted_here', 'project/flagged-code/not_adopted_here'] ['merged', 'flagged', 'verified', 'recorded'] never" "$OUT"
 
 fresh
 it "a check whose argv changed after adoption, with its hash recomputed and a real typed prompt, is rejected"
@@ -594,15 +823,15 @@ check "['personal/acme/web:verified.lookup/adoption_unverified'] ['no approval']
 
 it "an approval for one autonomy action or check does not load the same content under another"
 OUT="$(run_py <<'EOF'
-gate = adopt({"level": "act"}, widening=True, target="autonomy:merge_around_gate")
+gate = adopt({"level": "act"}, widening=True, target="autonomy:fix_other_team_code")
 look = adopt({"argv": ["dd-trace", "{id}"]}, target="check:acme/web:verified.lookup")
-personal({"autonomy": {"merge_around_gate": gate, "full_release": dict(gate)},
+personal({"autonomy": {"fix_other_team_code": gate, "eval_waiver": dict(gate)},
           "checks": {"acme/web": {"verified.lookup": look}, "acme/api": {"verified.lookup": dict(look)}}})
 p = pp.load(repo_key="acme/web", prompt_lookup=lookup)
-print(reasons(p), p["autonomy"]["merge_around_gate"]["level"], p["autonomy"]["full_release"]["level"], sorted(p["checks"]))
+print(reasons(p), p["autonomy"]["fix_other_team_code"]["level"], p["autonomy"]["eval_waiver"]["level"], sorted(p["checks"]))
 EOF
 )"
-check "['personal/acme/api:verified.lookup/adoption_unverified', 'personal/full_release/adoption_unverified'] act propose ['acme/web']" "$OUT"
+check "['personal/acme/api:verified.lookup/adoption_unverified', 'personal/eval_waiver/adoption_unverified'] act propose ['acme/web']" "$OUT"
 
 it "a rule rewritten after adoption, with its hash recomputed and a real typed prompt, is rejected"
 OUT="$(run_py <<'EOF'
