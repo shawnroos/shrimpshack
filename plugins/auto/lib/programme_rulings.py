@@ -28,14 +28,11 @@ pc = programme_context
 ENDINGS = ("fulfilled", "withdrawn")
 CORRECTION_EFFECTS = ("grant", "restrict")
 ANCHOR_ROWS = {"item_handed": "ask", "pm_decided": "decision_id", "handed_answered": "decision_id"}
+NAMED_WHEN_NEW = ("grant", "decided")
 
 
 class RulingError(programme_decisions.DecisionError):
     pass
-
-
-def _dict(value) -> dict:
-    return value if isinstance(value, dict) else {}
 
 
 def row_index(rows, kind, key, value):
@@ -140,6 +137,14 @@ def _named(target):
     return target if target == pc.PROGRAMME_SCOPE else pc._item_options(target)
 
 
+# The PM picks a Ruling's id, so a prompt naming only the id proves nothing about a new grant or decided
+# Ruling; Shawn's words must also name its kind and items. A new restrict only narrows the PM.
+def _names_needed(content, delta, new) -> list:
+    if new and content.get("effect") in NAMED_WHEN_NEW:
+        return [content["kind"]] + [_named(t) for t in content.get("applies_to") or []]
+    return [_named(t) for t in pc._dict(delta).get("names", pc._dict(delta).get("added")) or []]
+
+
 # A carried Ruling arrives with no items, so every item it is given is new here and must be named by
 # Shawn's prompt, whatever its effect; accept-context reads the same names.
 def _carried_delta(content) -> dict:
@@ -160,10 +165,10 @@ def _record(host, programme, cid, content, prompt, *, correction=None) -> dict:
            "applies_to": content["applies_to"]}
     if current is not None and pc._content(current, pc.RULING_KEYS) == content:
         return dict(out, rev=current["rev"], state="accepted", unchanged=True)
-    carried = _dict(revisions[-1]).get("carried") if revisions and current is None else None
+    carried = pc._dict(revisions[-1]).get("carried") if revisions and current is None else None
     delta = _carried_delta(content) if carried else pc.ruling_delta(current, content)
     if prompt and not correction:
-        host.require_named(prompt, cid, *[_named(t) for t in (delta or {}).get("names") or [] if carried])
+        host.require_named(prompt, cid, *_names_needed(content, delta if carried else None, current is None))
     revisions = ctx["decisions"].setdefault(cid, revisions)
     revision = pc._append(revisions, content, prompt, accept=bool(prompt) and not (delta and delta["wider"]),
                           delta=delta)
@@ -171,14 +176,15 @@ def _record(host, programme, cid, content, prompt, *, correction=None) -> dict:
     if carried:
         revision["carried"] = carried
     if revision["state"] == "accepted":
-        _activate(host, programme, revision, prompt, baseline=_dict(current).get("baseline"))
+        _activate(host, programme, revision, prompt, baseline=pc._dict(current).get("baseline"))
     return dict(out, rev=revision["rev"], state=revision["state"], unchanged=False, delta=delta,
                 source=revision["source"], baseline=revision["baseline"])
 
 
 def _check_prompt_unused(ctx, prompt_id) -> None:
     for rid, revisions in ctx["decisions"].items():
-        if any(r.get("replies_to") and _dict(r.get("source")).get("prompt_id") == prompt_id for r in revisions):
+        if any(r.get("replies_to") and pc._dict(r.get("source")).get("prompt_id") == prompt_id
+               for r in revisions):
             raise RulingError(f"prompt {prompt_id!r} already drove correction {rid!r}; one typed prompt makes "
                               "one correction")
 
@@ -282,9 +288,10 @@ def _h_accept_context(host, argv):
         revision = pc.pending(ctx[kind].get(cid)) if kind else None
         if revision is None:
             raise record.RecordError(f"no pending revision of {cid!r} to accept")
-        delta = _dict(revision.get("delta"))
-        added = delta.get("names", delta.get("added")) or []
-        host.require_named(prompt, cid, *[pc._item_options(t) if t != pc.PROGRAMME_SCOPE else t for t in added])
+        if revision.get("carried") and not revision.get("applies_to"):
+            raise RulingError(f"bind carried Ruling {cid} with record-ruling naming its items")
+        new = kind == "decisions" and pc.in_force(ctx[kind][cid]) is None
+        host.require_named(prompt, cid, *_names_needed(revision, revision.get("delta"), new))
         pc._accept(ctx[kind][cid], revision, prompt)
         if revision.get("effect") in pc.EFFECTS:
             _activate(host, programme, revision, prompt)
@@ -302,17 +309,19 @@ _SPECS = (
      "an unknown kind or effect; a grant or decided Ruling of a protected kind; an end date that is not ISO "
      "UTC time; a revision that changes the kind or effect, or revises a closed Ruling or a kind-less "
      "decision record; a change to a decided Ruling without a typed prompt; a prompt that is not typed or does "
-     "not name the id. Without a prompt it waits for accept-context. A widening (a grant that adds items, "
-     "drops a limit or ends later; a restrict that loses items, drops a limit or ends sooner) waits too, while "
-     "the prior revision stays in force. With --replies-to the anchor gives the item and kind, the prompt "
-     "must come after the anchor and drive no other correction, and the Ruling applies at once with a notice."),
+     "not name the id, or for a new grant or decided Ruling its kind and every item too. Without a prompt it "
+     "waits for accept-context. A widening (a grant that adds items, drops a limit or ends later; a restrict "
+     "that loses items, drops a limit or ends sooner) waits too, while the prior revision stays in force. "
+     "With --replies-to the anchor gives the item and kind, the prompt must come after the anchor and drive "
+     "no other correction, and the Ruling applies at once with a notice."),
     ("close-ruling", _h_close_ruling,
      "<id> --as fulfilled|withdrawn [--why <text>] [--prompt <id>] [--origin pm|ui] [--run <id>]",
      "no Ruling in force or pending; --as fulfilled without --why; --as withdrawn, or closing a restrict or a decided "
      "Ruling, without a typed prompt naming the id. Closing as fulfilled never counts as a beat."),
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
      "no pending revision; a prompt that is not typed, came from a legacy journal or an obsolete writer, or "
-     "does not name the id and every target the revision adds (for a Ruling, every item it gives the PM). "
+     "does not name the id and every target the revision adds (for a Ruling, every item it gives the PM, and "
+     "for a new grant or decided Ruling its kind); a carried Ruling that has no items yet. "
      "A grant that becomes active records the Authority level for its kind as its baseline."),
 )
 

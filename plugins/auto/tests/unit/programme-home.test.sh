@@ -458,7 +458,7 @@ CODES=""
 "$PY" "$PROGPY" add-item linear:AI-7 --title "Crop" --kind fix_only >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" amend-term stop_rule never_stop --prompt "$(old_prompt 'stop rule never_stop')" >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" record-ruling r-small --kind technical_approach --effect decided --scope "keep PRs small" \
-  --prompt "$(old_prompt 'r-small: keep PRs small')" >/dev/null 2>&1; CODES="${CODES}$?"
+  --prompt "$(old_prompt 'r-small: keep PRs small, technical approach across the programme')" >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" log-decision linear:AI-7 --kind technical_approach --silent --why "smaller" >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" status --json >/dev/null 2>&1; CODES="${CODES}$?"
 check "00000 ['accepted', 'terms']" "${CODES} $(old_agreement_keys)"

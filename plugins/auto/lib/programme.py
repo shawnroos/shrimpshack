@@ -159,7 +159,9 @@ def active_rulings(programme, now=None) -> list:
         if not pc.is_ruling(revisions) or pc.ruling_state(revisions, when) != "active":
             continue
         # merge-item leaves a Ruling's targets as written; without this an old id loses its waiver after a merge.
-        targets = pc.canonical_targets(items, current, (pc.PROGRAMME_SCOPE,))
+        # Only a record with no applies_to at all is programme-wide; an empty list covers nothing, as at the gate.
+        default = (pc.PROGRAMME_SCOPE,) if current.get("applies_to") is None else ()
+        targets = pc.canonical_targets(items, current, default)
         targets = [t for t in targets if t == pc.PROGRAMME_SCOPE or _item_open(programme, t)]
         if not targets:
             continue

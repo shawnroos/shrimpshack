@@ -73,7 +73,7 @@ from this session's lease.
    | Shawn's answer | Verb |
    | --- | --- |
    | Ship or decline a handed item | `P answer-handed <item> --choice ship\|decline --prompt <id>` (ship also needs `--kind <change-kind>`) |
-   | A standing order or decision ("always...", "until...") | `P record-ruling <id> --effect decided\|grant\|restrict --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>] --prompt <id>` |
+   | A standing order or decision ("always...", "until...") | `P record-ruling <id> --effect decided\|grant\|restrict --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>] --prompt <id>`; for a new grant or decided Ruling his prompt must name the id, the kind and every item (or "programme"), otherwise it waits for `accept-context` |
    | Withdraw a Ruling | `P close-ruling <ruling-id> --as withdrawn --prompt <id>` |
    | Accept a proposed term change | `P amend-term <key> <proposed value> --prompt <id>` (add `--seconds <n>` for a fixed cadence) |
    | Add or turn off a tool of record | `P amend-term tools_of_record <list> --prompt <id>`, where the list holds the tools that stay on |

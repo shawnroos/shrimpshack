@@ -312,6 +312,16 @@ it "an act-level kind still records"
 prog log-decision programme --kind merge_at_gate --silent --why "gate is green"
 check '0 "merge_at_gate"' "$CODE $(field 'prog["decisions"][-1]["kind"]')"
 
+it "a restrict of a kind on one item also stops the PM logging that kind against the programme"
+P_RM="$(prompt typed 'r-merges: I decide merges for linear:AI-1')"
+prog record-ruling r-merges --kind merge_at_gate --effect restrict --scope "Shawn merges AI-1" \
+  --applies-to linear:AI-1 --prompt "$P_RM"
+BEFORE="$(decision_count)"
+prog log-decision programme --kind merge_at_gate --silent --why "gate is green"
+check "1 hand-item ${BEFORE}" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+P_RM2="$(prompt typed 'withdraw r-merges')"
+prog close-ruling r-merges --as withdrawn --prompt "$P_RM2"
+
 edit 'rec["programme"]["agreement"].pop("contract_version")'
 prog add-item linear:AI-7 --title "Unstamped product ask" --kind product_question
 it "on an unstamped programme a non-product kind on a product question records without refusing"
@@ -378,7 +388,7 @@ it "log-decision no longer takes --repo as the source of the project layer"
 prog log-decision linear:AI-20 --kind tool_choice --silent --why x --repo "$REPO_ACT"
 check "2 unknown option --repo" "$CODE $(printf '%s' "$OUT" | grep -o 'unknown option --repo' | head -1)"
 
-P_GRANT="$(prompt typed 'r-tools: you pick the tools for linear:AI-21 yourself')"
+P_GRANT="$(prompt typed 'r-tools: tool choice for linear:AI-21 is yours')"
 prog record-ruling r-tools --kind tool_choice --effect grant --scope "PM picks tools" \
   --applies-to linear:AI-21 --prompt "$P_GRANT"
 it "a grant Ruling on tool_choice records with the act baseline of the item's repo"

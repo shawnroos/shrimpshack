@@ -314,7 +314,7 @@ print(sum(1 for r in pj.read(args[0]) if r.get("kind") == "prompt"))
 EOF
 }
 
-P_DEC="$(typed "record browser-first: browser acceptance first, no Linux work")"
+P_DEC="$(typed "record browser-first: technical approach for AI-7, browser acceptance first, no Linux work")"
 prog record-ruling browser-first --effect decided --kind technical_approach --scope "browser acceptance first" \
   --reason "Shawn wants the browser path proven before anything else" --limit "no Linux work" \
   --applies-to linear:AI-7 --prompt "$P_DEC"

@@ -125,7 +125,7 @@ for item in herdr:a herdr:b herdr:c herdr:d herdr:m1 herdr:m2; do
 done
 
 # ── active and pending ────────────────────────────────────────────────────
-P1="$(prompt 'r-tools: you pick the tools for herdr:a and herdr:b yourself')"
+P1="$(prompt 'r-tools: you pick the tools for herdr:a and herdr:b yourself, tool choice is yours')"
 it "a Ruling recorded with a typed prompt is active"
 prog record-ruling r-tools --kind tool_choice --effect grant --scope "PM picks tools" \
   --applies-to herdr:a --applies-to herdr:b --prompt "$P1" --run "$RUN"
@@ -133,7 +133,7 @@ check "0 accepted active" "$CODE $(pyget "$OUT" 'd["state"]') $(ruling_state r-t
 
 it "the Ruling keeps Shawn's words, its kind and its effect"
 REV="$(pyget "$(ctx)" "d['decisions']['r-tools']['in_force']")"
-check "r-tools: you pick the tools for herdr:a and herdr:b yourself tool_choice grant" \
+check "r-tools: you pick the tools for herdr:a and herdr:b yourself, tool choice is yours tool_choice grant" \
   "$(pyget "$REV" 'd["quote"]') $(pyget "$REV" 'd["kind"]') $(pyget "$REV" 'd["effect"]')"
 
 it "a Ruling recorded without a typed prompt is pending"
@@ -143,6 +143,80 @@ check "0 pending_acceptance pending" "$CODE $(pyget "$OUT" 'd["state"]') $(rulin
 
 it "a pending Ruling is not in the gate's view"
 check "" "$(rulings_for herdr:a work_sequencing)"
+
+state_of() { pyget "$(ctx)" "((d['decisions'].get('$1') or {}).get('state'))"; }
+
+# ── a first grant or decided Ruling names its kind and items ──────────────
+it "a first grant whose prompt names only its id is refused and does not bind"
+P_BARE="$(prompt 'r-new yes go ahead')"
+prog record-ruling r-new --kind tool_choice --effect grant --scope "PM picks tools" --applies-to herdr:c \
+  --prompt "$P_BARE" --run "$RUN"
+check "nonzero inactive " "$([ "$CODE" -ne 0 ] && echo nonzero) $([ "$(state_of r-new)" != active ] && echo inactive) $(rulings_for herdr:c tool_choice)"
+has "tool_choice" "$OUT"
+
+it "a first grant whose prompt names its id, kind and items binds"
+P_FULL="$(prompt 'r-new: tool choice on herdr:c is yours')"
+prog record-ruling r-new --kind tool_choice --effect grant --scope "PM picks tools" --applies-to herdr:c \
+  --prompt "$P_FULL" --run "$RUN"
+check "0 accepted r-new:grant:herdr:c:act" "$CODE $(pyget "$OUT" 'd["state"]') $(rulings_for herdr:c tool_choice)"
+
+it "a first decided eval_waiver whose prompt names only its id is refused"
+P_WV="$(prompt 'r-wv yes')"
+prog record-ruling r-wv --kind eval_waiver --effect decided --scope "no eval" --applies-to herdr:d \
+  --prompt "$P_WV" --run "$RUN"
+check "nonzero inactive " "$([ "$CODE" -ne 0 ] && echo nonzero) $([ "$(state_of r-wv)" != active ] && echo inactive) $(rulings_for herdr:d eval_waiver)"
+
+it "a first restrict whose prompt names only its id still binds"
+P_RS="$(prompt 'r-rs yes')"
+prog record-ruling r-rs --kind technical_approach --effect restrict --scope "Shawn accepts" --applies-to herdr:d \
+  --prompt "$P_RS" --run "$RUN"
+check "0 accepted" "$CODE $(pyget "$OUT" 'd["state"]')"
+
+it "accept-context on a first grant recorded without a prompt needs its kind and items named"
+prog record-ruling r-wait --kind work_sequencing --effect grant --scope "PM orders" --applies-to herdr:d --run "$RUN"
+P_WA1="$(prompt 'accept r-wait')"
+prog accept-context r-wait --prompt "$P_WA1" --run "$RUN"
+K1="$CODE"
+P_WA2="$(prompt 'accept r-wait: work sequencing on herdr:d')"
+prog accept-context r-wait --prompt "$P_WA2" --run "$RUN"
+check "nonzero 0 active" "$([ "$K1" -ne 0 ] && echo nonzero) $CODE $(state_of r-wait)"
+
+# ── a carried Ruling with no items, and what reads an empty applies_to ────
+it "accept-context refuses a carried Ruling that still has no items"
+run_py "$RUN" <<'EOF' >/dev/null
+rec = programme_records.load(args[0])
+revs = rec["programme"]["context"]["decisions"].setdefault("r-car", [])
+pc._append(revs, {"scope": "carried", "reason": None, "limits": [], "applies_to": [], "requirements": [],
+                  "kind": "optimisation_depth", "effect": "grant", "until": None}, None, accept=False, delta=None)
+revs[-1].update(quote=None, baseline=None, carried={"from": "shawn/alpha", "entry": "e1"})
+programme_records.save(args[0], rec)
+EOF
+P_CAR="$(prompt 'accept r-car')"
+prog accept-context r-car --prompt "$P_CAR" --run "$RUN"
+check "nonzero pending" "$([ "$CODE" -ne 0 ] && echo nonzero) $(state_of r-car)"
+has "bind carried Ruling r-car with record-ruling naming its items" "$OUT"
+
+it "an accepted Ruling with an empty applies_to covers nothing in the rules view, the brief and the gate"
+check "[] [] []" "$(run_py "$RUN" <<'EOF'
+programme_mod = load_lib_module("programme")
+rec = programme_records.load(args[0])
+revs = rec["programme"]["context"]["decisions"]["r-car"]
+pc._accept(revs, revs[-1], {"prompt_id": "p-x", "quote": "x"})
+programme_records.save(args[0], rec)
+programme = ph.normalize_programme(programme_records.load(args[0])["programme"])
+now = core.now_iso()
+shown = [r["id"] for r in programme_mod.active_rulings(programme, now) if r["id"] == "r-car"]
+gate = [r["id"] for t in ("herdr:a", pc.PROGRAMME_SCOPE) for r in pc.rulings_for(programme, t, "optimisation_depth", now)
+        if r["id"] == "r-car"]
+rules = [r["id"] for r in programme_mod.rules_in_force(programme_records.load(args[0]))["rulings"] if r["id"] == "r-car"]
+print(json.dumps(shown), json.dumps(gate), json.dumps(rules))
+EOF
+)"
+run_py "$RUN" <<'EOF' >/dev/null
+rec = programme_records.load(args[0])
+del rec["programme"]["context"]["decisions"]["r-car"]
+programme_records.save(args[0], rec)
+EOF
 
 it "an active grant reaches the gate as a grant for its item"
 check "r-tools:grant:herdr:a,herdr:b:act" "$(rulings_for herdr:a tool_choice)"
@@ -158,7 +232,7 @@ prog record-ruling r-bad --kind tool_choice --effect grant --scope x --until tom
 check "2" "$([ "$CODE" -ne 0 ] && echo 2)"
 
 # ── AE2: widening a grant ─────────────────────────────────────────────────
-P2="$(prompt 'r-eval: skip full eval for herdr:a')"
+P2="$(prompt 'r-eval: eval waiver, skip full eval for herdr:a')"
 prog record-ruling r-eval --kind eval_waiver --effect grant --scope "skip full eval" \
   --applies-to herdr:a --prompt "$P2" --run "$RUN"
 P3="$(prompt 'r-eval: widen it')"
@@ -204,7 +278,7 @@ it "the restrict still holds herdr:b at the gate while its loss waits"
 check "shawn restrict" "$(gate herdr:b technical_approach act)"
 
 it "extending a grant's end date is a widening and waits"
-P9="$(prompt 'r-until: herdr:d until new year')"
+P9="$(prompt 'r-until: optimisation depth on herdr:d until new year')"
 prog record-ruling r-until --kind optimisation_depth --effect grant --scope "depth" --applies-to herdr:d \
   --until 2099-01-01T00:00:00Z --prompt "$P9" --run "$RUN"
 P10="$(prompt 'r-until: longer')"
@@ -284,7 +358,7 @@ check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
 
 # ── expiry ────────────────────────────────────────────────────────────────
 it "a Ruling whose end date has passed reads as expired and leaves the gate"
-P_OLD="$(prompt 'r-old: herdr:d')"
+P_OLD="$(prompt 'r-old: acceptance on herdr:d')"
 prog record-ruling r-old --kind acceptance --effect grant --scope "old" --applies-to herdr:d \
   --until 2000-01-01T00:00:00Z --prompt "$P_OLD" --run "$RUN"
 check "expired " "$(ruling_state r-old) $(rulings_for herdr:d acceptance)"
@@ -332,7 +406,7 @@ prog close-ruling r-order --as fulfilled --why "done" --run "$RUN"
 check "nonzero active" "$([ "$CODE" -ne 0 ] && echo nonzero) $(ruling_state r-order)"
 
 # ── decided Rulings ───────────────────────────────────────────────────────
-P_DEC="$(prompt 'r-call: server-side crop on herdr:a, my call')"
+P_DEC="$(prompt 'r-call: server-side crop on herdr:a, my call on the technical approach')"
 prog record-ruling r-call --kind technical_approach --effect decided --scope "server crop" \
   --applies-to herdr:a --prompt "$P_DEC" --run "$RUN"
 it "changing a decided Ruling without a typed prompt is refused, not parked"
@@ -354,7 +428,7 @@ prog close-ruling r-call --as fulfilled --why "shipped" --prompt "$P_DEC3" --run
 check "nonzero 0 closed" "$([ "$K1" -ne 0 ] && echo nonzero) $CODE $(ruling_state r-call)"
 
 # ── merges and programme scope ────────────────────────────────────────────
-P_M="$(prompt 'r-merge: herdr:m1 tool choice is yours')"
+P_M="$(prompt 'r-merge: herdr:m1 worker coordination is yours')"
 prog record-ruling r-merge --kind worker_coordination --effect grant --scope "m1" --applies-to herdr:m1 \
   --prompt "$P_M" --run "$RUN"
 prog merge-item herdr:m1 herdr:m2 --run "$RUN"

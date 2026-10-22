@@ -379,8 +379,9 @@ def rulings_for(programme, item, kind, now) -> list:
                 or ruling_state(revisions, when) != "active":
             continue
         targets = set(canonical_targets(items, current))
-        # A programme-wide Ruling covers every item, as programme scope does for assign-item.
-        if PROGRAMME_SCOPE in targets:
+        # A programme-wide Ruling covers every item, as programme scope does for assign-item. A restrict on
+        # any item also covers the programme-level call, or logging against programme would bypass it.
+        if PROGRAMME_SCOPE in targets or (item == PROGRAMME_SCOPE and current.get("effect") == "restrict"):
             targets.add(item)
         if item in targets:
             out.append({"id": rid, "rev": current.get("rev"), "kind": kind, "effect": current.get("effect"),

@@ -187,10 +187,10 @@ has "protocol change: Done standard shared-blocker added" "$OUT"
 prog ack-protocol --run "$RUN"
 
 # ── Covers AE6: a grant Ruling that Authority now narrows ────────────────
-P_G1="$(prompt 'g1: you pick the tools for herdr:a yourself')"
+P_G1="$(prompt 'g1: you pick the tools for herdr:a yourself, tool choice')"
 prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --applies-to herdr:a \
   --prompt "$P_G1" --run "$RUN"
-P_G2="$(prompt 'g2: you pick the tools for herdr:c yourself')"
+P_G2="$(prompt 'g2: you pick the tools for herdr:c yourself, tool choice')"
 prog record-ruling g2 --kind tool_choice --effect grant --scope "PM picks tools on c" --applies-to herdr:c \
   --prompt "$P_G2" --run "$RUN"
 it "a grant recorded while Authority holds act shows no conflict"
@@ -239,6 +239,97 @@ print(" ".join(sorted(programme_records.load(args[0])["programme"]["protocol_ack
 EOF
 )"
 lacks "protocol not acknowledged" "$(rules_block)"
+
+# ── a rejected check command ──────────────────────────────────────────────
+printf '{"protocol_format": 1, "autonomy": {"prod_off_flag": {"level": "propose"}}, "checks": {"shawn/alpha": {"verified.lookup": {"argv": ["lookup", "{id}"]}}}}' > "$PERSONAL"
+it "an unadopted check command is listed as rejected under its own section name"
+has "protocol change: check command shawn/alpha:verified.lookup at the personal layer rejected (check_not_adopted)" "$(rules_block)"
+rm -f "$PERSONAL"
+
+# ── several remit repos, each with its own project layer ─────────────────
+# publish <name> [tool_choice level]: a clone whose default branch carries that project layer, if any.
+publish() {
+  local seed="${WORK}/seed-$1" clone="${WORK}/clone-$1"
+  mkdir -p "${seed}/.claude"
+  git -C "$seed" init -q -b main
+  if [ -n "${2:-}" ]; then
+    printf '{"protocol_format": 1, "autonomy": {"tool_choice": {"level": "%s"}}}' "$2" > "${seed}/.claude/auto-protocol.json"
+  else
+    : > "${seed}/README"
+  fi
+  git -C "$seed" add -A
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m seed
+  git clone -q "$seed" "$clone"
+  printf '%s' "$clone"
+}
+# republish <name> <tool_choice level>: change that project layer on the default branch and fetch it.
+republish() {
+  local seed="${WORK}/seed-$1"
+  mkdir -p "${seed}/.claude"
+  printf '{"protocol_format": 1, "autonomy": {"tool_choice": {"level": "%s"}}}' "$2" > "${seed}/.claude/auto-protocol.json"
+  git -C "$seed" add -A
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m change
+  git -C "${WORK}/clone-$1" fetch -q
+}
+remit() {
+  local body='{"spaces":["w5"],"repos":['
+  local sep=""
+  for path in "$@"; do body="${body}${sep}{\"path\":\"${path}\"}"; sep=","; done
+  OUT="$(printf '%s]}' "$body" | "$PY" "$PROG" set-remit --run "$RUN" 2>&1)"
+}
+
+REPO_ACT="$(publish act act)"
+REPO_NARROW="$(publish narrow propose)"
+REPO_OUT="$(publish outside)"
+RUN="$(run_py <<'EOF'
+print(ph.create_programme(["w5"], "sess-pm")["run"])
+EOF
+)"
+remit "$REPO_ACT" "$REPO_OUT"
+prog add-item herdr:r --title "r" --kind fix_only --repo "$REPO_ACT" --run "$RUN"
+prog add-item herdr:o --title "o" --kind fix_only --repo "$REPO_OUT" --run "$RUN"
+P_GP="$(prompt 'gp: tool choice across the programme is yours')"
+prog record-ruling gp --kind tool_choice --effect grant --scope "PM picks tools" --prompt "$P_GP" --run "$RUN"
+P_GR="$(prompt 'gr: tool choice on herdr:r is yours')"
+prog record-ruling gr --kind tool_choice --effect grant --scope "PM picks tools on r" --applies-to herdr:r \
+  --prompt "$P_GR" --run "$RUN"
+P_GO="$(prompt 'go: tool choice on herdr:o is yours')"
+prog record-ruling go --kind tool_choice --effect grant --scope "PM picks tools on o" --applies-to herdr:o \
+  --prompt "$P_GO" --run "$RUN"
+it "grants recorded while every repo they read holds act show no conflict"
+check "act act act" "$(baseline gp) $(baseline gr) $(baseline go)"
+lacks "Ruling conflict" "$(rules_block)"
+
+remit "$REPO_ACT"
+it "dropping a repo from the remit leaves its item's repo in place"
+check "${REPO_OUT}" "$(run_py "$RUN" <<'EOF'
+print(programme_records.load(args[0])["programme"]["items"]["herdr:o"].get("repo"))
+EOF
+)"
+republish outside propose
+it "a grant on an item whose repo is outside the remit reads that repo's layer, not the remit's"
+OUT="$(rules_block)"
+has "Ruling conflict: go grants tool_choice on herdr:o, but Authority now holds tool_choice at propose (act when granted)" "$OUT"
+lacks "Ruling conflict: gp" "$OUT"
+
+remit "$REPO_ACT" "$REPO_NARROW"
+it "a second remit repo whose project layer narrows the kind puts a programme-wide grant in conflict at that level"
+OUT="$(rules_block)"
+has "Ruling conflict: gp grants tool_choice on programme, but Authority now holds tool_choice at propose (act when granted)" "$OUT"
+it "an item grant reads only its own repo's layer, so the narrower repo leaves it alone"
+lacks "Ruling conflict: gr" "$OUT"
+
+it "with no grant active, only acknowledged repos are compared, and the rest are listed as unacknowledged"
+prog close-ruling gp --as fulfilled --why "done" --run "$RUN"
+prog close-ruling gr --as fulfilled --why "done" --run "$RUN"
+prog close-ruling go --as fulfilled --why "done" --run "$RUN"
+prog ack-protocol --run "$RUN"
+republish narrow never
+remit "$REPO_ACT" "$REPO_NARROW" "$REPO_OUT"
+OUT="$(rules_block)"
+has "protocol change: Authority tool_choice propose -> never (repos: ${REPO_NARROW})" "$OUT"
+has "protocol not acknowledged for ${REPO_OUT}" "$OUT"
+lacks "Ruling conflict" "$OUT"
 
 it "no verb crashed with a traceback"
 check "" "$CRASHES"

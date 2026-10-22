@@ -418,7 +418,7 @@ step propose-agreement --project-term "naming=kebab case files" --source "repo f
 step edit-project-term "$(term_id naming)" "kebab case for every file"
 step amend-term stop_rule never_stop --prompt "$(prompt typed 'stop rule never_stop')"
 step record-ruling r-small --kind technical_approach --effect decided --scope "keep the PR small" \
-  --prompt "$(prompt typed 'r-small: keep the PR small')"
+  --prompt "$(prompt typed 'r-small: keep the PR small, technical approach across the programme')"
 step add-item linear:AI-1 --title "Crop" --kind fix_only
 step log-decision linear:AI-1 --kind technical_approach --silent --why "smaller diff"
 step rules

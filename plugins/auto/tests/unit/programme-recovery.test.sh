@@ -24,7 +24,7 @@ EOF
 prog add-item linear:AI-1 --title "browser acceptance" --kind fix_only --pane w2:p30 --terminal-id term_p30 --session sess-w1
 prog add-item linear:AI-2 --title "linux investigation"
 prog add-item linear:AI-3 --title "spare worker slot"
-P1="$(typed "record decision d-browser")"
+P1="$(typed "record decision d-browser: technical approach for AI-1")"
 prog record-ruling d-browser --effect decided --kind technical_approach --scope "browser acceptance only" --reason "Shawn wants the browser path first" \
   --limit "never touch production data" --applies-to linear:AI-1 --prompt "$P1"
 it "a decision with a typed prompt is recorded"
@@ -148,7 +148,7 @@ check 1 "$CODE"
 # Scenario 10: oversized text stays retrievable by id; the binding limit is never dropped.
 TAIL="never-delete-the-staging-bucket"
 LONG="$("$PY" -c 'import sys; print(("context " * 55) + sys.argv[1])' "$TAIL")"
-P3="$(typed "record decision d-big")"
+P3="$(typed "record decision d-big: technical approach for AI-3")"
 prog record-ruling d-big --effect decided --kind technical_approach --scope "big" --reason "$LONG" --limit "$LONG" --applies-to linear:AI-3 --prompt "$P3"
 prog recover --run "$RUN"
 PKT="$OUT"

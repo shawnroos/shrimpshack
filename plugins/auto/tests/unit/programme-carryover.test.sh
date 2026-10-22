@@ -158,7 +158,7 @@ REMIT_A="{\"spaces\":[\"w2\"],\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"sha
 RUN_P="$(new_programme w9)"
 it "a programme with nothing to act on and no Ruling may stop"
 check "True " "$(stop_state "$RUN_P")"
-P_PW="$(prompt "$RUN_P" 'pw: you coordinate the workers yourself')"
+P_PW="$(prompt "$RUN_P" 'pw: worker coordination across the programme is yours')"
 prog record-ruling pw --kind worker_coordination --effect grant --scope "PM coordinates workers" --prompt "$P_PW" --run "$RUN_P"
 it "an active Ruling with no offer-made marker holds the stop"
 check "0 False carryover_unoffered" "$CODE $(stop_state "$RUN_P")"
@@ -176,13 +176,13 @@ has "carryover_offered" "$(run_py "$RUN_P" <<'EOF'
 print(" ".join(r["kind"] for r in pj.read(args[0])))
 EOF
 )"
-P_PX="$(prompt "$RUN_P" 'px: you pick the optimisation depth yourself')"
+P_PX="$(prompt "$RUN_P" 'px: you pick the optimisation depth across the programme yourself')"
 prog record-ruling px --kind optimisation_depth --effect grant --scope "PM picks depth" --prompt "$P_PX" --run "$RUN_P"
 it "a Ruling recorded after the offer holds the stop again until it is offered"
 check "False carryover_unoffered" "$(stop_state "$RUN_P")"
 prog carry-rulings --run "$RUN_P"
 check "True " "$(stop_state "$RUN_P")"
-P_PE="$(prompt "$RUN_P" 'pe: depth until 2000')"
+P_PE="$(prompt "$RUN_P" 'pe: acceptance across the programme until 2000')"
 prog close-ruling px --as fulfilled --why "done" --run "$RUN_P"
 prog record-ruling pe --kind acceptance --effect grant --scope "old" --until 2000-01-01T00:00:00Z --prompt "$P_PE" --run "$RUN_P"
 it "an expired Ruling does not hold the stop"
@@ -192,7 +192,7 @@ check "True " "$(stop_state "$RUN_P")"
 RUN_A="$(new_programme w2)"
 remit "$RUN_A" "$REMIT_A"
 prog add-item herdr:a --title "a" --kind fix_only --run "$RUN_A"
-P_G1="$(prompt "$RUN_A" 'g1: you pick the tools for herdr:a yourself')"
+P_G1="$(prompt "$RUN_A" 'g1: tool choice for herdr:a is yours')"
 prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --applies-to herdr:a \
   --limit "no paid tools" --prompt "$P_G1" --run "$RUN_A"
 P_R1="$(prompt "$RUN_A" 'r1: I pick the technical approach on herdr:a')"
@@ -226,7 +226,7 @@ import json, sys
 doc = json.load(open(sys.argv[1]))
 print(json.dumps(sorted([k, e["ruling"], e["kind"], e["effect"]] for k, v in doc["keys"].items() for e in v)))' "$STORE")"
 it "the stored entry keeps the scope, limits and Shawn's words, and no items"
-check '["PM picks tools", ["no paid tools"], "g1: you pick the tools for herdr:a yourself", false]' "$("$PY" -c '
+check '["PM picks tools", ["no paid tools"], "g1: tool choice for herdr:a is yours", false]' "$("$PY" -c '
 import json, sys
 e = json.load(open(sys.argv[1]))["keys"]["shawn/alpha"][0]
 print(json.dumps([e["scope"], e["limits"], e["quote"], "applies_to" in e]))' "$STORE")"
@@ -271,7 +271,7 @@ has '"carried_over"' "$OUT"
 it "the pre-fill writes no project term, reserved or not"
 check "[]" "$(field "$RUN_B" '[t["area"] for t in prog["agreement"].get("project_terms") or [] if t.get("origin") or t.get("reserved")]')"
 it "the carried revision keeps the scope, limits and Shawn's old words apart from its own quote"
-check '["PM picks tools", ["no paid tools"], null, "g1: you pick the tools for herdr:a yourself"]' \
+check '["PM picks tools", ["no paid tools"], null, "g1: tool choice for herdr:a is yours"]' \
   "$(field "$RUN_B" '[prog["context"]["decisions"]["g1"][-1][k] for k in ("scope", "limits", "quote")] + [prog["context"]["decisions"]["g1"][-1]["carried"]["quote"]]')"
 it "set-remit again adds no second revision"
 remit "$RUN_B" "$REMIT_A"
@@ -289,7 +289,7 @@ prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools"
   --applies-to herdr:x --prompt "$P_ID" --run "$RUN_B"
 check "nonzero pending" "$([ "$CODE" -ne 0 ] && echo nonzero) $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["state"]' | tr -d '"' | sed 's/_acceptance//')"
 it "a typed prompt naming the Ruling and its new items binds it, with a fresh baseline"
-P_ITEMS="$(prompt "$RUN_B" 'g1 applies to herdr:x now')"
+P_ITEMS="$(prompt "$RUN_B" 'g1 tool choice applies to herdr:x now')"
 prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" \
   --applies-to herdr:x --prompt "$P_ITEMS" --run "$RUN_B"
 check '0 "accepted" ["herdr:x"] "act"' "$CODE $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["state"]') $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["applies_to"]') $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["baseline"]')"
@@ -320,7 +320,7 @@ check "0 []" "$CODE $(carried_rulings "$RUN_E")"
 
 it "a carried Ruling whose id is taken is skipped with a notice"
 RUN_T="$(new_programme w7)"
-P_T="$(prompt "$RUN_T" 'g1: I decided the tools myself')"
+P_T="$(prompt "$RUN_T" 'g1: I decided the tool choice for the programme myself')"
 prog record-ruling g1 --kind tool_choice --effect decided --scope "Shawn's tools" --prompt "$P_T" --run "$RUN_T"
 remit "$RUN_T" "{\"spaces\":[\"w7\"],\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"shawn/alpha\"}]}"
 check "0 decided" "$CODE $(field "$RUN_T" 'prog["context"]["decisions"]["g1"][-1]["effect"]' | tr -d '"')"
@@ -340,9 +340,9 @@ from _bootstrap import load_lib_module
 proto = load_lib_module("programme_protocol")
 doc = json.load(open(sys.argv[1]))
 base = dict(doc["keys"]["shawn/alpha"][0])
-def forged(entry_id, ruling, adoption):
+def forged(entry_id, ruling, adoption, **extra):
     entry = {k: v for k, v in base.items() if k != "adoption"}
-    entry.update(id=entry_id, key=sys.argv[2], ruling=ruling)
+    entry.update(id=entry_id, key=sys.argv[2], ruling=ruling, **extra)
     if adoption is not None:
         entry["adoption"] = dict(base["adoption"], **adoption)
         if adoption.get("hash") is None:
@@ -352,6 +352,7 @@ doc["keys"][sys.argv[2]] = [
     forged("kbare00", "fa", None),
     forged("kmach00", "fb", {"machine": "elsewhere"}),
     forged("khash00", "fc", {"hash": base["adoption"]["hash"]}),
+    forged("kuntil0", "fd", {"hash": None}, until="tomorrow"),
 ]
 json.dump(doc, open(sys.argv[1], "w"))
 EOF
@@ -363,6 +364,9 @@ rm -rf "${WORK}/data.bak"
 it "mutation: with the adoption check patched out the forged entries arrive"
 prog_mutated set-remit --run "$RUN_D" < <(printf '%s' "{\"spaces\":[\"w5\"],\"repos\":[{\"path\":\"${GAMMA}\"}]}")
 check "0 3" "$CODE $(field "$RUN_D" 'len([r for r, v in (prog.get("context") or {}).get("decisions", {}).items() if v[-1].get("carried")])')"
+it "a carried entry whose end date is not ISO time is dropped with a notice, not carried"
+has "dropped carried-over entry kuntil0" "$OUT"
+check "false" "$(field "$RUN_D" '"fd" in (prog.get("context") or {}).get("decisions", {})')"
 rm -rf "$CLAUDE_AUTO_DATA_DIR"
 /bin/cp -Rp "${WORK}/data.bak" "$CLAUDE_AUTO_DATA_DIR"
 

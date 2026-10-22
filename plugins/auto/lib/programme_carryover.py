@@ -180,6 +180,8 @@ def _arrive(ctx, entry, key):
         return None, f"the id {rid} is taken in this programme"
     if entry.get("effect") not in pc.EFFECTS:
         return None, f"unknown effect {entry.get('effect')!r}"
+    if entry.get("until") and run_record_core.parse_iso(entry["until"]) is None:
+        return None, f"end date {entry['until']!r} is not ISO UTC time"
     content = {"scope": programme_sanitize.clean(entry.get("scope")), "reason": entry.get("reason"),
                "limits": [programme_sanitize.clean(v) for v in entry.get("limits") or []], "applies_to": [],
                "requirements": [], "kind": kind, "effect": entry["effect"], "until": entry.get("until")}

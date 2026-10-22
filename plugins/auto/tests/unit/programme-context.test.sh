@@ -128,7 +128,7 @@ done
 NOW_EXPR='core.now_iso()'
 
 AUTONOMY_BEFORE="$("$PY" "$PROG" status --run "$RUN" --json 2>&1)"
-P_DEC="$(prompt typed 'record decision d-browser: ship the browser fix, no prod flag changes')"
+P_DEC="$(prompt typed 'record decision d-browser: technical approach for browser-e2e, ship the browser fix, no prod flag changes')"
 
 it "record-ruling with a typed prompt that names it records accepted revision 1"
 prog record-ruling d-browser --effect decided --kind technical_approach --scope "ship the browser fix" --reason "customers hit the broken flow" \
@@ -185,7 +185,7 @@ check "$(pyget "$AUTONOMY_BEFORE" 'd["model"]["rules_in_force"]["autonomy"]')" \
   "$(pyget "$(status_json)" 'd["model"]["rules_in_force"]["autonomy"]')"
 
 # ── Scenario 2: materially wider work waits for acceptance of the delta ─────
-P_DOCS="$(prompt typed 'record decision d-docs for docs-page')"
+P_DOCS="$(prompt typed 'record decision d-docs: technical approach for docs-page')"
 prog record-ruling d-docs --effect decided --kind technical_approach --scope "fix the docs page" \
   --reason "stale install steps" --applies-to herdr:docs-page --prompt "$P_DOCS" --run "$RUN"
 prog assign-item herdr:docs-page --decision-id d-docs --run "$RUN"

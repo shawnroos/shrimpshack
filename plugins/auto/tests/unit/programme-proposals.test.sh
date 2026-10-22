@@ -332,7 +332,7 @@ prog clear-proposal stop_rule
 check 0 "$CODE"
 it "close-ruling --as fulfilled is refused while the compact flag is set"
 rm -f "${HOME_DIR}/.compact-flag"
-P_RULING="$(prompt typed 'r-suite: run the auto suite first is your call')"
+P_RULING="$(prompt typed 'r-suite: run the auto suite first, tool choice across the programme is your call')"
 prog record-ruling r-suite --kind tool_choice --effect grant --scope "run the auto suite first" --prompt "$P_RULING"
 touch "${HOME_DIR}/.compact-flag"
 prog close-ruling r-suite --as fulfilled --why "done"

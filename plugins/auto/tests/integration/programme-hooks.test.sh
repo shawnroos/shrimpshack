@@ -716,7 +716,7 @@ EOF
 )"
 it "with nothing to act on and no Ruling, the Stop hook lets the PM stop"
 check "" "$(stop_hook sess-carry)"
-prompt_hook sess-carry "pw: you coordinate the workers yourself" >/dev/null
+prompt_hook sess-carry "pw: worker coordination across the programme is yours" >/dev/null
 P_CARRY="$(run_py "$CARRY_RUN" <<'EOF'
 print([x for x in pj.read(args[0]) if x["kind"] == "prompt"][-1]["prompt_id"])
 EOF
