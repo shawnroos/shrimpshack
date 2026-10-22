@@ -605,6 +605,16 @@ prog release-resources --run "$RUN"
 it "an ignored dist folder is not treated as disposable"
 check "pending out" "$(wt_state "$RUN") $(cat "${WT}/dist/report.pdf")"
 
+wt_programme w68
+echo base > "${WT}/a.txt"; git -C "$WT" add a.txt; git -C "$WT" commit -qm "add a"; git -C "$WT" branch -q keep-a
+git -C "$WT" update-index --assume-unchanged a.txt; echo LOCALEDIT >> "${WT}/a.txt"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a hidden local edit (assume-unchanged) blocks removal"
+check "pending yes" "$(wt_state "$RUN") $(grep -q LOCALEDIT "${WT}/a.txt" && echo yes || echo no)"
+it "the receipt names how to unhide it"
+has "no-assume-unchanged" "$(wt_detail "$RUN")"
+
 wt_programme w42
 git -C "$WT" commit -q --allow-empty -m "detached work"
 end_typed "$RUN" >/dev/null

@@ -206,6 +206,15 @@ def release(value) -> dict:
         return _seen("refused", path, (
             f"{path} holds ignored files that removing it would delete ({', '.join(kept[:5])}); "
             f"move or delete them, {later}"))
+    flagged = _git(path, "ls-files", "-v", "-z")
+    if not _ok(flagged):
+        return _seen("failed", path, f"{programme_exec.failure(flagged, 'git ls-files')}; {later}")
+    hidden = [t[2:] for t in flagged["stdout"].split("\0")
+              if len(t) > 2 and (t[0].islower() or t[0] == "S") and os.path.lexists(os.path.join(path, t[2:]))]
+    if hidden:
+        return _seen("refused", path, (
+            f"{path} has files git status does not check ({', '.join(hidden[:5])}); run git update-index "
+            f"--no-assume-unchanged --no-skip-worktree on them, then commit or clean, {later}"))
     if os.path.exists(os.path.join(path, ".gitmodules")):
         return _seen("refused", path, (
             f"{path} has submodules, which git worktree remove cannot remove; delete it by hand, "

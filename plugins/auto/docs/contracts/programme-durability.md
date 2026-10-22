@@ -134,6 +134,7 @@ Removal is refused when any of these is true:
 | --- | --- |
 | The worktree has modified or untracked files | Commit or clean them |
 | It holds any ignored file or folder other than `.DS_Store` (an ignored folder can hide a nested repo with uncommitted work) | Delete or move them, or record a disposition |
+| A file marked assume-unchanged or skip-worktree is present (git status hides its edits) | Clear the flag, then commit or clean |
 | It has submodules, which `git worktree remove` cannot remove | Delete it by hand, then record `dispose-action --resource worktree` |
 | Its HEAD holds a commit that no branch or remote reaches | Create a branch at its HEAD |
 | The command's own cwd is inside the worktree | `cd` to the main checkout |
