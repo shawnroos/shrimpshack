@@ -30,7 +30,9 @@ LOCK_NAME = ".journal.lock"
 SECRETS_ENV = "CLAUDE_AUTO_SECRETS_FILE"
 DEFAULT_SECRETS_FILE = "~/.secrets"
 REDACTED = "[redacted]"
-PROMPT_ORIGINS = ("typed", "cron", "unknown")
+STORED_PROMPT_ORIGINS = ("typed", "cron", "unknown")
+# "picked" is only ever resolved from a pick source record, never stored as a label.
+PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked",)
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
@@ -50,6 +52,11 @@ KINDS = (
     "agreement_proposed",
     "agreement_accepted",
     "term_amended",
+    "term_picked",
+    "recommendations_taken",
+    "setup_step_set",
+    "setup_seen_recorded",
+    "setup_step_kept",
     "term_proposed",
     "term_noted",
     "proposal_cleared",
@@ -324,8 +331,8 @@ def append_claim(run_id: str, session_id, payload) -> dict:
 
 
 def append_prompt(run_id: str, session_id, text: str, origin: str, now=None, *, source=None) -> dict:
-    if origin not in PROMPT_ORIGINS:
-        raise JournalError(f"prompt origin must be one of {list(PROMPT_ORIGINS)}; got {origin!r}")
+    if origin not in STORED_PROMPT_ORIGINS:
+        raise JournalError(f"prompt origin must be one of {list(STORED_PROMPT_ORIGINS)}; got {origin!r}")
     prompt_id = "p" + secrets.token_hex(3)
     payload = {"text": redact(text), "origin": origin}
     if source is not None:

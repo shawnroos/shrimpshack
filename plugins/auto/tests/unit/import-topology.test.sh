@@ -171,7 +171,8 @@
 #   programme_naming     → programme_home
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
 #                          session_registry, driver_session, programme_sanitize,
-#                          programme_resume [lazy] (handover flags the new driver's restore)
+#                          programme_resume [lazy] (handover flags the new driver's restore),
+#                          programme_sources [lazy] (takeover reads herdr)
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
 #                          programme_record, programme_sanitize, programme_tracker,
 #                          programme_tasks, programme_plans, driver_session

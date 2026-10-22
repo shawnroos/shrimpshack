@@ -3,7 +3,8 @@
 
 The advisor-routing gate (KTD-4/5). On an AskUserQuestion tool call, DENY and
 redirect the driving agent to the advisor ONLY when a LIVE self-driven /auto run
-owns this very session — otherwise emit nothing (allow).
+owns this very session — otherwise emit nothing (allow). Separately, it DENIES a
+call that pre-fills ``answers`` from a programme's driving session (KTD2).
 
 OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
     a question belongs to a live auto run iff, for SOME run-record under
@@ -74,6 +75,25 @@ def _read_session_id(raw: str):
         return None
     sid = data.get("session_id")
     return sid if isinstance(sid, str) and sid else None
+
+
+def _prefills_for_programme(stdin_raw: str, session_id) -> bool:
+    try:
+        data = json.loads(stdin_raw) if stdin_raw else {}
+    except ValueError:
+        return False
+    tool_input = data.get("tool_input") if isinstance(data, dict) else None
+    if not session_id or not isinstance(tool_input, dict) or "answers" not in tool_input:
+        return False
+    # A broken or held lease still names this session as the programme's driver.
+    run, _record, _lease, held = load_lib_module("on-user-prompt")._driving_run(session_id)
+    return bool(run or held)
+
+
+_PREFILL_REASON = (
+    "auto: this session drives a programme, so it may not pre-fill a picker. Ask the "
+    "AskUserQuestion again without `answers` and let Shawn pick."
+)
 
 
 def _owns_session(led, *, run_record, session_id, skip_staleness, stale_threshold, now):
@@ -165,7 +185,15 @@ def decide(repo_root: str, stdin_raw: str) -> dict | None:
     Fires the deny ONLY when a live self-driven run owns this session.
     """
     session_id = _read_session_id(stdin_raw)
-    if not _live_run_owns_session(repo_root, session_id):
+    if _prefills_for_programme(stdin_raw, session_id):
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": _PREFILL_REASON,
+            }
+        }
+    if not repo_root or not _live_run_owns_session(repo_root, session_id):
         return None  # not our run (or no session) => allow normal AskUserQuestion.
     if test_hatch_enabled("CLAUDE_AUTO_TEST_DENY_UNSUPPORTED"):
         # FAIL OPEN (the question gate's asymmetry vs the action backstop —

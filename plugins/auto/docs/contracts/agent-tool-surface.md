@@ -150,6 +150,25 @@ session.
   count as a beat, and take --origin ui as a display label. `amend-term` and
   `set-remit` settle a pending proposal: accepted when the new value matches it,
   else superseded. The rules in force never carry a proposal.
+- **Setup picks**: before acceptance, `pick-term` (`<key> <value> --pick <id>`) sets one
+  per-programme agreement term from a picker answer Shawn gave in the driving session.
+  It takes `--pick`, not `--prompt`: the cited prompt must resolve to origin picked,
+  exactly one of its questions must name the term (and no other term), and that
+  answer must name the value (for a list term, exactly the value's options and no
+  other). `take-recommendations` (`--pick <id>`) needs a pick whose answer names
+  "take all recommendations" without a negation; it sets every per-programme term to its
+  pending proposal, else its current value, in one write. Both record `set_by` shawn,
+  origin picked, the question and the answer, and cite the pick. One picker answer
+  (one transcript and tool use) approves one write, however many prompt rows cite it.
+  Both refuse after acceptance, and refuse autonomy, rulings, reserved areas and
+  shared settings: those stay typed. A refusal journals `approval_refused`. A typed
+  accept must come after the last pick. No typed gate accepts a picked prompt.
+- **Setup walkthrough notes**: `setup-step` (`<name>`) records the step the PM asks now,
+  `setup-seen` (`--json <file>|-`) records what the source probe saw (tabs, repos and
+  tracker lists of strings, and a required items list, empty when there is nothing
+  to adopt; the items step stays open until it is recorded), and `setup-keep` (`<step>`) marks a step
+  done with its current value (never the accept step). They need no prompt, are allowed
+  while the compact flag is set and never count as a beat.
 - **Re-read requests**: `request-reread` asks the PM to re-read the rules in force
   at its next sweep. It needs no prompt, leaves the compact flag as it is, never
   counts as a beat, and takes --origin ui as a display label.
@@ -607,8 +626,19 @@ session.
   programme_started. It is refused while a space's lease is live, orphaned or
   newer, and the error names the holding run and session. `takeover`, `handover
   <session-id>` and `end` act only on a request that the prompt hook journaled
-  from the caller's own session, and each request is used once. `takeover` needs
-  an orphaned lease and a typed takeover request made while it was orphaned.
+  from the caller's own session, and each request is used once. `takeover`
+  needs a live or orphaned lease and a typed takeover request journaled since the
+  last start, takeover or handover, and one of: the
+  lease is orphaned and the request was typed while it was; herdr proves the
+  driving session gone (the newest registry pane it ran in, found by terminal and
+  then by pane id, is missing from a readable
+  snapshot, or now reports another session or terminal, and no pane reports the
+  driving session); or the typed request text says `--replace <name>` where the
+  name is the driver's pane label, pane id or session id. herdr unreadable, no
+  registry pane, a headless driver, another herdr server, or an open pane that
+  reports no session is not proof. A refusal on a live driver names its pane and
+  tab and gives the `--replace` line to type. `--replace` on the verb itself
+  authorizes nothing.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
   the driving session, or an orphaned lease. Takeover and handover rewrite every

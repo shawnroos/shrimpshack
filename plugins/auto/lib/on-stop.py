@@ -324,6 +324,50 @@ def _programme_reason_texts(status) -> list:
     return sorted(out)
 
 
+_REASON_FIXES = {
+    "no_rule_proposed": ("no rule says when {t} is done: `programme.sh propose-rule '<rule json>'`, "
+                         "then `programme.sh set-waiting {t} --who shawn --reporter shawn`"),
+    "unwatched_wait": ("{t} waits with nothing watching: Monitor `programme-watch.sh --item {t} -- <command>`, "
+                       "or `programme.sh set-waiting {t} --who <who> --reporter <name>`"),
+    "unproven_done": "{t} is done but unproven: `programme.sh check-deliverable {t} <deliverable>`",
+    "undebugged_blocker": ("{t} is blocked with no trace: debug it at runtime, then "
+                           "`programme.sh set-waiting {t} --blocker --trace-id <id>` (or `--job-id <id>`)"),
+    "ownerless_item": ("{t} has no owner: `programme.sh start-worker {t} -- <spinoff arguments>`, "
+                       "or `programme.sh queue --action start_worker --item {t}`"),
+    "open_item": "{t} is open: act on it, or record what it waits on with `programme.sh set-waiting {t}`",
+    "queued_action": "do your queued actions, then `programme.sh queue --remove <entry-id>` for each",
+    "unread_claim": "`programme.sh inbox`, act on the claims, then `programme.sh mark-read --offset <n>`",
+    "source_unavailable": ("source {t} is down: `programme.sh set-source {t} --unavailable --watcher remit`, "
+                           "or `--unsupported` when this machine cannot read it"),
+    "safety_pause": "{t} is paused for safety: tell Shawn; only he lifts it",
+}
+
+
+def _programme_fixes(status) -> tuple[list, bool]:
+    fixes, unhinted = [], False
+    for reason in status.get("reasons") or []:
+        if not isinstance(reason, dict):
+            continue
+        fix = _REASON_FIXES.get(reason.get("kind"))
+        if fix is None:
+            unhinted = True
+            continue
+        line = fix.format(t=reason.get("item") or reason.get("system") or "")
+        if line not in fixes:
+            fixes.append(line)
+    return fixes, unhinted
+
+
+def _fixes_text(status) -> str:
+    fixes, unhinted = _programme_fixes(status)
+    text = "".join(f"\n- {line}" for line in fixes)
+    if text:
+        text = "\n\nTo clear:" + text
+    if unhinted or not fixes:
+        text += "\n\nAct on your next step."
+    return text
+
+
 def _nag_signature(blocking, programmes=()) -> str:
     """A deterministic signature of the blocking set (U2 / finding #9).
 
@@ -450,9 +494,7 @@ def _programme_reason_for(hold) -> str:
                 "still owes. Report this to Shawn; do not treat the programme as finished or free.")
     text = (
         f"auto: programme {hold['run']} may not stop yet — "
-        + "; ".join(_programme_reason_texts(status))
-        + ". Act on your next step, or give each wait a live watcher or a named "
-        "person who reports back."
+        + "; ".join(_programme_reason_texts(status)) + "."
     )
     unwatched = status.get("unwatched_waits") or []
     if unwatched:
@@ -460,14 +502,14 @@ def _programme_reason_for(hold) -> str:
             " Unwatched waits: " + ", ".join(unwatched) + ". Stopping again lets "
             "the stop through and journals them as stopped unwatched, for Shawn."
         )
-    return text + _rules_suffix(hold)
+    return text + _fixes_text(status) + _rules_suffix(hold)
 
 
 def _terse_programme_reason_for(hold) -> str:
     return (
         f"auto: programme {hold['run']} still may not stop (unchanged): "
         + "; ".join(_programme_reason_texts(hold["status"]))
-        + "." + _rules_suffix(hold)
+        + "." + _fixes_text(hold["status"]) + _rules_suffix(hold)
     )
 
 

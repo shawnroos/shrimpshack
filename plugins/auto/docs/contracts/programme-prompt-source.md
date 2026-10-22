@@ -27,6 +27,26 @@ The source reader supports the transcript shapes observed in Claude Code 2.1.302
 - Slash-command source text reconstructs the original slash command and arguments before comparing their hash.
 - Meta messages, sidechains, compaction summaries, SDK input, and tool-result rows do not supply human authority.
 
+## Picker answers
+
+A picker (AskUserQuestion) answer in a programme's driving session is a pick, not a typed prompt.
+`UserPromptSubmit` does not fire for it.
+
+1. `PostToolUse` on AskUserQuestion journals a prompt row with origin `unknown` and a source record of kind `pick`.
+2. The record holds the session, transcript path, tool-use ID, transcript byte offset, prefix hash, a hash of the answers map, and the redacted question-to-answer map.
+3. The row resolves to `picked` only when the transcript check passes. The journal never stores `picked` as a label, and a stored `picked` label is not trusted.
+4. The check needs one plain assistant row (same session, no sidechain or meta) with the `tool_use` for that ID, named AskUserQuestion, whose input has no `answers` key.
+5. It needs one plain user row linked to that assistant row by `sourceToolAssistantUUID`, carrying the `tool_result` for that ID and a `permissionDecision.source` that starts with `user`.
+6. That row's `toolUseResult.answers` must match the captured hash, and its redacted form must match the stored map.
+7. The result row can sit before or after the captured offset. The prefix must be unchanged.
+
+The PreToolUse AskUserQuestion hook denies a driving-session call whose input carries `answers`. It gates on the session's lease file, not on a repo `.claude/auto` folder.
+The transcript check is the second line against a pre-filled answer.
+
+The source reader supports the picker shapes observed in Claude Code 2.1.304.
+A change to the secrets file can change the redacted map and make an older pick unverifiable.
+A verified pick shows that Shawn chose the answer. Each verb that takes a pick checks what the pick may approve and that it is not cited twice.
+
 ## Failure behavior
 
 Missing, malformed, changed, truncated, or unsupported source records refuse approval without changing programme state.

@@ -125,10 +125,11 @@ export function defaultTerms() {
 }
 
 export function viewText(
-  parts: { work?: unknown[]; contract?: unknown; reread?: unknown; rows?: unknown[]; model?: unknown } = {},
+  parts: { work?: unknown[]; contract?: unknown; reread?: unknown; rows?: unknown[]; model?: unknown; setup?: unknown } = {},
   format = 3,
 ) {
   return JSON.stringify({
+    ...(parts.setup === undefined ? {} : { setup: parts.setup }),
     view_format: format,
     run: 'prog-1',
     generated_at: '2026-10-19T10:00:00Z',
@@ -143,11 +144,21 @@ export function viewText(
 export function world(on: On, files: Record<string, string>, mtimes: Record<string, number> = {}) {
   const store = new Map<string, unknown>()
   const scrolls: { offset: number; by: number }[] = []
+  const opens: { id: string; focus?: boolean }[] = []
+  const ran: { command: string; args: string }[] = []
+  let placed = true
   mock.env(on, { CLAUDE_AUTO_DATA_DIR: DATA })
   on('session.id', () => ({ value: 'sess-pm' }))
   on('command.register', () => ({ value: { command: 'programme-view' } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_$, e) => {
+    opens.push({ id: e.id, ...(e.focus && { focus: true }) })
+    return { value: placed ? { isPlaced: true } : { isPlaced: false, reason: 'no surface places panes' } }
+  })
+  on('command.run', (_$, e) => {
+    ran.push({ command: e.command, args: e.args })
+    return { text: `core ran ${e.command}`, context: ['core note'] }
+  })
   const clock = mock.clock(on, { now: Date.parse('2026-10-19T10:00:00Z') })
   on('ui.focus', () => ({}))
   on('ui.scroll', (_$, e) => {
@@ -172,7 +183,46 @@ export function world(on: On, files: Record<string, string>, mtimes: Record<stri
     if (!(e.path in files)) throw new Error('ENOENT')
     return { value: { kind: 'file' as const, size: 1, mtimeMs: mtimes[e.path] ?? 1, isLink: false } }
   })
-  return { store, scrolls, clock }
+  const unplace = () => {
+    placed = false
+  }
+  return { store, scrolls, clock, opens, ran, unplace }
+}
+
+export const setupStep = (key: string, group: string, state: string, extra: Record<string, unknown> = {}) => ({
+  key,
+  label: key.replaceAll('_', ' '),
+  group,
+  state,
+  values: `${key} values`,
+  recommendation: null,
+  recommendation_source: null,
+  needs_typed: false,
+  reply: null,
+  ...extra,
+})
+
+export function setupPart() {
+  return {
+    current: 'sources',
+    steps: [
+      setupStep('where', 'scope', 'done', { values: 'AI-Editor' }),
+      setupStep('sources', 'scope', 'current', { recommendation: 'tracker, tasks, plans', recommendation_source: 'plugin default' }),
+      setupStep('cadence', 'pacing', 'upcoming'),
+      setupStep('rulings', 'rulings', 'upcoming', { label: 'rulings and reserved areas', needs_typed: true, reply: 'approve the proposed rulings' }),
+      setupStep('shared', 'shared', 'upcoming', { label: 'shared settings', values: 'using existing', needs_typed: true }),
+      setupStep('items', 'items', 'upcoming', {
+        label: 'items to adopt',
+        items: [{ item: 'WEB-1', title: 'Owner history', pane: 'w2-p3', session: 's1', adopted: false }],
+      }),
+      setupStep('accept', 'accept', 'upcoming', { values: 'not accepted', needs_typed: true, reply: 'accept the agreement' }),
+    ],
+    scope: {
+      in: { spaces: ['default.AI-Editor'], tabs: [], repos: ['shrimpshack', 'ai-chat-backend'], tracker: ['WEB'] },
+      out: { tabs: ['Infra'], repos: ['ai-editor-backend'], tracker: [] },
+      probed: true,
+    },
+  }
 }
 
 export const lease = (session = 'sess-pm') => JSON.stringify({ session_id: session, run: 'prog-1', home: HOME })
