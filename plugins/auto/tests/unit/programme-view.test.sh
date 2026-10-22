@@ -878,6 +878,13 @@ elif spec == "states":
     seed_programme([beh("bprop", state="proposed", source=src), beh("bret", state="retired"),
                     beh("bwin", overrides=["bloser"]), beh("bmov", moved_to="personal")])
     keep([beh("bloser", "personal"), beh("bmov", "personal"), beh("bzeta", "repo", repo_key="acme/zeta")])
+elif spec == "split":
+    def two(p):
+        p["remit"]["repos"] = [{"path": os.environ["BEH_ALPHA"], "github": "acme/alpha"},
+                               {"path": os.environ["BEH_ALPHA"] + "-beta", "github": "acme/beta"}]
+        p["behaviours"] = [beh("bsplit", moved_to="repo", moved_repo_key="acme/alpha")]
+    mutate(run, two)
+    keep([beh("bsplit", "repo")])
 EOF
 }
 beh_lines() { printf '%s\n' "$1" | grep -E '^ *behaviour ' | sed 's/^ *//'; }
@@ -969,6 +976,13 @@ it "a record with no behaviours has an empty behaviours list in the contract"
 check "[]" "$("$PY" "$PROG" status --run "$BEH_NONE" --json 2>&1 | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["contract"]["behaviours"])')"
 it "a record with no behaviours shows no Behaviours section on the terms page"
 lacks "Behaviours" "$("$PY" "$PROG" status terms --run "$BEH_NONE" 2>&1)"
+
+BEH_RUN3="$(new_run w34)"
+rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+beh_seed "$BEH_RUN3" split >/dev/null
+BEH_JSON3="$("$PY" "$PROG" status --run "$BEH_RUN3" --json 2>&1)"
+it "a copy moved to one repo of a two-repo remit still shows at the programme layer for the other repo"
+check "programme repo" "$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(" ".join(sorted(b["layer"] for b in d["contract"]["behaviours"] if b["id"] == "bsplit")))' "$BEH_JSON3" 2>&1)"
 unset CLAUDE_AUTO_BEHAVIOURS_STORE
 
 echo "programme-view.test.sh: ${PASS} passed, ${FAIL} failed"

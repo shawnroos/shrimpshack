@@ -551,9 +551,8 @@ def behaviours_view(record, lookup) -> dict:
     forced = [e for repo in remit or [None]
               for e in programme_behaviours.resolve(record, None, repo, store=loaded)["in_force"]]
     rejected = [r for r in base["rejected"] if r.get("layer") != "repo" or r.get("key") in keys]
-    valid = {id(e) for e in programme_behaviours._programme_entries(programme, [])}
-    entries = [e for e in programme["behaviours"] if id(e) in valid and not programme_behaviours._held(loaded, e)]
-    entries += [e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
+    entries = programme_behaviours.shown_programme_entries(programme, loaded)
+    entries +=[e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
     overriders = {}
     for e in forced:
         for name in e.get("overrides") or ():
