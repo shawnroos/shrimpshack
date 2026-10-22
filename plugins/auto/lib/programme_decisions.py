@@ -41,7 +41,6 @@ DECISION_KINDS = AUTONOMY_ACTIONS + (
     "optimisation_depth", "product_scope", "acceptance", "denied_operation",
 )
 PROTECTED_KINDS = ("prod_deploy", "full_release", "spend_over_cap", "merge_around_gate", DENIED_KIND)
-# Narrowest first. Duplicates programme_protocol.AUTONOMY_WIDTH: this module stays a leaf.
 LEVEL_ORDER = ("never", "propose", "act_and_tell", "act")
 
 
@@ -143,10 +142,6 @@ def refusal(kind, verdict) -> str:
 
 def _decide_product_question(record, protocol, programme, key) -> str:
     item = programme["items"][key]
-    if not stamped(programme):
-        raise DecisionError(
-            f"item {key!r} matched the {PRODUCT_RULE} rule and this programme's agreement has no "
-            "contract stamp, so product questions go to Shawn: use hand-item")
     if item["state"] not in record.WAITABLE_STATES:
         raise DecisionError(f"item {key!r} is {item['state']}; only an open or waiting product question "
                             "is decided")
@@ -158,18 +153,19 @@ def _decide_product_question(record, protocol, programme, key) -> str:
     return DECIDED
 
 
-def _check_pm_may_decide(protocol, programme, kind) -> None:
-    level = ((protocol.get("autonomy") or {}).get(kind) or {}).get("level")
-    # A stamped contract hands product calls to the PM (KTD4); the protocol still says propose.
-    if kind == "product_call" and stamped(programme):
-        return
-    if kind == DENIED_KIND or level in SHAWN_LEVELS:
-        raise DecisionError(f"kind {kind!r} stays with Shawn ({level or 'refused permission'}); the PM "
-                            "does not record it as its own: use hand-item")
+def _check_pm_may_decide(host, programme, kind, target) -> dict:
+    protocol = host.programme_rulings.protocol_for(host, programme, [target])
+    now = run_record_core.now_iso()
+    active = host.programme_record.programme_context.rulings_for(programme, target, kind, now)
+    verdict = who_decides(kind, target, level=host.programme_rulings.level_of(protocol, kind), rulings=active,
+                          now=now, accepted=stamped(programme))
+    if verdict["decider"] == "shawn":
+        raise DecisionError(refusal(kind, verdict))
+    return protocol
 
 
 def _h_log_decision(host, argv):
-    positional, opts = host._parse(argv, values=("run", "kind", "term", "why", "repo"), flags=("silent",))
+    positional, opts = host._parse(argv, values=("run", "kind", "term", "why"), flags=("silent",))
     if len(positional) != 1:
         raise ValueError("usage: log-decision <item|programme> --kind <kind> (--term <id> | --silent) "
                          "--why <text>")
@@ -184,18 +180,17 @@ def _h_log_decision(host, argv):
         term = programme_sanitize.token(opts["term"])
         if term is None:
             raise DecisionError(f"--term must be one term id with no spaces: {opts['term']!r}")
-    protocol = record._load_protocol(host, opts.get("repo"))
 
     def change(programme, prompt, rec):
         key = None if target == PROGRAMME_TARGET else record._resolve(programme, target)
-        state = None
         if key is not None and programme["items"][key]["state"] == "handed":
             raise DecisionError(f"item {key!r} is handed and waits on Shawn's answer; answer-handed or a "
                                 "correction reopens it")
+        protocol = _check_pm_may_decide(host, programme, kind, key or PROGRAMME_TARGET)
+        state = None
         if (key is not None and kind in PRODUCT_DECISION_KINDS
                 and PRODUCT_RULE in (programme["items"][key].get("matched_rule") or [])):
             state = _decide_product_question(record, protocol, programme, key)
-        _check_pm_may_decide(protocol, programme, kind)
         entry = add_decision(programme, kind=kind, by="pm", item=key or PROGRAMME_TARGET, why=why,
                              term=term, silent=term is None, outcome=DECIDED if state else None)
         if key is not None:
@@ -209,14 +204,16 @@ def _h_log_decision(host, argv):
 
 _SPECS = (
     ("log-decision", _h_log_decision,
-     "<item-id|programme> --kind <decision-kind> (--term <id> | --silent) --why <text> [--repo <path>] "
-     "[--run <id>]",
-     "an unknown decision kind; denied_operation, or a kind whose autonomy level is propose or never "
-     "(hand the item instead; product_call is allowed on a stamped agreement); both or neither of "
-     "--term and --silent; no --why; an unknown item; a handed item. A product_call or product_scope on an item that "
-     "matched the product-question rule also rejects an unstamped agreement (hand the item instead) "
-     "and a finished item; on a stamped agreement it closes the item as decided, or re-matches its "
-     "other change kinds and leaves it open. Other kinds leave the item alone."),
+     "<item-id|programme> --kind <decision-kind> (--term <id> | --silent) --why <text> [--run <id>]",
+     "an unknown decision kind; a kind that stays with Shawn: a protected kind, product_call or "
+     "product_scope before the agreement is stamped, a kind an active restrict Ruling covers for the "
+     "item, a grant whose kind Authority now holds narrower (a conflict), or an Authority level of "
+     "propose or never, read from the item's repo or, for the programme or an item with no repo, the "
+     "narrowest across remit repos (hand the item instead); both or neither of --term and --silent; "
+     "no --why; an unknown item; a handed item. A product_call or product_scope on an item that "
+     "matched the product-question rule also rejects a finished item; on a stamped agreement it "
+     "closes the item as decided, or re-matches its other change kinds and leaves it open. Other "
+     "kinds leave the item alone."),
 )
 
 

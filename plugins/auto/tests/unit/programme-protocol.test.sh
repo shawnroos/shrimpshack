@@ -125,10 +125,18 @@ it "the default layer carries the action autonomy mapping"
 OUT="$(run_py <<'EOF'
 a = pp.load()["autonomy"]
 print(a["merge_at_gate"]["level"], a["file_issue"]["level"], a["eval_backed_prerelease"]["level"],
-      a["prod_deploy"]["level"], a["fix_other_team_code"]["level"], a["merge_around_gate"]["level"], len(a))
+      a["fix_other_team_code"]["level"], len(a))
 EOF
 )"
-check "act act act_and_tell propose never never 19" "$OUT"
+check "act act act_and_tell never 15" "$OUT"
+
+it "no layer stores a level for a protected kind: the plugin defaults leave all five out"
+OUT="$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+print(sorted(set(pp.plugin_layer()["autonomy"]) & set(pd.PROTECTED_KINDS)), pp.PROTECTED_KINDS is pd.PROTECTED_KINDS)
+EOF
+)"
+check "[] True" "$OUT"
 
 it "the defaults give the seven kinds the PM decides today, and product calls, the act level"
 OUT="$(run_py <<'EOF'
@@ -347,10 +355,10 @@ def fixture_lookup(run_id, prompt_id):
 os.environ["CLAUDE_AUTO_MACHINE"] = manifest["machine"]
 p = pp.load(prompt_lookup=fixture_lookup)
 r = p["rules"][manifest["personal"]["rule"]]
-print(reasons(p), r["layer"], r["adopted_on"], "autonomy" in r, p["autonomy"]["prod_deploy"]["layer"])
+print(reasons(p), r["layer"], r["adopted_on"], "autonomy" in r, "prod_deploy" in p["autonomy"])
 EOF
 )"
-check "['personal/prod_deploy/protected_kind'] personal None False plugin" "$OUT"
+check "['personal/prod_deploy/protected_kind'] personal None False False" "$OUT"
 
 OLD="${WORK}/base-snapshot"
 mkdir -p "${OLD}/lib" "${OLD}/protocol"
@@ -469,10 +477,10 @@ REPO_PROT="$(publish protected)"
 it "Covers AE3. A project-layer entry setting prod_deploy is refused at load and listed as rejected"
 OUT="$(run_py "$REPO_PROT" <<'EOF'
 p = pp.load(repo_path=args[0], prompt_lookup=lookup)
-print(reasons(p), p["autonomy"]["prod_deploy"]["level"], p["autonomy"]["prod_deploy"]["layer"], p["autonomy"]["spend_over_cap"]["layer"])
+print(reasons(p), "prod_deploy" in p["autonomy"], "spend_over_cap" in p["autonomy"])
 EOF
 )"
-check "['project/prod_deploy/protected_kind', 'project/spend_over_cap/protected_kind'] propose plugin plugin" "$OUT"
+check "['project/prod_deploy/protected_kind', 'project/spend_over_cap/protected_kind'] False False" "$OUT"
 
 it "a personal entry setting any protected kind is refused at load"
 OUT="$(run_py <<'EOF'

@@ -82,13 +82,20 @@ def _until(value):
     return value
 
 
-def authority_level(host, programme, kind, targets):
+def protocol_for(host, programme, targets) -> dict:
     items = programme["items"]
     repos = {items[t].get("repo") if t in items else None for t in targets}
     if None in repos:
         repos = {r.get("path") for r in (programme.get("remit") or {}).get("repos") or [] if isinstance(r, dict)}
-    protocol = host.programme_protocol.load(repos=sorted(r for r in repos if r), prompt_lookup=host.prompt_lookup)
+    return host.programme_protocol.load(repos=sorted(r for r in repos if r), prompt_lookup=host.prompt_lookup)
+
+
+def level_of(protocol, kind):
     return (protocol["autonomy"].get(kind) or {}).get("level")
+
+
+def authority_level(host, programme, kind, targets):
+    return level_of(protocol_for(host, programme, targets), kind)
 
 
 def _activate(host, programme, revision, prompt, baseline=None) -> None:

@@ -91,8 +91,10 @@
 #   programme_context    → run_record_core, programme_home, programme_sanitize
 #                          (pure over the programme block: the predicate loads it on every
 #                          record write; its verb handlers get programme_record passed in)
-#   programme_protocol   → programme_home                      (never programme_journal:
+#   programme_protocol   → programme_home, programme_decisions (never programme_journal:
 #                          the prompt lookup is passed in by the caller)
+#   programme_decisions  → run_record_core, programme_sanitize  (a leaf over decision data: its
+#                          log-decision handler reaches protocol, Rulings and record through `host`)
 #   programme_journal    → run_record_core, programme_home; programme_authority,
 #                          programme_artifacts [lazy]
 #   programme_store      → run_record_core, programme_home; programme_journal [lazy]
@@ -613,6 +615,14 @@ if loads_sibling "programme_protocol.py" "programme_journal"; then
   fail "programme_protocol.py must not load programme_journal — the caller passes prompt_lookup in"
 else
   pass
+fi
+
+it "programme_decisions.py loads only run_record_core and programme_sanitize (programme_protocol loads it)"
+_extra="$(grep -oE 'load_lib_module\("[a-z_]+"\)|_lazy_load\("[a-z_]+"\)' "$LIB/programme_decisions.py" | grep -vE '"(run_record_core|programme_sanitize)"')"
+if [ -z "$_extra" ] && loads_sibling "programme_decisions.py" "programme_sanitize"; then
+  pass
+else
+  fail "programme_decisions.py must stay a leaf — programme_protocol and programme_rulings load it; extra loads: ${_extra}"
 fi
 
 it "programme_predicate.py loads no protocol, journal or task predicate"

@@ -25,6 +25,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_decisions = load_lib_module("programme_decisions")
 
 PERSONAL_PATH_ENV = "CLAUDE_AUTO_PERSONAL_PROTOCOL"
 MACHINE_ENV = "CLAUDE_AUTO_MACHINE"
@@ -39,7 +40,7 @@ DELIVERABLES = programme_home.DELIVERABLES
 OUTCOMES = ("handed", "debugged")
 REQUIREMENTS = DELIVERABLES + OUTCOMES
 AUTONOMY_LEVELS = programme_home.AUTONOMY_LEVELS
-AUTONOMY_WIDTH = {"never": 0, "propose": 1, "act_and_tell": 2, "act": 3}
+AUTONOMY_WIDTH = {level: width for width, level in enumerate(programme_decisions.LEVEL_ORDER)}
 CHANGE_KINDS = (
     "flagged_code", "fix_only", "shared_package", "evals_or_docs",
     "product_question", "shared_blocker",
@@ -50,7 +51,7 @@ RULE_FIELDS = (
 )
 LEGACY_RULE_FIELD = "autonomy"
 LEGACY_NEW_RULE_LEVEL = "propose"
-PROTECTED_KINDS = ("prod_deploy", "full_release", "spend_over_cap", "merge_around_gate", "denied_operation")
+PROTECTED_KINDS = programme_decisions.PROTECTED_KINDS
 _UNVERIFIED_REASONS = ("not_adopted", "adoption_malformed", "adoption_unverified", "not_adopted_here")
 ADOPTION_FIELDS = ("machine", "run_id", "prompt_id", "quote", "prompt_hash", "hash")
 LAYER_KEYS = ("protocol_format", "rules", "autonomy", "checks")

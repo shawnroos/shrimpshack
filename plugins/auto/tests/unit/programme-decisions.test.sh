@@ -252,6 +252,12 @@ check "\"open\" ${BEFORE}" "$(field 'prog["items"]["linear:AI-2"]["state"]') $(d
 it "the unstamped product question still needs hand-item"
 prog hand-item linear:AI-2 --question "Which crop?" --kind product_call
 check '0 "handed"' "$CODE $(field 'prog["items"]["linear:AI-2"]["state"]')"
+for kind in product_call product_scope; do
+  it "on an unstamped programme a programme-level ${kind} is refused and writes no decision"
+  BEFORE="$(decision_count)"
+  prog log-decision programme --kind "$kind" --silent --why "obvious"
+  check "1 hand-item ${BEFORE}" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+done
 
 edit 'rec["programme"]["agreement"]["contract_version"] = 1'
 FIN_BEFORE="$(finished_count)"
@@ -324,6 +330,75 @@ it "answering an old ask records a decision of kind unknown with no ask id"
 P_SHIP1="$(prompt typed 'ship AI-1')"
 prog answer-handed linear:AI-1 --choice ship --prompt "$P_SHIP1"
 check '0 ["unknown", null]' "$CODE $(field '[prog["decisions"][-1]["kind"], prog["decisions"][-1]["ask"]]')"
+
+for kind in technical_approach work_sequencing worker_coordination tool_choice optimisation_depth product_scope acceptance; do
+  it "the newly listed kind ${kind} is still PM-decidable by default"
+  prog log-decision programme --kind "$kind" --silent --why "default authority"
+  check "0 \"${kind}\"" "$CODE $(field 'prog["decisions"][-1]["kind"]')"
+done
+
+# publish <name> <tool_choice level>: a clone whose default branch carries a project layer for tool_choice.
+publish() {
+  local seed="${WORK}/seed-$1" bare="${WORK}/bare-$1.git" clone="${WORK}/clone-$1"
+  mkdir -p "${seed}/.claude"
+  printf '{"autonomy": {"tool_choice": {"level": "%s"}}}' "$2" > "${seed}/.claude/auto-protocol.json"
+  git -C "$seed" init -q -b main
+  git -C "$seed" add -A
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m seed
+  git clone -q --bare "$seed" "$bare"
+  git clone -q "$bare" "$clone"
+  printf '%s' "$clone"
+}
+REPO_ACT="$(publish act act)"
+REPO_PROPOSE="$(publish propose propose)"
+P_REMIT="$(prompt typed "add repos ${REPO_ACT} and ${REPO_PROPOSE}")"
+OUT="$(printf '{"repos": [{"path": "%s"}, {"path": "%s"}]}' "$REPO_ACT" "$REPO_PROPOSE" \
+  | "$PY" "$PROG" set-remit --prompt "$P_REMIT" 2>&1)"
+it "the remit takes two repos whose project layers set tool_choice to act and to propose"
+check "2" "$(field 'len(prog["remit"]["repos"])')"
+
+prog add-item linear:AI-20 --title "On the propose repo" --kind fix_only --repo "$REPO_PROPOSE"
+prog add-item linear:AI-21 --title "On the act repo" --kind fix_only --repo "$REPO_ACT"
+prog add-item linear:AI-22 --title "No repo" --kind fix_only
+
+it "a project-layer propose on the item's repo refuses a PM decision with no repo flag"
+BEFORE="$(decision_count)"
+prog log-decision linear:AI-20 --kind tool_choice --silent --why "use the helper"
+check "1 hand-item ${BEFORE}" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+it "an item on the act repo reads only its own repo's layer and records"
+prog log-decision linear:AI-21 --kind tool_choice --silent --why "use the helper"
+check '0 "linear:AI-21"' "$CODE $(field 'prog["decisions"][-1]["item"]')"
+it "an item with no recorded repo is refused when one remit repo sets the kind to propose"
+prog log-decision linear:AI-22 --kind tool_choice --silent --why "use the helper"
+check "1 hand-item" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1)"
+it "a programme-level decision uses the narrowest level across remit repos"
+prog log-decision programme --kind tool_choice --silent --why "use the helper"
+check "1 hand-item" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1)"
+it "log-decision no longer takes --repo as the source of the project layer"
+prog log-decision linear:AI-20 --kind tool_choice --silent --why x --repo "$REPO_ACT"
+check "2 unknown option --repo" "$CODE $(printf '%s' "$OUT" | grep -o 'unknown option --repo' | head -1)"
+
+P_GRANT="$(prompt typed 'r-tools: you pick the tools for linear:AI-21 yourself')"
+prog record-ruling r-tools --kind tool_choice --effect grant --scope "PM picks tools" \
+  --applies-to linear:AI-21 --prompt "$P_GRANT"
+it "a grant Ruling on tool_choice records with the act baseline of the item's repo"
+check "0" "$CODE"
+P_NARROW="$(prompt typed 'set tool_choice to propose')"
+prog adopt-autonomy tool_choice propose --prompt "$P_NARROW"
+it "Covers AE6. with personal Authority narrowed to propose, log-decision on the granted item is refused as a conflict"
+BEFORE="$(decision_count)"
+prog log-decision linear:AI-21 --kind tool_choice --silent --why "use the helper"
+check "1 (conflict) hand-item ${BEFORE}" \
+  "$CODE $(printf '%s' "$OUT" | grep -o '(conflict)' | head -1) $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+
+it "the who-decides gate has exactly one caller in shipped code"
+check "1" "$(grep -rnE '(^|[^_a-zA-Z.])who_decides\(|\.who_decides\(' "${AUTO_ROOT}/lib" "${AUTO_ROOT}/hooks" 2>/dev/null \
+  | grep -v 'def who_decides' | wc -l | tr -d ' ')"
+it "programme_decisions reads no autonomy map: the Authority level arrives as plain data"
+check "0" "$(grep -cE '"autonomy"' "${AUTO_ROOT}/lib/programme_decisions.py")"
+it "no other shipped module looks up a kind in the merged autonomy map to gate a decision"
+check "programme_rulings.py" "$(grep -lE '\[\"autonomy\"\]\.get\(kind\)|get\(\"autonomy\"\).*\.get\(kind\)' "${AUTO_ROOT}"/lib/*.py | xargs -n1 basename | sort | tr '\n' ' ' | sed 's/ $//')"
 
 # The who-decides gate, called with plain data. MUTATE patches one branch out in-process.
 gate() {
