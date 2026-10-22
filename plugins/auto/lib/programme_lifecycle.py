@@ -79,13 +79,18 @@ def _lease_for(host, opts, sid):
         return hits[0][1]
     for lease in programme_home.leases_for_session(sid):
         return lease
+    named = programme_home.lease_driven_by(opts.get("replace"))
+    if named:
+        return named
     space = session_registry.space_of_session(sid, os.environ) if sid else None
     if not space:
-        raise host.ProgrammeError("this session is not in a herdr space; pass --run <id>")
+        raise host.ProgrammeError("this session is not in a herdr space; name the PM by its session id "
+                                  "(/auto:programme-takeover --replace <session id>) or pass --run <id>")
     key = programme_home.space_key(*space)
     lease = programme_home.read_lease(programme_home.lease_path(*space))
     if lease is None:
-        raise host.ProgrammeError(f"no programme holds {key}")
+        raise host.ProgrammeError(f"no programme holds {key}; to take over a programme in another space, "
+                                  "name its PM by session id: /auto:programme-takeover --replace <session id>")
     if lease.get("corrupt"):
         raise host.ProgrammeError(f"the lease for {key} is unreadable; nothing to take over")
     return lease
@@ -219,13 +224,7 @@ def _h_start(host, argv):
     return 0
 
 
-def _replace_name(text) -> str | None:
-    words = str(text or "").split()
-    if "--replace" not in words:
-        return None
-    rest = words[words.index("--replace") + 1:]
-    name = " ".join(rest[:next((i for i, w in enumerate(rest) if w.startswith("--")), len(rest))])
-    return name.strip("'\"") or None
+_replace_name = programme_home.replace_name
 
 
 def _names_driver(name, presence) -> bool:
@@ -277,7 +276,7 @@ def _live_driver(lease, presence, name) -> str:
     label = presence.get("pane_label")
     typable = label and not any(w.startswith("--") for w in label.split()) and label[0] not in "'\"" \
         and label[-1] not in "'\""
-    reply = (label if typable else None) or presence.get("pane_id") or presence.get("session_id")
+    reply = presence.get("session_id") or (label if typable else None) or presence.get("pane_id")
     wrong = f"--replace {name} does not name the current PM. " if name else ""
     space = programme_home.space_key(lease.get("server"), lease.get("workspace"))
     return (f"{wrong}{_driver_words(presence)} is still the live PM for space {space}: "

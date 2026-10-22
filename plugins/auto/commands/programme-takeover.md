@@ -1,6 +1,6 @@
 ---
 description: Take over this herdr space's auto programme from this session when its PM is gone, or replace a named PM
-argument-hint: "[--replace <PM pane name>]"
+argument-hint: "[--replace <PM session id>]"
 allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop, AskUserQuestion
 ---
 
@@ -10,7 +10,10 @@ old PM is gone: the pane that ran it is closed, or now runs another session or
 terminal. It also works when the lease is orphaned (the PM stopped beating for
 two cadence periods) and the request was typed while it was. Otherwise it needs
 Shawn to name the PM he is replacing: `/auto:programme-takeover --replace <PM
-pane name>`. The old PM's next programme write is then refused. If herdr cannot
+session id>` (a pane name also works inside the PM's own herdr workspace). The
+session id works from any workspace or machine, because herdr pane and tab ids
+differ per workspace and per machine. The old PM's next programme write is then
+refused. If herdr cannot
 be read, auto does not count the PM as gone. Pass `--replace` on the dispatch
 line only when Shawn typed it; the typed text, not the argument, is what counts.
 
