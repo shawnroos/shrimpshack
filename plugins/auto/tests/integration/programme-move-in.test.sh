@@ -202,6 +202,17 @@ HERE="$NOREPO"
 check "1 0" "$CODE $(moves "$OUT")"
 has "<auto-rules>" "$OUT"
 
+it "a handover successor's programme.sh rules prints the move line"
+as sess-n rules --run "$RUN"
+check "0 1" "$CODE $(moves "$OUT")"
+has "Run \`cd ${WT}\`" "$OUT"
+
+it "programme.sh rules from inside the worktree omits it"
+HERE="$WT"
+as sess-n rules --run "$RUN"
+HERE="$NOREPO"
+check "0 0" "$CODE $(moves "$OUT")"
+
 it "restored context after compaction names the move line when the cwd is outside the worktree"
 CTX="$(restored sess-n "$NOREPO")"
 has "programme: ${RUN}" "$CTX"

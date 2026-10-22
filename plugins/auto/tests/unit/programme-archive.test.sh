@@ -529,6 +529,33 @@ it "check-archive names the worktree"
 has '"id": "worktree"' "$(resources_check "$RUN")"
 has "uncommitted or untracked" "$(resources_check "$RUN")"
 
+wt_programme w60
+printf 'docs/\n' >> "${WORK}/repo-w60/.git/info/exclude"
+mkdir -p "${WT}/docs"; echo plan > "${WT}/docs/plan.md"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a worktree holding an ignored file is not removed"
+check "pending plan" "$(wt_state "$RUN") $(cat "${WT}/docs/plan.md")"
+it "the receipt names the ignored path"
+has "docs/" "$(wt_detail "$RUN")"
+
+wt_programme w61
+printf '.claude/\n' >> "${WORK}/repo-w61/.git/info/exclude"
+git -C "$WT" worktree add -q -b child "${WT}/.claude/wt/child"
+echo wip > "${WT}/.claude/wt/child/wip.txt"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a worktree holding an ignored nested worktree is not removed"
+check "pending wip" "$(wt_state "$RUN") $(cat "${WT}/.claude/wt/child/wip.txt")"
+
+wt_programme w62
+printf 'node_modules/\n.DS_Store\n' >> "${WORK}/repo-w62/.git/info/exclude"
+mkdir -p "${WT}/node_modules/x"; echo dep > "${WT}/node_modules/x/index.js"; touch "${WT}/.DS_Store"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "ignored dependency and cache folders alone do not block removal"
+check "released no" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no)"
+
 wt_programme w42
 git -C "$WT" commit -q --allow-empty -m "detached work"
 end_typed "$RUN" >/dev/null

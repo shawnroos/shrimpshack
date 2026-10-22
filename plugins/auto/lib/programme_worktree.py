@@ -81,11 +81,6 @@ def _listing(main):
     return entries
 
 
-def registered(main):
-    listed = _listing(main)
-    return None if listed is None else list(listed)
-
-
 def _ensure_excluded(main, target) -> None:
     rel = os.path.relpath(target, main) + "/"
     if _git(main, "check-ignore", "-q", rel)["code"] == 0:
@@ -117,7 +112,7 @@ def create(repo_path, run, now_iso=None) -> dict:
     if not main:
         return _outcome("refused", None, error=f"{repo_path} is not inside a git repo")
     target = target_path(main, run)
-    listed = registered(main)
+    listed = _listing(main)
     if listed is None:
         return _outcome("failed", target, error=f"could not list the worktrees of {main}")
     if _real(target) in listed:
@@ -163,6 +158,15 @@ def _cwd():
         return None
 
 
+# Ignored entries a build or install recreates, so losing them with the worktree costs nothing.
+REGENERABLE = frozenset({"node_modules", ".DS_Store", "__pycache__", ".pytest_cache", ".venv",
+                         ".cache", ".angular", ".next", ".turbo", "dist", "build", "coverage"})
+
+
+def _regenerable(entry) -> bool:
+    return entry.strip().strip("/").split("/")[0] in REGENERABLE
+
+
 def release(value) -> dict:
     seen = observe(value)
     if seen["status"] != "present":
@@ -172,12 +176,18 @@ def release(value) -> dict:
     if inside(_cwd(), path):
         return _seen("refused", path, (
             f"this command ran inside {path}; cd {shlex.quote(main)} and run release-resources again"))
-    status = _git(path, "status", "--porcelain", "--untracked-files=all")
+    status = _git(path, "status", "--porcelain", "--untracked-files=all", "--ignored=matching")
     if not _ok(status):
         return _seen("failed", path, f"{programme_exec.failure(status, 'git status')}; {later}")
-    if status["stdout"].strip():
+    lines = status["stdout"].splitlines()
+    if any(line[:2] != "!!" for line in lines if line.strip()):
         return _seen("refused", path, (
             f"{path} has uncommitted or untracked changes; commit or clean them, {later}"))
+    kept = [line[3:] for line in lines if line[:2] == "!!" and not _regenerable(line[3:])]
+    if kept:
+        return _seen("refused", path, (
+            f"{path} holds ignored files that removing it would delete ({', '.join(kept[:5])}); "
+            f"move or delete them, {later}"))
     if not head:
         return _seen("failed", path, f"git lists no HEAD for {path}; {later}")
     lost = _git(main, "rev-list", "-n", "1", head, "--not", "--branches", "--remotes")

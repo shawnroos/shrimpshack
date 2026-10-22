@@ -104,7 +104,7 @@ def programme_context(stdin_raw) -> list:
     return blocks
 
 
-def _restore(hold, sid, source, cwd=None) -> str:
+def _restore(hold, sid, source, cwd) -> str:
     if hold.get("hold"):
         return _held_block(hold["run"], hold["hold"])
     # Journaled before rendering: the row moves the store revision, and the block must name the latest one.

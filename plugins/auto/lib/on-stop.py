@@ -540,7 +540,8 @@ def _drift(hold, session_id, cwd):
         return hold, None
     try:
         record = hold.get("record")
-        if not isinstance(record, dict) or (record.get("programme") or {}).get("ended"):
+        programme = (record.get("programme") or {}) if isinstance(record, dict) else {}
+        if programme.get("ended") or not isinstance(programme.get("pm_worktree"), dict):
             return hold, None
         programme_worktree = load_lib_module("programme_worktree")
         worktree = programme_worktree.recorded(record)

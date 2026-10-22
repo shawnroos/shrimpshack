@@ -133,6 +133,7 @@ Removal is refused when any of these is true:
 | Condition | Fix named in the receipt |
 | --- | --- |
 | The worktree has modified or untracked files | Commit or clean them |
+| It holds ignored files outside dependency and build-cache folders (`node_modules`, `dist`, `build`, `.venv` and similar) | Move or delete them |
 | Its HEAD holds a commit that no branch or remote reaches | Create a branch at its HEAD |
 | The command's own cwd is inside the worktree | `cd` to the main checkout |
 
@@ -145,8 +146,8 @@ only observes the worktree and never removes it.
   branch.
 - A worktree deleted by hand counts as released. Git keeps a stale entry for it
   until git prunes it. auto leaves that entry alone.
-- Files that `.gitignore` covers do not count as changes. Git removes them with
-  the worktree.
+- Ignored dependency and build-cache folders do not block removal. Git deletes
+  them with the worktree, and an install or build recreates them.
 
 ## 5. Source verification
 
