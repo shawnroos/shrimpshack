@@ -110,7 +110,8 @@ The verb then refuses, because it finds no request.
 
 ## 4. Retention
 
-Nothing is deleted automatically.
+Nothing is deleted automatically. The one removal is the programme worktree,
+and only when someone runs `release-resources` after end (see below).
 
 - Retained objects, staging, archives, closing entries and old exports stay
   until a person removes them.
@@ -119,6 +120,33 @@ Nothing is deleted automatically.
 - A preservation receipt says what was captured. It is not permission to delete
   the source. Remove a worker's worktree only after
   `preserve-code --source <worktree> --check` says the receipt still covers it.
+
+### The programme worktree
+
+The programme worktree (`pm_worktree`) is the one thing auto removes, and only
+after programme end. End records it as the closure resource `worktree`.
+`release-resources` removes it with a plain `git worktree remove`. It never
+uses `-f`, and it never runs `git worktree prune`.
+
+Removal is refused when any of these is true:
+
+| Condition | Fix named in the receipt |
+| --- | --- |
+| The worktree has modified or untracked files | Commit or clean them |
+| Its HEAD holds a commit that no branch or remote reaches | Create a branch at its HEAD |
+| The command's own cwd is inside the worktree | `cd` to the main checkout |
+
+A refused worktree stays `pending`, and `check-archive` names it under the
+`resources` check. Fix the cause and run `release-resources` again. To keep
+the worktree, record `dispose-action --resource worktree`. After that, release
+only observes the worktree and never removes it.
+
+- A branch made inside the worktree survives removal, because git keeps every
+  branch.
+- A worktree deleted by hand counts as released. Git keeps a stale entry for it
+  until git prunes it. auto leaves that entry alone.
+- Files that `.gitignore` covers do not count as changes. Git removes them with
+  the worktree.
 
 ## 5. Source verification
 

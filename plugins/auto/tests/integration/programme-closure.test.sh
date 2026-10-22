@@ -309,6 +309,40 @@ check "$BASEV" "$(inventory "$RUNV")"
 it "S10: the view bytes are the seal's"
 check "$VIEWB" "$(shasum -a 256 "$(home_of "$RUNV")/views/view.json")"
 
+# ── the programme worktree: an unsafe removal blocks the archive; a safe one lets it seal ──
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+cd "$WORK" || exit 1
+WREPO="${WORK}/wt-repo"
+git init -q "$WREPO" && git -C "$WREPO" commit -q --allow-empty -m init
+RUNW="$(new_programme w50)"
+WTW="$(run_py "$RUNW" "$WREPO" <<'EOF'
+pw = load_lib_module("programme_worktree")
+pa = load_lib_module("programme_authority")
+made = pw.create(args[1], args[0])
+def mutate(rec):
+    rec["programme"]["pm_worktree"] = made["record"]
+pa.write(ph.home_path(args[0]), args[0], mutate, lambda _r, _rec: pj.entry("remit_set", "sess-pm", {}))
+print(made["record"]["path"])
+EOF
+)"
+echo wip > "${WTW}/wip.txt"
+end_typed "$RUNW" >/dev/null
+prog release-resources --run "$RUNW"
+prog archive --run "$RUNW"
+it "a dirty programme worktree blocks the archive under the resources check"
+check "1 checks_failed" "$CODE $(pyget "$OUT" 'd.get("code")')"
+has "worktree" "$(pyget "$OUT" '[c for c in d["checks"] if c["check"] == "resources"][0]["failures"]')"
+it "the dirty worktree and its file are still there"
+check "wip" "$(cat "${WTW}/wip.txt")"
+rm "${WTW}/wip.txt"
+prog release-resources --run "$RUNW"
+it "once clean, release-resources removes it"
+check "released no" "$(arch_field "$RUNW" 'closure["resources"]["worktree"]["state"]') $([ -e "$WTW" ] && echo yes || echo no)"
+prog archive --run "$RUNW"
+it "and the archive seals"
+check "0 sealed" "$CODE $(pyget "$OUT" 'd.get("status")')"
+
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 

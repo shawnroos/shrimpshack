@@ -472,6 +472,125 @@ check "0 sealed" "$CODE $(pyget "$OUT" 'd.get("status")')"
 it "the foreign line was never absorbed a second time"
 check 1 "$(foreign_events "$FRUN")"
 
+# ── the programme worktree is a closure resource, removed only when nothing in it can be lost ──
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+cd "$WORK" || exit 1
+WT=""
+# wt_programme <space>: a programme whose pm_worktree is a fresh detached worktree; sets RUN and WT.
+wt_programme() {
+  local repo="${WORK}/repo-$1"
+  git init -q "$repo" && git -C "$repo" commit -q --allow-empty -m init
+  RUN="$(new_programme "$1")"
+  WT="$(run_py "$RUN" "$repo" <<'EOF'
+pw = load_lib_module("programme_worktree")
+pa = load_lib_module("programme_authority")
+made = pw.create(args[1], args[0])
+def mutate(rec):
+    rec["programme"]["pm_worktree"] = made["record"]
+pa.write(ph.home_path(args[0]), args[0], mutate, lambda _r, _rec: pj.entry("remit_set", "sess-pm", {}))
+print(made["record"]["path"])
+EOF
+)"
+}
+wt_state() { arch_field "$1" 'closure["resources"]["worktree"]["state"]'; }
+wt_detail() { arch_field "$1" 'closure["resources"]["worktree"]["receipts"][-1]["detail"]'; }
+listed() { git -C "$1" worktree list --porcelain | grep -c "^worktree $2$"; }
+resources_check() {
+  prog check-archive --run "$1"
+  pyget "$OUT" '[c for c in d["checks"] if c["check"] == "resources"][0]'
+}
+
+wt_programme w40
+CLEAN_RUN="$RUN"
+CLEAN_REPO="${WORK}/repo-w40"
+end_typed "$RUN" >/dev/null
+it "end owes the recorded worktree as a closure resource"
+check '["lease:default.w40", "worktree"]' "$(arch_field "$RUN" 'sorted(closure["resources"])')"
+it "the owed worktree names its path and main checkout"
+check "$WT" "$(arch_field "$RUN" 'closure["resources"]["worktree"]["path"]')"
+it "before release-resources, check-archive names the worktree"
+has '"id": "worktree"' "$(resources_check "$RUN")"
+prog release-resources --run "$RUN"
+it "release-resources from outside removes a clean detached worktree"
+check "released no 0" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no) $(listed "$CLEAN_REPO" "$WT")"
+it "check-archive then passes its resources check"
+check "true" "$(pyget "$(resources_check "$RUN")" 'd["ok"]')"
+
+wt_programme w41
+echo draft > "${WT}/notes.txt"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a worktree with an untracked file is not removed"
+check "pending draft" "$(wt_state "$RUN") $(cat "${WT}/notes.txt")"
+it "the receipt names the untracked change and the fix"
+has "commit or clean" "$(wt_detail "$RUN")"
+it "check-archive names the worktree"
+has '"id": "worktree"' "$(resources_check "$RUN")"
+has "uncommitted or untracked" "$(resources_check "$RUN")"
+
+wt_programme w42
+git -C "$WT" commit -q --allow-empty -m "detached work"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a detached worktree holding a commit no branch reaches is not removed"
+check "pending yes" "$(wt_state "$RUN") $([ -d "$WT" ] && echo yes || echo no)"
+it "the receipt names the unreachable commit and the fix"
+has "no branch or remote reaches" "$(wt_detail "$RUN")"
+
+wt_programme w43
+git -C "$WT" switch -q -c shawn-work
+git -C "$WT" commit -q --allow-empty -m "his work"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a worktree on a branch Shawn made and committed to is removed"
+check "released no" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no)"
+it "his branch and its commit survive the removal"
+check "his work" "$(git -C "${WORK}/repo-w43" log -1 --format=%s shawn-work 2>&1)"
+
+wt_programme w44
+end_typed "$RUN" >/dev/null
+INSIDE_OUT="$(cd "$WT" && "$PY" "$PROG" release-resources --run "$RUN" 2>&1)"
+it "release-resources run from inside the worktree leaves it in place"
+check "pending yes" "$(wt_state "$RUN") $([ -d "$WT" ] && echo yes || echo no)"
+it "the refusal names the cd out"
+has "cd " "$(wt_detail "$RUN")"
+has "inside" "$(wt_detail "$RUN")"
+lacks "Traceback" "$INSIDE_OUT"
+prog release-resources --run "$RUN"
+it "the same worktree is removed once the caller is outside it"
+check "released no" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no)"
+
+wt_programme w45
+end_typed "$RUN" >/dev/null
+rm -rf "$WT"
+prog release-resources --run "$RUN"
+it "a worktree deleted by hand is confirmed as released"
+check "released" "$(wt_state "$RUN")"
+it "its stale registration is left for git, never pruned by auto"
+check "1" "$(listed "${WORK}/repo-w45" "$WT")"
+
+wt_programme w47
+end_typed "$RUN" >/dev/null
+KEEP="$(typed_in "$RUN" sess-pm "keep the programme worktree: dispose-action --resource worktree")"
+prog dispose-action --resource worktree --as accepted_unknown --prompt "$KEEP" --run "$RUN"
+it "a typed prompt records a disposition on the worktree resource"
+check 0 "$CODE"
+prog release-resources --run "$RUN"
+it "a worktree with a disposition is observed, never removed"
+check "yes 1" "$([ -d "$WT" ] && echo yes || echo no) $(listed "${WORK}/repo-w47" "$WT")"
+it "and check-archive no longer names it"
+check "true" "$(pyget "$(resources_check "$RUN")" 'd["ok"]')"
+
+RUN="$(new_programme w46)"
+end_typed "$RUN" >/dev/null
+it "a programme with no worktree owes no worktree resource"
+check '["lease:default.w46"]' "$(arch_field "$RUN" 'sorted(closure["resources"])')"
+
+it "a released worktree resource stays released on a later release-resources"
+prog release-resources --run "$CLEAN_RUN"
+check "released" "$(wt_state "$CLEAN_RUN")"
+
 echo
 echo "programme-archive.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

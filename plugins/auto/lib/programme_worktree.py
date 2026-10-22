@@ -67,12 +67,23 @@ def _ok(result) -> bool:
     return result["ran"] and result["code"] == 0
 
 
-def registered(main):
+def _listing(main):
     result = _git(main, "worktree", "list", "--porcelain")
     if not _ok(result):
         return None
-    return [_real(line[len("worktree "):].strip()) for line in result["stdout"].splitlines()
-            if line.startswith("worktree ")]
+    entries, current = {}, None
+    for line in result["stdout"].splitlines():
+        if line.startswith("worktree "):
+            current = _real(line[len("worktree "):].strip())
+            entries[current] = {}
+        elif current and line.startswith("HEAD "):
+            entries[current]["head"] = line[len("HEAD "):].strip()
+    return entries
+
+
+def registered(main):
+    listed = _listing(main)
+    return None if listed is None else list(listed)
 
 
 def _ensure_excluded(main, target) -> None:
@@ -125,6 +136,61 @@ def create(repo_path, run, now_iso=None) -> dict:
         return _outcome("failed", target, error=(
             f"{programme_exec.failure(result, 'git worktree add')} (path {target})"))
     return _outcome("created", target, record_value(target, main, now_iso))
+
+
+def _seen(status, path, detail, head=None) -> dict:
+    return {"status": status, "path": path, "detail": detail, "head": head}
+
+
+def observe(value) -> dict:
+    path, main = _real(value.get("path")), _real(value.get("repo"))
+    listed = _listing(main) if main else None
+    if listed is None:
+        if path and not os.path.lexists(path):
+            return _seen("gone", path, f"{path} no longer exists and its repo {main} cannot be listed")
+        return _seen("failed", path, f"could not list the worktrees of {main}")
+    if path not in listed:
+        return _seen("gone", path, f"git no longer lists {path} as a worktree of {main}")
+    if not os.path.isdir(path):
+        return _seen("gone", path, f"{path} was deleted; git keeps a stale entry until it prunes it")
+    return _seen("present", path, f"{path} is still a worktree of {main}", listed[path].get("head"))
+
+
+def _cwd():
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
+def release(value) -> dict:
+    seen = observe(value)
+    if seen["status"] != "present":
+        return seen
+    path, main, head = seen["path"], _real(value.get("repo")), seen["head"]
+    later = "then run release-resources again, or record dispose-action --resource worktree"
+    if inside(_cwd(), path):
+        return _seen("refused", path, (
+            f"this command ran inside {path}; cd {shlex.quote(main)} and run release-resources again"))
+    status = _git(path, "status", "--porcelain", "--untracked-files=all")
+    if not _ok(status):
+        return _seen("failed", path, f"{programme_exec.failure(status, 'git status')}; {later}")
+    if status["stdout"].strip():
+        return _seen("refused", path, (
+            f"{path} has uncommitted or untracked changes; commit or clean them, {later}"))
+    if not head:
+        return _seen("failed", path, f"git lists no HEAD for {path}; {later}")
+    lost = _git(main, "rev-list", "-n", "1", head, "--not", "--branches", "--remotes")
+    if not _ok(lost):
+        return _seen("failed", path, f"{programme_exec.failure(lost, 'git rev-list')}; {later}")
+    if lost["stdout"].strip():
+        return _seen("refused", path, (
+            f"{path} holds commits that no branch or remote reaches; create a branch at its HEAD "
+            f"(git -C {shlex.quote(path)} branch <name>), {later}"))
+    removed = _git(main, "worktree", "remove", path)
+    if not _ok(removed):
+        return _seen("failed", path, f"{programme_exec.failure(removed, 'git worktree remove')}; {later}")
+    return _seen("removed", path, f"removed {path}; branches made in it are kept")
 
 
 def _block(record_or_programme):

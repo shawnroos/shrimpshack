@@ -124,12 +124,23 @@ mkdir -p "${WORK}/plain"
 OUT="$(create "${WORK}/plain" r6)"
 case "$OUT" in "refused None None "*) check ok ok ;; *) check "refused ..." "$OUT" ;; esac
 
-it "nothing in the module removes a worktree"
-if grep -nE "worktree\", \"remove|\"remove\"|prune" "${AUTO_ROOT}/lib/programme_worktree.py"; then
-  fail "programme_worktree.py must not remove or prune worktrees (U5 owns removal)"
-else
-  pass
-fi
+it "the module removes a worktree only inside release, and never prunes"
+OUT="$("$PY" - "${AUTO_ROOT}/lib/programme_worktree.py" <<'EOF'
+import re, sys
+text = open(sys.argv[1]).read()
+blocks = re.split(r"(?m)^(?=def )", text)
+print(sorted({re.match(r"def (\w+)", b).group(1) if b.startswith("def ") else "<module>"
+              for b in blocks if re.search(r'"remove"|"prune"|worktree (remove|prune)', b)}))
+EOF
+)"
+check "['release']" "$OUT"
+
+# auto-spawn.py rolls back worktrees it created moments earlier in the same call, with -f; it
+# predates this guard and holds no one's work. Any other forced or pruning removal fails here.
+it "no code in lib/ removes a worktree with -f or --force, or prunes worktrees"
+HITS="$(grep -rnE '"remove"[^])]*"(-f|--force)"|worktree remove +(-f|--force)|worktree", *"prune"|worktree prune' \
+  "${AUTO_ROOT}/lib" | grep -v '^[^:]*/lib/auto-spawn\.py:' || true)"
+check "" "$HITS"
 
 it "inside: the worktree and a subdirectory are inside; its parent and a sibling are not"
 mkdir -p "${TARGET}/sub"
