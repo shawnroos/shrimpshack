@@ -930,6 +930,19 @@ The nag file is `<repo>/.claude/auto/.stop-nag-<sid>.json`, or
 `[A-Za-z0-9_-]` and is capped at 128 characters. A stop with no session id uses
 `.stop-nag.json`. A programme holds only its driving session's stop.
 
+Drift: when the driving PM of a live programme with a `pm_worktree` stops, the hook
+compares the `cwd` in the hook's stdin (never the shell's `$PWD` or herdr's pane cwd)
+with the recorded worktree path, by realpath; a subdirectory of the worktree is inside
+it. The check runs before holds whose programme may stop are dropped. When the cwd is
+outside and the worktree is inside the session's start directory (§10.10, newest
+`startup` or `resume` row), the stop is blocked with a `cwd_drift` reason whose fix is
+`cd <worktree>`, and that reason is part of the nag signature. When the `cd` would not
+last, the stop is let through with a `systemMessage` naming `/cd <worktree>`.
+`cwd_drift` is a hook-only reason kind: it is not in `REASON_KINDS` and status does not
+show it. A missing `cwd`, a null or malformed `pm_worktree`, a worktree path that no
+longer exists, an ended programme or any error lets the stop through. The hook writes
+nothing to the record, and no environment variable turns the check off.
+
 ### 10.10 Session registry
 
 `<data>/sessions/<server>.<workspace>.jsonl` (0600, folder 0700, lock
