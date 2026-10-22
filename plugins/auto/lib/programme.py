@@ -881,6 +881,7 @@ def _h_status(argv):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
+        sys.stdout.write(f"{line}\n" if (line := load_lib_module("programme_worktree").status_line(record)) else "")
     return 0
 
 

@@ -28,6 +28,7 @@ driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
 programme_terms = load_lib_module("programme_terms")
+programme_worktree = load_lib_module("programme_worktree")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
@@ -195,6 +196,27 @@ def _rearm_list(record) -> dict:
     return {"waits": waits, "watchers": sorted((programme.get("watchers") or {}).keys())}
 
 
+def _make_worktree(run, programme=None):
+    programme = programme if programme is not None else \
+        ((programme_home._read_record(run) or {}).get("programme") or {})
+    repo = programme_worktree.remit_repo(programme)
+    if programme_worktree.recorded(programme) or not repo:
+        return None
+    try:
+        return programme_worktree.create(repo, run)
+    except OSError as exc:
+        return {"status": "failed", "path": None, "record": None, "error": f"could not create the worktree: {exc}"}
+
+
+def _record_worktree(made, programme) -> dict:
+    if not made:
+        return {}
+    if made["record"] and not programme_worktree.recorded(programme):
+        programme["pm_worktree"] = made["record"]
+        return {"pm_worktree": made["record"]}
+    return {"pm_worktree_error": made["error"]} if made["error"] else {}
+
+
 def _locked(body):
     return programme_home._with_leases_lock(body)
 
@@ -299,12 +321,15 @@ def _h_takeover(host, argv):
     # herdr reads take seconds; they run before the leases lock and the driver is re-checked under it.
     status = _fresh_status(lease)
     presence = None if orphan_asks(status) or status not in MOVABLE_STATES else _presence(lease, run)
+    asked_now = status in MOVABLE_STATES and _since_driver_changed(run, _requests(run, "takeover", sid))
+    made = _make_worktree(run) if asked_now else None
 
     def move(request, reason, evidence):
         extra = {"reason": reason, "evidence": evidence} if evidence else {"reason": reason}
         return _move(run, sid, "taken_over", sid,
                      lambda moved, rec: dict(_rearm_list(rec), request=_request_ref(request),
-                                             request_text=(request.get("payload") or {}).get("text"), **extra))
+                                             request_text=(request.get("payload") or {}).get("text"),
+                                             **_record_worktree(made, rec["programme"]), **extra))
 
     def body():
         status = _fresh_status(lease)
@@ -357,6 +382,7 @@ def _h_handover(host, argv):
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
     run = lease["run"]
+    made = _make_worktree(run) if session_registry.caller_drives(programme_home._read_record(run), sid) else None
 
     def body():
         status = _fresh_status(lease)
@@ -373,7 +399,8 @@ def _h_handover(host, argv):
             raise _Refused(f"no typed /auto:programme-handover {target} in the driving session", status)
         cites = list(asked[-1]["cites"])
         moved = _move(run, target, "handed_over", sid,
-                      lambda moved, rec: {"request": _request_ref(asked[-1])}, cites=cites)
+                      lambda moved, rec: dict(_record_worktree(made, rec["programme"]),
+                                              request=_request_ref(asked[-1])), cites=cites)
         return dict(moved, prompt_id=cites[0])
 
     try:
@@ -632,6 +659,14 @@ def _h_set_remit(host, argv):
         doc = json.loads(raw)
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
+    # git worktree add is slow: it runs on the remit-to-be before the leases lock, recorded under it.
+    run, _, record = host._locate(opts)
+    current = programme_home.normalize_programme(record.get("programme") or {})
+    try:
+        drives = session_registry.caller_drives(record, driver_session.driving_session_id())
+        made = _make_worktree(run, dict(current, remit=parse_remit(doc, current["remit"]))) if drives else None
+    except (ValueError, programme_home.ProgrammeHomeError):
+        made = None
 
     def change(programme, prompt, rec):
         before = programme["remit"]
@@ -652,6 +687,8 @@ def _h_set_remit(host, argv):
             term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
         out = {"remit": after,
                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
+        if after["repos"]:
+            out.update(_record_worktree(made, programme))
         if not accepted:
             carried, notices = programme_carryover.prefill(host, programme)
             out.update({"carried_over": carried} if carried else {}, **({"notices": notices} if notices else {}))
