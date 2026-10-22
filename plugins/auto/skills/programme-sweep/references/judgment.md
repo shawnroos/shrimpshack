@@ -144,9 +144,11 @@ same gate in this order, and the first match wins:
    (`full_release`), spend over the cap (`spend_over_cap`), merging around the
    gate (`merge_around_gate`) and refused permissions (`denied_operation`)
    always stay with Shawn. No Authority level and no Ruling gives them to you.
-2. **Not accepted.** Until the agreement is accepted (`agreement: accepted` in
-   the rules block), `product_call` and `product_scope` stay with Shawn. Every
-   other kind goes on to the next steps.
+2. **Not accepted.** Until the rules block shows an `operating contract v<n>`
+   line (the accepted marker), `product_call` and `product_scope` stay with
+   Shawn. An agreement accepted under an older plugin can show
+   `agreement: accepted` without that line; product calls still stay with him
+   there. Every other kind goes on to the next steps.
 3. **Restrict.** An active restrict Ruling for the kind and the item keeps it
    with Shawn, whatever else applies.
 4. **Grant.** An active grant Ruling for the kind and the item gives it to you.
@@ -175,4 +177,4 @@ Even then, bring it to Shawn with one recommendation when the choice:
 
 When the choice stays with Shawn, `log-decision` refuses it: hand it with
 `P hand-item <item> --kind <kind> --question "<one question with your recommendation>"`.
-Handing is never refused.
+The who-decides gate never blocks a hand.

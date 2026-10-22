@@ -87,7 +87,7 @@ from this session's lease.
    | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
    | He corrects who decides a kind of choice ("that didn't need me") | `P record-ruling <id> --effect grant\|restrict --scope <text> --replies-to <ask-or-decision-id> --prompt <id>`, then see below |
    | He names a preferred tool and its new text | `P edit-project-term <term-id> "<new text>" --prompt <id>` (the term ids are in `P status --agreement`) |
-   | He re-records an old reservation the rules block lists | `P record-ruling <new-id> --effect restrict --kind <decision-kind> --scope <text> --prompt <id>`, under a new id (the old entry cannot be revised), then `P close-ruling <old-id> --as withdrawn --prompt <id>` |
+   | He re-records an old reservation the rules block lists | `P record-ruling <new-id> --effect restrict --kind <decision-kind> --scope <text> --prompt <id>`, under a new id (the old entry cannot be revised), then `P close-ruling <old-id> --as withdrawn --prompt <id>`; his reply names both ids |
    | He picks Rulings to carry to the next programme | `P carry-rulings --prompt <id> <ruling-id>...`, after the offer (step 17) |
    | Accept a pending decision or requirement | `P accept-context <decision-or-requirement-id> --prompt <id>` |
    | Lift a safety pause | `P lift-pause <pause-id> --prompt <id>` |
@@ -299,7 +299,8 @@ from this session's lease.
       open. Hand Shawn only the choices on that section's list, with one
       recommendation each.
     - `log-decision` refuses a kind that stays with Shawn: a protected kind,
-      `product_call` or `product_scope` before the agreement is accepted, a kind
+      `product_call` or `product_scope` while the rules block has no
+      `operating contract v<n>` line (the accepted marker), a kind
       an active restrict Ruling covers for the item, and a kind whose Authority
       level is propose or never. Hand those.
     - A `protocol change:` or `protocol not acknowledged` line means Authority
