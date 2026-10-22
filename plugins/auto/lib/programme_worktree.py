@@ -158,13 +158,10 @@ def _cwd():
         return None
 
 
-# Ignored entries a build or install recreates, so losing them with the worktree costs nothing.
-REGENERABLE = frozenset({"node_modules", ".DS_Store", "__pycache__", ".pytest_cache", ".venv",
-                         ".cache", ".angular", ".next", ".turbo", "coverage"})
-
-
-def _regenerable(entry) -> bool:
-    return entry.rstrip("/").rsplit("/", 1)[-1] in REGENERABLE
+# Default-deny: an ignored folder can hide a nested repo with uncommitted work, so the only
+# ignored entry a removal may take is a Finder metadata file, which can hold nothing.
+def _disposable(entry) -> bool:
+    return entry.rsplit("/", 1)[-1] == ".DS_Store"
 
 
 def _entries(porcelain_z) -> list:
@@ -204,11 +201,15 @@ def release(value) -> dict:
     if any(code != "!!" for code, _ in entries):
         return _seen("refused", path, (
             f"{path} has uncommitted or untracked changes; commit or clean them, {later}"))
-    kept = [name for code, name in entries if not _regenerable(name)]
+    kept = [name for code, name in entries if not _disposable(name)]
     if kept:
         return _seen("refused", path, (
             f"{path} holds ignored files that removing it would delete ({', '.join(kept[:5])}); "
             f"move or delete them, {later}"))
+    if os.path.exists(os.path.join(path, ".gitmodules")):
+        return _seen("refused", path, (
+            f"{path} has submodules, which git worktree remove cannot remove; delete it by hand, "
+            f"then record dispose-action --resource worktree"))
     if not head:
         return _seen("failed", path, f"git lists no HEAD for {path}; {later}")
     lost = _git(main, "rev-list", "-n", "1", head, "--not", "--branches", "--remotes")

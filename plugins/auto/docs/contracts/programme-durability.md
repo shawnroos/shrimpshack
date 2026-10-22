@@ -133,7 +133,8 @@ Removal is refused when any of these is true:
 | Condition | Fix named in the receipt |
 | --- | --- |
 | The worktree has modified or untracked files | Commit or clean them |
-| It holds ignored files other than wholly ignored dependency and cache folders (`node_modules`, `__pycache__`, `.venv`, `.cache` and similar; `dist` and `build` are not on the list because they can hold user files) | Move or delete them |
+| It holds any ignored file or folder other than `.DS_Store` (an ignored folder can hide a nested repo with uncommitted work) | Delete or move them, or record a disposition |
+| It has submodules, which `git worktree remove` cannot remove | Delete it by hand, then record `dispose-action --resource worktree` |
 | Its HEAD holds a commit that no branch or remote reaches | Create a branch at its HEAD |
 | The command's own cwd is inside the worktree | `cd` to the main checkout |
 | Another worktree is registered inside it, even a stale entry | Remove it, or clear git's stale entry if its folder is gone |
@@ -147,8 +148,9 @@ only observes the worktree and never removes it.
   branch.
 - A worktree deleted by hand counts as released. Git keeps a stale entry for it
   until git prunes it. auto leaves that entry alone.
-- Ignored dependency and build-cache folders do not block removal. Git deletes
-  them with the worktree, and an install or build recreates them.
+- A worktree that held `node_modules` or other caches stays `pending` until
+  those folders are deleted. auto never decides that an ignored folder is safe
+  to lose.
 
 ## 5. Source verification
 

@@ -549,21 +549,33 @@ it "a worktree holding an ignored nested worktree is not removed"
 check "pending wip" "$(wt_state "$RUN") $(cat "${WT}/.claude/wt/child/wip.txt")"
 
 wt_programme w62
-printf 'node_modules/\n.DS_Store\n' >> "${WORK}/repo-w62/.git/info/exclude"
-mkdir -p "${WT}/node_modules/x"; echo dep > "${WT}/node_modules/x/index.js"; touch "${WT}/.DS_Store"
+printf '.DS_Store\n' >> "${WORK}/repo-w62/.git/info/exclude"
+touch "${WT}/.DS_Store"; mkdir -p "${WT}/sub"; touch "${WT}/sub/.DS_Store"
 end_typed "$RUN" >/dev/null
 prog release-resources --run "$RUN"
-it "ignored dependency and cache folders alone do not block removal"
+it "ignored .DS_Store files alone do not block removal"
 check "released no" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no)"
 
 wt_programme w63
-printf '__pycache__/\nnode_modules/\n' >> "${WORK}/repo-w63/.git/info/exclude"
-mkdir -p "${WT}/pkg/lib/__pycache__" "${WT}/packages/a/node_modules/caf\303\251"
-echo c > "${WT}/pkg/lib/__pycache__/m.pyc"; echo d > "${WT}/packages/a/node_modules/caf\303\251/i.js"
+printf 'node_modules/\n' >> "${WORK}/repo-w63/.git/info/exclude"
+git init -q "${WT}/node_modules/pkg"; echo work > "${WT}/node_modules/pkg/work.txt"
 end_typed "$RUN" >/dev/null
 prog release-resources --run "$RUN"
-it "nested and non-ASCII dependency and cache folders do not block removal"
-check "released no" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no)"
+it "an ignored dependency folder blocks removal, so a repo inside it keeps its work"
+check "pending work" "$(wt_state "$RUN") $(cat "${WT}/node_modules/pkg/work.txt")"
+it "the receipt names the ignored folder"
+has "node_modules/" "$(wt_detail "$RUN")"
+
+wt_programme w67
+SUB="${WORK}/sub-w67"; git init -q "$SUB" && git -C "$SUB" commit -q --allow-empty -m s
+git -C "$WT" -c protocol.file.allow=always submodule add -q "$SUB" lib >/dev/null 2>&1
+git -C "$WT" commit -qm "add submodule"
+git -C "$WT" branch -q keep-sub
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a worktree with submodules is refused with a reason that names dispose-action"
+check "pending" "$(wt_state "$RUN")"
+has "submodule" "$(wt_detail "$RUN")"
 
 wt_programme w64
 printf 'dist/\n' >> "${WORK}/repo-w64/.git/info/exclude"
