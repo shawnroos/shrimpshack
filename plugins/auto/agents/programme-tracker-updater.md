@@ -21,7 +21,13 @@ You make the tracker writes the PM hands you. The PM has already checked which i
 A list of writes, each with:
 
 - `issue`: the issue key (for example `AI-1109`). Write only to the issues in this list.
-- `label`: one of `in_progress`, `pr_open`, `merged`, `blocked`, `handed`, plus the comment text and any links the PM gives.
+- `label`: one of `in_progress`, `pr_open`, `merged`, `blocked`, `handed`, for your record only.
+- `state`: the state name to set, or null to leave the state alone.
+- `comment`: the comment text to post, or null.
+- `links`: a list of `{url, title}` to add, possibly empty.
+- `labels`: labels to add, possibly empty.
+
+Write exactly these fields. Never infer a state, comment, link or label from the `label`.
 
 ## The rules
 

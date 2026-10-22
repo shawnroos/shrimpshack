@@ -35,12 +35,14 @@ Never run any other `programme.sh` verb, and never run `mark-read`. A hook refus
 One JSON object and nothing else:
 
 ```json
-{"ok": true, "run": "<run>", "claims": [
+{"ok": true, "run": "<run>", "total": <total>, "inbox_offset": <inbox_offset>, "next": "<next, copied as printed>", "claims": [
   {"index": 0, "item": "<item id>", "item_name": "<title or session name>", "kind": "<claim kind>",
    "summary": "<one plain sentence>", "asks_for": "<what the worker wants from the PM, or null>",
    "evidence_named": ["<PR, issue or file the claim cites>"]}
 ]}
 ```
+
+Copy `total`, `inbox_offset` and `next` exactly as `inbox` printed them: the PM uses `next` to mark the claims read.
 
 If the inbox cannot be read, return `{"ok": false, "run": "<run>", "unknown": "<one line>"}`. An empty or failed read is unknown, never "no claims", unless the command printed an empty inbox.
 

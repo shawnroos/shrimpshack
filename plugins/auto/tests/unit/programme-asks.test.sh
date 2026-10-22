@@ -117,6 +117,17 @@ prog() {
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 ask() { field "items[\"$1\"][\"handed\"]$2"; }
+run_brief() {
+  run_py "$RUN" "$1" <<'EOF'
+import types
+ps = load_lib_module("programme_sources")
+try:
+    ps._brief_tail(types.SimpleNamespace(ProgrammeError=RuntimeError), record(args[0])["programme"], [args[1]], [])
+    print("listed")
+except RuntimeError as exc:
+    print("refused " + ("voided" if "voided" in str(exc) else str(exc)))
+EOF
+}
 fp() { ask "$1" '["fingerprint"]' | tr -d '"'; }
 
 A="linear:AI-901"
@@ -176,6 +187,10 @@ it "a 1800-character ask across fields is stored whole"
 prog hand-item "$L" --kind product_call --question "Long?" --option "ship | ${EFFECT}" \
   --if-nothing "$NOTHING" --recommend ship --recommend-why "$WHY" --evidence "$EVID"
 check '[0, 400, null, 500, 500, 400]' "[$CODE, $(field "[len(items['$L']['handed']['options'][0]['effect']), items['$L']['handed']['options'][0]['cost'], len(items['$L']['handed']['if_nothing']), len(items['$L']['handed']['recommendation_why']), len(items['$L']['handed']['evidence'][0])]" | tr -d '[]')]"
+it "no decision detail row for the long ask is cut by the view"
+check "0" "$(view_q 'sum(1 for d in v["model"]["decisions_for_shawn"] if d.get("item") == "'"$L"'" for line in d.get("details") or [] if line.endswith("…") or line.endswith("..."))')"
+it "the long ask's view rows still carry every field's full text"
+check "\"True True True\"" "$(view_q '" ".join(str(any(x in line for d in v["model"]["decisions_for_shawn"] if d.get("item") == "'"$L"'" for line in d.get("details") or [])) for x in ("e" * 400, "n" * 500, "w" * 500))')"
 it "a field over its own cap is refused, not cut"
 prog add-item linear:AI-903 --title "Too long" --kind fix_only
 prog hand-item linear:AI-903 --kind product_call --question "Long?" --if-nothing "${NOTHING}x"
@@ -254,6 +269,16 @@ check '"open"' "$(view_q "asks['$A']['status']")"
 it "a second typed answer records"
 prog answer-handed "$A" --choice ship --prompt "$(prompt_at 2 'ship Crop default')"
 check "0 open" "$CODE $(field "items['$A']['state']" | tr -d '"')"
+
+it "a worker brief that cites the voided decision is refused, not listed as settled"
+check "refused voided" "$(run_brief "$DEC1")"
+
+it "update-ask never voids an answer on an item that has finished"
+edit "prog['items']['$A']['state'] = 'done'"
+prog update-ask "$A" --readiness "aaaa000011112222"
+check "1 done" "$CODE $(field "items['$A']['state']" | tr -d '"')"
+has "reopen" "$OUT"
+edit "prog['items']['$A']['state'] = 'open'"
 
 it "ask-relayed after answer-handed records relayed_at"
 prog ask-relayed "$A"

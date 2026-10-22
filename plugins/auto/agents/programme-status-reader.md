@@ -19,7 +19,17 @@ You read one auto programme's status and return it as data. You never change the
 ## Input
 
 - `run`: the programme run id. Required.
-- `fields`: what the PM wants back (for example `actionable_reasons`, `items`, `decisions_for_shawn`). If none is given, return the whole `model.programme` block.
+- `fields`: dotted paths into the status JSON the PM wants back. If none is given, return `model.programme`.
+
+Where the fields live in `status --json`:
+
+| Path | Holds |
+| --- | --- |
+| `model.programme` | run, may_stop, stop_rule, reasons, `actionable_reasons` (kind, target, name), counts |
+| `model.items` | every item with its state and title |
+| `model.decisions_for_shawn` | open decisions, each with its text detail rows |
+| `asks` | every open or answered-but-unrelayed ask: fingerprint, `shown_current`, `replies`, `answered` |
+| `run` | the run id |
 
 ## What you run
 
@@ -36,7 +46,7 @@ Never run any other `programme.sh` verb. A hook refuses every programme write ve
 Return one JSON object and nothing else:
 
 ```json
-{"ok": true, "run": "<run>", "data": { ...the requested fields... }}
+{"ok": true, "run": "<run>", "data": {"<path>": <value at that path>, ...}}
 ```
 
 If the command fails, prints no JSON, or the run id is missing, return:

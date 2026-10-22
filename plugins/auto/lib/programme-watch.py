@@ -3,7 +3,8 @@
 
 Remit mode beats the `remit` watcher each interval and keeps polling after each change, until
 its Monitor expires or kills it. A superseded or ended watcher prints `remit-watcher-exit
-superseded` or `remit-watcher-exit ended` and exits 0.
+superseded` or `remit-watcher-exit ended` and exits 0; a crash prints
+`remit-watcher-exit crashed: <error>` and exits 1.
 Item mode runs a watch command, beats that item's watcher until it exits, then prints
 its exit status. Record writes go only through the programme CLI.
 """
@@ -431,16 +432,27 @@ def _superseded(record) -> bool:
 
 def _remit_mode(run_id, opts) -> int:
     record = _read(run_id)
+    try:
+        return _remit_loop(run_id, opts, record)
+    except Exception as exc:  # noqa: BLE001 — the sweep re-arms on a crash line, never on silence
+        _say(f"remit-watcher-exit crashed: {type(exc).__name__}")
+        _warn(f"{type(exc).__name__}: {exc}")
+        return 1
+
+
+def _remit_loop(run_id, opts, record) -> int:
     if _ended(record) or _superseded(record):
         return 0
     if opts["tracker"] and not programme_home.source_enabled(_programme(record), "tracker"):
         _warn("the agreement turns the tracker off; not watching it")
+    # Beat before the first poll: herdr and tracker reads can take seconds, and until the first beat
+    # a wait this watcher covers reads as unwatched.
+    if not _beat(run_id, REMIT_WATCHER):
+        return 1
     signals = RemitSignals({"home": programme_home.home_path(run_id)}, opts["tracker"])
     changes = signals.poll(record)
     if changes:
         _say("; ".join(changes))
-    if not _beat(run_id, REMIT_WATCHER):
-        return 1
     interval, deadline, polls, refused = _interval(), time.monotonic(), 0, 0
     while True:
         deadline += interval

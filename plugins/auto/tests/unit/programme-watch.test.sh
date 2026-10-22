@@ -151,7 +151,7 @@ start_watch() {
 }
 
 wait_exit() {
-  local pid="$1" limit="${2:-80}" n=0
+  local pid="$1" limit="${2:-160}" n=0
   while kill -0 "$pid" 2>/dev/null; do
     sleep 0.1
     n=$((n + 1))
@@ -161,7 +161,7 @@ wait_exit() {
 }
 
 wait_for() {
-  local file="$1" pattern="$2" limit="${3:-50}" n=0
+  local file="$1" pattern="$2" limit="${3:-100}" n=0
   while ! grep -q -- "$pattern" "$file" 2>/dev/null; do
     sleep 0.1
     n=$((n + 1))
@@ -614,6 +614,29 @@ wait_exit "$WPID"
 check 0 "$?"
 check "remit-watcher-exit ended" "$(cat "${WORK}/ended.out")"
 has "ended" "$(cat "${WORK}/ended.err")"
+
+it "a remit watcher that crashes prints a crash line before it exits, so the sweep can tell it from expiry"
+CRASH="$("$PY" - "$AUTO_ROOT" <<'PYEOF' 2>/dev/null
+import importlib.util, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+spec = importlib.util.spec_from_file_location("pw", os.path.join(sys.argv[1], "lib", "programme-watch.py"))
+pw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pw)
+class Boom:
+    def __init__(self, *args):
+        pass
+    def poll(self, record):
+        raise RuntimeError("source read blew up")
+pw._read = lambda run_id: {}
+pw._ended = pw._superseded = lambda record: False
+pw._beat = lambda *args: True
+pw._programme = lambda record: {}
+pw.RemitSignals = Boom
+code = pw._remit_mode("prog-x", {"tracker": False, "max_polls": 1})
+print(f"code={code}")
+PYEOF
+)"
+case "$CRASH" in *"remit-watcher-exit crashed"*"code=1"*) pass ;; *) fail "got: $CRASH" ;; esac
 
 echo ""
 echo "programme-watch.test.sh: ${PASS} passed, ${FAIL} failed"

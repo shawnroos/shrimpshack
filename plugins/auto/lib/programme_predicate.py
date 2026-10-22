@@ -222,9 +222,7 @@ def _name_reasons(floor, items) -> None:
     for reason in floor:
         item = items.get(reason.get("item")) if isinstance(reason.get("item"), str) else None
         if isinstance(item, dict):
-            sessions = [s.get("name") for s in item.get("sessions") or [] if isinstance(s, dict) and s.get("name")]
-            reason["name"] = programme_naming.label(item.get("title") or (sessions[-1] if sessions else None),
-                                                    reason["item"])
+            reason["name"] = programme_naming.item_name(reason["item"], item)
 
 
 def _corrupt(now) -> dict:

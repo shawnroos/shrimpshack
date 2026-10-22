@@ -43,4 +43,4 @@ One JSON object and nothing else:
 ]}
 ```
 
-Copy `result`, `gates` and `fingerprint` exactly as `check-mergeable` printed them. A PR whose read failed keeps `result: unknown` with the reason in `gates`. Never upgrade unknown to ready.
+`check-mergeable` prints its facts flat; nest them under `facts` as shown. Copy `result`, `gates` and `fingerprint` exactly as printed. An unknown read prints only `result`, `pr`, an empty `gates` and a `note`: return `"result": "unknown"`, `"fingerprint": null`, `"facts": null` and the `note` text as `"note"`. Never upgrade unknown to ready.

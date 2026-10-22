@@ -1,12 +1,6 @@
-"""Read whether an open PR is ready to merge, and optionally pin the head Shawn approved.
-
-`check-mergeable <pr> [--pin <item>]` prints ready, not_ready or unknown with the facts a merge
-ask cites. Without --pin it writes nothing; with --pin it journals `merge_pinned` so the merged
-check later refutes a merge of any other head.
-"""
+"""Read whether an open PR is ready to merge, and optionally pin the head Shawn approved."""
 
 import functools
-import hashlib
 import json
 import shutil
 
@@ -15,6 +9,7 @@ from _bootstrap import load_lib_module
 programme_evidence = load_lib_module("programme_evidence")
 programme_home = load_lib_module("programme_home")
 programme_record = load_lib_module("programme_record")
+programme_store = load_lib_module("programme_store")
 
 Unknown = programme_evidence.Unknown
 
@@ -103,10 +98,10 @@ def _bar(pr) -> dict:
 
 
 def fingerprint(facts) -> str:
-    basis = {k: facts.get(k) for k in ("head", "merge_state", "mergeable", "review", "draft",
+    basis = {k: facts.get(k) for k in ("head", "base", "merge_state", "mergeable", "review", "draft",
                                        "unresolved_threads", "state")}
     basis["checks"] = sorted([str(c.get("name")), str(c.get("outcome"))] for c in facts.get("checks") or [])
-    return hashlib.sha256(json.dumps(basis, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return programme_store.digest_of(basis)[:16]
 
 
 def check_mergeable(ref, remit_repos=None) -> dict:

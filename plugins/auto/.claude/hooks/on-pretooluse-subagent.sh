@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# auto PreToolUse hook: a dispatched sub-agent may read a programme but never write to it.
-# The decision lives in lib/on-pretooluse-subagent.py. rel-001: always exit 0.
+# rel-001: always exit 0; a hook failure must never block the main session's tools.
 
 set -uo pipefail
 

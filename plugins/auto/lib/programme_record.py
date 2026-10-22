@@ -518,7 +518,7 @@ def _h_watcher_beat(host, argv):
             entry["prompt"] = cron_prompt
         return {"watcher": watcher_id, "last_beat_at": entry["last_beat_at"]}
 
-    return host._write(opts, change, "watcher_beat", compact_exempt=True, journal=False)
+    return host._write(opts, change, "watcher_beat", compact_exempt=True, journal=False, names_change=False)
 
 
 def _run_tool(argv):

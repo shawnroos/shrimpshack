@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""Structured asks to Shawn: their facts, fingerprint, exact replies and shown/relayed marks.
-
-``hand-item`` builds the ask here; ``update-ask``, ``ask-shown`` and ``ask-relayed`` are
-registered through ``build_verbs(host)``. The view reads ``view_asks`` and ``detail_lines``.
-"""
+"""Structured asks to Shawn: their facts, fingerprint, exact replies and shown/relayed marks."""
 
 from __future__ import annotations
 
 import functools
-import hashlib
-import json
 import os
 import sys
 
@@ -21,6 +15,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_decisions = load_lib_module("programme_decisions")
 programme_naming = load_lib_module("programme_naming")
 programme_sanitize = load_lib_module("programme_sanitize")
+programme_store = load_lib_module("programme_store")
 run_record_core = load_lib_module("run_record_core")
 
 REPLY_CHOICES = ("ship", "decline")
@@ -94,7 +89,7 @@ def parse_facts(opts) -> dict:
 
 def fingerprint(ask) -> str:
     basis = {k: ask.get(k) for k in FACT_KEYS + ("kind", "op")}
-    return hashlib.sha256(json.dumps(basis, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return programme_store.digest_of(basis)[:16]
 
 
 def new_ask(kind, facts, op=None) -> dict:
@@ -114,13 +109,11 @@ def structured(ask) -> bool:
 
 
 def item_name(key, item) -> str:
-    sessions = [s.get("name") for s in item.get("sessions") or [] if isinstance(s, dict) and s.get("name")]
-    return programme_naming.label(item.get("title") or (sessions[-1] if sessions else None), key)
+    return programme_naming.item_name(key, item)
 
 
 def replies(items, key) -> dict:
-    live = {k: i for k, i in items.items()
-            if i.get("state") not in programme_naming.FINAL_ITEM_STATES or k == key}
+    live = programme_naming.live_items(items, key)
     return {choice: programme_naming.reply(live, key, choice) for choice in REPLY_CHOICES}
 
 
@@ -182,22 +175,43 @@ def detail_lines(items, key) -> list:
     out = []
     for option in ask.get("options") or []:
         cost = f" (cost: {option['cost']})" if option.get("cost") else ""
-        out.append(f"option {option.get('label')}: {option.get('effect')}{cost}")
+        out += _fit(f"option {option.get('label')}: {option.get('effect')}{cost}",
+                    _labelled(f"option {option.get('label')}: ", option.get("effect"))
+                    + (_labelled("  cost: ", option["cost"]) if option.get("cost") else []))
     if ask.get("recommendation"):
         why = f": {ask['recommendation_why']}" if ask.get("recommendation_why") else ""
-        out.append(f"recommend {ask['recommendation']}{why}")
+        out += _fit(f"recommend {ask['recommendation']}{why}",
+                    _labelled("recommend ", ask["recommendation"])
+                    + (_labelled("  why: ", ask["recommendation_why"]) if ask.get("recommendation_why") else []))
     if ask.get("if_nothing"):
-        out.append(f"if nothing: {ask['if_nothing']}")
-    out += [f"risk: {r}" for r in ask.get("risks") or []]
-    out += [f"evidence: {e}" for e in ask.get("evidence") or []]
+        out += _labelled("if nothing: ", ask["if_nothing"])
+    for r in ask.get("risks") or []:
+        out += _labelled("risk: ", r)
+    for e in ask.get("evidence") or []:
+        out += _labelled("evidence: ", e)
     for name in ("pr", "issue"):
         link = ask.get(name) if isinstance(ask.get(name), dict) else None
         if link:
-            out.append(f"{name.upper() if name == 'pr' else name}: "
-                       + " ".join(v for v in (link.get("title"), link.get("url")) if v))
+            label = f"{name.upper() if name == 'pr' else name}: "
+            parts = [v for v in (link.get("title"), link.get("url")) if v]
+            out += _fit(label + " ".join(parts), [line for v in parts for line in _labelled(label, v)])
     reply = replies(items, key)
-    out.append(f'reply: "{reply["ship"]}" or "{reply["decline"]}"')
+    out += _fit(f'reply: "{reply["ship"]}" or "{reply["decline"]}"',
+                [line for choice in ("ship", "decline") for line in _labelled(f"reply to {choice}: ", f'"{reply[choice]}"')])
     return [programme_sanitize.clean(line, cap=0) for line in out]
+
+
+def _fit(line, split) -> list:
+    return [line] if len(line) <= programme_sanitize.DEFAULT_CAP else split
+
+
+def _labelled(label, value) -> list:
+    # The view re-cleans every string at DEFAULT_CAP, so a label that would push a full field past it
+    # goes on its own line instead of cutting the field's end.
+    value = str(value or "")
+    if len(label) + len(value) <= programme_sanitize.DEFAULT_CAP:
+        return [label + value]
+    return [label.rstrip(), value]
 
 
 def _ask_on(record, programme, item_id):
@@ -249,6 +263,10 @@ def _h_update_ask(host, argv):
             raise record.RecordError(f"the ask on {key!r} was answered and relayed; hand a new ask instead")
         if not answered and item["state"] != "handed":
             raise record.RecordError(f"item {key!r} is {item['state']}, not handed")
+        # A decline answer drops the item itself, so only a finish the answer did not cause blocks the void.
+        caused = item["state"] == "dropped" and answered.get("choice") == "decline" if answered else False
+        if answered and item["state"] in ("done", "dropped", "decided") and not caused:
+            raise record.RecordError(f"item {key!r} is {item['state']}; reopen it before changing its ask")
         new = dict(ask, **facts)
         new["fingerprint"] = fingerprint(new)
         out = {"item": key, "ask": ask.get("id"), "fingerprint": new["fingerprint"],

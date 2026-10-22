@@ -130,6 +130,12 @@ has "plugin tests" "$OUT"
 it "a changed check outcome changes the fingerprint"
 lacks "\"fingerprint\": \"${READY_PRINT}\"" "$OUT"
 
+variant retarget "pr['baseRefName'] = 'release'"
+it "a PR retargeted to another base changes the fingerprint"
+readiness retarget
+check "ready" "$(ready_of "$OUT")"
+lacks "\"fingerprint\": \"${READY_PRINT}\"" "$OUT"
+
 variant draft "pr['isDraft'] = True; pr['mergeStateStatus'] = 'DRAFT'"
 it "a draft PR is not ready"
 readiness draft

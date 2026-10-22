@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import sys
@@ -21,8 +22,9 @@ run_record_core = load_lib_module("run_record_core")
 _NAME_WORD = re.compile(r"[0-9a-z_\-]+")
 _NAME_JOINERS = re.compile(r"[_\-]")
 NEGATIONS = ("not", "never", "no", "dont", "t")
-CHOICE_WORDS = ("ship", "decline", "drop", "reopen")
-FINAL_ITEM_STATES = ("done", "dropped", "decided")
+ASK_CHOICES = ("ship", "decline")
+CHOICE_WORDS = ASK_CHOICES + ("drop", "reopen")
+FINAL_ITEM_STATES = tuple(s for s in programme_home.FINISHED_ITEM_STATES if s != "handed")
 MIN_HUMAN_NAME = 6  # a shorter squashed title ("ok", "fix") turns up in ordinary replies
 
 
@@ -36,8 +38,13 @@ def name_words(text) -> list:
     return [w for w in words if w]
 
 
-def squash(text) -> str:
+@functools.lru_cache(maxsize=4096)
+def _squash(text) -> str:
     return "".join(name_words(text))
+
+
+def squash(text) -> str:
+    return _squash(str(text or ""))
 
 
 def runs(words, name) -> list:
@@ -94,6 +101,15 @@ def _id_forms(key, item) -> list:
             for form in (item_id.split(":", 1)[-1], item_id)]
 
 
+def item_name(key, item) -> str:
+    sessions = [s.get("name") for s in item.get("sessions") or [] if isinstance(s, dict) and s.get("name")]
+    return label(item.get("title") or (sessions[-1] if sessions else None), key)
+
+
+def live_items(items, key) -> dict:
+    return {k: i for k, i in items.items() if i.get("state") not in FINAL_ITEM_STATES or k == key}
+
+
 def _human_raw(item) -> list:
     raws = [item.get("title")] + [s.get("name") for s in item.get("sessions") or [] if isinstance(s, dict)]
     return [r for r in raws if len(squash(r)) >= MIN_HUMAN_NAME and squash(r) not in CHOICE_WORDS + NEGATIONS]
@@ -101,6 +117,17 @@ def _human_raw(item) -> list:
 
 def _id_named(words, key, item) -> bool:
     return any(affirmed(words, start) for form in _id_forms(key, item) for start, _ in runs(words, squash(form)))
+
+
+def _id_starts(words, key, item) -> list:
+    return [start for form in _id_forms(key, item) for start, _ in runs(words, squash(form)) if affirmed(words, start)]
+
+
+def _id_chosen(words, key, item, choice) -> bool:
+    opposite = [c for c in ASK_CHOICES if c != choice]
+    if any(w in opposite and affirmed(words, i) for i, w in enumerate(words)):
+        return False
+    return any(words[j] == choice and affirmed(words, j) for s in _id_starts(words, key, item) for j in range(s))
 
 
 def _name_starts(words, item) -> list:
@@ -111,12 +138,13 @@ def _chosen(words, start, choice) -> bool:
     return start > 0 and words[start - 1] == choice and affirmed(words, start - 1)
 
 
-def _named_set(words, live, key, choice, fresh) -> list:
+def _named_set(words, live, key, choice, fresh, asked=False) -> list:
     out = []
     for k, item in live.items():
         if k == key:
-            hit = _id_named(words, k, item) or (fresh and any(_chosen(words, s, choice)
-                                                              for s in _name_starts(words, item)))
+            # An ask's answer needs the same choice word and freshness whether it names the id or a name.
+            by_id = (fresh and _id_chosen(words, k, item, choice)) if asked else _id_named(words, k, item)
+            hit = by_id or (fresh and any(_chosen(words, s, choice) for s in _name_starts(words, item)))
         else:
             hit = _id_named(words, k, item) or any(affirmed(words, s) for s in _name_starts(words, item))
         if hit:
@@ -127,26 +155,27 @@ def _named_set(words, live, key, choice, fresh) -> list:
 def reply(live, key, choice) -> str:
     for raw in _human_raw(live[key]):
         candidate = f"{choice} {raw}"
-        if _named_set(name_words(candidate), live, key, choice, True) == [key]:
+        if _named_set(name_words(candidate), live, key, choice, True, True) == [key]:
             return candidate
     return f"{choice} {key}"
 
 
 def item_refusal(quote, items, key, choice, *, prompt_at=None, ask=None):
     words = name_words(quote)
-    live = {k: i for k, i in items.items() if i.get("state") not in FINAL_ITEM_STATES or k == key}
+    live = live_items(items, key)
     fresh = True
     if ask is not None:
         set_at = run_record_core.parse_iso(ask.get("facts_at") or ask.get("at"))
         typed_at = run_record_core.parse_iso(prompt_at)
         fresh = bool(set_at and typed_at and typed_at >= set_at)
-    named = _named_set(words, live, key, choice, fresh)
+    named = _named_set(words, live, key, choice, fresh, ask is not None)
     if named == [key]:
         return None
     if key in named:
         return ("its text names more than one open item; type one of "
                 + ", ".join(repr(reply(live, k, choice)) for k in named))
-    if not fresh and any(_chosen(words, s, choice) for s in _name_starts(words, live[key])):
+    if not fresh and (any(_chosen(words, s, choice) for s in _name_starts(words, live[key]))
+                      or _id_chosen(words, key, live[key], choice)):
         return f"it was typed before the ask's current facts were set; type {reply(live, key, choice)!r}"
     return f"its text does not name {key!r} after {choice!r}; type {reply(live, key, choice)!r}"
 
