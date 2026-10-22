@@ -698,7 +698,8 @@ it "hooks.json registers no per-call permission hooks and guards Edit and MultiE
 OUT="$("$PY" - "${HOOKS}/hooks.json" <<'EOF'
 import json, re, sys
 h = json.load(open(sys.argv[1]))["hooks"]
-out = [not any(e in h for e in ("PermissionDenied", "PostToolUse", "PostToolUseFailure"))]
+out = [not any(e in h for e in ("PermissionDenied", "PostToolUseFailure"))
+       and all(e["matcher"] == "AskUserQuestion" for e in h.get("PostToolUse", []))]
 action = [e for e in h["PreToolUse"] if "on-pretooluse-action.sh" in e["hooks"][0]["command"]][0]
 out.append(all(re.fullmatch(action["matcher"], t) is not None for t in ("Bash", "Write", "Edit", "MultiEdit")))
 out.append(re.fullmatch(action["matcher"], "Read") is None)

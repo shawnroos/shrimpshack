@@ -50,8 +50,12 @@ def _proposed_tool(term):
     return ((proposal or {}).get("extras") or {}).get("add") if term.get("key") == "tools_of_record" else None
 
 
+def offered(term) -> dict:
+    return _with_tool(term, _proposed_tool(term))
+
+
 def check_amend(host, term, value, opts):
-    return host._check_value(_with_tool(term, _proposed_tool(term)), value, opts)
+    return host._check_value(offered(term), value, opts)
 
 
 def _settle(term, matched) -> None:

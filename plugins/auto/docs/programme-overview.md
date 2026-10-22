@@ -58,6 +58,10 @@ The programme record exists outside the conversation. The PM reads this record a
 
 Programme starts with proposed terms and a remit. The human approves these before the PM accepts the agreement.
 
+Setup runs as a walkthrough. `/auto:programme` opens the Programme pane, which shows the draft agreement and what is in and out of scope. The chat asks one question per step, with the PM's recommendation first. The first question offers to take every recommendation at once.
+
+Before acceptance, a picker answer sets a per-programme setting. The programme checks the answer against the session transcript before it counts. A picker answer never approves the accept itself, a shared setting, a ruling or a reserved area; those need a typed reply. After acceptance, only typed replies approve.
+
 The remit separates three types of scope:
 
 | Scope | What it names |
@@ -241,6 +245,8 @@ This prevents an automated event from borrowing an older human prompt with the s
 The fix uses local transcript evidence. It does not protect against an actor who rewrites all trusted local records.
 
 Synthetic approval tests pass. In live checks, a typed approval succeeded, and SDK prompts and background notifications were refused. An accepted prompt suggestion does not count as typed input.
+
+A picker answer is a separate origin, `picked`. It counts only for setup choices before acceptance, and only when the transcript shows Shawn answered a question the PM asked without pre-filled answers.
 
 An installed copy of the plugin includes the fix only after it updates to a release that contains PR #110.
 

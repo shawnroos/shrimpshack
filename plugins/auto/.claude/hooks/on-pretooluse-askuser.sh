@@ -18,6 +18,10 @@
 # the deny contract is unavailable, the worst case is the operator is asked
 # directly. So this hook emits nothing (allow) on any uncertainty.
 #
+# It also DENIES a call whose input pre-fills `answers` when this session drives
+# a programme (KTD2); that check is gated on the programme lease file, since a
+# programme has no <repo>/.claude/auto folder.
+#
 # rel-001: presence-gate first; ALWAYS exit 0 at the process level; heavy work
 # exec'd into Python. Mirrors .claude/hooks/on-stop.sh.
 
@@ -36,8 +40,16 @@ __cd_find_repo() {
   return 1
 }
 
-__cd_repo="$(__cd_find_repo)" || exit 0
-[ -d "${__cd_repo}/.claude/auto" ] || exit 0
+__cd_repo="$(__cd_find_repo)" || __cd_repo=""
+
+# Programme state lives in the plugin data folder, not under the repo, so a
+# session a programme lease names is gated on that lease (KTD2), not on the walk.
+__cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
+__cd_files=()
+for __cd_f in "${__cd_leases}"/*.json; do
+  [ -e "$__cd_f" ] && __cd_files+=("$__cd_f")
+done
+[ -n "$__cd_repo" ] || [ "${#__cd_files[@]}" -gt 0 ] || exit 0
 
 PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -53,6 +65,16 @@ fi
 __cd_stdin_json=""
 if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
+fi
+
+if [ -z "$__cd_repo" ]; then
+  # Anything the shell cannot read exactly (no id, two ids, unusual characters, a \u escape) still goes to Python.
+  __cd_after_sid="${__cd_stdin_json#*\"session_id\"}"
+  if [[ $__cd_stdin_json != *\\u* && $__cd_after_sid != *\"session_id\"* \
+        && $__cd_stdin_json =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]+)\" ]]; then
+    grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_files[@]}"
+    [ $? = 1 ] && exit 0
+  fi
 fi
 
 # Hand off ALL decision logic to Python. `|| true` belt-and-braces so even an

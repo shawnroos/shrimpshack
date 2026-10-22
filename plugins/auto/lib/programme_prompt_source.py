@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
+import sys
 
-_MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_lib_module  # noqa: E402
+
+programme_pick_source = load_lib_module("programme_pick_source")
+
+_MAX_TRANSCRIPT_BYTES = programme_pick_source._MAX_TRANSCRIPT_BYTES
+_hash = programme_pick_source._hash
 _COMMAND = re.compile(
     r'<command-message>([^<>\n]+)</command-message>\n'
     r'<command-name>(/[^<>\n]+)</command-name>'
     r'(?:\n<command-args>([\s\S]*)</command-args>)?'
 )
-
-
-def _hash(value):
-    return hashlib.sha256(value).hexdigest()
 
 
 def capture(data):
@@ -24,16 +28,10 @@ def capture(data):
     text = data.get('prompt')
     if not all(isinstance(value, str) and value for value in (path, sid, prompt_id)):
         return None
-    if not isinstance(text, str) or not os.path.isabs(path) or os.path.basename(path) != sid + '.jsonl':
+    if not isinstance(text, str):
         return None
-    try:
-        with open(path, 'rb') as stream:
-            prefix = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
-    except FileNotFoundError:
-        prefix = b''
-    except OSError:
-        return None
-    if len(prefix) > _MAX_TRANSCRIPT_BYTES or (prefix and not prefix.endswith(b'\n')):
+    prefix = programme_pick_source.read_prefix(path, sid)
+    if prefix is None:
         return None
     # The runtime appends the source row after UserPromptSubmit returns; older rows cannot authorize this occurrence.
     return {'version': 1, 'path': path, 'session_id': sid, 'prompt_id': prompt_id,
@@ -63,9 +61,11 @@ def _human_text(row):
 def origin(row):
     payload = row.get('payload') or {}
     claimed = payload.get('origin')
-    if claimed not in ('typed', 'unknown'):
+    if claimed not in ('typed', 'unknown', 'picked'):
         return claimed
     source = payload.get('source')
+    if isinstance(source, dict) and source.get('kind') == 'pick':
+        return programme_pick_source.verify(row)
     if not isinstance(source, dict) or type(source.get('version')) is not int or source.get('version') != 1:
         return 'unknown'
     sid = row.get('session_id')

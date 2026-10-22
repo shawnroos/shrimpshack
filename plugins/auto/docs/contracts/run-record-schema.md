@@ -733,7 +733,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
+`term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
@@ -803,6 +803,11 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `{term_id, area, value, reserved, source, accepted}`; `project_term_amended` adds
   `previous` (the replaced value) and the approval fields `prompt_id`, `quote` and
   `cites: [prompt_id]`.
+- `term_picked` carries `{term, value, why, prompt_id, quote, origin: "picked", question, answer,
+  path, tool_use_id}` and `cites: [prompt_id]` of the pick; `recommendations_taken` carries the same
+  pick fields plus `terms` (key to value set). `path` and `tool_use_id` key a pick's single use.
+  `setup_step_set` carries `{step}`, `setup_seen_recorded` `{seen: {tabs, repos, tracker, items}}`
+  as counts, and `setup_step_kept` `{kept}`; the values live in `programme.setup`.
 - `term_corrected` carries `{correction, kind, anchor, to, previous, pm_reading, reopened, notice}`
   (`reopened` is the item moved from handed back to open, or null); `correction_undone` carries
   `{correction, kind, restored, made_under: [choice ids], notice}`. Both add `prompt_id`, `quote`
