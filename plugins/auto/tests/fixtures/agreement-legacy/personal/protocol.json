@@ -1,0 +1,47 @@
+{
+  "autonomy": {
+    "prod_deploy": {
+      "adoption": {
+        "hash": "sha256:26f6dc6cee7b0f89fd9b05b9c62dffaeb2b8de13b68b46f95155d1fb5bf333db",
+        "machine": "studio",
+        "prompt_hash": "sha256:fd9b3bb3bd4628ee7d1386712f65777d6063a72055fdb831d4848c5fece6f6e5",
+        "prompt_id": "pb155db",
+        "quote": "yes, set prod_deploy to never",
+        "run_id": "prog-20261022-074131-6061ce"
+      },
+      "level": "never"
+    }
+  },
+  "protocol_format": 1,
+  "rules": [
+    {
+      "added_at": "2026-10-06T10:00:00Z",
+      "added_by": "pm",
+      "adoption": {
+        "hash": "sha256:e935036ba45d151c7b4937e0ec9e1e37f9a98fc5d98e431b6502222d5fb40192",
+        "machine": "studio",
+        "prompt_hash": "sha256:9e6903a0ef6dc57359de73155ee2471c290d67111f981536c4d628416143188a",
+        "prompt_id": "p88ad4d",
+        "quote": "yes adopt docs-verified",
+        "run_id": "prog-20261022-074131-6061ce"
+      },
+      "applies_when": {
+        "change_kinds": [
+          "evals_or_docs"
+        ]
+      },
+      "autonomy": "act_and_tell",
+      "caveat": "",
+      "evidence_bar": {
+        "merged": "merged at the gate",
+        "verified": "checked at runtime"
+      },
+      "id": "docs-verified",
+      "requires": [
+        "merged",
+        "verified"
+      ],
+      "why": "docs need a runtime check"
+    }
+  ]
+}

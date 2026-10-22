@@ -1,0 +1,38 @@
+{
+  "decisions": [
+    "d-browser",
+    "d-docs"
+  ],
+  "files": [
+    "personal/protocol.json",
+    "prompt-fixtures/tmp6jglylr1/sess-pm.jsonl",
+    "prompt-fixtures/tmp99jrqqjf/sess-pm.jsonl",
+    "prompt-fixtures/tmpc7p__f4k/sess-pm.jsonl",
+    "prompt-fixtures/tmphdusrf_f/sess-pm.jsonl",
+    "prompt-fixtures/tmpi25n4rhm/sess-pm.jsonl",
+    "prompt-fixtures/tmpk1tdvbxq/sess-pm.jsonl",
+    "prompt-fixtures/tmpvgr169uo/sess-pm.jsonl",
+    "prompt-fixtures/tmpxr5e0fqu/sess-pm.jsonl",
+    "prompt-fixtures/tmpyq2i2wo0/sess-pm.jsonl"
+  ],
+  "instructions": {
+    "plain": "ic5dac2",
+    "waiver": "i928c44"
+  },
+  "lib_commit": "dfff00e0621ba8874c3320aa86c995f788c62d6c",
+  "machine": "studio",
+  "personal": {
+    "autonomy": "prod_deploy",
+    "rule": "docs-verified"
+  },
+  "project_terms": {
+    "open": "t0137e1",
+    "preferred_tool": "t2f3768",
+    "reserved": "teef7d5"
+  },
+  "requirement": "r-browser",
+  "run": "prog-20261022-074131-6061ce",
+  "sentinel": "__AGREEMENT_LEGACY_ROOT__",
+  "sentinel_count_in_sql": 11,
+  "session": "sess-pm"
+}
