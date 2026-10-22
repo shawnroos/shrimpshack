@@ -354,17 +354,31 @@ def _canonical(items, target) -> str:
     return _dict(found).get("id") or target
 
 
+def canonical_targets(items, revision, default=()) -> list:
+    return list(dict.fromkeys(_canonical(items, t) for t in revision.get("applies_to") or default))
+
+
+def current_revisions(decisions):
+    for rid, revisions in sorted(decisions.items()):
+        current = in_force(revisions)
+        if current is not None:
+            yield rid, revisions, current
+
+
+def ruling_kind_label(ruling, default="record") -> str:
+    return ruling.get("kind") or f"legacy {str(ruling.get('legacy') or default).replace('_', ' ')}"
+
+
 def rulings_for(programme, item, kind, now) -> list:
     when = run_record_core.parse_iso(now)
     items = _dict(programme.get("items"))
     out = []
-    for rid, revisions in sorted(block(programme)["decisions"].items()):
-        current = in_force(revisions)
+    for rid, revisions, current in current_revisions(block(programme)["decisions"]):
         # A kind-less entry (an old decision record, instruction or reserved term) never reaches the gate.
-        if current is None or current.get("kind") is None or current.get("kind") != kind \
+        if current.get("kind") is None or current.get("kind") != kind \
                 or ruling_state(revisions, when) != "active":
             continue
-        targets = {_canonical(items, t) for t in current.get("applies_to") or []}
+        targets = set(canonical_targets(items, current))
         # A programme-wide Ruling covers every item, as programme scope does for assign-item.
         if PROGRAMME_SCOPE in targets:
             targets.add(item)

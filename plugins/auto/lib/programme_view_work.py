@@ -26,6 +26,15 @@ def _dict(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _section(out, title, lines, empty) -> None:
+    out.append({"style": "head", "text": title})
+    out.extend(lines or [{"style": "dim", "text": f"  {empty}"}])
+
+
+def _row(text, style="text") -> dict:
+    return {"style": style, "text": text}
+
+
 def _time(value):
     if isinstance(value, datetime.datetime):
         return value

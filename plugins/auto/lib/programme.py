@@ -155,13 +155,12 @@ def active_rulings(programme, now=None) -> list:
     when = run_record_core.parse_iso(now) if now else None
     items = programme.get("items") or {}
     out = []
-    for rid, revisions in sorted(pc.block(programme)["decisions"].items()):
-        current = pc.in_force(revisions)
-        if current is None or not pc.is_ruling(revisions) or pc.ruling_state(revisions, when) != "active":
+    for rid, revisions, current in pc.current_revisions(pc.block(programme)["decisions"]):
+        if not pc.is_ruling(revisions) or pc.ruling_state(revisions, when) != "active":
             continue
         # merge-item leaves a Ruling's targets as written; without this an old id loses its waiver after a merge.
-        targets = list(dict.fromkeys(pc._canonical(items, t) for t in current.get("applies_to") or ["programme"]))
-        targets = [t for t in targets if t == "programme" or _item_open(programme, t)]
+        targets = pc.canonical_targets(items, current, (pc.PROGRAMME_SCOPE,))
+        targets = [t for t in targets if t == pc.PROGRAMME_SCOPE or _item_open(programme, t)]
         if not targets:
             continue
         out.append(dict({k: current.get(k) for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
@@ -182,7 +181,7 @@ def _protocol(journals) -> dict:
     return programme_protocol.load(prompt_lookup=lambda run_id, prompt_id: prompt_lookup(run_id, prompt_id, journals))
 
 
-def rules_in_force(record, journals=None, protocol=None) -> dict:
+def rules_in_force(record, journals=None, protocol=None, changes=True) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     journals = {} if journals is None else journals
     protocol = _protocol(journals) if protocol is None else protocol
@@ -210,9 +209,9 @@ def rules_in_force(record, journals=None, protocol=None) -> dict:
     legacy = programme_rulings.legacy_restricts(programme)
     if legacy:
         out["legacy_restricts"] = legacy
-    changes = programme_protocol_changes.report(sys.modules[__name__], programme, journals)
-    if changes:
-        out["protocol_changes"] = changes
+    report = changes and programme_protocol_changes.report(sys.modules[__name__], programme, journals, protocol)
+    if report:
+        out["protocol_changes"] = report
     if contract:
         out["operating_contract"] = contract
     return out

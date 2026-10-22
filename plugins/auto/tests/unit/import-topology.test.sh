@@ -139,7 +139,7 @@
 #                          programme_record (claim) and programme reach it lazily or after
 #                          their verb table, so it closes no import-time cycle.
 #   programme_resume     → run_record_core, programme_home, programme_authority,
-#                          programme_recovery; programme_journal [lazy]. It takes
+#                          programme_recovery, programme_context; programme_journal [lazy]. It takes
 #                          `programme` as a host argument for the inbox verb and never
 #                          loads it, nor programme_sources or programme_lifecycle.
 #   programme_trajectory → run_record_core, programme_home, programme_journal,
@@ -177,7 +177,7 @@
 #                          programme_decisions, programme_context (never programme_terms or
 #                          programme_record: record is the host's)
 #   programme_naming     → programme_home
-#   programme_protocol_changes → run_record_core, programme_decisions, programme_context
+#   programme_protocol_changes → run_record_core, programme_decisions, programme_context, programme_carryover
 #                          (protocol loads and Authority levels reach it through `host`)
 #   programme_carryover  → run_record_core, programme_home, programme_journal, programme_protocol,
 #                          programme_sanitize, programme_context, programme_decisions,

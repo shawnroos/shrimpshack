@@ -35,6 +35,9 @@ HOOK_KINDS = ("blocked_settings_write",)
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
+_section = programme_view_work._section
+_row = programme_view_work._row
+
 
 def _dict(value) -> dict:
     return value if isinstance(value, dict) else {}
@@ -432,15 +435,6 @@ def _lifecycle_lines(life) -> list:
 
 def _yes(flag) -> str:
     return "yes" if flag else "no"
-
-
-def _section(out, title, lines, empty) -> None:
-    out.append({"style": "head", "text": title})
-    out.extend(lines or [{"style": "dim", "text": f"  {empty}"}])
-
-
-def _row(text, style="text") -> dict:
-    return {"style": style, "text": text}
 
 
 def _header(p) -> dict:

@@ -23,6 +23,7 @@ run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_authority = load_lib_module("programme_authority")
 programme_recovery = load_lib_module("programme_recovery")
+programme_context = load_lib_module("programme_context")
 
 CONTEXT_TAG = "auto-context"
 DIGEST_KEYS = ("pending_decisions", "decisions", "requirements", "blockers", "binding", "assignments")
@@ -81,7 +82,7 @@ def _decision_line(d) -> str:
 
 
 def _ruling_line(r) -> str:
-    label = r.get("kind") or f"legacy {str(r.get('legacy') or 'record').replace('_', ' ')}"
+    label = programme_context.ruling_kind_label(r)
     applies = ", ".join(str(a) for a in r.get("applies_to") or []) or "programme"
     until = f"; until {r['until']}" if r.get("until") else ""
     return f"binding {r['id']} ({label}, {r.get('effect')}): {_q(r.get('scope'))}{_cut(r)}; applies to {applies}{until}"

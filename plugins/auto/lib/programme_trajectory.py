@@ -149,7 +149,7 @@ def _h_record_trajectories(host, argv):
         return 0
 
     def change(programme, prompt, rec):
-        allowed = allowed_clauses(host.rules_in_force(rec), host.active_rulings(programme))
+        allowed = allowed_clauses(host.rules_in_force(rec, changes=False), host.active_rulings(programme))
         at = run_record_core.now_iso()
         stored, changes, skipped = [], [], []
         for entry in rows:

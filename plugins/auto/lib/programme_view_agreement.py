@@ -28,6 +28,8 @@ CHANGES_LIMIT = 20
 CHANGE_KINDS = (programme_terms.EDITED, programme_terms.AMENDED)
 
 _dict = programme_view_work._dict
+_section = programme_view_work._section
+_row = programme_view_work._row
 
 
 def _scope_text(key, term) -> str:
@@ -96,7 +98,7 @@ def ruling_label(ruling) -> str:
     if kind:
         head = f"{ruling['effect']} {kind}"
     else:
-        head = f"{ruling['effect']}, no kind (legacy {str(ruling.get('legacy') or 'decision record').replace('_', ' ')})"
+        head = f"{ruling['effect']}, no kind ({programme_context.ruling_kind_label(ruling, 'decision record')})"
     return f"{head} \"{ruling.get('quote')}\""
 
 
@@ -157,15 +159,6 @@ def build(block, journal_entries, rules, protocol=None, now=None) -> dict:
         "changes": changes[:CHANGES_LIMIT],
         "changes_total": len(changes),
     }
-
-
-def _section(out, title, lines, empty) -> None:
-    out.append({"style": "head", "text": title})
-    out.extend(lines or [{"style": "dim", "text": f"  {empty}"}])
-
-
-def _row(text, style="text") -> dict:
-    return {"style": style, "text": text}
 
 
 def _applies(ruling) -> str:

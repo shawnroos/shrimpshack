@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """Carry-over of Rulings from one programme to the next on the same project.
 
-``offer`` lists what a programme can carry: its active Rulings. ``carry-rulings`` with no ids makes
-the offer and records the offer-made marker the stop predicate reads; with ids and a typed prompt
-it stores Shawn's picks in the per-machine store (one JSON file beside the personal protocol),
-under each remit repo's GitHub owner/name or normalised path. ``end`` makes the offer too. Each
-entry carries an adoption block like the personal protocol's. ``set-remit`` on an unaccepted
-agreement brings each verified entry in as a pending Ruling with no items, which binds only when
-Shawn's typed prompt names the items it now applies to. Running programmes never read the store.
+Running programmes never read the store.
 """
 
 from __future__ import annotations
@@ -189,6 +183,7 @@ def _arrive(ctx, entry, key):
     content = {"scope": programme_sanitize.clean(entry.get("scope")), "reason": entry.get("reason"),
                "limits": [programme_sanitize.clean(v) for v in entry.get("limits") or []], "applies_to": [],
                "requirements": [], "kind": kind, "effect": entry["effect"], "until": entry.get("until")}
+    # Pending with no items: it binds only when Shawn's typed prompt names the items it now applies to.
     revision = pc._append(ctx["decisions"].setdefault(rid, []), content, None, accept=False, delta=None)
     revision.update(quote=None, baseline=None,
                     carried={"from": key, "entry": entry.get("id"), "run_id": entry.get("run_id"),

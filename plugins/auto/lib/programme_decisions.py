@@ -109,6 +109,11 @@ def _restricting(rulings) -> list:
     return [r for r in rulings if r.get("effect") == "restrict"]
 
 
+def narrower_than_baseline(level, baseline) -> bool:
+    # A grant with no recorded baseline is compared as if it was made at act, so it never outranks Authority.
+    return level is not None and LEVEL_ORDER.index(level) < LEVEL_ORDER.index(baseline or "act")
+
+
 def _verdict(level, reason, conflict=False) -> dict:
     decider = "shawn" if level in SHAWN_LEVELS else "pm"
     return {"decider": decider, "level": level, "reason": reason, "conflict": conflict}
@@ -128,9 +133,7 @@ def who_decides(kind, item, *, level, rulings, now, accepted) -> dict:
     grants = [r for r in applying if r.get("effect") == "grant"]
     if not grants:
         return _verdict(level, "authority")
-    # A grant with no recorded baseline is compared as if it was made at act, so it never outranks Authority.
-    if level is not None and any(LEVEL_ORDER.index(level) < LEVEL_ORDER.index(g.get("baseline") or "act")
-                                 for g in grants):
+    if any(narrower_than_baseline(level, g.get("baseline")) for g in grants):
         return _verdict(level, "conflict", conflict=True)
     return _verdict("act", "grant")
 

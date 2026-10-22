@@ -11,6 +11,7 @@ entry no wider than the layer below. The format is in
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -250,8 +251,8 @@ def _new_state() -> dict:
     return {"rules": {}, "autonomy": {}, "checks": {}, "rejected": [], "notices": [], "layers": []}
 
 
-def _reject(state, layer, entry_id, reason, detail=None) -> None:
-    state["rejected"].append({"layer": layer, "id": entry_id, "reason": reason, "detail": detail})
+def _reject(state, layer, entry_id, reason, detail=None, section=None) -> None:
+    state["rejected"].append({"layer": layer, "id": entry_id, "reason": reason, "detail": detail, "section": section})
 
 
 def _adopt(layer, entry, lookup, target):
@@ -291,13 +292,13 @@ def _merge_rules(state, layer, rules, lookup) -> None:
         rid = ids[index] if isinstance(ids[index], str) else None
         label = rid or "#%d" % index
         if rid is not None and ids.count(rid) > 1:
-            _reject(state, layer, label, "duplicate_id")
+            _reject(state, layer, label, "duplicate_id", section="rules")
             continue
         try:
             _validate_rule(raw)
             adopted_on = _adopt(layer, raw, lookup, target_of("rules", rid))
         except _Reject as exc:
-            _reject(state, layer, label, exc.reason, exc.detail)
+            _reject(state, layer, label, exc.reason, exc.detail, "rules")
             continue
         rule = {k: raw[k] for k in RULE_FIELDS}
         rule.update(layer=layer, adopted_on=adopted_on, adoption=raw.get("adoption"))
@@ -327,7 +328,7 @@ def _merge_autonomy(state, layer, entries, lookup) -> None:
         try:
             entry = _autonomy_entry(state, layer, action, raw, lookup)
         except _Reject as exc:
-            _reject(state, layer, action, exc.reason, exc.detail)
+            _reject(state, layer, action, exc.reason, exc.detail, "autonomy")
             continue
         state["autonomy"][action] = entry
 
@@ -353,7 +354,7 @@ def _merge_check_block(state, layer, repo, block, lookup) -> None:
     try:
         _validate_check_block(block)
     except _Reject as exc:
-        _reject(state, layer, repo, exc.reason, exc.detail)
+        _reject(state, layer, repo, exc.reason, exc.detail, "checks")
         return
     for key, entry in block.items():
         try:
@@ -361,7 +362,7 @@ def _merge_check_block(state, layer, repo, block, lookup) -> None:
                 _verify_adoption(entry, lookup, target_of("checks", key, repo), local_only=True,
                                  missing="check_not_adopted")
         except _Reject as exc:
-            _reject(state, layer, "%s:%s" % (repo, key), exc.reason, exc.detail)
+            _reject(state, layer, "%s:%s" % (repo, key), exc.reason, exc.detail, "checks")
             continue
         state["checks"].setdefault(repo, {})[key] = {"argv": list(entry["argv"]), "layer": layer}
 
@@ -513,6 +514,12 @@ def load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None, re
                 lambda: (_read_file(personal), personal), prompt_lookup, None)
 
     _load_projects(state, _repo_pairs(repo_path, repo_key, repos), prompt_lookup)
+    return state
+
+
+def with_project(base, repo_path, prompt_lookup=None) -> dict:
+    state = copy.deepcopy(base)
+    _load_projects(state, _repo_pairs(repo_path, None, None), prompt_lookup)
     return state
 
 

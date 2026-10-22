@@ -208,10 +208,8 @@ def _scan(block: dict, now, inbox_size, cadence: int) -> dict:
 
 def active_rulings(block: dict, now) -> list:
     out = []
-    for rid, revisions in sorted(programme_context.block(block)["decisions"].items()):
-        current = programme_context.in_force(revisions)
-        if current is not None and current.get("kind") is not None \
-                and programme_context.ruling_state(revisions, now) == "active":
+    for rid, revisions, current in programme_context.current_revisions(programme_context.block(block)["decisions"]):
+        if current.get("kind") is not None and programme_context.ruling_state(revisions, now) == "active":
             out.append((rid, current))
     return out
 

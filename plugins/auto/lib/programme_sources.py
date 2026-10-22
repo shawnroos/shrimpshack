@@ -565,7 +565,7 @@ def _restrictions(opts) -> list:
 
 
 def _ruling_line(ruling) -> str:
-    label = ruling.get("kind") or f"legacy {str(ruling.get('legacy') or 'record').replace('_', ' ')}"
+    label = programme_context.ruling_kind_label(ruling)
     limits = "; ".join(ruling.get("limits") or []) or "none"
     until = f"; until {ruling['until']}" if ruling.get("until") else ""
     return (f"- ruling:{ruling['id']} ({label}, {ruling.get('effect')}): {ruling.get('scope')}; "

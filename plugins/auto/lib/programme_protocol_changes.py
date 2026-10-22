@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """Protocol change reporting: what changed in Authority and Done standards since the PM last acknowledged.
 
-``ack-protocol`` stores the merged protocol per remit repo in the programme block: each kind's
-Authority level, each Done standard's content hash and each rejected entry. The rules view
-compares the protocol it reads now with that snapshot, so a hand edit shows on the next read with
-no programme write. The same pass lists grant Rulings whose kind Authority now holds narrower than
-the level recorded when the grant became active. ``programme.py`` registers the verb through
-``build_verbs(host)``.
+``ack-protocol`` stores a baseline of the merged protocol per remit repo; the rules view diffs
+against it on read, so a hand edit shows with no programme write.
 """
 
 from __future__ import annotations
@@ -23,21 +19,20 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 programme_decisions = load_lib_module("programme_decisions")
 programme_context = load_lib_module("programme_context")
+programme_carryover = load_lib_module("programme_carryover")
 
 ACK_KEY = "protocol_ack"
 NO_REPO = "personal"
-SECTION_NAMES = {"autonomy": "Authority", "rules": "Done standard"}
+SECTION_NAMES = {"autonomy": "Authority", "rules": "Done standard", "checks": "check command"}
 LEVEL_ORDER = programme_decisions.LEVEL_ORDER
 
 
 def _repos(programme) -> list:
-    out = []
+    out = {}
     for repo in (programme.get("remit") or {}).get("repos") or []:
         if isinstance(repo, dict) and repo.get("path"):
-            key = repo.get("github") or os.path.normpath(repo["path"])
-            if key not in [k for k, _ in out]:
-                out.append((key, repo["path"]))
-    return out or [(NO_REPO, None)]
+            out.setdefault(programme_carryover.key_of(repo), repo["path"])
+    return list(out.items()) or [(NO_REPO, None)]
 
 
 def _rejected_key(entry) -> str:
@@ -52,15 +47,19 @@ def snapshot_of(host, protocol) -> dict:
             "rejected": sorted(_rejected_key(e) for e in protocol["rejected"] if e.get("id"))}
 
 
-def current(host, programme, journals=None) -> dict:
+def _load(host, programme, journals, base, keys=None) -> dict:
     def lookup(run_id, prompt_id):
         return host.prompt_lookup(run_id, prompt_id, journals)
 
-    out = {}
-    for key, path in _repos(programme):
-        protocol = host.programme_protocol.load(repo_path=path, prompt_lookup=lookup)
-        out[key] = (protocol, snapshot_of(host, protocol), path)
-    return out
+    if base is None:
+        base = host.programme_protocol.load(prompt_lookup=lookup)
+    return {key: (host.programme_protocol.with_project(base, path, lookup), path)
+            for key, path in _repos(programme) if keys is None or key in keys}
+
+
+def current(host, programme, journals=None, base=None) -> dict:
+    return {key: (protocol, snapshot_of(host, protocol), path)
+            for key, (protocol, path) in _load(host, programme, journals, base).items()}
 
 
 def _add(rows, row, key) -> None:
@@ -71,7 +70,8 @@ def _add(rows, row, key) -> None:
     rows.append(dict(row, repos=[key]))
 
 
-def _diff(acked, now, key, changed, rejected, protocol) -> None:
+def _diff(acked, protocol, key, changed, rejected, host) -> None:
+    now = snapshot_of(host, protocol)
     for section in ("autonomy", "rules"):
         before, after = acked.get(section) or {}, now[section]
         for name in sorted(set(before) | set(after)):
@@ -84,66 +84,67 @@ def _diff(acked, now, key, changed, rejected, protocol) -> None:
     seen = set(acked.get("rejected") or [])
     for entry in protocol["rejected"]:
         if entry.get("id") and _rejected_key(entry) not in seen:
-            _add(rejected, {"layer": entry["layer"], "id": entry["id"], "reason": entry["reason"]}, key)
+            _add(rejected, {"layer": entry["layer"], "id": entry["id"], "reason": entry["reason"],
+                            "section": entry.get("section")}, key)
 
 
-def _narrower(level, baseline) -> bool:
-    # A grant with no recorded baseline is compared as made at act, as the gate does.
-    return level is not None and LEVEL_ORDER.index(level) < LEVEL_ORDER.index(baseline or "act")
-
-
-def _level(host, programme, kind, targets, loaded):
-    items = programme["items"]
-    paths = {items[t].get("repo") if t in items else None for t in targets}
-    by_path = {path: protocol for protocol, _, path in loaded.values()}
+def _level(host, programme, kind, targets, by_path, fallback):
+    paths = host.programme_rulings.target_repos(programme, targets)
     # The gate's rule (programme_rulings.protocol_for): a programme-wide or repo-less target reads every remit repo.
     if None in paths:
         paths = set(by_path)
     if not paths <= set(by_path):
-        return host.programme_rulings.authority_level(host, programme, kind, targets)
+        held = frozenset(paths)
+        if held not in fallback:
+            fallback[held] = host.programme_rulings.protocol_for(host, programme, targets)
+        return host.programme_rulings.level_of(fallback[held], kind)
     levels = [host.programme_rulings.level_of(by_path[p], kind) for p in paths]
     levels = [lv for lv in levels if lv is not None]
     return min(levels, key=LEVEL_ORDER.index) if levels else None
 
 
-def conflicts(host, programme, now_iso, loaded) -> list:
+def _grants(programme, now_iso) -> list:
     when = run_record_core.parse_iso(now_iso)
     items = programme.get("items") or {}
     out = []
-    for rid, revisions in sorted(programme_context.block(programme)["decisions"].items()):
-        ruling = programme_context.in_force(revisions)
-        if not ruling or ruling.get("effect") != "grant" or ruling.get("kind") is None \
+    for rid, revisions, ruling in programme_context.current_revisions(programme_context.block(programme)["decisions"]):
+        if ruling.get("effect") != "grant" or ruling.get("kind") is None \
                 or programme_context.ruling_state(revisions, when) != "active":
             continue
-        targets = sorted({programme_context._canonical(items, t) for t in ruling.get("applies_to") or []})
-        level = _level(host, programme, ruling["kind"], targets, loaded)
-        if _narrower(level, ruling.get("baseline")):
+        out.append((rid, ruling, sorted(programme_context.canonical_targets(items, ruling))))
+    return out
+
+
+def conflicts(host, programme, grants, loaded) -> list:
+    by_path = {path: protocol for protocol, path in loaded.values()}
+    fallback = {}
+    out = []
+    for rid, ruling, targets in grants:
+        level = _level(host, programme, ruling["kind"], targets, by_path, fallback)
+        if programme_decisions.narrower_than_baseline(level, ruling.get("baseline")):
             out.append({"ruling": rid, "kind": ruling["kind"], "items": targets,
                         "baseline": ruling.get("baseline") or "act", "level": level})
     return out
 
 
-def report(host, programme, journals=None) -> dict:
+def report(host, programme, journals=None, base=None) -> dict:
     acked = (programme.get(ACK_KEY) or {}).get("repos") or {}
+    grants = _grants(programme, run_record_core.now_iso())
+    # _level reads every loaded repo for a programme-wide grant, so an active grant needs every remit repo loaded.
+    loaded = _load(host, programme, journals, base, None if grants else set(acked))
     unacknowledged, changed, rejected = [], [], []
-    loaded = current(host, programme, journals)
-    for key, (protocol, now, _) in loaded.items():
+    for key, _ in _repos(programme):
         if key not in acked:
             unacknowledged.append(key)
             continue
-        _diff(acked[key], now, key, changed, rejected, protocol)
+        _diff(acked[key], loaded[key][0], key, changed, rejected, host)
     out = {"unacknowledged": unacknowledged, "changed": changed, "rejected": rejected,
-           "conflicts": conflicts(host, programme, run_record_core.now_iso(), loaded)}
+           "conflicts": conflicts(host, programme, grants, loaded)}
     return out if any(out.values()) else {}
 
 
 def _repo_text(row) -> str:
     return "" if row["repos"] == [NO_REPO] else f" (repos: {', '.join(row['repos'])})"
-
-
-def _section_of(entry_id) -> str:
-    # Rejected entries carry no section; Authority keys are decision kinds, written with "_", and rule ids never are.
-    return "Authority" if entry_id in programme_decisions.DECISION_KINDS or "_" in entry_id else "Done standard"
 
 
 def lines(report_) -> list:
@@ -162,7 +163,7 @@ def lines(report_) -> list:
             what = f"{row['was'] or 'unset'} -> {row['now'] or 'unset'}"
         out.append(f"protocol change: {name} {row['id']} {what}{_repo_text(row)}{tell}")
     for row in report_["rejected"]:
-        out.append(f"protocol change: {_section_of(row['id'])} {row['id']} at the {row['layer']} layer rejected "
+        out.append(f"protocol change: {SECTION_NAMES.get(row.get('section'), 'Done standard')} {row['id']} at the {row['layer']} layer rejected "
                    f"({row['reason']}): the layer below still applies{_repo_text(row)}{tell}")
     for row in report_["conflicts"]:
         out.append(f"Ruling conflict: {row['ruling']} grants {row['kind']} on {', '.join(row['items'])}, but "

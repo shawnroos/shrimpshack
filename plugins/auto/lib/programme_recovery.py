@@ -362,11 +362,10 @@ def _binding(ctx) -> dict:
     denials = [_capped(dict(d, binding=True), ("reason",), f"denial:{n}")
                for n, d in enumerate(ctx["denials"]) if isinstance(d, dict)]
     rulings = []
-    for rid, revisions in sorted(ctx["decisions"].items()):
+    for rid, revisions, current in programme_context.current_revisions(ctx["decisions"]):
         # No clock here: the packet must stay deterministic for one revision, so an expired until still shows.
         if not programme_context.is_ruling(revisions) or programme_context.ruling_state(revisions, None) != "active":
             continue
-        current = programme_context.in_force(revisions)
         entry = _capped({k: current.get(k) for k in ("kind", "effect", "legacy", "scope", "quote", "applies_to",
                                                      "until", "rev")}, ("scope", "quote"), f"ruling:{rid}")
         entry.update(binding=True, authorizes=False)

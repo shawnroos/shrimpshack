@@ -82,9 +82,13 @@ def _until(value):
     return value
 
 
-def protocol_for(host, programme, targets) -> dict:
+def target_repos(programme, targets) -> set:
     items = programme["items"]
-    repos = {items[t].get("repo") if t in items else None for t in targets}
+    return {items[t].get("repo") if t in items else None for t in targets}
+
+
+def protocol_for(host, programme, targets) -> dict:
+    repos = target_repos(programme, targets)
     if None in repos:
         repos = {r.get("path") for r in (programme.get("remit") or {}).get("repos") or [] if isinstance(r, dict)}
     return host.programme_protocol.load(repos=sorted(r for r in repos if r), prompt_lookup=host.prompt_lookup)
@@ -100,9 +104,8 @@ def authority_level(host, programme, kind, targets):
 
 def legacy_restricts(programme) -> list:
     out = []
-    for rid, revisions in sorted(pc.block(programme)["decisions"].items()):
-        current = pc.in_force(revisions)
-        if _dict(current).get("legacy") == "project_term":
+    for rid, _, current in pc.current_revisions(pc.block(programme)["decisions"]):
+        if current.get("legacy") == "project_term":
             out.append({"id": rid, "area": current.get("area"), "scope": current.get("scope")})
     return out
 
