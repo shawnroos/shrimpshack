@@ -483,6 +483,7 @@ check '["herdr:browser-e2e"]|["herdr:linux-probe"]|["herdr:docs-page"]' \
 
 P_SR="$(prompt typed 'amend stop_rule only_when_done')"
 prog amend-term stop_rule only_when_done --prompt "$P_SR" --run "$RUN"
+prog carry-rulings --run "$RUN"
 it "only-when-done keeps its effect: done allows the stop although r-linux is unsatisfied"
 check "allow" "$(pyget "$(stop_decide)" 'd["decision"]')"
 

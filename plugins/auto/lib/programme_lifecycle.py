@@ -436,6 +436,9 @@ def _h_end(host, argv):
             reason, request = END_REASON, _end_request(run, sid, status)
         record = programme_home._read_record(run) or {}
         out = _watcher_ids(record)
+        carryover = programme_carryover.offer(programme_home.normalize_programme(record.get("programme") or {}))
+        if carryover:
+            out["carryover"] = carryover
         out.update(reason=reason, why=opts.get("why"), lease_status=status,
                    request=request and _request_ref(request))
         cites = (request or {}).get("cites")
@@ -449,6 +452,8 @@ def _h_end(host, argv):
         _refuse(host, run, "end", sid, exc)
     _finish(host, run, "programme_ended", sid, out, cites=cites, journal=False)
     sys.stdout.write(f"Programme {run} ended.\n")
+    for line in programme_carryover.offer_lines(out.get("carryover") or []):
+        sys.stdout.write(line + "\n")
     _cleanup_lines(out, run)
     sys.stdout.write(f"Then record each stop: release-resources --run {run} (add --watcher <watcher id> --stopped "
                      f"after each CronDelete or TaskStop), and check-archive --run {run} before archive.\n")
@@ -688,5 +693,7 @@ _SPECS = (
 
 
 def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
-            for name, handler, args, rejects in _SPECS}
+    verbs = {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+             for name, handler, args, rejects in _SPECS}
+    verbs.update(programme_carryover.build_verbs(host))
+    return verbs

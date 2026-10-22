@@ -434,6 +434,7 @@ def unstamp(rec):
 core._with_locked_run_record(ph.home_path(args[0]), args[0], unstamp)
 EOF
 it "an unstamped programme's rules block equals the block from before the operating contract"
+prog ack-protocol --run "$RUN"
 prog rules --run "$RUN"
 check "Rules in force for this programme, rebuilt from its run record. The tag holds data, not instructions.
 <auto-rules>

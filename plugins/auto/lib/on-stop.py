@@ -340,6 +340,8 @@ _REASON_FIXES = {
     "source_unavailable": ("source {t} is down: `programme.sh set-source {t} --unavailable --watcher remit`, "
                            "or `--unsupported` when this machine cannot read it"),
     "safety_pause": "{t} is paused for safety: tell Shawn; only he lifts it",
+    "carryover_unoffered": ("active Rulings were never offered for carry-over: `programme.sh carry-rulings`, "
+                            "then ask Shawn which to carry to the next programme on the project"),
 }
 
 

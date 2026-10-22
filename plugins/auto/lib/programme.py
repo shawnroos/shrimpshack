@@ -216,6 +216,9 @@ def rules_in_force(record, journals=None, protocol=None) -> dict:
     legacy = programme_rulings.legacy_restricts(programme)
     if legacy:
         out["legacy_restricts"] = legacy
+    changes = programme_protocol_changes.report(sys.modules[__name__], programme, journals)
+    if changes:
+        out["protocol_changes"] = changes
     if contract:
         out["operating_contract"] = contract
     return out
@@ -224,6 +227,7 @@ def rules_in_force(record, journals=None, protocol=None) -> dict:
 def render_rules(record, revision=None) -> str:
     rules = rules_in_force(record)
     lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rules_texts(rules)]
+    lines += programme_protocol_changes.lines(rules.get("protocol_changes"))
     body = "\n".join(lines).replace("<", "\\u003c")
     accepted = (((record.get("programme") or {}).get("agreement")) or {}).get("accepted")
     return (
@@ -932,6 +936,8 @@ _VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__nam
 _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name__]))
 programme_rulings = load_lib_module("programme_rulings")
 _VERBS.update(programme_rulings.build_verbs(sys.modules[__name__]))
+programme_protocol_changes = load_lib_module("programme_protocol_changes")
+_VERBS.update(programme_protocol_changes.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

@@ -27,8 +27,9 @@ REASON_KINDS = (
     "corrupt_record", "never_stop", "not_done", "until_time", "unproven_done",
     "no_rule_proposed", "undebugged_blocker", "ownerless_item", "open_item",
     "unwatched_wait", "queued_action", "unread_claim", "source_unavailable",
-    "safety_pause", "corrupt_context",
+    "safety_pause", "corrupt_context", "carryover_unoffered",
 )
+OFFER_KEY = "carryover_offer"
 PAUSED_REASONS = ("ownerless_item", "open_item", "unwatched_wait")
 
 
@@ -205,6 +206,26 @@ def _scan(block: dict, now, inbox_size, cadence: int) -> dict:
             "acceptance": acceptance}
 
 
+def active_rulings(block: dict, now) -> list:
+    out = []
+    for rid, revisions in sorted(programme_context.block(block)["decisions"].items()):
+        current = programme_context.in_force(revisions)
+        if current is not None and current.get("kind") is not None \
+                and programme_context.ruling_state(revisions, now) == "active":
+            out.append((rid, current))
+    return out
+
+
+def unoffered_rulings(block: dict, now) -> list:
+    try:
+        active = active_rulings(block, now)
+    # A malformed context already holds the stop as corrupt_context.
+    except Exception:
+        return []
+    offered = set(_dict(block.get(OFFER_KEY)).get("offered") or [])
+    return [rid for rid, _ in active if rid not in offered]
+
+
 def _stop_decision(rule: str, until, done: bool, floor: list, now):
     if rule == "never_stop" and not _off("NEVER_STOP"):
         return False, [{"kind": "never_stop"}]
@@ -243,6 +264,10 @@ def _compute(record: dict, now, inbox_size) -> dict:
     else:
         may_stop, reasons = _stop_decision(rule, stop_term.get("until"), scan["done"],
                                            scan["floor"], now)
+        # After the stop rule, so it holds a done programme too: the offer must be made before the PM stops.
+        unoffered = unoffered_rulings(block, now)
+        if may_stop and unoffered:
+            may_stop, reasons = False, [{"kind": "carryover_unoffered", "rulings": unoffered}]
     return {
         "done": bool(scan["done"]),
         "may_stop": bool(may_stop),

@@ -706,6 +706,34 @@ EOF
 )"
 check "True True True" "$OUT"
 
+# ── carry-over offer before the stop ──────────────────────────────────────
+stop_hook() {
+  ( cd "$NOREPO" && bash "${HOOKS}/on-stop.sh" <<< "{\"session_id\":\"$1\",\"stop_hook_active\":false}" 2>/dev/null )
+}
+CARRY_RUN="$(run_py <<'EOF'
+print(ph.create_programme(["w8"], "sess-carry")["run"])
+EOF
+)"
+it "with nothing to act on and no Ruling, the Stop hook lets the PM stop"
+check "" "$(stop_hook sess-carry)"
+prompt_hook sess-carry "pw: you coordinate the workers yourself" >/dev/null
+P_CARRY="$(run_py "$CARRY_RUN" <<'EOF'
+print([x for x in pj.read(args[0]) if x["kind"] == "prompt"][-1]["prompt_id"])
+EOF
+)"
+CLAUDE_CODE_SESSION_ID=sess-carry run_py record-ruling pw --kind worker_coordination --effect grant \
+  --scope "PM coordinates workers" --prompt "$P_CARRY" --run "$CARRY_RUN" <<'EOF' >/dev/null
+sys.exit(load_lib_module("programme")._cli(args))
+EOF
+it "an active Ruling never offered for carry-over holds the stop and names the verb that makes the offer"
+OUT="$(stop_hook sess-carry)"
+case "$OUT" in *'"decision": "block"'*carry-rulings*|*'"decision":"block"'*carry-rulings*) pass ;; *) fail "got [$OUT]" ;; esac
+it "once carry-rulings makes the offer, the Stop hook lets the PM stop with no answer from Shawn"
+CLAUDE_CODE_SESSION_ID=sess-carry run_py carry-rulings --run "$CARRY_RUN" <<'EOF' >/dev/null
+sys.exit(load_lib_module("programme")._cli(args))
+EOF
+check "" "$(stop_hook sess-carry)"
+
 echo ""
 echo "programme-hooks.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

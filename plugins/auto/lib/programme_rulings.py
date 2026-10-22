@@ -133,6 +133,17 @@ def _check_revisable(cid, revisions, kind, effect, prompt) -> None:
         raise RulingError(f"Ruling {cid!r} is Shawn's own decision; changing it needs a typed prompt naming it")
 
 
+def _named(target):
+    return target if target == pc.PROGRAMME_SCOPE else pc._item_options(target)
+
+
+# A carried Ruling arrives with no items, so every item it is given is new here and must be named by
+# Shawn's prompt, whatever its effect; accept-context reads the same names.
+def _carried_delta(content) -> dict:
+    items = list(content["applies_to"])
+    return {"added": items, "removed": [], "removed_limits": [], "until": None, "names": items, "wider": False}
+
+
 def _record(host, programme, cid, content, prompt, *, correction=None) -> dict:
     ctx = pc._mutable(programme)
     pc._ids(ctx, cid, "decisions")
@@ -146,13 +157,16 @@ def _record(host, programme, cid, content, prompt, *, correction=None) -> dict:
            "applies_to": content["applies_to"]}
     if current is not None and pc._content(current, pc.RULING_KEYS) == content:
         return dict(out, rev=current["rev"], state="accepted", unchanged=True)
+    carried = _dict(revisions[-1]).get("carried") if revisions and current is None else None
+    delta = _carried_delta(content) if carried else pc.ruling_delta(current, content)
     if prompt and not correction:
-        host.require_named(prompt, cid)
-    delta = pc.ruling_delta(current, content)
+        host.require_named(prompt, cid, *[_named(t) for t in (delta or {}).get("names") or [] if carried])
     revisions = ctx["decisions"].setdefault(cid, revisions)
     revision = pc._append(revisions, content, prompt, accept=bool(prompt) and not (delta and delta["wider"]),
                           delta=delta)
     revision.update(quote=prompt and prompt["quote"], replies_to=correction, baseline=None)
+    if carried:
+        revision["carried"] = carried
     if revision["state"] == "accepted":
         _activate(host, programme, revision, prompt, baseline=_dict(current).get("baseline"))
     return dict(out, rev=revision["rev"], state=revision["state"], unchanged=False, delta=delta,

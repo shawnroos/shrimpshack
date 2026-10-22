@@ -194,19 +194,37 @@ session.
   acceptance; no other verb writes it, and an agreement without it keeps the old
   rule that every product question goes to Shawn. It refuses a prompt that the
   journal holds before the last `agreement_proposed` or `project_term_edited`
-  line, or before the last `remit_set` line that pre-filled a carried-over term,
+  line, or before the last `remit_set` line that brought in a carried-over Ruling,
   so Shawn accepts the terms he last saw.
-- **Carry-over store**: one JSON file per machine beside the personal protocol
-  (`CLAUDE_AUTO_CARRYOVER_STORE` overrides the path) keeps entries for the next
-  programme on a project, under each remit repo's key (its GitHub owner/name, or
-  its path when it has none) or under "all". Each entry carries an adoption block
-  like the personal protocol's and one `rule_adopted` approval record. When
-  `set-remit` stores repos on an agreement that is not yet accepted, it adds a
-  project term for each verified entry under each remit repo's key and under
-  "all", one per area, with the repo key ahead of "all", each marked with its
-  origin key. It drops an entry whose adoption does not verify on this machine
-  and prints a notice naming the entry. An accepted programme never reads the
-  store.
+- **Carry-over**: `carry-rulings` with no ids makes the carry-over offer: it
+  lists every active Ruling and records the offer-made marker. While an active
+  Ruling is missing from that marker the programme may not stop
+  (`carryover_unoffered`), whatever its stop rule; making the offer, not Shawn's
+  answer, releases the stop. `end` makes the same offer in its output and its
+  `programme_ended` line. `carry-rulings --prompt <id> <ruling-id>...` stores
+  Shawn's pick; the typed prompt must name each id and come after an offer that
+  listed them, and it still runs after `end`. The carry-over store is one JSON
+  file per machine beside the personal protocol (`CLAUDE_AUTO_CARRYOVER_STORE`
+  overrides the path), with each Ruling under each remit repo's key (its GitHub
+  owner/name, or its path when it has none), an adoption block like the personal
+  protocol's and one `rule_adopted` approval record. When `set-remit` stores
+  repos on an agreement that is not yet accepted, each verified entry arrives as
+  a pending Ruling under its own id with no items, keeping its kind, effect,
+  scope, limits, end date and Shawn's old words. It binds only when a typed
+  prompt names the id and each item it now applies to, through `record-ruling`
+  or `accept-context`. An entry whose adoption does not verify on this machine,
+  or whose id is taken, is dropped with a notice naming it. An accepted
+  programme never reads the store, and no project term is carried over.
+- **Protocol changes**: the rules block compares the protocol it reads now with
+  the snapshot `ack-protocol` last stored, per remit repo: each Authority level,
+  each Done standard's content hash and each rejected entry. It lists every
+  changed level (old and new), every added, removed or changed Done standard and
+  every newly rejected entry, so a hand edit shows on the next read with no
+  programme write; the PM tells Shawn, then runs `ack-protocol`. Before the first
+  `ack-protocol` it asks for one. The same block lists each active grant Ruling
+  whose kind Authority now holds narrower than the level recorded when the grant
+  became active; the narrower level applies until Shawn accepts a new revision of
+  it or it is closed, and `ack-protocol` never clears that line.
 - **Old instructions**: a programme record written before Rulings keeps its
   instructions, and each reads as a kind-less legacy Ruling with the effect
   decided, under the instruction's id. A Ruling already stored under that id wins.
