@@ -209,6 +209,12 @@ def _all_rows() -> list:
     return rows
 
 
+def session_rows(session_id) -> list:
+    if not session_id:
+        return []
+    return [r for r in _all_rows() if r.get("session_id") == session_id]
+
+
 def lookup(session_id, server=None, workspace=None, *, include_headless=False):
     if not session_id:
         return None
