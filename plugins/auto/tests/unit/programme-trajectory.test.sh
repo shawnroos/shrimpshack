@@ -95,7 +95,7 @@ prog add-item linear:AI-1 --title "View test"
 prog add-item linear:AI-2 --title "Docs pass"
 prog add-item linear:AI-3 --title "Finished one"
 edit 'rec["programme"]["items"]["linear:AI-3"]["state"] = "done"'
-edit 'rec["programme"]["instructions"].append({"id": "i0a1b2c", "state": "active", "applies_to": "programme", "at": "2026-10-19T00:00:00Z", "quote": "keep PRs small", "prompt_id": "p0000001", "until": None, "why": None, "closed": None})'
+edit 'rec["programme"].setdefault("instructions", []).append({"id": "i0a1b2c", "state": "active", "applies_to": "programme", "at": "2026-10-19T00:00:00Z", "quote": "keep PRs small", "prompt_id": "p0000001", "until": None, "why": None, "closed": None})'
 RULE_ID="$(run_py "$RUN" <<'EOF'
 prog = load_lib_module("programme")
 print(prog.rules_in_force(record(args[0]))["rules"][0]["id"])

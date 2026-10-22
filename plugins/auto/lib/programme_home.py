@@ -53,7 +53,7 @@ ITEM_FIELDS = (
     "history", "trajectory", "repo",
 )
 PROGRAMME_FIELDS = (
-    "remit", "created_at", "agreement", "instructions", "decisions", "items",
+    "remit", "created_at", "agreement", "decisions", "items",
     "working_model", "watchers", "inbox_offset", "ended", "permission_proposals",
 )
 
@@ -195,7 +195,6 @@ def default_terms(now_iso: str) -> dict:
     return {
         "remit": term("remit", ("space", "tabs", "spaces"), "space"),
         "stop_rule": term("stop_rule", STOP_RULES, "nothing_it_can_act_on", until=None),
-        "autonomy": term("autonomy", ("protocol",), "protocol", overrides={}),
         "cadence": term("cadence", ("on_change", "fixed"), "on_change",
                         seconds=DEFAULT_CADENCE_SECONDS, eval_budget_usd_per_day=25,
                         quiet_hours=None),
@@ -225,14 +224,6 @@ TERM_GUIDE = {
             "never_stop": "Never stop on its own.",
         },
     },
-    "autonomy": {
-        "editor": "choice",
-        "binding": "none",
-        "description": "How far the PM may act without asking Shawn first.",
-        "options": {
-            "protocol": "The protocol rules decide, action by action.",
-        },
-    },
     "cadence": {
         "editor": "interval",
         "binding": "code",
@@ -255,6 +246,8 @@ TERM_GUIDE = {
 }
 
 _OLD_TOOLS_KEY = "sources"
+_OLD_INSTRUCTIONS_KEY = "instructions"
+_OLD_AUTONOMY_TERM = "autonomy"
 _RENAMED_FIELDS = ("value", "set_by", "set_at", "why", "prompt_id", "quote")
 
 
@@ -296,7 +289,6 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         },
         "created_at": now_iso,
         "agreement": {"accepted": None, "terms": default_terms(now_iso)},
-        "instructions": [],
         "decisions": [],
         "items": {},
         "working_model": {"doing": None, "queue": []},
@@ -361,7 +353,7 @@ def _legacy_revision(entry, legacy, effect, scope, applies_to, until) -> dict:
 
 def _legacy_rulings(block) -> dict:
     out = {}
-    for entry in block.get("instructions") or []:
+    for entry in block.get(_OLD_INSTRUCTIONS_KEY) or []:
         if isinstance(entry, dict) and isinstance(entry.get("id"), str):
             out[entry["id"]] = _legacy_revision(entry, "instruction", "decided", entry.get("quote"),
                                                 [entry.get("applies_to") or "programme"], entry.get("until"))
@@ -374,17 +366,28 @@ def _legacy_rulings(block) -> dict:
     return out
 
 
-def _with_legacy_rulings(block) -> None:
+def _with_legacy_rulings(block) -> bool:
     legacy = _legacy_rulings(block)
     context = block.get("context")
-    if not legacy or not isinstance(context or {}, dict) or not isinstance((context or {}).get("decisions", {}), dict):
-        return
+    if not legacy:
+        return True
+    if not isinstance(context or {}, dict) or not isinstance((context or {}).get("decisions", {}), dict):
+        return False
     context = dict(context or {})
     decisions = dict(context.get("decisions") or {})
     for rid, revision in legacy.items():
         decisions.setdefault(rid, [revision])
     context["decisions"] = decisions
     block["context"] = context
+    return True
+
+
+def _drop_retired(block) -> None:
+    block.pop(_OLD_INSTRUCTIONS_KEY, None)
+    agreement = block["agreement"]
+    if isinstance(agreement.get("project_terms"), list):
+        agreement["project_terms"] = [e for e in agreement["project_terms"]
+                                      if not (isinstance(e, dict) and e.get("reserved"))]
 
 
 def normalize_programme(block: dict) -> dict:
@@ -402,6 +405,7 @@ def normalize_programme(block: dict) -> dict:
         renamed = dict(base["agreement"]["terms"]["tools_of_record"])
         renamed.update({k: old[k] for k in _RENAMED_FIELDS if k in old})
         terms["tools_of_record"] = renamed
+    terms.pop(_OLD_AUTONOMY_TERM, None)
     for key, term in base["agreement"]["terms"].items():
         terms.setdefault(key, term)
     agreement["terms"] = terms
@@ -417,7 +421,9 @@ def normalize_programme(block: dict) -> dict:
         tracker.setdefault(part, [])
     remit["tracker"] = tracker
     out["remit"] = remit
-    _with_legacy_rulings(out)
+    # A malformed context cannot take the legacy copy, so the old keys stay until it is repaired.
+    if _with_legacy_rulings(out):
+        _drop_retired(out)
     return out
 
 

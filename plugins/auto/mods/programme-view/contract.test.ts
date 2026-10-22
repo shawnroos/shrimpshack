@@ -19,17 +19,19 @@ import {
   world,
 } from './test-world'
 
-test('the contract view lists five terms with their setting and description', async ($, on) => {
+test('the contract view lists the four Scope terms with their setting and description, and no autonomy', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const pane = await contractPane($)
   const terms = (await buttonKeys(pane)).filter(key => key.startsWith('term:'))
-  expect(terms).toEqual(['term:remit', 'term:stop_rule', 'term:autonomy', 'term:cadence', 'term:tools_of_record'])
+  expect(terms).toEqual(['term:remit', 'term:stop_rule', 'term:cadence', 'term:tools_of_record'])
   const drawn = await lines(pane)
   const cadence = drawn.find(line => line.includes('cadence ')) ?? ''
   expect(cadence).toContain('fixed, seconds 900')
   expect(cadence).toContain('what cadence controls')
   expect(drawn.some(line => line.includes('"ask before closing"'))).toBe(true)
-  expect(drawn.some(line => line.includes('Applies to the whole programme (inherited) · 1 step relies on this'))).toBe(true)
+  expect(drawn.some(line => line.includes('Applies to the whole programme (inherited) · decided, no kind · 1 step relies on this'))).toBe(true)
+  expect(drawn.some(line => line.includes('Rulings'))).toBe(true)
+  expect(drawn.some(line => /autonomy|instruction|correction|project term/i.test(line))).toBe(false)
 })
 
 test('opening cadence shows binding, reliant steps, set by, notes, proposal and options with the active one marked', async ($, on) => {
@@ -69,16 +71,16 @@ test('opening a second term closes the first', async ($, on) => {
   const pane = await contractPane($)
   await pane.press({ key: 'term:cadence' })
   await settle()
-  await pane.press({ key: 'term:autonomy' })
+  await pane.press({ key: 'term:stop_rule' })
   await settle()
   const keys = await buttonKeys(pane)
   expect(keys.some(key => key.startsWith('option:cadence:'))).toBe(false)
-  expect(keys.filter(key => key.startsWith('option:autonomy:'))).toEqual(['option:autonomy:a', 'option:autonomy:b'])
+  expect(keys.filter(key => key.startsWith('option:stop_rule:'))).toEqual(['option:stop_rule:a', 'option:stop_rule:b'])
   expect((await lines(pane)).some(line => line.includes('choose any'))).toBe(false)
   expect((await lines(pane)).find(line => line.includes('what a means'))).toContain('\uF192')
   expect((await lines(pane)).some(line => line.includes('Written guidance only'))).toBe(true)
 
-  await pane.press({ key: 'term:autonomy' })
+  await pane.press({ key: 'term:stop_rule' })
   await settle()
   expect((await buttonKeys(pane)).some(key => key.startsWith('option:'))).toBe(false)
 })
@@ -103,24 +105,24 @@ test('in a 12-row pane the focused option row is the one the draw marks, below t
 
 test('a refused proposal shows "refused" and its reason; a superseded one shows "superseded"', async ($, on) => {
   const terms = defaultTerms()
-  terms[2] = term('autonomy', {
-    proposal: { value: 'act_and_tell', at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'refused', reason: 'the prompt was a suggestion, not typed' },
+  terms[1] = term('stop_rule', {
+    proposal: { value: 'only_when_done', at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'refused', reason: 'the prompt was a suggestion, not typed' },
   })
-  terms[4] = term('tools_of_record', {
+  terms[3] = term('tools_of_record', {
     proposal: { value: ['tracker'], at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'superseded', settled_at: '2026-10-19T09:30:00Z' },
   })
   terms[0] = term('remit', { proposal: { value: 'tabs', at: '2026-10-19T09:00:00Z', origin: 'pm', state: 'accepted' } })
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
   const pane = await contractPane($)
   const drawn = await lines(pane)
-  expect(drawn.find(line => line.includes('autonomy '))).toContain('refused: the prompt was a suggestion, not typed')
+  expect(drawn.find(line => line.includes('stop rule '))).toContain('refused: the prompt was a suggestion, not typed')
   expect(drawn.find(line => line.includes('tools of record '))).toContain('superseded')
   expect(drawn.find(line => line.includes('remit '))).toContain('accepted')
   expect(drawn.find(line => line.includes('cadence '))).toContain('proposed: on_change')
 
-  await pane.press({ key: 'term:autonomy' })
+  await pane.press({ key: 'term:stop_rule' })
   await settle()
-  expect((await lines(pane)).some(line => line.includes('Proposed: act_and_tell · refused: the prompt was a suggestion, not typed'))).toBe(true)
+  expect((await lines(pane)).some(line => line.includes('Proposed: only_when_done · refused: the prompt was a suggestion, not typed'))).toBe(true)
 })
 
 test('the re-read line shows the last re-read, the terms changed since, and a pending request', async ($, on) => {
@@ -128,12 +130,12 @@ test('the re-read line shows the last re-read, the terms changed since, and a pe
   const hhmm = new Date(at).toTimeString().slice(0, 5)
   world(on, {
     [LEASE]: lease(),
-    [VIEW]: viewText({ reread: { last_at: at, changed_since: ['autonomy', 'cadence'], requested: true, requested_at: '2026-10-19T09:20:00Z' } }),
+    [VIEW]: viewText({ reread: { last_at: at, changed_since: ['stop_rule', 'cadence'], requested: true, requested_at: '2026-10-19T09:20:00Z' } }),
   })
   const pane = await contractPane($)
   const drawn = await lines(pane)
   expect(drawn.some(line => line.includes(`PM last re-read the rules at ${hhmm}`))).toBe(true)
-  expect(drawn.some(line => line.includes('2 terms changed since then: autonomy, cadence'))).toBe(true)
+  expect(drawn.some(line => line.includes('2 terms changed since then: stop rule, cadence'))).toBe(true)
   expect(drawn.some(line => line.includes('re-read requested'))).toBe(true)
 })
 

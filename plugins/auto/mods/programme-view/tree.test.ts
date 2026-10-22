@@ -53,7 +53,7 @@ test('two items draw two trees: done count, current step, numbered planned steps
   expect(drawn[at('2 done')]).toContain('last: Add owner history field')
   expect(at('2 done')).toBe(at('Export owner history') + 1)
   expect(at('Write view test')).toBe(at('2 done') + 1)
-  expect(drawn[at('Write view test')]).toContain('autonomy')
+  expect(drawn[at('Write view test')]).toContain('remit')
   expect(drawn[at('1. Run auto suite')]).toBeDefined()
   expect(at('1. Run auto suite')).toBe(at('Write view test') + 1)
   expect(at('2. Open PR')).toBe(at('1. Run auto suite') + 1)

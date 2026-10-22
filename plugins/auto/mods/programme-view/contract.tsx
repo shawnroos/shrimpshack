@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 
-import { acceptReply, customOf, draftReply, draftText, instructionTemplate, isChecklist, toolsOf, withdrawReply } from './actions'
+import { acceptReply, customOf, draftReply, draftText, isChecklist, rulingTemplate, toolsOf, withdrawReply } from './actions'
 import type { Draft, EditorKind, Outcome } from './actions'
 import { COLOR, GLYPH } from './palette'
 import type { Ui } from './tree'
@@ -31,9 +31,18 @@ export type Term = {
   options: { name: string; description: string; active: boolean }[]
 }
 
-export type Instruction = { id: string; quote: string; applies_to: string; scope: 'own' | 'inherited'; reliant_steps: number }
+export type Ruling = {
+  id: string
+  quote: string
+  applies_to: string[]
+  scope: 'own' | 'inherited'
+  effect: 'decided' | 'grant' | 'restrict'
+  kind: string | null
+  until: string | null
+  reliant_steps: number
+}
 
-export type Contract = { terms: Term[]; instructions: Instruction[] }
+export type Contract = { terms: Term[]; rulings: Ruling[] }
 
 export type Reread = { last_at: string | null; changed_since: string[]; requested: boolean }
 
@@ -71,7 +80,7 @@ export type ContractProps = {
 
 export const termRowKey = (key: string) => `term:${key}`
 export const optionRowKey = (term: string, option: string) => `option:${term}:${option}`
-export const instructionRowKey = (id: string) => `instruction:${id}`
+export const rulingRowKey = (id: string) => `ruling:${id}`
 export const noteKey = (term: string) => `note:${term}`
 export const whyKey = (id: string) => `why:${id}`
 export const toolEditKey = (term: string) => `tool:${term}`
@@ -300,41 +309,37 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
     gap(`${term.key}:end`)
   }
 
-  gap('instructions')
-  line('instructions', <Text bold>Instructions  </Text>, <Text dimColor>{'─'.repeat(33)}</Text>)
-  for (const instruction of contract.instructions) {
-    const key = instructionRowKey(instruction.id)
+  gap('rulings')
+  line('rulings', <Text bold>Rulings  </Text>, <Text dimColor>{'─'.repeat(37)}</Text>)
+  for (const ruling of contract.rulings) {
+    const key = rulingRowKey(ruling.id)
     line(
       key,
       cursor(key, '▌'),
       <Text color={COLOR.warning}>{`   ${GLYPH.clause}  `}</Text>,
-      <Button key={key} label={instruction.quote} plain {...focus(key)} onPress={() => act.focusRow(key)}>
-        <Text bold>{`"${instruction.quote}"`}</Text>
+      <Button key={key} label={ruling.quote} plain {...focus(key)} onPress={() => act.focusRow(key)}>
+        <Text bold>{`"${ruling.quote}"`}</Text>
       </Button>,
     )
-    const target =
-      instruction.applies_to === 'programme' ? 'the whole programme' : (itemTitles[instruction.applies_to] ?? instruction.applies_to)
+    const targets = ruling.applies_to.map(id => (id === 'programme' ? 'the whole programme' : (itemTitles[id] ?? id)))
+    const what = ruling.kind ? `${ruling.effect} ${ruling.kind}` : `${ruling.effect}, no kind`
+    const until = ruling.until ? ` until ${ruling.until}` : ''
     line(
       `${key}:about`,
-      <Text dimColor>{`         Applies to ${target} (${instruction.scope}) · ${steps(instruction.reliant_steps)}`}</Text>,
+      <Text dimColor>{`         Applies to ${targets.join(', ')}${until} (${ruling.scope}) · ${what} · ${steps(ruling.reliant_steps)}`}</Text>,
     )
     if (focusedRow !== key) continue
-    typeThis(`${key}:withdraw`, withdrawReply(instruction.quote), 9)
-    if (armed) line(`${key}:actions`, pad(9), action('act:fulfil', 'f', 'close as fulfilled', () => act.fulfil(instruction.id)))
-    if (editing === whyKey(instruction.id)) {
+    typeThis(`${key}:withdraw`, withdrawReply(ruling.id, ruling.quote), 9)
+    if (armed) line(`${key}:actions`, pad(9), action('act:fulfil', 'f', 'close as fulfilled', () => act.fulfil(ruling.id)))
+    if (editing === whyKey(ruling.id)) {
       line(
         `${key}:why`,
         pad(9),
-        <Input
-          key={whyKey(instruction.id)}
-          label="Why is it fulfilled: "
-          autoFocus
-          onSubmit={text => act.closeAsFulfilled(instruction.id, text)}
-        />,
+        <Input key={whyKey(ruling.id)} label="Why is it fulfilled: " autoFocus onSubmit={text => act.closeAsFulfilled(ruling.id, text)} />,
       )
     }
   }
   const title = selectedItem ? itemTitles[selectedItem] : undefined
-  typeThis('instruction:new', instructionTemplate(title), 4, 'To add an instruction, type this:')
+  typeThis('ruling:new', rulingTemplate(title), 4, 'To add a Ruling, type this:')
   return <Box flexDirection="column">{out}</Box>
 }

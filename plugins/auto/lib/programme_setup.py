@@ -26,7 +26,6 @@ programme_terms = load_lib_module("programme_terms")
 programme_view_setup = load_lib_module("programme_view_setup")
 driver_session = load_lib_module("driver_session")
 
-SHARED_TERMS = programme_view_setup.SHARED_TERMS
 STEPS = (programme_view_setup.RULINGS, programme_view_setup.SHARED, programme_view_setup.ITEMS,
          programme_view_setup.ACCEPT)
 TAKE_ALL = "take all recommendations"
@@ -64,10 +63,10 @@ def _before_acceptance(host, programme) -> None:
 
 def _pickable(host, programme, key) -> dict:
     terms = programme["agreement"]["terms"]
-    if key in SHARED_TERMS or key not in terms or not isinstance(terms[key], dict):
+    if key not in terms or not isinstance(terms[key], dict):
         raise host.ProgrammeError(
             f"{key!r} is not a per-programme agreement term, so it stays typed: a pick sets only "
-            f"{sorted(k for k in terms if k not in SHARED_TERMS)}; rulings, reserved areas and shared "
+            f"{sorted(terms)}; rulings, reserved areas and shared "
             "settings need the reply Shawn types")
     return terms[key]
 
@@ -191,7 +190,7 @@ def _h_take_recommendations(host, argv):
         cite = _cite(pick, *taken[0])
         applied = {}
         for key, term in programme["agreement"]["terms"].items():
-            if key in SHARED_TERMS or not isinstance(term, dict):
+            if not isinstance(term, dict):
                 continue
             value, extras, settle = _recommendation(term)
             _set(host, term, value, extras, cite, TAKE_ALL, settle=settle)
@@ -301,7 +300,7 @@ def _h_setup_keep(host, argv):
 _SPECS = (
     ("pick-term", _h_pick_term,
      "<key> <value> --pick <id> [--seconds <n>] [--until <iso>] [--why <text>] [--run <id>]",
-     "an accepted agreement; a key that is not a per-programme agreement term (autonomy, rulings, reserved "
+     "an accepted agreement; a key that is not a per-programme agreement term (rulings, reserved "
      "areas and shared settings stay typed); a value outside the term's options; a prompt that is not a "
      "verified pick from the driving session; a pick already used; a pick whose question does not name "
      "the term alone, or whose answer does not name the value (for a list, exactly the value's options). "
@@ -309,7 +308,7 @@ _SPECS = (
     ("take-recommendations", _h_take_recommendations, "--pick <id> [--run <id>]",
      "an accepted agreement; a prompt that is not a verified pick from the driving session; a pick already "
      "used; a pick with no answer naming 'take all recommendations' without a negation. Sets every "
-     "per-programme term to its pending proposal, else its current value; leaves autonomy, rulings and "
+     "per-programme term to its pending proposal, else its current value; leaves rulings and "
      "shared settings alone."),
     ("setup-step", _h_setup_step, "<name> [--run <id>]",
      "an unknown step name (an agreement term key, rulings, shared, items or accept). Needs no prompt; "

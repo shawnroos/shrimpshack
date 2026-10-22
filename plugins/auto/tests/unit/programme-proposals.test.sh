@@ -191,10 +191,14 @@ EOF
 it "the rules block does not mention the proposal"
 lacks "1800" "$("$PY" "$PROG" rules --run "$RUN" 2>&1)"
 
-it "propose-term autonomy other is refused: the value is not an option"
-prog propose-term autonomy other
+it "propose-term autonomy is refused: the agreement has no autonomy term"
+prog propose-term autonomy protocol
 check 1 "$CODE"
-check 'false' "$(field "\"proposal\" in ${T}[\"autonomy\"]")"
+check 'false' "$(field "\"autonomy\" in ${T}")"
+it "propose-term remit other is refused: the value is not an option"
+prog propose-term remit other
+check 1 "$CODE"
+check 'false' "$(field "\"proposal\" in ${T}[\"remit\"] and ${T}[\"remit\"][\"proposal\"][\"value\"] == \"other\"")"
 it "propose-term on an unknown term is refused"
 prog propose-term nonsense x
 check 1 "$CODE"

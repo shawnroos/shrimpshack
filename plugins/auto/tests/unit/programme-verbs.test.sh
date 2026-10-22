@@ -229,13 +229,13 @@ has "until Shawn is back" "$RULES_BLOCK"
 it "an old item instruction follows its item through a merge, read by canonical id"
 prog add-item linear:AI-799 --title "old half"
 prog add-item linear:AI-800 --title "new half"
-edit 'rec["programme"]["instructions"].append(
+edit 'rec["programme"].setdefault("instructions", []).append(
     {"id": "imerge1", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "linear:AI-799",
      "until": None, "why": None, "prompt_id": "'"$P_ITEM"'", "quote": "keep AI-799 behind a flag", "closed": None})'
 prog merge-item linear:AI-799 linear:AI-800
 prog rules
 has "\"keep AI-799 behind a flag\" (applies to linear:AI-800)" "$OUT"
-check '"linear:AI-799"' "$(field '[i["applies_to"] for i in prog["instructions"] if i["id"] == "imerge1"][0]')"
+check '"linear:AI-799"' "$(field 'prog["context"]["decisions"]["imerge1"][0]["applies_to"][0]')"
 
 it "an old instruction is a kind-less Ruling: record-ruling refuses to revise it"
 prog record-ruling iback01 --effect decided --kind work_sequencing --scope "keep merging" --prompt "$P_BACK"
@@ -544,7 +544,7 @@ for kind in term_amended ruling_closed agreement_proposed agreement_accepted rul
 done
 lacks "missing:" "$GOT"
 
-it "status shows a personal rule and autonomy entry adopted on another machine as adopted there"
+it "status shows a personal rule and Authority entry adopted on another machine as adopted there"
 personal_doc '
 pp = load_lib_module("programme_protocol")
 rule = dict(doc["rules"][0])
@@ -558,7 +558,7 @@ doc["autonomy"]["merge_at_gate"] = gate
 '
 prog status
 has "rule laptop-docs: requires merged, adopted on laptop" "$OUT"
-has "autonomy merge_at_gate: propose, adopted on laptop" "$OUT"
+has "authority merge_at_gate: propose, adopted on laptop" "$OUT"
 lacks "adopted on studio" "$OUT"
 personal_doc 'doc["rules"] = [r for r in doc["rules"] if r["id"] != "laptop-docs"]; del doc["autonomy"]["merge_at_gate"]'
 

@@ -20,7 +20,7 @@ export function resetContract(): void {
 }
 
 export function isContractRow(key: string): boolean {
-  return key.startsWith('term:') || key.startsWith('option:') || key.startsWith('instruction:')
+  return key.startsWith('term:') || key.startsWith('option:') || key.startsWith('ruling:')
 }
 
 export function focusContractRow(key: string): void {
@@ -87,8 +87,8 @@ function actions($: EngineInterface): ContractActions {
     reread: () => perform(['request-reread', ...UI_ORIGIN_ARGS], 're-read requested'),
     fulfil: id => edit(whyKey(id)),
     closeAsFulfilled: (id, why) => {
-      if (!why.trim()) return refuse('say why the instruction is fulfilled')
-      return perform(['close-instruction', id, '--as', 'fulfilled', '--why', why.trim(), ...UI_ORIGIN_ARGS], 'instruction closed as fulfilled', () => {
+      if (!why.trim()) return refuse('say why the Ruling is fulfilled')
+      return perform(['close-ruling', id, '--as', 'fulfilled', '--why', why.trim(), ...UI_ORIGIN_ARGS], 'Ruling closed as fulfilled', () => {
         state.editing = undefined
       })
     },

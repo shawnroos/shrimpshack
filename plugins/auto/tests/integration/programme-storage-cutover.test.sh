@@ -914,7 +914,7 @@ run_py "$RUN7" "$P7A" >/dev/null <<'EOF'
 run, pid = args
 path = export_path(run)
 rec = json.load(open(path))
-rec["programme"]["instructions"].append({"id": "i000001", "state": "active", "at": "2026-01-01T00:00:00Z",
+rec["programme"].setdefault("instructions", []).append({"id": "i000001", "state": "active", "at": "2026-01-01T00:00:00Z",
     "applies_to": "programme", "until": None, "why": None, "prompt_id": "p999999", "quote": "be careful",
     "closed": None})
 json.dump(rec, open(path, "w"))

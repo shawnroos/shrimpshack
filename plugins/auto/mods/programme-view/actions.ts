@@ -185,10 +185,11 @@ export function draftText(term: Term, draft: Draft): string | undefined {
   return draft.option
 }
 
-export function instructionTemplate(title: string | undefined): string {
-  return `Instruction for ${title ?? 'the whole programme'}: `
+export function rulingTemplate(title: string | undefined): string {
+  return `Ruling for ${title ?? 'the whole programme'}: `
 }
 
-export function withdrawReply(quote: string): string {
-  return `Withdraw instruction "${quote}"`
+// close-ruling --as withdrawn needs a typed prompt that names the Ruling's id.
+export function withdrawReply(id: string, quote: string): string {
+  return `Withdraw ruling ${id} "${quote}"`
 }

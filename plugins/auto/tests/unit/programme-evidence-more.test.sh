@@ -422,17 +422,17 @@ has "keychain" "$(last_note linear:AI-2 released)"
 
 it "released: a closed waiver does not count"
 edit 'items["linear:AI-2"]["deliverables"]["released"] = {"result": "unknown"}'
-edit 'prog["instructions"].append({"id": "iaaaaaa", "state": "withdrawn", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p1", "quote": "waive the eval for AI-2", "closed": None})'
+edit 'prog.setdefault("instructions", []).append({"id": "iaaaaaa", "state": "withdrawn", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p1", "quote": "waive the eval for AI-2", "closed": None})'
 prog check-deliverable linear:AI-2 released --repo "$REPO"
 check '"refuted"' "$(result_of linear:AI-2 released)"
 
 it "released: an active waiver for another item does not count"
-edit 'prog["instructions"].append({"id": "ibbbbbb", "state": "active", "at": ago(60), "applies_to": "linear:AI-1", "until": None, "why": None, "prompt_id": "p2", "quote": "waive the eval", "closed": None})'
+edit 'prog.setdefault("instructions", []).append({"id": "ibbbbbb", "state": "active", "at": ago(60), "applies_to": "linear:AI-1", "until": None, "why": None, "prompt_id": "p2", "quote": "waive the eval", "closed": None})'
 prog check-deliverable linear:AI-2 released --repo "$REPO"
 check '"refuted"' "$(result_of linear:AI-2 released)"
 
 it "released: a match with an active waiver instruction naming the item is confirmed"
-edit 'prog["instructions"].append({"id": "icccccc", "state": "active", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p3", "quote": "ship it, waive the eval for this one", "closed": None})'
+edit 'prog.setdefault("instructions", []).append({"id": "icccccc", "state": "active", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p3", "quote": "ship it, waive the eval for this one", "closed": None})'
 : > "$CALLS"
 prog check-deliverable linear:AI-2 released --repo "$REPO"
 check '"confirmed"' "$(result_of linear:AI-2 released)"

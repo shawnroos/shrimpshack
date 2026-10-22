@@ -322,9 +322,9 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           and after['cadence']['value'] == 'fixed' and after['cadence']['seconds'] == 600
           and after['stop_rule']['proposal']['state'] == 'accepted', (result.stdout + result.stderr, after))
     check('take-recommendations leaves the shared, ruling and protocol settings alone',
-          after['autonomy']['set_by'] == 'default'
+          'autonomy' not in after
           and all(e['set_by'] == 'proposal' for e in record(run)['programme']['agreement']['project_terms'])
-          and not personal.exists(), after['autonomy'])
+          and not personal.exists(), sorted(after))
     check('take-recommendations journals one row citing the pick',
           [r['payload'].get('prompt_id') for r in kinds(run, 'recommendations_taken')] == [take],
           kinds(run, 'recommendations_taken'))

@@ -224,10 +224,10 @@ it "the answer on the ask points back to the decision"
 check "true" "$(field 'prog["items"]["linear:AI-4"]["handed"]["answered"]["decision_id"] == prog["decisions"][-1]["id"]')"
 it "the handed_answered journal entry carries the decision id"
 has "$(field 'prog["decisions"][-1]["id"]' | tr -d '"')" "$(journal_last handed_answered)"
-it "status --terms shows the ask an answer replies to"
-prog status --terms --json
+it "status --agreement shows the ask an answer replies to"
+prog status --agreement --json
 has "\"ask\": ${ASK}" "$OUT"
-prog status --terms
+prog status --agreement
 has "(ask $(printf '%s' "$ASK" | tr -d '"'))" "$OUT"
 
 it "accept-agreement writes a Shawn decision of kind agreement"

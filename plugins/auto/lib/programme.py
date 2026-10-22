@@ -170,12 +170,6 @@ def active_rulings(programme, now=None) -> list:
     return out
 
 
-def active_instructions(programme) -> list:
-    return [{"id": r["id"], "quote": r["quote"], "until": r["until"], "at": r["at"], "prompt_id": r["prompt_id"],
-             "applies_to": r["applies_to"][0]}
-            for r in active_rulings(programme) if r["legacy"] == "instruction"]
-
-
 def _terms_view(agreement) -> dict:
     view = {}
     for key, term in sorted((agreement.get("terms") or {}).items()):
@@ -210,7 +204,7 @@ def rules_in_force(record, journals=None, protocol=None) -> dict:
         "autonomy": autonomy,
         "rejected_rules": [{"id": r["id"], "layer": r["layer"], "reason": r["reason"]}
                            for r in protocol["rejected"]],
-        "instructions": active_instructions(programme),
+        "rulings": active_rulings(programme),
         "permission_proposals": programme_permission.in_force(programme),
     }
     legacy = programme_rulings.legacy_restricts(programme)
@@ -823,26 +817,25 @@ def _rebuild_missing_view(run_id, home, record) -> None:
 
 
 def _h_status(argv):
-    positional, opts = _parse(argv, values=("run",), flags=("json", "terms"))
-    # The slash command passes its arguments as one quoted string, so `terms` arrives as a word.
+    positional, opts = _parse(argv, values=("run",), flags=("json", "agreement"))
+    # The slash command passes its arguments as one quoted string, so `agreement` arrives as a word.
     words = [w for p in positional for w in p.split()]
-    if "terms" in words:
-        opts["terms"] = True
-        words.remove("terms")
+    if "agreement" in words:
+        opts["agreement"] = True
+        words.remove("agreement")
     if len(words) > 1 or (words and opts.get("run")):
-        raise ValueError("usage: status [<run>|--run <id>] [--terms] [--json]")
+        raise ValueError("usage: status [<run>|--run <id>] [--agreement] [--json]")
     if words:
         opts["run"] = words[0]
     run_id, home, record = _locate(opts)
     _rebuild_missing_view(run_id, home, record)
     view = build_view(run_id, home, record)
-    if opts.get("terms"):
-        terms = view["model"]["terms"]
+    if opts.get("agreement"):
         if opts.get("json"):
-            _emit({"run": view["run"], "generated_at": view["generated_at"], "terms": terms,
-                   "rows": programme_view.terms_rows(terms)})
+            _emit({"run": view["run"], "generated_at": view["generated_at"], "agreement": view["model"]["agreement"],
+                   "rows": programme_view.agreement_rows(view["model"])})
         else:
-            sys.stdout.write(programme_view.render_terms(view) + "\n")
+            sys.stdout.write(programme_view.render_agreement(view) + "\n")
     elif opts.get("json"):
         _emit(view)
     else:

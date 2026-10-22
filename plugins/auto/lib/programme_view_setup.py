@@ -24,8 +24,6 @@ USING_EXISTING = "using existing"
 REPLIES = {RULINGS: "approve the proposed rulings", SHARED: "adopt the proposed shared rules",
            ACCEPT: "accept the agreement"}
 SEEN_PARTS = ("tabs", "repos", "tracker")
-# Its only option defers to the personal protocol, which every programme shares (`adopt-autonomy`).
-SHARED_TERMS = ("autonomy",)
 
 
 _dict = programme_view_work._dict
@@ -59,7 +57,7 @@ def _term_step(key, term, kept) -> dict:
     done = term.get("set_by") not in UNSET_BY or key in kept
     out = _step(key, guide.get("label") or key.replace("_", " "),
                 term.get("section") or guide.get("section") or key, done,
-                programme_view_work._value_text(term), recommendation, source, needs_typed=key in SHARED_TERMS)
+                programme_view_work._value_text(term), recommendation, source)
     out["options"] = [o["name"] for o in programme_view_work._options(programme_proposals.offered(term), guide)]
     return out
 

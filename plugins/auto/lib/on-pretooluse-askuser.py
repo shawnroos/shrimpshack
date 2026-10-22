@@ -104,7 +104,7 @@ def _owns_session(led, *, run_record, session_id, skip_staleness, stale_threshol
     """
     if not isinstance(led, dict):
         return False
-    # Programme runs are exempt: their autonomy term governs questions instead.
+    # Programme runs are exempt: the PM's Authority and Rulings govern its questions instead.
     if led.get("run_kind") == "programme":
         return False
     if phase_grammar.current_phase(led) == "done":

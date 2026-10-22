@@ -476,7 +476,8 @@ out("changed", f"{w['t:chg']['changed_since_first']} {w['t:chg']['change_hash']}
 
 c = "term:cadence"
 items = [item("t:a", trajectory=traj(ago(60), done=[step("old", c), step("older", c)], current=step("now", c),
-                                     planned=[step("next", c), step("free"), step("i", "instruction:i1")])),
+                                     planned=[step("next", c), step("free"), step("i", "instruction:i1"),
+                                              step("r", "ruling:i2")])),
          item("t:w", state="waiting", waiting_on={"who": "ci"},
               trajectory=traj(ago(60), current=step("wait", c), planned=[step("then", "term:remit")])),
          item("t:d", state="done", trajectory=traj(ago(60), current=step("gone", c)))]
@@ -488,9 +489,10 @@ r["programme"]["instructions"] = [
 v = view(r, rules=prog.rules_in_force(r, {}))
 terms = {t["key"]: t for t in v["contract"]["terms"]}
 out("reliant", f"{terms['cadence']['reliant_steps']} {terms['remit']['reliant_steps']} {terms['stop_rule']['reliant_steps']}")
-ins = {i["id"]: i for i in v["contract"]["instructions"]}
-out("instructions", " ".join(sorted(ins)) + f" | {ins['i1']['scope']} {ins['i1']['reliant_steps']} {ins['i1']['quote']}"
-                    f" | {ins['i2']['scope']} {ins['i2']['applies_to']} {ins['i2']['reliant_steps']}")
+ins = {i["id"]: i for i in v["contract"]["rulings"]}
+out("rulings", " ".join(sorted(ins)) + f" | {ins['i1']['scope']} {ins['i1']['reliant_steps']} {ins['i1']['quote']}"
+               f" | {ins['i2']['scope']} {ins['i2']['applies_to']} {ins['i2']['reliant_steps']}"
+               f" | {ins['i1']['effect']} {ins['i1']['kind']} {ins['i1']['legacy']}")
 w = work(v)["t:a"]
 out("steps", " ".join(f"{s['kind']}:{s['clause_label']}" for s in w["steps"]))
 out("no_clause", f"{[s for s in w['steps'] if s['title'] == 'free'][0]['no_clause']}")
@@ -538,7 +540,7 @@ out("work_json", json.dumps(v["work"]))
 out("rows_text", pv.render_text(v).replace("\n", " ¶ "))
 
 v = view({"run_id": "prog-empty", "programme": {}})
-out("empty", f"{v['work']}|{len(v['contract']['terms'])}|{v['contract']['instructions']}|{v['reread']['last_at']}|{v['view_format']}")
+out("empty", f"{v['work']}|{len(v['contract']['terms'])}|{v['contract']['rulings']}|{v['reread']['last_at']}|{v['view_format']}")
 v = view({})
 out("no_block", f"{v['work']}|{v['reread']['requested']}")
 EOF
@@ -587,10 +589,10 @@ it "a changed item carries the newest change hash beside its trajectory hash"
 check "True hc hc False None" "$(got changed)"
 it "reliant counts take current and planned steps of open and waiting items, not done steps"
 check "3 1 0" "$(got reliant)"
-it "instructions show quote, own or inherited scope and reliant steps; closed ones are absent"
-check "i1 i2 | own 1 keep PRs small | inherited programme 0" "$(got instructions)"
+it "old instructions show as Rulings with quote, own or inherited scope and reliant steps; closed ones are absent"
+check "i1 i2 | own 1 keep PRs small | inherited ['programme'] 1 | decided None instruction" "$(got rulings)"
 it "steps carry their glyph kind and clause label"
-check "done:cadence done:cadence current:cadence planned:cadence planned:no clause planned:instruction i1" "$(got steps)"
+check "done:cadence done:cadence current:cadence planned:cadence planned:no clause planned:instruction i1 planned:ruling i2" "$(got steps)"
 it "a step with no clause is flagged no_clause"
 check "True" "$(got no_clause)"
 it "a waiting item's current step uses the waiting glyph"
@@ -610,7 +612,7 @@ check "code|How often the PM sweeps the programme.|cadence|on_change, seconds 36
 it "the active option is marked"
 check "on_change" "$(got cadence_active)"
 it "each term names how the contract view edits it; a term outside the guide is a plain choice"
-check "remit:space stop_rule:until autonomy:choice cadence:interval tools_of_record:checklist mystery:choice" "$(got editors)"
+check "remit:space stop_rule:until cadence:interval tools_of_record:checklist mystery:choice" "$(got editors)"
 it "reread: rules loaded at 09:10 and cadence set at 09:30 give changed since cadence"
 check "2026-10-19T09:10:00Z|cadence|False" "$(got reread)"
 it "a term carries who set it, why and its notes"
@@ -626,14 +628,21 @@ lacks "w2:p7" "$(got work_json)"
 it "the text rows carry a Work section with the current step"
 has "Work ¶   title t:a: Write view test" "$(got rows_text)"
 it "a record with no trajectories gives empty work, full contract terms and an empty reread"
-check "[]|5|[]|None|3" "$(got empty)"
+check "[]|4|[]|None|3" "$(got empty)"
 it "a record with no programme block still builds"
 check "[]|False" "$(got no_block)"
 
-TERMS_RUN="$(new_run w10)"
-TERMS_HOME="${CLAUDE_AUTO_DATA_DIR}/programmes/${TERMS_RUN}"
-run_py "$TERMS_RUN" <<'EOF' >/dev/null
+AGREE_RUN="$(new_run w10)"
+AGREE_HOME="${CLAUDE_AUTO_DATA_DIR}/programmes/${AGREE_RUN}"
+run_py "$AGREE_RUN" <<'EOF' >/dev/null
 run = args[0]
+def ruling(state, kind, effect, quote, applies_to=("programme",), until=None, **extra):
+    rev = {"rev": 1, "state": state, "at": "2026-10-01T00:00:00Z", "kind": kind, "effect": effect,
+           "scope": quote, "quote": quote, "reason": None, "limits": [], "requirements": [],
+           "applies_to": list(applies_to), "until": until, "baseline": None, "delta": None,
+           "source": {"class": "human_input", "prompt_id": "p000001", "origin_label": "typed", "origin_verified": True}}
+    rev.update(extra)
+    return [rev]
 def seed(p):
     a = p["agreement"]
     a["accepted"] = {"at": "2026-10-01T00:00:00Z", "prompt_id": "p000000", "quote": "go"}
@@ -644,19 +653,25 @@ def seed(p):
         {"id": "t000002", "area": "release", "value": "Shawn ships releases", "reserved": True,
          "source": "kickoff chat", "set_by": "proposal", "history": []},
     ]
+    p["instructions"] = [{"id": "i000001", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": None,
+                          "until": None, "why": None, "prompt_id": "p000002", "quote": "keep PRs small",
+                          "closed": None}]
+    p["context"] = {"decisions": {
+        "r-tools": ruling("accepted", "tool_choice", "grant", "let the PM pick tools", baseline="act"),
+        "r-wide": ruling("pending_acceptance", "work_sequencing", "restrict", "ask before reordering"),
+        "r-old": ruling("accepted", "technical_approach", "grant", "pick any parser", until="2026-01-01T00:00:00Z"),
+        "r-carry": ruling("pending_acceptance", "acceptance", "grant", "accept docs-only PRs", applies_to=(),
+                          carried={"from": "acme/web", "entry": "c1", "run_id": "prog-old"}),
+    }}
     p["decisions"] = [
         {"id": "d000001", "at": "2026-10-02T00:00:00Z", "kind": "technical_approach", "by": "pm",
          "item": "programme", "term": "t000001", "silent": False, "why": "unit tests cover the parser"},
-        {"id": "d000002", "at": "2026-10-02T01:00:00Z", "kind": "work_sequencing", "by": "pm",
-         "item": "programme", "term": "t000002", "silent": False, "why": "hold the release for Shawn"},
-        {"id": "d000003", "at": "2026-10-02T02:00:00Z", "kind": "tool_choice", "by": "pm",
-         "item": "programme", "term": None, "silent": True, "why": "picked ripgrep"},
+        {"id": "d000002", "at": "2026-10-02T01:00:00Z", "kind": "tool_choice", "by": "pm",
+         "item": "programme", "term": "r-tools", "silent": False, "why": "picked ripgrep"},
+        {"id": "d000003", "at": "2026-10-02T02:00:00Z", "kind": "work_sequencing", "by": "pm",
+         "item": "programme", "term": None, "silent": True, "why": "docs first"},
     ]
-mutate(run, seed)
-pj.append(run, "project_term_edited", "sess-pm",
-          {"term_id": "t000001", "area": "test depth", "value": "unit tests only", "reserved": False,
-           "source": "kickoff chat", "accepted": False})
-pj.append(run, "pm_decided", "sess-pm", {"decision_id": "d000001", "term": "t000001"})
+core._with_locked_run_record(ph.home_path(run), run, lambda rec: seed(rec["programme"]))
 pj.append(run, "project_term_amended", "sess-pm",
           {"term_id": "t000001", "area": "test depth", "value": "unit tests only", "previous": "none",
            "prompt_id": "p000009", "quote": "test depth: unit tests only, key [redacted]", "accepted": True},
@@ -665,103 +680,140 @@ EOF
 
 snapshot() { find "$1" -type f -exec shasum {} + 2>/dev/null | sort; }
 
-"$PY" "$PROG" status --run "$TERMS_RUN" >/dev/null 2>&1
-BEFORE="$(snapshot "$TERMS_HOME")"
-TERMS_OUT="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms 2>&1)"
-TERMS_JSON="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms --json 2>&1)"
-AFTER="$(snapshot "$TERMS_HOME")"
+"$PY" "$PROG" status --run "$AGREE_RUN" >/dev/null 2>&1
+BEFORE="$(snapshot "$AGREE_HOME")"
+AGREE_OUT="$("$PY" "$PROG" status --run "$AGREE_RUN" --agreement 2>&1)"
+AGREE_JSON="$("$PY" "$PROG" status --run "$AGREE_RUN" --agreement --json 2>&1)"
+AFTER="$(snapshot "$AGREE_HOME")"
 
-it "status --terms writes nothing to the run record, journal or views"
+it "status --agreement writes nothing to the run record, journal or views"
 check "$BEFORE" "$AFTER"
 
-it "status --terms lists both project terms"
-has "t000001 test depth: unit tests only (source kickoff chat)" "$TERMS_OUT"
-it "status --terms marks a reserved term"
-has "t000002 release: Shawn ships releases (reserved for Shawn; source kickoff chat)" "$TERMS_OUT"
+it "the agreement page heads with acceptance and the contract stamp"
+has "Agreement (operating contract v1): accepted 2026-10-01T00:00:00Z" "$AGREE_OUT"
 
-it "each decision appears under the term it used"
-check "t000001:d000001|t000002:d000002|None:d000003" "$("$PY" -c '
+it "Scope lists the remit, stop rule, cadence and budget and the sources watched, and no autonomy"
+has "$(printf '  remit: space\n')" "$AGREE_OUT"
+has "  stop rule: nothing_it_can_act_on" "$AGREE_OUT"
+has "  cadence and budget: on_change, seconds 3600, eval budget 25 USD a day" "$AGREE_OUT"
+has "  sources watched: tracker, tasks, plans" "$AGREE_OUT"
+lacks "autonomy" "$AGREE_OUT"
+
+it "Scope keeps the open preferred-tool text readable with its source"
+has "  preferred tool t000001 test depth: unit tests only (source kickoff chat)" "$AGREE_OUT"
+
+it "Rulings list active, pending, carried and expired entries, each with its effect and kind"
+has "  active r-tools: grant tool_choice \"let the PM pick tools\" (applies to programme)" "$AGREE_OUT"
+has "  pending r-wide: restrict work_sequencing \"ask before reordering\" (applies to programme)" "$AGREE_OUT"
+has "  carried r-carry: grant acceptance \"accept docs-only PRs\" (from prog-old under acme/web; names no items yet)" "$AGREE_OUT"
+has "  expired r-old: grant technical_approach \"pick any parser\" (applies to programme, until 2026-01-01T00:00:00Z)" "$AGREE_OUT"
+
+it "an old instruction and an old reserved term show as kind-less legacy Rulings"
+has "  active i000001: decided, no kind (legacy instruction) \"keep PRs small\" (applies to programme)" "$AGREE_OUT"
+has "  active t000002: restrict, no kind (legacy project term) \"Shawn ships releases\" (applies to programme)" "$AGREE_OUT"
+
+it "Authority shows each protected kind as a fixed row from the code tuple"
+check "prod_deploy full_release spend_over_cap merge_around_gate denied_operation" "$("$PY" -c '
 import json,sys
-t=json.loads(sys.argv[1])["terms"]
-print("|".join(str(g["term"]) + ":" + d["id"] for g in t["by_term"] for d in g["decisions"]))' "$TERMS_JSON" 2>&1)"
+a=json.loads(sys.argv[1])["agreement"]["authority"]
+print(" ".join(r["kind"] for r in a if r["fixed"]))' "$AGREE_JSON" 2>&1)"
+has "  prod_deploy: never (fixed in code)" "$AGREE_OUT"
+it "Authority shows the plugin default for a PM-decided kind"
+has "  tool_choice: act (plugin)" "$AGREE_OUT"
 
-it "a silent decision appears under no term"
-has "$(printf '  no term\n    d000003 tool_choice by pm: picked ripgrep')" "$TERMS_OUT"
+it "Done standards list each rule with what it requires"
+has "Done standards" "$AGREE_OUT"
+has "  fix-only: requires " "$AGREE_OUT"
 
-it "a term's decisions follow its heading"
-has "$(printf '  t000001 test depth: unit tests only\n    d000001 technical_approach by pm: unit tests cover the parser')" "$TERMS_OUT"
+it "the protocol-change lines show on the agreement page"
+has "protocol not acknowledged for personal" "$AGREE_OUT"
+
+it "the decision log groups each decision under the Ruling or term it cited"
+check "r-tools:d000002|t000001:d000001|None:d000003" "$("$PY" -c '
+import json,sys
+t=json.loads(sys.argv[1])["agreement"]
+print("|".join(str(g["ruling"]) + ":" + d["id"] for g in t["decisions_by_ruling"] for d in g["decisions"]))' "$AGREE_JSON" 2>&1)"
+has "$(printf '  r-tools grant tool_choice "let the PM pick tools"\n    d000002 tool_choice by pm: picked ripgrep')" "$AGREE_OUT"
+has "$(printf '  no Ruling applied\n    d000003 work_sequencing by pm: docs first')" "$AGREE_OUT"
 
 it "an amendment shows with its source and redacted quote"
-has "project_term_amended t000001: test depth: none -> unit tests only · source typed prompt p000009 · Shawn: \"test depth: unit tests only, key [redacted]\"" "$TERMS_OUT"
-
+has "project_term_amended t000001: test depth: none -> unit tests only · source typed prompt p000009" "$AGREE_OUT"
 it "the secret in the quote never reaches the page"
-lacks "sk-abcdefghijklmnopqrstuvwx" "$TERMS_OUT$TERMS_JSON"
+lacks "sk-abcdefghijklmnopqrstuvwx" "$AGREE_OUT$AGREE_JSON"
 
-it "a pre-acceptance edit shows its source"
-has "project_term_edited t000001: test depth: unit tests only · source kickoff chat" "$TERMS_OUT"
+it "the agreement page names no removed concept"
+lacks "orrection" "$AGREE_OUT"
+lacks "project term t0" "$AGREE_OUT"
+lacks "Instruction" "$AGREE_OUT"
+lacks "reserved for Shawn" "$AGREE_OUT"
 
-it "recent changes leave out rows that change no term"
-lacks "pm_decided" "$TERMS_OUT"
+it "status --agreement prints only the agreement page"
+lacks "Who waits on whom" "$AGREE_OUT"
 
-it "status --terms prints only the terms section"
-lacks "Who waits on whom" "$TERMS_OUT"
-
-it "status --terms --json carries the same rows as the text"
-check "same" "$("$PY" - "$TERMS_JSON" "$TERMS_OUT" <<'EOF'
+it "status --agreement --json carries the same rows as the text"
+check "same" "$("$PY" - "$AGREE_JSON" "$AGREE_OUT" <<'EOF'
 import json, sys
 rows = json.loads(sys.argv[1])["rows"]
 print("same" if "\n".join(r["text"] for r in rows) == sys.argv[2] else "differs")
 EOF
 )"
 
-it "status --terms --json carries the change rows"
-check "project_term_amended:p000009|project_term_edited:None" "$("$PY" -c '
-import json,sys
-t=json.loads(sys.argv[1])["terms"]
-print("|".join(c["kind"] + ":" + str(c["prompt_id"]) for c in t["changes"]))' "$TERMS_JSON" 2>&1)"
-
-it "the terms section in view.json matches status --terms --json"
-"$PY" "$PROG" set-now "Reading terms" --run "$TERMS_RUN" >/dev/null 2>&1
-check "same" "$("$PY" - "${TERMS_HOME}/views/view.json" "$TERMS_JSON" <<'EOF'
+it "the agreement section in view.json matches status --agreement --json"
+"$PY" "$PROG" set-now "Reading the agreement" --run "$AGREE_RUN" >/dev/null 2>&1
+check "same" "$("$PY" - "${AGREE_HOME}/views/view.json" "$AGREE_JSON" <<'EOF'
 import json, sys
-print("same" if json.load(open(sys.argv[1]))["model"]["terms"] == json.loads(sys.argv[2])["terms"] else "differs")
+print("same" if json.load(open(sys.argv[1]))["model"]["agreement"] == json.loads(sys.argv[2])["agreement"] else "differs")
 EOF
 )"
 
-FULL_OUT="$("$PY" "$PROG" status --run "$TERMS_RUN" 2>&1)"
+it "a write after the upgrade drops the old instruction list and reserved term but keeps their Rulings"
+check "False ['t000001'] True True" "$(run_py "$AGREE_RUN" <<'EOF'
+p = record(args[0])["programme"]
+print("instructions" in p, [t["id"] for t in p["agreement"]["project_terms"]],
+      "i000001" in p["context"]["decisions"], "t000002" in p["context"]["decisions"])
+EOF
+)"
+
+FULL_OUT="$("$PY" "$PROG" status --run "$AGREE_RUN" 2>&1)"
 it "the stamped status page shows the operating contract under rules in force"
 has "operating contract v1: when the terms are silent the PM decides and records why" "$FULL_OUT"
-it "the stamped status page lists the reserved project term in the contract"
-has "reserved for Shawn t000002 release: Shawn ships releases" "$FULL_OUT"
-it "the full status page does not include the terms section"
-lacks "Recent term changes" "$FULL_OUT"
+it "the stamped status page lists the preferred-tool text and no reserved term"
+has "preferred tool t000001 test depth: unit tests only" "$FULL_OUT"
+lacks "reserved for Shawn" "$FULL_OUT"
+it "the status page lists Rulings in force under rules in force"
+has "ruling r-tools: grant tool_choice \"let the PM pick tools\" (applies to programme)" "$FULL_OUT"
+has "ruling i000001: decided, no kind (legacy instruction) \"keep PRs small\" (applies to programme)" "$FULL_OUT"
+it "the full status page does not include the agreement page"
+lacks "Decisions by Ruling" "$FULL_OUT"
 
 it "an unstamped programme's status page shows no operating contract"
 lacks "operating contract" "$("$PY" "$PROG" status --run "$QUIET" 2>&1)"
 
-run_py "$TERMS_RUN" <<'EOF' >/dev/null
+run_py "$AGREE_RUN" <<'EOF' >/dev/null
 for n in range(25):
     pj.append(args[0], "project_term_edited", "sess-pm",
               {"term_id": "t000001", "area": "test depth", "value": f"value {n}", "reserved": False,
                "source": "kickoff chat", "accepted": False})
 EOF
-CAP_JSON="$("$PY" "$PROG" status --run "$TERMS_RUN" --terms --json 2>&1)"
+CAP_JSON="$("$PY" "$PROG" status --run "$AGREE_RUN" --agreement --json 2>&1)"
 it "recent term changes stop at 20 rows, newest first"
-check "20|test depth: value 24|27" "$("$PY" -c '
+check "20|test depth: value 24|26" "$("$PY" -c '
 import json,sys
-t=json.loads(sys.argv[1])["terms"]
+t=json.loads(sys.argv[1])["agreement"]
 print(len(t["changes"]), t["changes"][0]["text"], t["changes_total"], sep="|")' "$CAP_JSON" 2>&1)"
 it "the capped page says how many changes it left out"
-has "7 older changes not shown" "$("$PY" "$PROG" status --run "$TERMS_RUN" --terms 2>&1)"
+has "6 older changes not shown" "$("$PY" "$PROG" status --run "$AGREE_RUN" --agreement 2>&1)"
 
-it "the slash command form status <run> terms prints the terms page"
-has "Recent term changes" "$("$PY" "$PROG" status "$TERMS_RUN terms" 2>&1)"
-it "a bare terms word selects the terms page"
-has "Decisions by term" "$("$PY" "$PROG" status "terms" --run "$TERMS_RUN" 2>&1)"
+it "the slash command form status <run> agreement prints the agreement page"
+has "Decisions by Ruling" "$("$PY" "$PROG" status "$AGREE_RUN agreement" 2>&1)"
+it "a bare agreement word selects the agreement page"
+has "Decisions by Ruling" "$("$PY" "$PROG" status "agreement" --run "$AGREE_RUN" 2>&1)"
+it "the old terms word is not an alias"
+"$PY" "$PROG" status "terms" --run "$AGREE_RUN" >/dev/null 2>&1
+check "2" "$?"
 
-it "status --terms on a programme with no terms says so"
-has "no project terms" "$("$PY" "$PROG" status --run "$QUIET" --terms 2>&1)"
-
+it "status --agreement on a quiet programme says it has no Rulings"
+has "no Rulings" "$("$PY" "$PROG" status --run "$QUIET" --agreement 2>&1)"
 it "the mod reads the view format this module writes"
 FORMAT="$(run_py <<'EOF'
 print(load_lib_module("programme_view").VIEW_FORMAT)

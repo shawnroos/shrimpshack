@@ -161,10 +161,9 @@ def apply_contract(rules) -> list:
 
 def contract_lines(view) -> list:
     out = [f"operating contract v{view['version']}: when the terms are silent the PM decides and records why"]
-    out += [f"{'reserved for Shawn' if t.get('reserved') else 'project term'} {t.get('id')} "
-            f"{t.get('area')}: {t.get('value')}" for t in view["project_terms"]]
+    out += [f"preferred tool {t.get('id')} {t.get('area')}: {t.get('value')}" for t in view["project_terms"]]
     out.append("bring Shawn only decisions that: " + "; ".join(view["escalations"]))
-    out.append("protected escalations override every project term: " + ", ".join(view["protected"]))
+    out.append("protected escalations override every Ruling and preferred tool: " + ", ".join(view["protected"]))
     return [programme_sanitize.clean(text, cap=0) for text in out]
 
 
@@ -200,10 +199,6 @@ def _h_edit(host, argv):
 
     def change(programme, prompt, rec):
         entry = _find(programme, term_id)
-        # An old reserved term also reads as a legacy restrict Ruling, so its text must not drift from that copy.
-        if entry.get("reserved"):
-            raise TermsError(f"project term {term_id!r} is an old reservation, which reads as a Ruling now; ask "
-                             "Shawn to record it again as a Ruling with a kind")
         accepted = bool(programme["agreement"].get("accepted"))
         if accepted:
             extra = _amend(host, entry, text, source, prompt)
@@ -223,7 +218,7 @@ def _h_edit(host, argv):
 _SPECS = (
     ("edit-project-term", _h_edit,
      "<term-id> <text> [--prompt <id>] [--source <evidence>] [--run <id>]",
-     "an unknown term id; an empty text; a protected area or text; an old reserved term (it reads as a Ruling). "
+     "an unknown term id (an old reserved term reads as a Ruling now); an empty text; a protected area or text. "
      "After acceptance it also rejects no typed --prompt and a prompt that does not name the area and the new text."),
 )
 

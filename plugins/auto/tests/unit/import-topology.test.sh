@@ -146,8 +146,11 @@
 #                          programme_sanitize, programme_record, driver_session
 #   programme_view       → programme_home, programme_permission_rules, programme_predicate,
 #                          programme_sanitize, programme_tasks, programme_terms, session_registry,
-#                          programme_view_work
+#                          programme_view_work, programme_view_agreement
 #   programme_view_work  → programme_home, programme_predicate
+#   programme_view_agreement → run_record_core, programme_home, programme_context,
+#                          programme_decisions, programme_journal, programme_protocol,
+#                          programme_protocol_changes, programme_terms, programme_view_work
 #   permission_transcript → programme_sanitize, session_registry
 #   programme_permission_state → run_record_core, programme_record, programme_permission_rules
 #   programme_permission_settle → run_record_core, programme_home, programme_journal,
@@ -517,7 +520,8 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
            programme_recovery.py programme_archive.py programme_resume.py \
            programme_terms.py programme_proposals.py programme_trajectory.py programme_view_work.py \
-           programme_naming.py programme_rulings.py programme_protocol_changes.py programme_carryover.py; do
+           programme_naming.py programme_rulings.py programme_protocol_changes.py programme_carryover.py \
+           programme_view_agreement.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -539,7 +543,7 @@ done
 for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
              programme-watch run_record_evidence programme_lifecycle programme_archive \
              programme_resume programme_terms programme_proposals programme_view_work programme_naming \
-             programme_rulings programme_protocol_changes programme_carryover; do
+             programme_rulings programme_protocol_changes programme_carryover programme_view_agreement; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
