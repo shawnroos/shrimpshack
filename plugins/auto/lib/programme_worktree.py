@@ -160,11 +160,11 @@ def _cwd():
 
 # Ignored entries a build or install recreates, so losing them with the worktree costs nothing.
 REGENERABLE = frozenset({"node_modules", ".DS_Store", "__pycache__", ".pytest_cache", ".venv",
-                         ".cache", ".angular", ".next", ".turbo", "dist", "build", "coverage"})
+                         ".cache", ".angular", ".next", ".turbo", "coverage"})
 
 
 def _regenerable(entry) -> bool:
-    return any(part in REGENERABLE for part in entry.strip("/").split("/"))
+    return entry.rstrip("/").rsplit("/", 1)[-1] in REGENERABLE
 
 
 def _entries(porcelain_z) -> list:
@@ -189,10 +189,14 @@ def release(value) -> dict:
     if inside(_cwd(), path):
         return _seen("refused", path, (
             f"this command ran inside {path}; cd {shlex.quote(main)} and run release-resources again"))
-    nested = [p for p in (_listing(main) or {}) if p != _real(path) and inside(p, path)]
+    listed = _listing(main)
+    if listed is None:
+        return _seen("failed", path, f"could not list the worktrees of {main}; {later}")
+    nested = [p for p in listed if p != _real(path) and inside(p, path)]
     if nested:
         return _seen("refused", path, (
-            f"{path} contains another worktree ({nested[0]}); remove or move it first, {later}"))
+            f"{path} contains another worktree ({nested[0]}); remove it, or clear git's stale "
+            f"entry for it if its folder is already gone, {later}"))
     status = _git(path, "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching")
     if not _ok(status):
         return _seen("failed", path, f"{programme_exec.failure(status, 'git status')}; {later}")

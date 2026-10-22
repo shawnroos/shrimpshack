@@ -574,6 +574,25 @@ prog release-resources --run "$RUN"
 it "a worktree inside a cache folder still blocks removal"
 check "pending wip" "$(wt_state "$RUN") $(cat "${WT}/dist/inner/wip.txt")"
 
+wt_programme w65
+mkdir -p "${WORK}/repo-w65/coverage"; echo keep > "${WORK}/repo-w65/coverage/README"
+git -C "${WORK}/repo-w65" add coverage/README && git -C "${WORK}/repo-w65" commit -qm "track coverage"
+git -C "$WT" checkout -q --detach "$(git -C "${WORK}/repo-w65" rev-parse HEAD)"
+printf '.env\n' >> "${WORK}/repo-w65/.git/info/exclude"
+echo SECRET=1 > "${WT}/coverage/.env"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "an ignored file inside a tracked folder with a cache name is not removed"
+check "pending SECRET=1" "$(wt_state "$RUN") $(cat "${WT}/coverage/.env")"
+
+wt_programme w66
+printf 'dist/\n' >> "${WORK}/repo-w66/.git/info/exclude"
+mkdir -p "${WT}/dist"; echo out > "${WT}/dist/report.pdf"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "an ignored dist folder is not treated as disposable"
+check "pending out" "$(wt_state "$RUN") $(cat "${WT}/dist/report.pdf")"
+
 wt_programme w42
 git -C "$WT" commit -q --allow-empty -m "detached work"
 end_typed "$RUN" >/dev/null
