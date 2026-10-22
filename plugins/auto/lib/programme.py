@@ -150,17 +150,30 @@ def _item_open(programme, item_id) -> bool:
     return item is None or item.get("state") not in programme_home.FINISHED_ITEM_STATES
 
 
-def active_instructions(programme) -> list:
+def active_rulings(programme, now=None) -> list:
+    pc = programme_rulings.pc
+    when = run_record_core.parse_iso(now) if now else None
+    items = programme.get("items") or {}
     out = []
-    for entry in programme.get("instructions") or []:
-        if entry.get("state") != "active":
+    for rid, revisions in sorted(pc.block(programme)["decisions"].items()):
+        current = pc.in_force(revisions)
+        if current is None or not pc.is_ruling(revisions) or pc.ruling_state(revisions, when) != "active":
             continue
-        # merge-item leaves an instruction's target as written; without this an old id loses its waiver after a merge.
-        target = programme_rulings.pc._canonical(programme.get("items") or {}, entry.get("applies_to") or "programme")
-        if target != "programme" and not _item_open(programme, target):
+        # merge-item leaves a Ruling's targets as written; without this an old id loses its waiver after a merge.
+        targets = list(dict.fromkeys(pc._canonical(items, t) for t in current.get("applies_to") or ["programme"]))
+        targets = [t for t in targets if t == "programme" or _item_open(programme, t)]
+        if not targets:
             continue
-        out.append(dict({k: entry.get(k) for k in ("id", "quote", "until", "at", "prompt_id")}, applies_to=target))
+        out.append(dict({k: current.get(k) for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
+                                                     "until", "at", "limits")},
+                        id=rid, applies_to=targets, prompt_id=(current.get("source") or {}).get("prompt_id")))
     return out
+
+
+def active_instructions(programme) -> list:
+    return [{"id": r["id"], "quote": r["quote"], "until": r["until"], "at": r["at"], "prompt_id": r["prompt_id"],
+             "applies_to": r["applies_to"][0]}
+            for r in active_rulings(programme) if r["legacy"] == "instruction"]
 
 
 def _terms_view(agreement) -> dict:

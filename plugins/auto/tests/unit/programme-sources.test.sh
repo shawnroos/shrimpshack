@@ -687,6 +687,49 @@ prog prompt-item herdr:w2/p31 "carry on" --decision no-such-record
 it "a decision id in neither the log nor the decision records refuses"
 check 1 "$CODE"
 has "no accepted decision record" "$OUT"
+
+run_py "$RUN" <<'EOF' >/dev/null
+def ruling(effect, kind, applies_to, scope, state="accepted", legacy=None):
+    return [{"rev": 1, "state": state, "kind": kind, "effect": effect, "legacy": legacy, "applies_to": applies_to,
+             "until": None, "scope": scope, "reason": "Shawn said so", "quote": scope, "limits": [], "requirements": []}]
+def body(rec):
+    decisions = rec["programme"]["context"]["decisions"]
+    decisions["r-grant"] = ruling("grant", "dependency_bump", ["linear:AI-792"], "bump minor deps freely")
+    decisions["r-hold"] = ruling("restrict", "merge_around_gate", ["linear:AI-792"], "never merge around CI")
+    decisions["r-call"] = ruling("decided", "product_call", ["programme"], "PNG export only")
+    decisions["r-other"] = ruling("grant", "dependency_bump", ["linear:AI-790"], "another item's grant")
+    decisions["r-shut"] = ruling("restrict", "prod_deploy", ["linear:AI-792"], "closed hold", state="closed")
+    decisions["i0legacy"] = ruling("decided", None, ["linear:AI-792"], "keep PRs small", legacy="instruction")
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+prog add-item linear:AI-792 --title "Rulings brief"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision "$DEC" -- --name rulings --handoff "$BRIEF"
+it "start-worker's brief lists the item's grant, restrict and decided Rulings beside the decision-log row"
+check 0 "$CODE"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+has "Settled decisions this work carries:" "$COPY"
+has "Export stays PNG only this release" "$COPY"
+has "- ruling:r-grant (dependency_bump, grant): bump minor deps freely; reason: Shawn said so" "$COPY"
+has "- ruling:r-hold (merge_around_gate, restrict): never merge around CI" "$COPY"
+has "- ruling:r-call (product_call, decided): PNG export only" "$COPY"
+has "- ruling:i0legacy (legacy instruction, decided): keep PRs small" "$COPY"
+it "the brief leaves out another item's Ruling and a closed one"
+lacks "another item's grant" "$COPY"
+lacks "closed hold" "$COPY"
+
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision r-hold -- --name rulings2 --handoff "$BRIEF"
+it "a Ruling passed with --decision reads as a Ruling, once"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+check "0 1" "$CODE $(printf '%s\n' "$COPY" | grep -c 'ruling:r-hold')"
+lacks "(decision record)" "$COPY"
+
+prog add-item linear:AI-793 --title "No handoff"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-793 -- --name plain --target tab
+it "start-worker with no handoff still starts when programme-wide Rulings exist"
+check 0 "$CODE"
 write_snapshot base
 
 it "no command crashed with a traceback"

@@ -564,6 +564,14 @@ def _restrictions(opts) -> list:
     return out
 
 
+def _ruling_line(ruling) -> str:
+    label = ruling.get("kind") or f"legacy {str(ruling.get('legacy') or 'record').replace('_', ' ')}"
+    limits = "; ".join(ruling.get("limits") or []) or "none"
+    until = f"; until {ruling['until']}" if ruling.get("until") else ""
+    return (f"- ruling:{ruling['id']} ({label}, {ruling.get('effect')}): {ruling.get('scope')}; "
+            f"reason: {ruling.get('reason') or 'none'}; limits: {limits}{until}")
+
+
 def _decision_line(decision_id, logged, records) -> str:
     entry = logged.get(decision_id)
     if entry is not None:
@@ -572,12 +580,14 @@ def _decision_line(decision_id, logged, records) -> str:
     current = programme_context.in_force(records.get(decision_id))
     if current is None:
         return None
+    if programme_context.is_ruling(records.get(decision_id)):
+        return _ruling_line(dict(current, id=decision_id))
     limits = "; ".join(current.get("limits") or []) or "none"
     return (f"- decision:{decision_id}@{current.get('rev')} (decision record): {current.get('scope')}; "
             f"reason: {current.get('reason')}; limits: {limits}")
 
 
-def _brief_tail(host, programme, decision_ids, restrictions) -> str:
+def _brief_tail(host, programme, key, decision_ids, restrictions, *, rulings) -> str:
     logged = {d.get("id"): d for d in programme.get("decisions") or [] if isinstance(d, dict)}
     try:
         records = programme_context.block(programme)["decisions"]
@@ -588,10 +598,12 @@ def _brief_tail(host, programme, decision_ids, restrictions) -> str:
     if unknown:
         raise host.ProgrammeError(f"unknown decision id {', '.join(unknown)}: not in the decision log and no "
                                   "accepted decision record")
+    carried = [_ruling_line(r) for r in host.active_rulings(programme, run_record_core.now_iso())
+               if rulings and r["id"] not in found and (key in r["applies_to"] or "programme" in r["applies_to"])]
     lines = []
-    if decision_ids:
+    if decision_ids or carried:
         lines.append("Settled decisions this work carries:")
-        lines += [found[d] for d in decision_ids]
+        lines += [found[d] for d in decision_ids] + carried
         lines.append(REOPEN_CLAUSE)
     if restrictions:
         lines.append("Restrictions on this work:")
@@ -692,7 +704,9 @@ def _h_start_worker(host, argv):
     key = programme_record._resolve(programme, item_id)
     if programme["items"][key]["state"] in programme_home.FINISHED_ITEM_STATES:
         raise host.ProgrammeError(f"item {key!r} is {programme['items'][key]['state']}")
-    tail = _brief_tail(host, programme, decision_ids, restrictions)
+    # Without a handoff there is no brief to carry the Rulings, and requiring one would refuse plain starts.
+    with_brief = bool(decision_ids or restrictions) or "--handoff" in extra[:-1]
+    tail = _brief_tail(host, programme, key, decision_ids, restrictions, rulings=with_brief)
     refusal = programme_context.unsafe_reason(programme, key, "start_worker")
     if refusal:
         raise host.ProgrammeError(refusal)
@@ -789,7 +803,7 @@ def _h_prompt_item(host, argv):
     sid = host._guard(home, record)
     programme = programme_home.normalize_programme(record.get("programme") or {})
     key = programme_record._resolve(programme, item_id)
-    tail = _brief_tail(host, programme, decision_ids, restrictions)
+    tail = _brief_tail(host, programme, key, decision_ids, restrictions, rulings=bool(decision_ids or restrictions))
     if tail:
         text = programme_sanitize.clean(positional[1], 0, keep_newlines=True) + tail
         if len(text) > PROMPT_CAP:

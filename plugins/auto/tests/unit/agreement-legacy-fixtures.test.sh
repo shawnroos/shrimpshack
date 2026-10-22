@@ -210,6 +210,56 @@ print(" ".join(str(len(again[i])) for i in sys.argv[3:]))
 PYEOF
 )"
 
+prog recover --run "$RUN"
+it "the recovery packet's binding section names every legacy Ruling with its effect"
+check "$("$PY" -c 'import json,sys; print(json.dumps(sorted([["ruling:"+sys.argv[1], "decided"], ["ruling:"+sys.argv[2], "decided"], ["ruling:"+sys.argv[3], "restrict"]])))' "$PLAIN" "$WAIVER" "$PT_RESERVED")" \
+  "$("$PY" -c 'import json,sys; print(json.dumps(sorted([r["id"], r["effect"]] for r in json.loads(sys.argv[1])["binding"]["rulings"])))' "$OUT" 2>&1)"
+it "the recovery packet still lists both old decision records as decision rows"
+check '["decision:d-browser@1", "decision:d-docs@1", "decision:d-docs@2"]' "$("$PY" -c 'import json,sys; print(json.dumps(sorted(r["id"] for r in json.loads(sys.argv[1])["decisions"] if r["decision_id"].startswith("d-"))))' "$OUT" 2>&1)"
+resolved() { prog recover --run "$RUN" --get "$1"; "$PY" -c 'import json,sys; print(sys.argv[2], json.loads(sys.argv[1])["entry"]["scope"])' "$OUT" "$CODE" 2>&1; }
+it "every old reference still resolves through recover --get"
+check "0 keep every PR under 300 lines" "$(resolved "instruction:${PLAIN}")"
+check "0 keep every PR under 300 lines" "$(resolved "ruling:${PLAIN}")"
+check "0 ship the browser fix" "$(resolved "decision:d-browser@1")"
+check "0 fix the docs page" "$(resolved "decision:d-docs@1")"
+check "0 Shawn writes every price string" "$(resolved "ruling:${PT_RESERVED}")"
+
+release_waivers() {
+  "$PY" - "$AUTO_ROOT" "$RUN" <<'PYEOF' 2>&1
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+from _bootstrap import load_lib_module
+import programme_records
+prog = load_lib_module("programme")
+ph = load_lib_module("programme_home")
+pe = load_lib_module("programme_evidence")
+programme = ph.normalize_programme(programme_records.load(sys.argv[2])["programme"])
+print(json.dumps([r["id"] for r in pe._context(prog, programme, "herdr:docs-page", "released", None)["waivers"]]))
+PYEOF
+}
+it "the release check reads the fixture's legacy waiver instruction as a waiver for its item"
+check "[\"$WAIVER\"]" "$(release_waivers)"
+
+P_WITHDRAW="$("$PY" - "$AUTO_ROOT" "$RUN" "$WAIVER" <<'PYEOF' 2>&1
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
+from programme_prompts import append_prompt
+print(append_prompt(sys.argv[2], os.environ["CLAUDE_CODE_SESSION_ID"], f"withdraw {sys.argv[3]}, run the eval")["prompt_id"])
+PYEOF
+)"
+prog close-ruling "$WAIVER" --as withdrawn --prompt "$P_WITHDRAW" --run "$RUN"
+it "close-ruling on the legacy waiver closes it and the release check stops counting it"
+check "0 []" "$CODE $(release_waivers)"
+it "the closed legacy waiver leaves the rules in force though the old instruction list still says active"
+prog rules --run "$RUN"
+lacks "applies to herdr:docs-page, until merged" "$OUT"
+has "decision:${WAIVER}@1 closed" "$OUT"
+it "the closed legacy waiver leaves the recovery packet's binding section"
+lacks "binding ruling:${WAIVER}" "$OUT"
+has "binding ruling:${PLAIN} (legacy instruction, decided)" "$OUT"
+
 it "no read crashed with a traceback"
 check "" "$CRASHES"
 

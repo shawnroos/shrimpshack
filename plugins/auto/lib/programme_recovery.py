@@ -330,8 +330,9 @@ def _decision_rows(ctx) -> list:
             ref = f"decision:{did}@{rev.get('rev')}"
             limits = [_capped({"text": text, "binding": True}, ("text",), f"{ref}/limit/{n}")
                       for n, text in enumerate(rev.get("limits") or [])]
-            row = _capped({k: rev.get(k) for k in ("state", "scope", "reason", "applies_to", "requirements",
-                                                  "superseded_by", "supersedes")}, ("scope", "reason"), ref)
+            row = _capped({k: rev.get(k) for k in ("state", "kind", "effect", "legacy", "scope", "reason",
+                                                  "applies_to", "until", "requirements", "superseded_by",
+                                                  "supersedes")}, ("scope", "reason"), ref)
             row.update(decision_id=did, rev=rev.get("rev"), limits=limits,
                        source=_source(rev))
             rows.append(row)
@@ -355,18 +356,22 @@ def _requirement_rows(ctx) -> list:
     return rows
 
 
-def _binding(ctx, programme) -> dict:
+def _binding(ctx) -> dict:
     pauses = [_capped(dict(p, binding=True), ("reason",), f"pause:{p.get('id')}")
               for p in programme_context.active_pauses(ctx)]
     denials = [_capped(dict(d, binding=True), ("reason",), f"denial:{n}")
                for n, d in enumerate(ctx["denials"]) if isinstance(d, dict)]
-    instructions = [_capped({k: e.get(k) for k in ("quote", "applies_to", "until", "prompt_id")},
-                            ("quote",), f"instruction:{e.get('id')}")
-                    for e in programme.get("instructions") or []
-                    if isinstance(e, dict) and e.get("state") == "active"]
-    for entry in instructions:
+    rulings = []
+    for rid, revisions in sorted(ctx["decisions"].items()):
+        # No clock here: the packet must stay deterministic for one revision, so an expired until still shows.
+        if not programme_context.is_ruling(revisions) or programme_context.ruling_state(revisions, None) != "active":
+            continue
+        current = programme_context.in_force(revisions)
+        entry = _capped({k: current.get(k) for k in ("kind", "effect", "legacy", "scope", "quote", "applies_to",
+                                                     "until", "rev")}, ("scope", "quote"), f"ruling:{rid}")
         entry.update(binding=True, authorizes=False)
-    return {"pauses": pauses, "denials": denials, "instructions": instructions}
+        rulings.append(entry)
+    return {"pauses": pauses, "denials": denials, "rulings": rulings}
 
 
 def _actions(programme) -> list:
@@ -428,7 +433,7 @@ def packet(run_id, revision, record, *, objects=True) -> dict:
         "pending_decisions": _pending(programme, status),
         "decisions": _decision_rows(ctx), "requirements": _requirement_rows(ctx),
         "acceptance": status["requirements"], "blockers": status["blockers"],
-        "binding": _binding(ctx, programme), "actions": _actions(programme),
+        "binding": _binding(ctx), "actions": _actions(programme),
         "assignments": ctx["assignments"], "results": _results(programme),
         "evidence_limits": _evidence_limits(status),
         "uncertain_effects": unreconciled_admissions(programme),
@@ -463,8 +468,10 @@ def lookup(record, ref) -> dict:
         found = ctx["pauses"].get(rest)
     elif kind == "denial" and rest.isdigit() and int(rest) < len(ctx["denials"]):
         found = ctx["denials"][int(rest)]
-    elif kind == "instruction":
-        found = next((e for e in programme.get("instructions") or [] if e.get("id") == rest), None)
+    elif kind in ("ruling", "instruction"):
+        # The context copy is canonical: close-ruling on an old instruction closes only that copy.
+        revisions = ctx["decisions"].get(rest) or []
+        found = programme_context.in_force(revisions) or (revisions[-1] if revisions else None)
     elif kind == "item":
         found = (programme.get("items") or {}).get(rest)
     elif kind == "op":

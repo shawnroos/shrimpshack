@@ -272,6 +272,25 @@ edit 'rec["programme"]["items"]["linear:AI-4"]["trajectory"] = {"done": [], "cur
 prog merge-item linear:AI-4 linear:AI-1
 check '"Other path"' "$(field 'prog["items"]["linear:AI-1"]["trajectory"]["current"]["title"]')"
 
+edit 'rec["programme"].setdefault("context", {}).setdefault("decisions", {})["r-small-prs"] = [{"rev": 1, "state": "accepted", "at": "2026-10-20T00:00:00Z", "kind": "merge_strategy", "effect": "restrict", "applies_to": ["linear:AI-1"], "until": None, "scope": "PRs under 300 lines", "reason": None, "quote": "keep PRs small", "limits": [], "requirements": []}]'
+edit 'rec["programme"]["context"]["decisions"]["r-gone"] = [{"rev": 1, "state": "closed", "at": "2026-10-20T00:00:00Z", "kind": "merge_strategy", "effect": "grant", "applies_to": ["linear:AI-1"], "until": None, "scope": "x", "reason": None, "quote": "x", "limits": [], "requirements": []}]'
+record_traj '[{"item": "linear:AI-1", "done": [], "current": {"title": "Split the PR", "clause": "ruling:r-small-prs"},
+  "planned": [{"title": "Old cite", "clause": "instruction:i0a1b2c"}, {"title": "Legacy as Ruling", "clause": "ruling:i0a1b2c"},
+              {"title": "Closed", "clause": "ruling:r-gone"}, {"title": "Not legacy", "clause": "instruction:r-small-prs"}],
+  "finish": "PR"}]'
+it "a step cites an active Ruling as ruling:<id>, and a legacy instruction both as ruling:<id> and instruction:<id>"
+check '["ruling:r-small-prs", "instruction:i0a1b2c", "ruling:i0a1b2c", null, null]' "$(field '[s["clause"] for s in [prog["items"]["linear:AI-1"]["trajectory"]["current"]] + prog["items"]["linear:AI-1"]["trajectory"]["planned"]]')"
+it "a closed Ruling and instruction:<id> naming a non-legacy Ruling are unknown clauses"
+check '["unknown_clause", "unknown_clause"]' "$(field '[s.get("note") for s in prog["items"]["linear:AI-1"]["trajectory"]["planned"][2:]]')"
+it "a stored instruction:<id> step still counts as reliant on that instruction"
+check "1 1" "$(run_py "$RUN" <<'EOF'
+pvw = load_lib_module("programme_view_work")
+steps = [pvw._step(s, "planned") for s in record(args[0])["programme"]["items"]["linear:AI-1"]["trajectory"]["planned"]]
+counts = pvw.reliant_counts([{"steps": steps}])
+print(counts.get("instruction:i0a1b2c"), counts.get("ruling:i0a1b2c"))
+EOF
+)"
+
 echo ""
 echo "programme-trajectory.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
