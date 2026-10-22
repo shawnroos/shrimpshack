@@ -27,8 +27,7 @@ programme_authority = load_lib_module("programme_authority")
 LEGACY = programme_authority.LEGACY
 APPROVAL_KINDS = ("agreement_accepted", "term_amended", "instruction_recorded", "instruction_closed",
                   "rule_adopted", "item_reopened", "handed_answered", "remit_set", "item_dropped",
-                  "project_term_amended", "term_corrected", "correction_undone", "corrections_kept",
-                  "correction_promoted")
+                  "project_term_amended")
 RESUME_FILE = ".test-resume-import"
 
 

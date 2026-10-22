@@ -120,8 +120,14 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     a_sid = 'setup-a'
     run = programme(a_sid, 'setup-a')
     proposed = verb(a_sid, run, 'propose-agreement', '--project-term', 'naming=use kebab case',
-                    '--reserved-term', 'deploys=only Shawn deploys', '--source', 'test brief')
-    check('propose-agreement adds a ruling and a reserved area', proposed.returncode == 0, proposed.stderr)
+                    '--source', 'test brief')
+    check('propose-agreement adds a project term', proposed.returncode == 0, proposed.stderr)
+
+    def seed_reserved(rec):
+        rec['programme']['agreement']['project_terms'].append(
+            {'id': 'tdeploy', 'area': 'deploys', 'value': 'only Shawn deploys', 'source': 'an older plugin',
+             'set_by': 'proposal', 'at': '2026-10-01T00:00:00Z', 'reserved': True, 'history': []})
+    core._with_locked_run_record(ph.home_path(run), run, seed_reserved)
     entries = record(run)['programme']['agreement']['project_terms']
     ruling = next(e['id'] for e in entries if not e['reserved'])
     reserved = next(e['id'] for e in entries if e['reserved'])
@@ -221,7 +227,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
 
     gate_pick = pick(a_sid, run, {'Cadence: on change?': 'on change'})
     for args, label in ((('amend-term', 'cadence', 'on_change'), 'amend-term'),
-                        (('record-instruction',), 'record-instruction'),
+                        (('close-ruling', 'tdeploy', '--as', 'withdrawn'), 'close-ruling'),
                         (('adopt-rule', 'r1'), 'adopt-rule'),
                         (('accept-context', 'd1'), 'accept-context'),
                         (('dispose-action', '--attempt', 'o1', '--as', 'abandoned_unknown'), 'dispose-action (archive)')):

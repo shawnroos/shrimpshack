@@ -326,24 +326,23 @@ prog propose-term stop_rule only_when_done
 check 0 "$CODE"
 prog clear-proposal stop_rule
 check 0 "$CODE"
-it "close-instruction --as fulfilled is refused while the compact flag is set"
+it "close-ruling --as fulfilled is refused while the compact flag is set"
 rm -f "${HOME_DIR}/.compact-flag"
-P_INSTR="$(prompt typed 'always run the auto suite first')"
-prog record-instruction --prompt "$P_INSTR"
-INSTR="$(field 'prog["instructions"][-1]["id"]' | tr -d '"')"
+P_RULING="$(prompt typed 'r-suite: run the auto suite first is your call')"
+prog record-ruling r-suite --kind tool_choice --effect grant --scope "run the auto suite first" --prompt "$P_RULING"
 touch "${HOME_DIR}/.compact-flag"
-prog close-instruction "$INSTR" --as fulfilled --why "done"
+prog close-ruling r-suite --as fulfilled --why "done"
 check 1 "$CODE"
 has "compacted" "$OUT"
-check '"active"' "$(field 'prog["instructions"][-1]["state"]')"
+check '"accepted"' "$(field 'prog["context"]["decisions"]["r-suite"][-1]["state"]')"
 rm -f "${HOME_DIR}/.compact-flag"
-it "close-instruction --as fulfilled does not move loop.last_beat_at and records its origin"
+it "close-ruling --as fulfilled does not move loop.last_beat_at and records its origin"
 edit 'rec.setdefault("loop", {})["last_beat_at"] = "2026-01-01T00:00:00Z"'
-prog close-instruction "$INSTR" --as fulfilled --why "done" --origin ui
+prog close-ruling r-suite --as fulfilled --why "done" --origin ui
 check 0 "$CODE"
 check '"2026-01-01T00:00:00Z"' "$(raw_field 'rec["loop"]["last_beat_at"]')"
 check '"ui"' "$(run_py "$RUN" <<'PY'
-print(json.dumps([r for r in pj.read(args[0]) if r["kind"] == "instruction_closed"][-1]["payload"].get("origin")))
+print(json.dumps([r for r in pj.read(args[0]) if r["kind"] == "ruling_closed"][-1]["payload"].get("origin")))
 PY
 )"
 

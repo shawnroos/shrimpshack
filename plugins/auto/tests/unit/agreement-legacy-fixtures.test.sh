@@ -153,6 +153,63 @@ check '["personal", null, null]' "$("$PY" -c 'import json,sys; print(json.dumps(
 it "a protected kind has no level in any layer: the adopted personal entry is not merged"
 check '[null, null, null]' "$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])[4:7]))' "$PERSONAL" 2>&1)"
 
+PT_RESERVED="$(manifest 'd["project_terms"]["reserved"]')"
+it "AE5: the context view shows each old instruction as a kind-less decided legacy Ruling"
+check "$PLAIN decided None instruction accepted keep every PR under 300 lines | $WAIVER decided None instruction accepted merged" "$("$PY" -c '
+import json, sys
+d = json.loads(sys.argv[1])["decisions"]
+out = []
+for rid, last in ((sys.argv[2], "scope"), (sys.argv[3], "until")):
+    rev = d[rid]["in_force"]
+    out.append(" ".join(str(x) for x in (rid, rev["effect"], rev["kind"], rev["legacy"], d[rid]["state"] == "active" and rev["state"], rev[last])))
+print(" | ".join(out))' "$CONTEXT" "$PLAIN" "$WAIVER" 2>&1)"
+it "AE5: the reserved project term shows as a kind-less legacy restrict carrying its area"
+check "restrict None project_term pricing copy [\"programme\"]" "$("$PY" -c '
+import json, sys
+rev = json.loads(sys.argv[1])["decisions"][sys.argv[2]]["in_force"]
+print(rev["effect"], rev["kind"], rev["legacy"], rev["area"], json.dumps(rev["applies_to"]))' "$CONTEXT" "$PT_RESERVED" 2>&1)"
+it "AE5: an open project term does not become a Ruling"
+check "False False" "$("$PY" -c '
+import json, sys
+d = json.loads(sys.argv[1])["decisions"]
+print(sys.argv[2] in d, sys.argv[3] in d)' "$CONTEXT" "$(manifest 'd["project_terms"]["open"]')" "$(manifest 'd["project_terms"]["preferred_tool"]')" 2>&1)"
+it "AE5: the recovery packet lists the old instructions as Rulings"
+has "decision:${PLAIN}@1 accepted: scope \"keep every PR under 300 lines\"" "$RULES"
+it "the rules view asks Shawn to re-record the reserved term as a Ruling with a kind"
+has "legacy restrict ${PT_RESERVED} pricing copy has no decision kind" "$RULES"
+
+it "a legacy Ruling never reaches the gate for any kind"
+check "[]" "$("$PY" - "$AUTO_ROOT" "$RUN" <<'PYEOF' 2>&1
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+from _bootstrap import load_lib_module
+import programme_records
+ph = load_lib_module("programme_home")
+pc = load_lib_module("programme_context")
+pd = load_lib_module("programme_decisions")
+programme = ph.normalize_programme(programme_records.load(sys.argv[2])["programme"])
+hits = [r["id"] for kind in list(pd.DECISION_KINDS) + [None] for item in ("herdr:docs-page", "programme")
+        for r in pc.rulings_for(programme, item, kind, "2026-10-22T08:00:00Z")]
+print(json.dumps(hits))
+PYEOF
+)"
+
+prog beat --run "$RUN"
+it "a write after the upgrade keeps exactly one revision per legacy Ruling"
+check "0 1 1 1" "$CODE $("$PY" - "$AUTO_ROOT" "$RUN" "$PLAIN" "$WAIVER" "$PT_RESERVED" <<'PYEOF' 2>&1
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+from _bootstrap import load_lib_module
+import programme_records
+ph = load_lib_module("programme_home")
+stored = programme_records.load(sys.argv[2])["programme"]
+again = ph.normalize_programme(stored)["context"]["decisions"]
+print(" ".join(str(len(again[i])) for i in sys.argv[3:]))
+PYEOF
+)"
+
 it "no read crashed with a traceback"
 check "" "$CRASHES"
 

@@ -113,14 +113,21 @@ P_RULE="$(typed "don't fix other teams' breaks")"
 P_GONE="$(typed "hold the flaky suite until Friday")"
 P_TERM="$(typed "stop rule: only when done")"
 
-it "the PM records the instruction to leave other teams' breaks alone"
-prog record-instruction --prompt "$P_RULE"
-check 0 "$CODE"
-prog record-instruction --prompt "$P_GONE" --why "suite is unreliable"
-GONE_ID="$("$PY" -c 'import json,sys; print(json.loads(sys.stdin.read())["instruction"])' <<< "$OUT" 2>&1)"
-it "a second instruction is closed before compaction"
-prog close-instruction "$GONE_ID" --as fulfilled --why "Friday came"
-check 0 "$CODE"
+it "an older plugin left one active instruction and one closed instruction in the record"
+run_py "$RUN" "$P_RULE" "$P_GONE" <<'EOF' >/dev/null
+def seed(rec):
+    rec["programme"]["instructions"] = [
+        {"id": "irule01", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "programme",
+         "until": None, "why": None, "prompt_id": args[1], "quote": "don't fix other teams' breaks", "closed": None},
+        {"id": "igone01", "state": "fulfilled", "at": "2026-10-01T00:00:00Z", "applies_to": "programme",
+         "until": None, "why": "suite is unreliable", "prompt_id": args[2], "quote": "hold the flaky suite until Friday",
+         "closed": {"at": "2026-10-02T00:00:00Z", "why": "Friday came", "prompt_id": None}}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], seed)
+EOF
+check 2 "$(run_py "$RUN" <<'EOF'
+print(len(programme_records.load(args[0])["programme"]["instructions"]))
+EOF
+)"
 
 it "the shim default data dir matches programme_home for SessionStart and PreCompact"
 DEF="$(sed -n 's/^DEFAULT_DATA_DIR = "~\/\(.*\)"$/\1/p' "${AUTO_ROOT}/lib/programme_home.py")"
@@ -183,8 +190,8 @@ it "the compact SessionStart injects the rules-in-force block"
 has "<auto-rules>" "$CTX"
 it "the injected block holds the instruction verbatim from the record"
 has "don't fix other teams' breaks" "$CTX"
-it "an instruction closed before compaction is absent from the block"
-lacks "hold the flaky suite" "$CTX"
+it "an instruction closed before compaction is absent from the rules block"
+lacks "hold the flaky suite" "${CTX%%</auto-rules>*}"
 it "the block names the programme"
 has "programme: ${RUN}" "$CTX"
 it "the block lists the instruction as a readable line"
@@ -304,7 +311,7 @@ EOF
 }
 
 P_DEC="$(typed "record browser-first: browser acceptance first, no Linux work")"
-prog record-decision browser-first --scope "browser acceptance first" \
+prog record-ruling browser-first --effect decided --kind technical_approach --scope "browser acceptance first" \
   --reason "Shawn wants the browser path proven before anything else" --limit "no Linux work" \
   --applies-to linear:AI-7 --prompt "$P_DEC"
 it "AE2 setup: the PM records a decision with a reason and a binding limit"
@@ -367,7 +374,7 @@ EOF
 # ── Scenario 2: a stale acknowledgement cannot enable work under a newer decision revision ──
 OLD_DIGEST="$(digest_in "$CTX2")"
 P_DEC2="$(typed "record browser-first again: browser acceptance first, no Linux work, no prod flags")"
-prog record-decision browser-first --scope "browser acceptance first" \
+prog record-ruling browser-first --effect decided --kind technical_approach --scope "browser acceptance first" \
   --reason "Shawn wants the browser path proven before anything else" --limit "no Linux work" \
   --limit "no prod flags" --applies-to linear:AI-7 --prompt "$P_DEC2"
 it "scenario 2 setup: a newer decision revision commits"
@@ -462,8 +469,14 @@ it "the compact reprint for an unstamped programme has no operating contract"
 pre_compact '{"session_id":"sess-pm","trigger":"auto","custom_instructions":null}' >/dev/null
 lacks "operating contract" "$(context_of "$(session_start '{"session_id":"sess-pm","source":"compact"}')")"
 prog rules --ack
-prog propose-agreement --project-term "crop defaults=PM picks the crop default" \
-  --reserved-term "pricing copy=Shawn writes every price string" --source "repo README"
+prog propose-agreement --project-term "crop defaults=PM picks the crop default" --source "repo README"
+run_py "$RUN" <<'EOF' >/dev/null
+def seed(rec):
+    rec["programme"]["agreement"]["project_terms"].append(
+        {"id": "tprice1", "area": "pricing copy", "value": "Shawn writes every price string", "source": "an older plugin",
+         "set_by": "proposal", "at": "2026-10-01T00:00:00Z", "reserved": True, "history": []})
+core._with_locked_run_record(ph.home_path(args[0]), args[0], seed)
+EOF
 prog accept-agreement --prompt "$(typed 'yes, I accept the agreement')"
 it "the agreement is accepted with the contract stamp"
 check 0 "$CODE"

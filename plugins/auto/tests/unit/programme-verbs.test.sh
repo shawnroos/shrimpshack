@@ -94,7 +94,7 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement accept-context add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed answer-permission archive assign-item beat check-archive check-deliverable claim clear-blocker clear-proposal close-instruction close-ruling collect-result context correct-term create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire hand-item handover inbox keep-corrections lift-pause log-decision mark-read merge-item note-term pause pick-term preserve-code promote promote-correction prompt-item propose-agreement propose-permission propose-rule propose-term queue raise-blocker reconcile-leases reconcile-operations record-decision record-denial record-instruction record-issues record-ruling record-tested-build record-trajectories recover release-resources reopen-item request-reread rules set-now set-remit set-source set-waiting settle-permissions setup-keep setup-seen setup-step start start-worker status sweep take-recommendations takeover tracker-synced undo-correction validate watcher-beat" "$VERBS"
+check "accept-agreement accept-context add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed answer-permission archive assign-item beat check-archive check-deliverable claim clear-blocker clear-proposal close-ruling collect-result context create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire hand-item handover inbox lift-pause log-decision mark-read merge-item note-term pause pick-term preserve-code promote prompt-item propose-agreement propose-permission propose-rule propose-term queue raise-blocker reconcile-leases reconcile-operations record-denial record-issues record-ruling record-tested-build record-trajectories recover release-resources reopen-item request-reread rules set-now set-remit set-source set-waiting settle-permissions setup-keep setup-seen setup-step start start-worker status sweep take-recommendations takeover tracker-synced validate watcher-beat" "$VERBS"
 
 
 # _VERBS.update lets a later module silently replace a verb another module registered under the same name.
@@ -182,7 +182,7 @@ P_BACK="$(prompt typed 'until Shawn is back, keep merging')"
 it "amend-term with wording that is not an option is refused"
 prog amend-term stop_rule "until Shawn is back" --prompt "$P_BACK"
 check 1 "$CODE"
-has "record-instruction" "$OUT"
+has "record-ruling" "$OUT"
 
 it "until_time needs an --until time"
 prog amend-term stop_rule until_time --prompt "$P_BACK"
@@ -192,22 +192,21 @@ it "a cadence value outside its options is refused"
 prog amend-term cadence hourly --prompt "$P_BACK"
 check 1 "$CODE"
 
-it "record-instruction with that wording and a typed prompt is accepted"
-prog record-instruction --prompt "$P_BACK"
-check 0 "$CODE"
-INSTR_BACK="$(field '[i["id"] for i in prog["instructions"]][-1]')"
-check '"until Shawn is back, keep merging"' "$(field 'prog["instructions"][-1]["quote"]')"
-
-it "record-instruction citing a cron prompt is refused"
-prog record-instruction --prompt "$P_CRON"
-check 1 "$CODE"
+for verb in record-instruction close-instruction record-decision; do
+  it "${verb} is gone: the CLI refuses it as an unknown verb"
+  prog "$verb" --prompt "$P_BACK"
+  check 2 "$CODE"
+done
 
 P_ITEM="$(prompt typed 'skip the full eval for AI-753')"
-it "record-instruction for one item, until merged, is accepted"
-prog record-instruction --prompt "$P_ITEM" --applies-to linear:AI-753 --until merged
-check 0 "$CODE"
+edit 'rec["programme"]["instructions"] = [
+    {"id": "iback01", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "programme", "until": None,
+     "why": None, "prompt_id": "'"$P_BACK"'", "quote": "until Shawn is back, keep merging", "closed": None},
+    {"id": "iitem01", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "linear:AI-753",
+     "until": "merged", "why": None, "prompt_id": "'"$P_ITEM"'", "quote": "skip the full eval for AI-753",
+     "closed": None}]'
 
-it "rules in force list the item instruction while the item is open"
+it "rules in force list an old item instruction while the item is open"
 edit 'rec["programme"]["items"]["linear:AI-753"] = {"id": "linear:AI-753", "title": "fix", "state": "open"}'
 prog rules
 check 0 "$CODE"
@@ -220,22 +219,38 @@ it "rules in force are readable lines, not a JSON dump"
 lacks '{"' "$OUT"
 check 0 "$(printf '%s\n' "$OUT" | sed -n '/<auto-rules>/,/<\/auto-rules>/p' | awk 'length > 300' | wc -l | tr -d ' ')"
 
-it "rules in force drop the item instruction once the item is done"
+it "rules in force drop the old item instruction once the item is done"
 edit 'rec["programme"]["items"]["linear:AI-753"]["state"] = "done"'
 prog rules
-lacks "skip the full eval for AI-753" "$OUT"
-has "until Shawn is back" "$OUT"
+RULES_BLOCK="$(printf '%s\n' "$OUT" | sed -n '/<auto-rules>/,/<\/auto-rules>/p')"
+lacks "skip the full eval for AI-753" "$RULES_BLOCK"
+has "until Shawn is back" "$RULES_BLOCK"
 
-it "close-instruction withdrawn without a prompt is refused"
-prog close-instruction "${INSTR_BACK//\"/}" --as withdrawn
+it "an old item instruction follows its item through a merge, read by canonical id"
+prog add-item linear:AI-799 --title "old half"
+prog add-item linear:AI-800 --title "new half"
+edit 'rec["programme"]["instructions"].append(
+    {"id": "imerge1", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "linear:AI-799",
+     "until": None, "why": None, "prompt_id": "'"$P_ITEM"'", "quote": "keep AI-799 behind a flag", "closed": None})'
+prog merge-item linear:AI-799 linear:AI-800
+prog rules
+has "\"keep AI-799 behind a flag\" (applies to linear:AI-800)" "$OUT"
+check '"linear:AI-799"' "$(field '[i["applies_to"] for i in prog["instructions"] if i["id"] == "imerge1"][0]')"
+
+it "an old instruction is a kind-less Ruling: record-ruling refuses to revise it"
+prog record-ruling iback01 --effect decided --kind work_sequencing --scope "keep merging" --prompt "$P_BACK"
+check 1 "$CODE"
+has "old instruction with no decision kind" "$OUT"
+
+it "close-ruling withdrawn on an old instruction without a prompt is refused"
+prog close-ruling iback01 --as withdrawn
 check 1 "$CODE"
 
-P_WITHDRAW="$(prompt typed 'forget the until-I-am-back thing')"
-it "close-instruction withdrawn with a typed prompt closes it"
-prog close-instruction "${INSTR_BACK//\"/}" --as withdrawn --prompt "$P_WITHDRAW"
+P_WITHDRAW="$(prompt typed 'forget iback01, the until-I-am-back thing')"
+it "close-ruling withdrawn with a typed prompt naming it closes the old instruction's Ruling"
+prog close-ruling iback01 --as withdrawn --prompt "$P_WITHDRAW"
 check 0 "$CODE"
-prog rules
-lacks "until Shawn is back" "$OUT"
+check '"closed"' "$(field 'prog["context"]["decisions"]["iback01"][-1]["state"]')"
 
 it "accept-agreement with no prompt is refused"
 prog accept-agreement
@@ -524,7 +539,7 @@ check '[["docs-verified"], ["fix_other_team_code", "prod_off_flag"], ["acme/web"
 
 it "each approval journals its own kind"
 GOT="$(journal_kinds)"
-for kind in term_amended instruction_recorded instruction_closed agreement_proposed agreement_accepted rule_proposed rule_adopted rules_acked; do
+for kind in term_amended ruling_closed agreement_proposed agreement_accepted rule_proposed rule_adopted rules_acked; do
   case "$GOT" in *"$kind"*) : ;; *) GOT="missing:${kind}" ;; esac
 done
 lacks "missing:" "$GOT"
@@ -581,10 +596,10 @@ CLAUDE_CODE_SESSION_ID="sess-stranger" prog amend-term cadence fixed --seconds 9
 check 1 "$CODE"
 check "$COUNT_BEFORE" "$(refusals)"
 
-it "record-instruction citing a cron prompt journals a refusal for the instruction"
-prog record-instruction --prompt "$P_CRON"
+it "close-ruling citing a cron prompt journals a refusal for the Ruling"
+prog close-ruling iitem01 --as withdrawn --prompt "$P_CRON"
 check 1 "$CODE"
-has '"record-instruction", "instruction"' "$(refusals)"
+has '"close-ruling", "iitem01"' "$(refusals)"
 
 it "accept-agreement citing an unknown prompt journals a not-found refusal"
 prog accept-agreement --prompt p0f0f0f

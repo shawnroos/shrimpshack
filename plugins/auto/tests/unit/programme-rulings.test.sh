@@ -366,10 +366,6 @@ P_P="$(prompt 'r-prog: optimisation depth is yours across the programme')"
 prog record-ruling r-prog --kind optimisation_depth --effect grant --scope "depth" --prompt "$P_P" --run "$RUN"
 check "pm grant" "$(gate herdr:b optimisation_depth act)"
 
-it "record-decision refuses an id that is a Ruling"
-P_RD="$(prompt 'record decision r-prog')"
-prog record-decision r-prog --scope x --reason y --prompt "$P_RD" --run "$RUN"
-check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
 
 it "programme_context still loads no protocol or journal module"
 if grep -nE 'load_lib_module\("(programme_protocol|programme_journal|programme_record|programme)"\)' \

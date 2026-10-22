@@ -98,6 +98,15 @@ def authority_level(host, programme, kind, targets):
     return level_of(protocol_for(host, programme, targets), kind)
 
 
+def legacy_restricts(programme) -> list:
+    out = []
+    for rid, revisions in sorted(pc.block(programme)["decisions"].items()):
+        current = pc.in_force(revisions)
+        if _dict(current).get("legacy") == "project_term":
+            out.append({"id": rid, "area": current.get("area"), "scope": current.get("scope")})
+    return out
+
+
 def _activate(host, programme, revision, prompt, baseline=None) -> None:
     if revision.get("quote") is None:
         revision["quote"] = prompt["quote"]
@@ -110,6 +119,9 @@ def _check_revisable(cid, revisions, kind, effect, prompt) -> None:
     if not revisions:
         return
     last = revisions[-1]
+    if last.get("legacy"):
+        raise RulingError(f"{cid!r} is an old {last['legacy'].replace('_', ' ')} with no decision kind; record it "
+                          "again as a Ruling with a kind under a new id")
     if not pc.is_ruling(revisions):
         raise RulingError(f"{cid!r} is a decision record without a kind; record the Ruling under a new id")
     if pc.ruling_state(revisions, None) == "closed":
@@ -206,10 +218,11 @@ def _h_record_ruling(host, argv):
 
 
 def _h_close_ruling(host, argv):
-    positional, opts = host._parse(argv, values=("run", "as", "why", "prompt"))
+    positional, opts = host._parse(argv, values=("run", "as", "why", "prompt", "origin"))
     if len(positional) != 1 or opts.get("as") not in ENDINGS:
         raise ValueError("usage: close-ruling <id> --as fulfilled|withdrawn [--why <text>] [--prompt <id>]")
     cid, ending = positional[0], opts["as"]
+    origin = host.programme_proposals.origin_of(opts)
     why = programme_sanitize.clean(opts.get("why")) or None
     if ending == "fulfilled" and not why:
         raise ValueError("close-ruling --as fulfilled needs --why")
@@ -231,10 +244,12 @@ def _h_close_ruling(host, argv):
         current["state"] = "closed"
         current["closed"] = {"at": run_record_core.now_iso(), "as": ending, "why": why,
                              "prompt_id": prompt and prompt["prompt_id"]}
-        return {"ruling_id": cid, "rev": current["rev"], "as": ending, "why": why, "state": "closed"}
+        return {"ruling_id": cid, "rev": current["rev"], "as": ending, "why": why, "state": "closed",
+                "origin": origin}
 
-    return host._write(opts, change, "ruling_closed", prompt_id=opts.get("prompt"),
-                       needs_prompt=ending == "withdrawn", verb="close-ruling", target=cid)
+    withdrawn = ending == "withdrawn"
+    return host._write(opts, change, "ruling_closed", prompt_id=opts.get("prompt"), needs_prompt=withdrawn,
+                       beat=withdrawn, verb="close-ruling", target=cid)
 
 
 def _h_accept_context(host, argv):
@@ -274,9 +289,10 @@ _SPECS = (
      "drops a limit or ends later; a restrict that loses items, drops a limit or ends sooner) waits too, while "
      "the prior revision stays in force. With --replies-to the anchor gives the item and kind, the prompt "
      "must come after the anchor and drive no other correction, and the Ruling applies at once with a notice."),
-    ("close-ruling", _h_close_ruling, "<id> --as fulfilled|withdrawn [--why <text>] [--prompt <id>] [--run <id>]",
+    ("close-ruling", _h_close_ruling,
+     "<id> --as fulfilled|withdrawn [--why <text>] [--prompt <id>] [--origin pm|ui] [--run <id>]",
      "no Ruling in force or pending; --as fulfilled without --why; --as withdrawn, or closing a restrict or a decided "
-     "Ruling, without a typed prompt naming the id."),
+     "Ruling, without a typed prompt naming the id. Closing as fulfilled never counts as a beat."),
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
      "no pending revision; a prompt that is not typed, came from a legacy journal or an obsolete writer, or "
      "does not name the id and every target the revision adds (for a Ruling, every item it gives the PM). "

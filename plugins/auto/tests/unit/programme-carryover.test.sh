@@ -92,48 +92,6 @@ core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
 EOF
 }
 
-hashes() {
-  "$PY" - "$CLAUDE_AUTO_DATA_DIR" "$STORE" <<'EOF'
-import hashlib, os, sys
-out = []
-for root, _, names in os.walk(sys.argv[1]):
-    for name in sorted(names):
-        if name.startswith("."):
-            continue
-        path = os.path.join(root, name)
-        out.append(path + ":" + hashlib.sha256(open(path, "rb").read()).hexdigest())
-store = sys.argv[2]
-out.append("store:" + (hashlib.sha256(open(store, "rb").read()).hexdigest() if os.path.exists(store) else "none"))
-print(hashlib.sha256("\n".join(sorted(out)).encode()).hexdigest())
-EOF
-}
-
-# A refused approval appends one approval_refused row and changes nothing else it governs.
-governed() {
-  "$PY" - "$AUTO_ROOT" "$1" "${STORE:-}" <<'EOF'
-import hashlib, json, os, sys
-sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
-from _bootstrap import load_lib_module
-ph = load_lib_module("programme_home")
-core = load_lib_module("run_record_core")
-pj = load_lib_module("programme_journal")
-run, store = sys.argv[2], sys.argv[3]
-rec = core.read_run_record(ph.home_path(run), run)
-rows = [r for r in pj.read(run) if r.get("kind") != "approval_refused"]
-kept = open(store, "rb").read().hex() if store and os.path.exists(store) else "none"
-print(hashlib.sha256(json.dumps([rec, rows, kept], sort_keys=True, default=str).encode()).hexdigest())
-EOF
-}
-
-refusals() {
-  "$PY" - "$AUTO_ROOT" "$1" <<'EOF'
-import os, sys
-sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
-from _bootstrap import load_lib_module
-print(sum(1 for r in load_lib_module("programme_journal").read(sys.argv[2]) if r.get("kind") == "approval_refused"))
-EOF
-}
-
 OUT=""
 CODE=0
 prog() {
@@ -141,20 +99,16 @@ prog() {
   CODE=$?
 }
 
-# The switch is a module constant with no environment override, so tests turn it on
-# inside the process that runs the verb. MUTATE patches one check out.
-ON_PY='
+MUT_PY='
 import os, sys
 sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
 from _bootstrap import load_lib_module
-load_lib_module("programme_terms").CORRECTIONS_ON = True
 programme = load_lib_module("programme")
-if os.environ.get("MUTATE") == "adoption":
-    load_lib_module("programme_protocol")._verify_adoption = lambda *a, **k: None
+load_lib_module("programme_protocol")._verify_adoption = lambda *a, **k: None
 sys.exit(programme._cli(sys.argv[1:]))
 '
-prog_on() {
-  OUT="$(AUTO_ROOT="$AUTO_ROOT" MUTATE="${MUTATE:-}" "$PY" -c "$ON_PY" "$@" 2>&1)"
+prog_mutated() {
+  OUT="$(AUTO_ROOT="$AUTO_ROOT" "$PY" -c "$MUT_PY" "$@" 2>&1)"
   CODE=$?
 }
 
@@ -174,18 +128,24 @@ pj.append(args[0], "end_request", "sess-pm",
           {"verb": "end", "text": "/auto:programme-end", "origin": "typed", "space": "x",
            "lease_status": "live", "driving": True, "source": source}, cites=[args[1]])
 EOF
-  if [ "${2:-}" = on ]; then prog_on end --run "$run"; else prog end --run "$run"; fi
+  prog end --run "$run"
 }
 
-correct() {
-  local run="$1" item="$2" kind="$3" to="$4" text="$5"
-  prog add-item "$item" --title "$item" --kind fix_only --run "$run"
-  prog hand-item "$item" --question "who picks?" --kind "$kind" --run "$run"
-  local ask p
-  ask="$(field "$run" "prog['items']['$item']['handed']['id']" | tr -d '"')"
+# The keep and promote verbs are gone; the store is seeded the way they wrote it, through a
+# typed prompt in the programme's journal, so the pre-fill still verifies each entry.
+seed_store() {
+  local run="$1" key="$2" kind="$3" to="$4" text="$5" p
   p="$(prompt "$run" typed "$text")"
-  prog_on correct-term --run "$run" --prompt "$p" --replies-to "$ask" --to "$to" --reading "$text"
-  field "$run" 'prog["agreement"]["corrections"][-1]["id"]' | tr -d '"'
+  run_py "$run" "$key" "$kind" "$to" "$p" <<'EOF' >/dev/null
+run, key, kind, to, pid = args
+programme = load_lib_module("programme")
+co = load_lib_module("programme_carryover")
+rec = record(run)
+prompt = programme._typed_prompt(run, rec, pid)
+keys = co.repo_keys(rec["programme"]) if key == "repos" else [key]
+correction = {"id": "c" + kind[:6], "kind": kind, "to": to, "quote": prompt["quote"], "pm_reading": prompt["quote"]}
+co.store(co.prepare([co.entry_for(correction, k, rec) for k in keys], prompt, rec), prompt, run, "sess-pm", "carryover")
+EOF
 }
 
 terms_by_origin() {
@@ -194,93 +154,31 @@ terms_by_origin() {
 
 REMIT_A="{\"spaces\":[\"w2\"],\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"shawn/alpha\"},{\"path\":\"${ALPHA2}\"}]}"
 
-# Programme A on alpha and alpha-two applies two corrections.
 RUN_A="$(new_programme w2)"
 remit "$RUN_A" "$REMIT_A"
 stamp_contract "$RUN_A"
-P_BEFORE="$(prompt "$RUN_A" typed "keep whatever you correct today")"
-C1="$(correct "$RUN_A" linear:A-1 technical_approach pm "that did not need me")"
-C2="$(correct "$RUN_A" linear:A-2 work_sequencing worker "workers can order that")"
+seed_store "$RUN_A" repos technical_approach pm "keep that technical approach call for this project"
 
-it "the fixture applied two corrections"
-case "$C1 $C2" in c??????" "c??????) pass ;; *) fail "$C1 $C2" ;; esac
-
-it "with the switch off, keep-corrections refuses and writes nothing"
-P_KEEP_OFF="$(prompt "$RUN_A" typed "keep the first correction")"
-BEFORE="$(hashes)"
-prog keep-corrections --run "$RUN_A" --prompt "$P_KEEP_OFF" "$C1"
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "corrections are not on yet" "$OUT"; else fail "code $CODE out $OUT"; fi
-it "with the switch off, promote-correction refuses and writes nothing"
-P_ALL_OFF="$(prompt "$RUN_A" typed "apply that to all projects")"
-BEFORE="$(hashes)"
-prog promote-correction --run "$RUN_A" --prompt "$P_ALL_OFF" "$C1"
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(hashes)" ]; then has "corrections are not on yet" "$OUT"; else fail "code $CODE out $OUT"; fi
-
-it "keep-corrections with an unknown correction refuses and writes nothing"
-BEFORE="$(governed "$RUN_A")"; COUNT="$(refusals "$RUN_A")"
-prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP_OFF" c000000
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(governed "$RUN_A")" ] && [ "$(refusals "$RUN_A")" = "$((COUNT + 1))" ]; then
-  has "no active correction 'c000000'" "$OUT"
-else
-  fail "code $CODE out $OUT"
-fi
-
-it "keep-corrections citing a prompt older than the correction refuses and writes nothing"
-BEFORE="$(governed "$RUN_A")"; COUNT="$(refusals "$RUN_A")"
-prog_on keep-corrections --run "$RUN_A" --prompt "$P_BEFORE" "$C1"
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(governed "$RUN_A")" ] && [ "$(refusals "$RUN_A")" = "$((COUNT + 1))" ]; then
-  has "is not later than the correction's prompt" "$OUT"
-else
-  fail "code $CODE out $OUT"
-fi
-it "keep-corrections citing a later prompt that does not name the correction refuses and writes nothing"
-BEFORE="$(governed "$RUN_A")"; COUNT="$(refusals "$RUN_A")"
-prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP_OFF" "$C1"
-if [ "$CODE" = 1 ] && [ "$BEFORE" = "$(governed "$RUN_A")" ] && [ "$(refusals "$RUN_A")" = "$((COUNT + 1))" ]; then
-  has "does not name what it approves" "$OUT"
-else
-  fail "code $CODE out $OUT"
-fi
-
-it "AE9: Shawn keeps one of the two corrections for this project"
-P_KEEP="$(prompt "$RUN_A" typed "keep ${C1} for this project")"
-prog_on keep-corrections --run "$RUN_A" --prompt "$P_KEEP" "$C1"
-check 0 "$CODE"
-it "the kept correction is stored under each remit repo key and not under all"
-check '[["'"${ALPHA2}"'", "'"${C1}"'"], ["shawn/alpha", "'"${C1}"'"]]' "$("$PY" -c '
+it "the seeded entry is stored under each remit repo key and not under all"
+check '[["'"${ALPHA2}"'", "technical_approach"], ["shawn/alpha", "technical_approach"]]' "$("$PY" -c '
 import json, sys
 doc = json.load(open(sys.argv[1]))
-print(json.dumps([[k, e["correction"]] for k, v in doc["keys"].items() for e in v], sort_keys=True))' "$STORE" | "$PY" -c '
-import json, sys
-print(json.dumps(sorted(json.load(sys.stdin))))')"
-it "every stored entry carries an adoption block bound to the prompt"
-check "True" "$("$PY" -c '
-import json, sys
-doc = json.load(open(sys.argv[1]))
-print(all(e["adoption"]["prompt_id"] == sys.argv[2] and e["adoption"]["machine"] == "studio"
-          for v in doc["keys"].values() for e in v))' "$STORE" "$P_KEEP")"
-it "the keep journals one approval row per stored entry, citing the prompt"
-check "2 True" "$(run_py "$RUN_A" "$P_KEEP" <<'EOF'
-rows = [r for r in pj.read(args[0]) if r["kind"] == "rule_adopted" and r["payload"].get("entry") == "carryover"]
-print(len(rows), all(r["cites"] == [args[1]] for r in rows))
-EOF
-)"
+print(json.dumps(sorted([k, e["kind"]] for k, v in doc["keys"].items() for e in v)))' "$STORE")"
 it "the programme's prompt lookup approves every stored entry"
-check "True" "$(run_py "$RUN_A" "$P_KEEP" "$STORE" <<'EOF'
+check "True" "$(run_py "$RUN_A" "$STORE" <<'EOF'
 programme = load_lib_module("programme")
 proto = load_lib_module("programme_protocol")
-doc = json.load(open(args[2]))
-approved = programme.prompt_lookup(args[0], args[1])["approved"]
-print(all(proto.approval_key(f"carryover:{k}:{e['id']}", e["adoption"]["hash"]) in approved
+doc = json.load(open(args[1]))
+print(all(proto.approval_key(f"carryover:{k}:{e['id']}", e["adoption"]["hash"])
+          in programme.prompt_lookup(args[0], e["adoption"]["prompt_id"])["approved"]
           for k, v in doc["keys"].items() for e in v))
 EOF
 )"
 
-it "end lists the corrections the programme applied while the switch is on"
-end_programme "$RUN_A" on
+it "end prints no corrections: the corrections switch is gone"
+end_programme "$RUN_A"
 check 0 "$CODE"
-has "correction ${C1}: technical_approach decided by pm" "$OUT"
-has "correction ${C2}: work_sequencing decided by worker" "$OUT"
+lacks "correction" "$OUT"
 
 # Programme B on the same repos, in the real startup order: propose, then set-remit.
 RUN_B="$(new_programme w3)"
@@ -289,13 +187,11 @@ P_EARLY_B="$(prompt "$RUN_B" typed "yes, I accept the agreement")"
 it "before set-remit the next programme has no carried-over term"
 check "[]" "$(terms_by_origin "$RUN_B")"
 remit "$RUN_B" "$REMIT_A"
-it "AE9: after set-remit the next programme pre-fills the kept correction once, marked with its origin"
+it "after set-remit the next programme pre-fills the stored entry once, marked with its origin"
 check 0 "$CODE"
 check '[["technical approach", "shawn/alpha"]]' "$(terms_by_origin "$RUN_B")"
 it "the carried-over term says it was carried over"
 check '["carried_over", "decided by the PM"]' "$(field "$RUN_B" '[[t["set_by"], t["value"]] for t in prog["agreement"]["project_terms"] if t.get("origin")][0]')"
-it "the correction that was not kept is not pre-filled"
-lacks "work sequencing" "$(field "$RUN_B" 'prog["agreement"]["project_terms"]')"
 it "set-remit again on the unaccepted agreement adds no duplicate"
 remit "$RUN_B" "$REMIT_A"
 check 1 "$(field "$RUN_B" 'len([t for t in prog["agreement"]["project_terms"] if t.get("origin")])')"
@@ -313,47 +209,13 @@ TERMS_B="$(field "$RUN_B" 'prog["agreement"]["project_terms"]')"
 RUN_C="$(new_programme w4)"
 prog propose-agreement --run "$RUN_C" --term cadence=fixed
 remit "$RUN_C" "{\"spaces\":[\"w4\"],\"repos\":[{\"path\":\"${BETA}\"}]}"
-it "a programme on another repo does not see a project-keyed correction"
+it "a programme on another repo does not see a project-keyed entry"
 check 0 "$CODE"
 check "[]" "$(terms_by_origin "$RUN_C")"
 
-stamp_contract "$RUN_C"
-P_EARLY_ALL="$(prompt "$RUN_C" typed "apply that to all projects")"
-C3="$(correct "$RUN_C" linear:C-1 tool_choice pm "pick the tools yourself")"
-C4="$(correct "$RUN_C" linear:C-2 optimisation_depth worker "workers decide how deep")"
+seed_store "$RUN_C" all tool_choice pm "pick the tools yourself, for all projects"
 
-refused() {
-  local want="$1"; shift
-  local before count
-  before="$(governed "$RUN_C")"; count="$(refusals "$RUN_C")"
-  prog_on "$@"
-  if [ "$CODE" = 1 ] && [ "$before" = "$(governed "$RUN_C")" ] && [ "$(refusals "$RUN_C")" = "$((count + 1))" ]; then
-    has "$want" "$OUT"
-  else
-    fail "code $CODE out $OUT"
-  fi
-}
-
-it "promote-correction without all projects in the prompt refuses and writes nothing"
-P_NONE="$(prompt "$RUN_C" typed "keep that one everywhere")"
-refused "all projects" promote-correction --run "$RUN_C" --prompt "$P_NONE" "$C3"
-it "a negated all projects refuses"
-P_NEG="$(prompt "$RUN_C" typed "don't apply that to all projects")"
-refused "negates" promote-correction --run "$RUN_C" --prompt "$P_NEG" "$C3"
-it "a prompt not later than the correction's own prompt refuses"
-refused "is not later than" promote-correction --run "$RUN_C" --prompt "$P_EARLY_ALL" "$C3"
-
-P_ALL="$(prompt "$RUN_C" typed "yes, apply that to all projects")"
-it "a typed prompt naming all projects promotes the correction"
-prog_on promote-correction --run "$RUN_C" --prompt "$P_ALL" "$C3"
-check 0 "$CODE"
-check '["tool_choice"]' "$("$PY" -c '
-import json, sys
-print(json.dumps([e["kind"] for e in json.load(open(sys.argv[1]))["keys"]["all"]]))' "$STORE")"
-it "a reused promotion prompt refuses"
-refused "already drove a promotion" promote-correction --run "$RUN_C" --prompt "$P_ALL" "$C4"
-
-it "a promotion does not change a programme that is already running"
+it "an all-projects entry does not change a programme that is already running"
 check "$TERMS_B" "$(field "$RUN_B" 'prog["agreement"]["project_terms"]')"
 P_ADD="$(prompt "$RUN_B" typed "add repo beta to the remit")"
 remit "$RUN_B" "{\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"shawn/alpha\"},{\"path\":\"${ALPHA2}\"},{\"path\":\"${BETA}\"}]}" --prompt "$P_ADD"
@@ -391,13 +253,13 @@ prog propose-agreement --run "$RUN_D" --term cadence=fixed
 rm -rf "${WORK}/data.bak"
 /bin/cp -Rp "$CLAUDE_AUTO_DATA_DIR" "${WORK}/data.bak"
 it "mutation: with the adoption check patched out the forged entries are pre-filled"
-MUTATE=adoption prog_on set-remit --run "$RUN_D" < <(printf '%s' "{\"spaces\":[\"w5\"],\"repos\":[{\"path\":\"${GAMMA}\"}]}")
+prog_mutated set-remit --run "$RUN_D" < <(printf '%s' "{\"spaces\":[\"w5\"],\"repos\":[{\"path\":\"${GAMMA}\"}]}")
 check "0 3" "$CODE $(field "$RUN_D" 'len([t for t in prog["agreement"].get("project_terms") or [] if t.get("origin") == "'"${GAMMA}"'"])')"
 rm -rf "$CLAUDE_AUTO_DATA_DIR"
 /bin/cp -Rp "${WORK}/data.bak" "$CLAUDE_AUTO_DATA_DIR"
 
 remit "$RUN_D" "{\"spaces\":[\"w5\"],\"repos\":[{\"path\":\"${GAMMA}\"}]}"
-it "a programme on a third repo pre-fills only the all-projects correction"
+it "a programme on a third repo pre-fills only the all-projects entry"
 check 0 "$CODE"
 check '[["tool choice", "all"]]' "$(terms_by_origin "$RUN_D")"
 it "a store entry with no adoption block is dropped with a notice naming it"

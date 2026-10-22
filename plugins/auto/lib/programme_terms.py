@@ -3,8 +3,7 @@
 
 Project terms sit at ``agreement.project_terms``, outside the fixed ``terms`` map that
 ``normalize_programme`` back-fills, so a record without them keeps reading as the old contract.
-Typed corrections live at ``agreement.corrections``; ``correct-term`` and ``undo-correction``
-refuse while ``CORRECTIONS_ON`` is false.
+They hold preferred-tool text only; who decides an area is a Ruling.
 ``programme.py`` registers ``edit-project-term`` through ``build_verbs(host)``; its
 ``propose-agreement`` and ``accept-agreement`` call ``add``, ``check_accept_order`` and ``stamp``.
 """
@@ -26,8 +25,6 @@ programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_decisions = load_lib_module("programme_decisions")
-programme_carryover = load_lib_module("programme_carryover")
-programme_rulings = load_lib_module("programme_rulings")
 
 CONTRACT_VERSION = 1
 PROPOSED = "agreement_proposed"
@@ -70,15 +67,13 @@ def protected_kind(host, area):
     return next((PROTECTED_WORDS[w] for w in words if w in PROTECTED_WORDS), None)
 
 
-def _check_area(host, area, text, reserved) -> None:
-    if reserved:
-        return
+def _check_area(host, area, text) -> None:
     for what, words in (("area", area), ("text", text)):
         kind = protected_kind(host, words)
         if kind:
             raise TermsError(
                 f"{what} {words!r} names a protected escalation ({kind}) that stays with Shawn: no "
-                "project term may give it to the PM or a worker; mark it reserved or leave it out")
+                "project term may give it to the PM or a worker; leave it out")
 
 
 def _text(value, what) -> str:
@@ -89,21 +84,20 @@ def _text(value, what) -> str:
 
 
 def parse_specs(host, opts) -> tuple:
-    specs = [(spec, False) for spec in opts.get("project-term") or []] + \
-            [(spec, True) for spec in opts.get("reserved-term") or []]
+    specs = opts.get("project-term") or []
     if not specs:
         return [], None
     if not programme_sanitize.clean(opts.get("source")):
         raise ValueError("a project term needs --source <evidence> naming where it came from")
     parsed = []
-    for spec, reserved in specs:
+    for spec in specs:
         area, sep, text = spec.partition("=")
         if not sep:
             raise ValueError(f"a project term needs <area>=<text>, got {spec!r}")
         area = _text(area, "a project term area")
         if not host._squash(area):
             raise ValueError(f"a project term area needs a word to name it, got {area!r}")
-        parsed.append((area, _text(text, "a project term text"), reserved))
+        parsed.append((area, _text(text, "a project term text")))
     return parsed, programme_sanitize.clean(opts["source"])
 
 
@@ -114,13 +108,13 @@ def add(host, programme, parsed, source) -> dict:
     entries = programme_home.project_terms(programme)
     taken = {host._squash(e.get("area")) for e in entries}
     added = []
-    for area, text, reserved in parsed:
-        _check_area(host, area, text, reserved)
+    for area, text in parsed:
+        _check_area(host, area, text)
         if host._squash(area) in taken:
             raise TermsError(f"area {area!r} already has a project term; change it with edit-project-term")
         taken.add(host._squash(area))
         entry = {"id": "t" + secrets.token_hex(3), "area": area, "value": text, "source": source,
-                 "set_by": "proposal", "at": run_record_core.now_iso(), "reserved": reserved,
+                 "set_by": "proposal", "at": run_record_core.now_iso(), "reserved": False,
                  "history": []}
         entries.append(entry)
         added.append({k: entry[k] for k in ("id", "area", "value", "reserved")})
@@ -181,14 +175,12 @@ def _find(programme, term_id) -> dict:
     raise TermsError(f"no project term {term_id!r}")
 
 
-def _amend(host, entry, text, source, prompt, reserve) -> dict:
+def _amend(host, entry, text, source, prompt) -> dict:
     if prompt is None:
         raise TermsError("the agreement is accepted; edit-project-term needs --prompt <id> of a typed "
                          "prompt that names the area and the new text")
-    if reserve is not None and reserve != bool(entry.get("reserved")):
-        raise TermsError("the agreement is accepted; a project term's reservation is fixed")
     host.require_named(prompt, entry["area"], text)
-    _check_area(host, entry["area"], text, entry.get("reserved"))
+    _check_area(host, entry["area"], text)
     previous = entry.get("value")
     entry.setdefault("history", []).append(
         {k: entry.get(k) for k in ("value", "set_by", "at", "source", "prompt_id")})
@@ -200,289 +192,39 @@ def _amend(host, entry, text, source, prompt, reserve) -> dict:
 
 
 def _h_edit(host, argv):
-    positional, opts = host._parse(argv, values=("run", "prompt", "source"), flags=("reserved", "unreserved"))
+    positional, opts = host._parse(argv, values=("run", "prompt", "source"))
     if len(positional) != 2:
         raise ValueError("usage: edit-project-term <id> <text> [--prompt <id>]")
-    if opts.get("reserved") and opts.get("unreserved"):
-        raise ValueError("edit-project-term takes at most one of --reserved and --unreserved")
     term_id, text = positional[0], _text(positional[1], "edit-project-term <text>")
     source = programme_sanitize.clean(opts.get("source")) or None
-    reserve = True if opts.get("reserved") else False if opts.get("unreserved") else None
 
     def change(programme, prompt, rec):
         entry = _find(programme, term_id)
+        # An old reserved term also reads as a legacy restrict Ruling, so its text must not drift from that copy.
+        if entry.get("reserved"):
+            raise TermsError(f"project term {term_id!r} is an old reservation, which reads as a Ruling now; ask "
+                             "Shawn to record it again as a Ruling with a kind")
         accepted = bool(programme["agreement"].get("accepted"))
         if accepted:
-            extra = _amend(host, entry, text, source, prompt, reserve)
+            extra = _amend(host, entry, text, source, prompt)
         else:
-            reserved = bool(entry.get("reserved")) if reserve is None else reserve
-            _check_area(host, entry["area"], text, reserved)
-            entry.update(value=text, reserved=reserved, at=run_record_core.now_iso())
+            _check_area(host, entry["area"], text)
+            entry.update(value=text, at=run_record_core.now_iso())
             if source:
                 entry["source"] = source
             extra = {}
-        return {"term_id": term_id, "area": entry["area"], "value": text, "reserved": entry["reserved"],
+        return {"term_id": term_id, "area": entry["area"], "value": text, "reserved": False,
                 "source": entry.get("source"), "accepted": accepted, **extra}
 
     return host._write(opts, change, lambda payload: AMENDED if payload["accepted"] else EDITED,
                        prompt_id=opts.get("prompt"))
 
 
-# No environment override: the PM can set environment variables from its own shell.
-CORRECTIONS_ON = False
-CORRECTIONS_OFF = "corrections are not on yet"
-CORRECTED = "term_corrected"
-UNDONE = "correction_undone"
-CORRECTABLE_KINDS = ("technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
-                     "optimisation_depth")
-OWNERS = ("pm", "worker", "shawn")
-
-
-def corrections(programme) -> list:
-    entries = programme.get("agreement", {}).get("corrections")
-    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
-
-
-def active_corrections(programme) -> list:
-    return [e for e in corrections(programme) if not e.get("undone")]
-
-
-def owner_of(programme, kind):
-    latest = [e for e in active_corrections(programme) if e.get("kind") == kind]
-    return latest[-1] if latest else None
-
-
-def owner_text(owner) -> str:
-    return owner or "the contract default"
-
-
-def _check_prompt_after(rows, prompt, earlier_id) -> None:
-    if _prompt_index(rows, prompt["prompt_id"]) <= _prompt_index(rows, earlier_id):
-        raise TermsError(f"prompt {prompt['prompt_id']!r} is not later than the correction's prompt "
-                         f"{earlier_id!r}")
-
-
-def correction_lines(entries) -> list:
-    return [programme_sanitize.clean(
-        f"correction {e.get('id')}: {e.get('kind')} decided by {e.get('to')} (Shawn: \"{e.get('quote')}\"; "
-        f"PM's reading: \"{e.get('pm_reading')}\")", cap=0) for e in entries]
-
-
-def _check_switch() -> None:
-    if not CORRECTIONS_ON:
-        raise TermsError(CORRECTIONS_OFF)
-
-
-_prompt_index = programme_rulings.prompt_index
-_check_anchor_order = programme_rulings.check_anchor_order
-
-
-def _anchor(programme, anchor_id) -> tuple:
-    found = programme_rulings.anchor(programme, anchor_id)
-    return found["kind"], found["item"] if found["ask"] else None
-
-
-def _check_correctable(kind) -> None:
-    if kind not in CORRECTABLE_KINDS:
-        raise TermsError(f"kind {kind!r} is not correctable; a correction may change only "
-                         f"{', '.join(CORRECTABLE_KINDS)}")
-
-
-def _check_prompt_unused(programme, prompt_id) -> None:
-    for entry in corrections(programme):
-        used = entry.get("prompt_id") == prompt_id or (entry.get("undone") or {}).get("prompt_id") == prompt_id
-        if used:
-            raise TermsError(f"prompt {prompt_id!r} already drove correction {entry.get('id')!r}; "
-                             "one typed prompt makes one correction")
-
-
-def _h_correct(host, argv):
-    _check_switch()
-    positional, opts = host._parse(argv, values=("run", "prompt", "replies-to", "to", "reading"))
-    if positional or not opts.get("replies-to") or opts.get("to") not in OWNERS:
-        raise ValueError("usage: correct-term --prompt <id> --replies-to <ask-or-choice-id> "
-                         "--to pm|worker|shawn --reading <text>")
-    reading = _text(opts.get("reading"), "--reading")
-    anchor_id, to = opts["replies-to"], opts["to"]
-
-    def change(programme, prompt, rec):
-        kind, item_key = _anchor(programme, anchor_id)
-        _check_correctable(kind)
-        _check_anchor_order(programme_journal.read(rec["run_id"]), anchor_id, prompt["prompt_id"])
-        _check_prompt_unused(programme, prompt["prompt_id"])
-        current = owner_of(programme, kind)
-        previous = current.get("to") if current else None
-        if previous == to:
-            raise TermsError(f"{kind} is already decided by {to} (correction {current.get('id')!r})")
-        entry = {"id": "c" + secrets.token_hex(3), "at": run_record_core.now_iso(), "kind": kind,
-                 "anchor": anchor_id, "to": to, "previous": previous, "prompt_id": prompt["prompt_id"],
-                 "quote": prompt["quote"], "pm_reading": reading,
-                 "choices_before": len(programme.get("decisions") or []), "undone": None}
-        programme["agreement"]["corrections"] = corrections(programme) + [entry]
-        reopened = None
-        if item_key and to != "shawn" and programme["items"][item_key]["state"] == "handed":
-            item = programme["items"][item_key]
-            item.update(state="open", waiting_on=None)
-            host.programme_record._history(item, "reopened", correction=entry["id"])
-            reopened = item_key
-        notice = (f"correction {entry['id']}: {kind} now decided by {to} (was {owner_text(previous)}). "
-                  f"Shawn said \"{prompt['quote']}\"; PM's reading: \"{reading}\"")
-        return {"correction": entry["id"], "kind": kind, "anchor": anchor_id, "to": to, "previous": previous,
-                "pm_reading": reading, "reopened": reopened, "notice": programme_sanitize.clean(notice, cap=0)}
-
-    return host._write(opts, change, CORRECTED, prompt_id=opts.get("prompt"), needs_prompt=True)
-
-
-def _h_undo(host, argv):
-    _check_switch()
-    positional, opts = host._parse(argv, values=("run", "prompt"))
-    if len(positional) != 1:
-        raise ValueError("usage: undo-correction <correction-id> --prompt <id>")
-    correction_id = positional[0]
-
-    def change(programme, prompt, rec):
-        entries = corrections(programme)
-        entry = next((e for e in entries if e.get("id") == correction_id), None)
-        if entry is None:
-            raise TermsError(f"no correction {correction_id!r}")
-        if entry.get("undone"):
-            raise TermsError(f"correction {correction_id!r} is already undone")
-        newer = owner_of(programme, entry["kind"])
-        if newer is not entry:
-            raise TermsError(f"correction {newer.get('id')!r} changed {entry['kind']} later; undo it first")
-        rows = programme_journal.read(rec["run_id"])
-        _check_prompt_after(rows, prompt, entry["prompt_id"])
-        entry["undone"] = {"at": run_record_core.now_iso(), "prompt_id": prompt["prompt_id"],
-                           "quote": prompt["quote"]}
-        made = [d.get("id") for d in (programme.get("decisions") or [])[entry.get("choices_before", 0):]
-                if isinstance(d, dict) and (d.get("kind") == entry["kind"] or d.get("term") == correction_id)]
-        notice = (f"undid correction {correction_id}: {entry['kind']} back to {owner_text(entry['previous'])}; "
-                  f"choices made under it stand: {', '.join(made) or 'none'}")
-        return {"correction": correction_id, "kind": entry["kind"], "restored": entry["previous"],
-                "made_under": made, "notice": notice}
-
-    return host._write(opts, change, UNDONE, prompt_id=opts.get("prompt"), needs_prompt=True)
-
-
-KEPT = "corrections_kept"
-PROMOTED = "correction_promoted"
-ALL_PROJECTS = "all projects"
-
-
-def _active(programme, correction_id) -> dict:
-    entry = next((e for e in active_corrections(programme) if e.get("id") == correction_id), None)
-    if entry is None:
-        raise TermsError(f"no active correction {correction_id!r} in this programme")
-    return entry
-
-
-def end_lines(programme) -> list:
-    return correction_lines(active_corrections(programme)) if CORRECTIONS_ON else []
-
-
-def _h_keep(host, argv):
-    _check_switch()
-    positional, opts = host._parse(argv, values=("run", "prompt"))
-    if not positional:
-        raise ValueError("usage: keep-corrections --prompt <id> <correction-id>...")
-
-    seen = {}
-
-    def change(programme, prompt, rec):
-        keys = programme_carryover.repo_keys(programme)
-        if not keys:
-            raise TermsError("the remit names no repo, so there is no project to keep a correction for")
-        kept = [_active(programme, cid) for cid in dict.fromkeys(positional)]
-        rows = programme_journal.read(rec["run_id"])
-        for correction in kept:
-            _check_prompt_after(rows, prompt, correction["prompt_id"])
-        host.require_named(prompt, *(c["id"] for c in kept))
-        adopted = programme_carryover.prepare(
-            [programme_carryover.entry_for(c, key, rec) for c in kept for key in keys], prompt, rec)
-        seen.update(adopted=adopted, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
-        return {"kept": [c["id"] for c in kept], "keys": keys, "stored": programme_carryover.summary(adopted),
-                "store_path": programme_carryover.store_path()}
-
-    return host._write(opts, change, KEPT, prompt_id=opts.get("prompt"), needs_prompt=True,
-                       after=lambda _: _store_after(seen, "carryover"))
-
-
-def _store_after(seen, how) -> None:
-    programme_carryover.store(seen["adopted"], seen["prompt"], seen["run"], seen["sid"], how)
-
-
-def _check_all_projects(host, prompt) -> None:
-    host.require_named(prompt, ALL_PROJECTS)
-    # require_named looks only at the word just before the name, so "don't apply that to all
-    # projects" would pass it; any negation earlier in the prompt refuses.
-    words = host._name_words(programme_journal.redact(prompt["quote"]))
-    start = min(s for s, _ in host._runs(words, host._squash(ALL_PROJECTS)))
-    if set(words[:start]) & set(host._NEGATIONS):
-        raise TermsError(f"prompt {prompt['prompt_id']!r} negates {ALL_PROJECTS!r}; a promotion needs a "
-                         "plain yes")
-
-
-def _check_promotion_unused(rows, prompt) -> None:
-    for row in rows:
-        if row.get("kind") == PROMOTED and (row.get("cites") or [None])[0] == prompt["prompt_id"]:
-            raise TermsError(f"prompt {prompt['prompt_id']!r} already drove a promotion "
-                             f"({(row.get('payload') or {}).get('promoted')!r}); one typed prompt "
-                             "promotes one correction")
-
-
-def _h_promote(host, argv):
-    _check_switch()
-    positional, opts = host._parse(argv, values=("run", "prompt"))
-    if len(positional) != 1:
-        raise ValueError("usage: promote-correction --prompt <id> <correction-id>")
-
-    seen = {}
-
-    def change(programme, prompt, rec):
-        correction = _active(programme, positional[0])
-        _check_all_projects(host, prompt)
-        rows = programme_journal.read(rec["run_id"])
-        _check_prompt_after(rows, prompt, correction["prompt_id"])
-        _check_promotion_unused(rows, prompt)
-        adopted = programme_carryover.prepare(
-            [programme_carryover.entry_for(correction, programme_carryover.ALL, rec)], prompt, rec)
-        seen.update(adopted=adopted, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
-        return {"promoted": correction["id"], "kind": correction["kind"],
-                "stored": programme_carryover.summary(adopted), "store_path": programme_carryover.store_path()}
-
-    return host._write(opts, change, PROMOTED, prompt_id=opts.get("prompt"), needs_prompt=True,
-                       after=lambda _: _store_after(seen, "promotion"))
-
-
 _SPECS = (
     ("edit-project-term", _h_edit,
-     "<term-id> <text> [--prompt <id>] [--source <evidence>] [--reserved|--unreserved] [--run <id>]",
-     "an unknown term id; an empty text; both --reserved and --unreserved; a protected area or text left "
-     "unreserved. After acceptance it also rejects no typed --prompt, a prompt that does not name the "
-     "area and the new text, and any change of reservation."),
-    ("correct-term", _h_correct,
-     "--prompt <id> --replies-to <ask-or-choice-id> --to pm|worker|shawn --reading <text> [--run <id>]",
-     "every call while corrections are not on yet; no typed prompt from the driving session; an "
-     "unknown anchor; an anchor recorded after the prompt; a kind off the correctable list; a prompt "
-     "that already drove a correction; a kind already decided by the new owner."),
-    ("undo-correction", _h_undo,
-     "<correction-id> --prompt <id> [--run <id>]",
-     "every call while corrections are not on yet; no typed prompt from the driving session; an "
-     "unknown or undone correction; a later correction of the same kind (named); a prompt not later "
-     "than the correction's."),
-    ("keep-corrections", _h_keep,
-     "--prompt <id> <correction-id>... [--run <id>]",
-     "every call while corrections are not on yet; no typed prompt from the driving session; an "
-     "unknown or undone correction; a prompt not later than every kept correction's, or one that does "
-     "not name each kept id; a remit with no repo. Stores each kept correction under every "
-     "remit repo's key for the next programme on that project."),
-    ("promote-correction", _h_promote,
-     "--prompt <id> <correction-id> [--run <id>]",
-     "every call while corrections are not on yet; no typed prompt from the driving session; an "
-     "unknown or undone correction; a prompt that does not name all projects, or holds a negation "
-     "anywhere before it; a prompt not later than the correction's; a prompt that already drove a "
-     "promotion. Stores the correction for every project's next programme; running programmes "
-     "never change."),
+     "<term-id> <text> [--prompt <id>] [--source <evidence>] [--run <id>]",
+     "an unknown term id; an empty text; a protected area or text; an old reserved term (it reads as a Ruling). "
+     "After acceptance it also rejects no typed --prompt and a prompt that does not name the area and the new text."),
 )
 
 

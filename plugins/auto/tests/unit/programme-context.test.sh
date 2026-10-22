@@ -130,8 +130,8 @@ NOW_EXPR='core.now_iso()'
 AUTONOMY_BEFORE="$("$PY" "$PROG" status --run "$RUN" --json 2>&1)"
 P_DEC="$(prompt typed 'record decision d-browser: ship the browser fix, no prod flag changes')"
 
-it "record-decision with a typed prompt that names it records accepted revision 1"
-prog record-decision d-browser --scope "ship the browser fix" --reason "customers hit the broken flow" \
+it "record-ruling with a typed prompt that names it records accepted revision 1"
+prog record-ruling d-browser --effect decided --kind technical_approach --scope "ship the browser fix" --reason "customers hit the broken flow" \
   --limit "no prod flag changes" --applies-to herdr:browser-e2e --prompt "$P_DEC" --run "$RUN"
 check "0 accepted 1" "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"]')"
 
@@ -173,8 +173,9 @@ it "AE2: the packet says it is context, not approval"
 has "not approval" "$(pyget "$PACKET" 'd["authority"]')"
 
 it "AE2: re-recording the unchanged decision makes no new revision and asks for no acceptance"
-prog record-decision d-browser --scope "ship the browser fix" --reason "customers hit the broken flow" \
-  --limit "no prod flag changes" --applies-to herdr:browser-e2e --run "$RUN"
+prog record-ruling d-browser --effect decided --kind technical_approach --scope "ship the browser fix" \
+  --reason "customers hit the broken flow" --limit "no prod flag changes" --applies-to herdr:browser-e2e \
+  --prompt "$P_DEC" --run "$RUN"
 check "0 true 1" "$CODE $(pyget "$OUT" 'd["unchanged"]') $(pyget "$OUT" 'd["rev"]')"
 it "AE2: no decision for Shawn asks to accept d-browser again"
 lacks "d-browser" "$(pyget "$(status_json)" 'd["model"]["decisions_for_shawn"]')"
@@ -185,18 +186,19 @@ check "$(pyget "$AUTONOMY_BEFORE" 'd["model"]["rules_in_force"]["autonomy"]')" \
 
 # ── Scenario 2: materially wider work waits for acceptance of the delta ─────
 P_DOCS="$(prompt typed 'record decision d-docs for docs-page')"
-prog record-decision d-docs --scope "fix the docs page" --reason "stale install steps" \
-  --applies-to herdr:docs-page --prompt "$P_DOCS" --run "$RUN"
+prog record-ruling d-docs --effect decided --kind technical_approach --scope "fix the docs page" \
+  --reason "stale install steps" --applies-to herdr:docs-page --prompt "$P_DOCS" --run "$RUN"
 prog assign-item herdr:docs-page --decision-id d-docs --run "$RUN"
 
 it "a wider revision of d-docs stays pending even with a typed prompt, and names its delta"
 P_WIDE="$(prompt typed 'widen d-docs to linux-probe too')"
-prog record-decision d-docs --scope "fix the docs page" --reason "stale install steps" \
-  --applies-to herdr:docs-page --applies-to herdr:linux-probe --prompt "$P_WIDE" --run "$RUN"
+prog record-ruling d-docs --effect decided --kind technical_approach --scope "fix the docs page" \
+  --reason "stale install steps" --applies-to herdr:docs-page --applies-to herdr:linux-probe --prompt "$P_WIDE" \
+  --run "$RUN"
 check "0 pending_acceptance 2 [\"herdr:linux-probe\"]" \
   "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"]') $(pyget "$OUT" 'd["delta"]["added"]')"
 
-it "a kind-less decision's delta lists the added target as what the accepting prompt must name"
+it "a decided Ruling's delta lists the added target as what the accepting prompt must name"
 check "[\"herdr:linux-probe\"]" "$(pyget "$("$PY" "$PROG" context --run "$RUN" 2>&1)" "d['decisions']['d-docs']['pending']['delta']['added']")"
 
 it "the context view reads the decision as active while its wider revision waits"
@@ -507,10 +509,12 @@ check "block" "$(pyget "$(stop_decide)" 'd["decision"]')"
 it "describe lists the context verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-for verb in record-decision record-ruling close-ruling define-requirement accept-context assign-item raise-blocker clear-blocker pause lift-pause record-denial context; do
+for verb in record-ruling close-ruling define-requirement accept-context assign-item raise-blocker clear-blocker pause lift-pause record-denial context; do
   case " $VERBS " in *" $verb "*) ;; *) VERBS="MISSING:$verb $VERBS" ;; esac
 done
 lacks "MISSING:" "$VERBS"
+it "describe no longer lists record-decision"
+lacks " record-decision " " $VERBS "
 
 it "no verb crashed with a traceback"
 check "" "$CRASHES"

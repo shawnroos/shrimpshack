@@ -25,11 +25,11 @@ prog add-item linear:AI-1 --title "browser acceptance" --kind fix_only --pane w2
 prog add-item linear:AI-2 --title "linux investigation"
 prog add-item linear:AI-3 --title "spare worker slot"
 P1="$(typed "record decision d-browser")"
-prog record-decision d-browser --scope "browser acceptance only" --reason "Shawn wants the browser path first" \
+prog record-ruling d-browser --effect decided --kind technical_approach --scope "browser acceptance only" --reason "Shawn wants the browser path first" \
   --limit "never touch production data" --applies-to linear:AI-1 --prompt "$P1"
 it "a decision with a typed prompt is recorded"
 check 0 "$CODE"
-prog record-decision d-linux --scope "linux follow-up" --reason "parked until browser lands" --applies-to linear:AI-2
+prog record-ruling d-linux --effect decided --kind technical_approach --scope "linux follow-up" --reason "parked until browser lands" --applies-to linear:AI-2
 it "a decision without a prompt is recorded as pending"
 check 0 "$CODE"
 P2="$(typed "define requirement r-browser")"
@@ -140,7 +140,7 @@ check 1 "$CODE"
 TAIL="never-delete-the-staging-bucket"
 LONG="$("$PY" -c 'import sys; print(("context " * 55) + sys.argv[1])' "$TAIL")"
 P3="$(typed "record decision d-big")"
-prog record-decision d-big --scope "big" --reason "$LONG" --limit "$LONG" --applies-to linear:AI-3 --prompt "$P3"
+prog record-ruling d-big --effect decided --kind technical_approach --scope "big" --reason "$LONG" --limit "$LONG" --applies-to linear:AI-3 --prompt "$P3"
 prog recover --run "$RUN"
 PKT="$OUT"
 LIMIT_ID="$(pyget "$PKT" '[l["id"] for r in d["decisions"] if r["decision_id"] == "d-big" for l in r["limits"]][0]')"

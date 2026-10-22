@@ -27,7 +27,6 @@ session_registry = load_lib_module("session_registry")
 driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
-programme_terms = load_lib_module("programme_terms")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
@@ -437,9 +436,6 @@ def _h_end(host, argv):
             reason, request = END_REASON, _end_request(run, sid, status)
         record = programme_home._read_record(run) or {}
         out = _watcher_ids(record)
-        corrections = programme_terms.end_lines(record.get("programme") or {})
-        if corrections:
-            out["corrections"] = corrections
         out.update(reason=reason, why=opts.get("why"), lease_status=status,
                    request=request and _request_ref(request))
         cites = (request or {}).get("cites")
@@ -453,8 +449,6 @@ def _h_end(host, argv):
         _refuse(host, run, "end", sid, exc)
     _finish(host, run, "programme_ended", sid, out, cites=cites, journal=False)
     sys.stdout.write(f"Programme {run} ended.\n")
-    for line in out.get("corrections") or []:
-        sys.stdout.write(f"Applied {line}\n")
     _cleanup_lines(out, run)
     sys.stdout.write(f"Then record each stop: release-resources --run {run} (add --watcher <watcher id> --stopped "
                      f"after each CronDelete or TaskStop), and check-archive --run {run} before archive.\n")

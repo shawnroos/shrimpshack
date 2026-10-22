@@ -35,7 +35,7 @@ either harms users or stalls other work.
 1. Find the code the fix touches, and send the work to the worker that owns that code (`P prompt-item`). The owner already holds the context, and a second worker in the same files makes conflicts.
 2. If two workers touch the same files, name one owner with `P add-item <item> --pane <pane> --session <session>`. The other worker waits for it or stacks on it.
 3. If the owner is in the middle of a merge or a review, add the work to the queue (`P queue --action <name> --item <item>`) instead of prompting now. An interrupted merge leaves a half-reviewed head.
-4. If the finding is a rule rather than a defect (for example, "never claim a result the user did not see"), record it with `P record-instruction` and do not start a fix for it now.
+4. If the finding is a rule rather than a defect (for example, "never claim a result the user did not see"), record it with `P record-ruling` and do not start a fix for it now.
 
 ## 3. Find what it waits for
 

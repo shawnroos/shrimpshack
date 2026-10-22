@@ -644,10 +644,6 @@ def seed(p):
         {"id": "t000002", "area": "release", "value": "Shawn ships releases", "reserved": True,
          "source": "kickoff chat", "set_by": "proposal", "history": []},
     ]
-    a["corrections"] = [{"id": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm",
-                         "previous": None, "prompt_id": "p000009",
-                         "quote": "you pick the tool, key [redacted]", "pm_reading": "PM picks tools",
-                         "choices_before": 3, "undone": None}]
     p["decisions"] = [
         {"id": "d000001", "at": "2026-10-02T00:00:00Z", "kind": "technical_approach", "by": "pm",
          "item": "programme", "term": "t000001", "silent": False, "why": "unit tests cover the parser"},
@@ -661,10 +657,10 @@ pj.append(run, "project_term_edited", "sess-pm",
           {"term_id": "t000001", "area": "test depth", "value": "unit tests only", "reserved": False,
            "source": "kickoff chat", "accepted": False})
 pj.append(run, "pm_decided", "sess-pm", {"decision_id": "d000001", "term": "t000001"})
-pj.append(run, "term_corrected", "sess-pm",
-          {"correction": "c000001", "kind": "tool_choice", "anchor": "d000003", "to": "pm", "previous": None,
-           "pm_reading": "PM picks tools", "prompt_id": "p000009",
-           "quote": "you pick the tool, key [redacted]"}, cites=["p000009"])
+pj.append(run, "project_term_amended", "sess-pm",
+          {"term_id": "t000001", "area": "test depth", "value": "unit tests only", "previous": "none",
+           "prompt_id": "p000009", "quote": "test depth: unit tests only, key [redacted]", "accepted": True},
+          cites=["p000009"])
 EOF
 
 snapshot() { find "$1" -type f -exec shasum {} + 2>/dev/null | sort; }
@@ -695,8 +691,8 @@ has "$(printf '  no term\n    d000003 tool_choice by pm: picked ripgrep')" "$TER
 it "a term's decisions follow its heading"
 has "$(printf '  t000001 test depth: unit tests only\n    d000001 technical_approach by pm: unit tests cover the parser')" "$TERMS_OUT"
 
-it "the correction shows with its source and redacted quote"
-has "term_corrected c000001: tool_choice now decided by pm (was the contract default) · source typed prompt p000009 · Shawn: \"you pick the tool, key [redacted]\"" "$TERMS_OUT"
+it "an amendment shows with its source and redacted quote"
+has "project_term_amended t000001: test depth: none -> unit tests only · source typed prompt p000009 · Shawn: \"test depth: unit tests only, key [redacted]\"" "$TERMS_OUT"
 
 it "the secret in the quote never reaches the page"
 lacks "sk-abcdefghijklmnopqrstuvwx" "$TERMS_OUT$TERMS_JSON"
@@ -719,7 +715,7 @@ EOF
 )"
 
 it "status --terms --json carries the change rows"
-check "term_corrected:p000009|project_term_edited:None" "$("$PY" -c '
+check "project_term_amended:p000009|project_term_edited:None" "$("$PY" -c '
 import json,sys
 t=json.loads(sys.argv[1])["terms"]
 print("|".join(c["kind"] + ":" + str(c["prompt_id"]) for c in t["changes"]))' "$TERMS_JSON" 2>&1)"

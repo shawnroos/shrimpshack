@@ -100,6 +100,16 @@ prog() {
 
 terms() { field 'prog["agreement"].get("project_terms")'; }
 term_id() { field "[t['id'] for t in prog['agreement']['project_terms'] if t['area'] == '$1'][0]" | tr -d '"'; }
+# Reserved terms can no longer be written; an old record carries them.
+seed_reserved() {
+  run_py "$RUN" "$1" "$2" "$3" <<'EOF' >/dev/null
+def seed(rec):
+    rec["programme"]["agreement"].setdefault("project_terms", []).append(
+        {"id": args[1], "area": args[2], "value": args[3], "source": "an older plugin", "set_by": "proposal",
+         "at": "2026-10-01T00:00:00Z", "reserved": True, "history": []})
+core._with_locked_run_record(ph.home_path(args[0]), args[0], seed)
+EOF
+}
 snapshot() { field 'prog["agreement"]'; }
 tree_hash() {
   "$PY" - "$AUTO_ROOT/protocol" "$CLAUDE_AUTO_PERSONAL_PROTOCOL" "${WORK}/settings.json" <<'EOF'
@@ -143,10 +153,11 @@ has '"area": "crop defaults"' "$(journal_last agreement_proposed)"
 it "proposing does not stamp the contract"
 check null "$(field 'prog["agreement"].get("contract_version")')"
 
-it "a reserved term marks an area Shawn keeps for himself"
+it "propose-agreement no longer takes --reserved-term: who decides an area is a Ruling"
 prog propose-agreement --reserved-term "pricing copy=Shawn writes every price string" --source "Shawn's note in the plan"
-check 0 "$CODE"
-check '[false, true]' "$(field '[t["reserved"] for t in prog["agreement"]["project_terms"]]')"
+check 2 "$CODE"
+check '[false]' "$(field '[t["reserved"] for t in prog["agreement"]["project_terms"]]')"
+seed_reserved tc0ffee "pricing copy" "Shawn writes every price string"
 
 it "a tool preference is a plain project term"
 prog propose-agreement --project-term "code review=use ce-code-review" --source "installed skills"
@@ -184,16 +195,13 @@ done
 it "the protected refusals wrote nothing"
 check "$BEFORE" "$(snapshot)"
 it "the protected refusals journaled nothing"
-check 3 "$(journal_count agreement_proposed)"
+check 2 "$(journal_count agreement_proposed)"
 
 it "a protected escalation in an unreserved term's text refuses"
 prog propose-agreement --project-term "testing=the PM deploys to production" --source x
 check "1 protected" "$CODE $(printf '%s' "$OUT" | grep -o 'protected' | head -1)"
 it "the text refusal wrote nothing"
 check "$BEFORE" "$(snapshot)"
-it "the same text reserved for Shawn is accepted"
-prog propose-agreement --reserved-term "testing=the PM deploys to production" --source x
-check 0 "$CODE"
 
 it "an area that only contains prod inside another word is not protected"
 prog propose-agreement --project-term "product copy=PM writes it" --source "brand doc"
@@ -203,9 +211,7 @@ it "merge at the gate is not a protected area"
 prog propose-agreement --project-term "merge at gate=PM merges when the gate is green" --source "plugin default"
 check 0 "$CODE"
 
-it "a protected area reserved for Shawn is accepted"
-prog propose-agreement --reserved-term "deploys=Shawn deploys" --source "Shawn's standing rule"
-check 0 "$CODE"
+seed_reserved td3910y deploys "Shawn deploys"
 
 CROP="$(term_id 'crop defaults')"
 DEPLOYS="$(term_id deploys)"
@@ -223,11 +229,15 @@ it "before acceptance an edit may change the source"
 prog edit-project-term "$CROP" "PM picks the crop default from the brand kit" --source "brand kit doc"
 check '"brand kit doc"' "$(field "[t['source'] for t in prog['agreement']['project_terms'] if t['id'] == '$CROP'][0]")"
 
-it "an edit that unreserves a protected area refuses"
+it "edit-project-term no longer takes --unreserved"
 BEFORE="$(snapshot)"
 prog edit-project-term "$DEPLOYS" "PM decides" --unreserved
+check 2 "$CODE"
+check "$BEFORE" "$(snapshot)"
+it "before acceptance edit-project-term refuses an old reserved term, which reads as a Ruling"
+prog edit-project-term "$DEPLOYS" "Shawn deploys on Mondays"
 check 1 "$CODE"
-has "protected" "$OUT"
+has "record it again as a Ruling with a kind" "$OUT"
 check "$BEFORE" "$(snapshot)"
 
 it "an edit that puts a protected escalation into an unreserved term's text refuses"
@@ -239,7 +249,7 @@ it "edit-project-term on an unknown id refuses"
 prog edit-project-term t000000 "anything"
 check 1 "$CODE"
 has "no project term" "$OUT"
-it "edit-project-term with --reserved and --unreserved together refuses"
+it "edit-project-term no longer takes --reserved"
 prog edit-project-term "$CROP" "x" --reserved --unreserved
 check 2 "$CODE"
 it "edit-project-term with an empty text refuses"
@@ -251,10 +261,10 @@ check 2 "$CODE"
 it "the refused edits changed nothing"
 check "$BEFORE" "$(snapshot)"
 
-it "before acceptance an edit may reserve an unprotected area"
+it "before acceptance an edit cannot reserve an area"
 prog edit-project-term "$(term_id 'code review')" "Shawn picks the reviewer" --reserved
-check 0 "$CODE"
-check true "$(field "[t['reserved'] for t in prog['agreement']['project_terms'] if t['area'] == 'code review'][0]")"
+check 2 "$CODE"
+check false "$(field "[t['reserved'] for t in prog['agreement']['project_terms'] if t['area'] == 'code review'][0]")"
 
 P_STALE="$(prompt typed 'yes, I accept the agreement')"
 prog edit-project-term "$CROP" "PM picks the crop default from the brand kit, smallest first"
@@ -286,7 +296,7 @@ check '1' "$(field 'prog["agreement"]["contract_version"]')"
 it "agreement_accepted carries the contract version"
 has '"contract_version": 1' "$(journal_last agreement_accepted)"
 it "acceptance keeps the project terms"
-check 7 "$(field 'len(prog["agreement"]["project_terms"])')"
+check 6 "$(field 'len(prog["agreement"]["project_terms"])')"
 
 ACCEPTED="$(snapshot)"
 it "after acceptance an edit without --prompt refuses"
@@ -313,11 +323,11 @@ check 1 "$CODE"
 it "after acceptance a change of reservation refuses"
 P_RES="$(prompt typed 'crop defaults: Shawn picks the crop')"
 prog edit-project-term "$CROP" "Shawn picks the crop" --reserved --prompt "$P_RES"
-check 1 "$CODE"
+check 2 "$CODE"
 it "after acceptance an unprotected area cannot be unreserved either"
 P_UNRES="$(prompt typed 'pricing copy: PM writes them')"
 prog edit-project-term "$(term_id 'pricing copy')" "PM writes them" --unreserved --prompt "$P_UNRES"
-check 1 "$CODE"
+check 2 "$CODE"
 it "after acceptance the refusals wrote nothing"
 check "$ACCEPTED" "$(snapshot)"
 it "after acceptance the refusals journaled nothing"
@@ -348,10 +358,10 @@ prog edit-project-term "$CROP" "PM picks it again" --prompt "$P_AMEND2"
 check '["PM picks the crop default from the brand kit, smallest first", "Shawn picks the crop"]' \
   "$(field "[h['value'] for t in prog['agreement']['project_terms'] if t['id'] == '$CROP' for h in t['history']]")"
 
-it "after acceptance the reserved deploys term keeps its reservation through a named edit"
+it "after acceptance a named edit of the old reserved deploys term refuses and changes nothing"
 P_DEP="$(prompt typed 'deploys: Shawn deploys on Fridays')"
 prog edit-project-term "$DEPLOYS" "Shawn deploys on Fridays" --prompt "$P_DEP"
-check "0 true" "$CODE $(field "[t['reserved'] for t in prog['agreement']['project_terms'] if t['id'] == '$DEPLOYS'][0]")"
+check '1 ["Shawn deploys", true]' "$CODE $(field "[[t['value'], t['reserved']] for t in prog['agreement']['project_terms'] if t['id'] == '$DEPLOYS'][0]")"
 
 it "propose-agreement still refuses once the agreement is accepted"
 prog propose-agreement --project-term "naming=kebab case" --source x
@@ -369,8 +379,11 @@ has "operating contract v1: when the terms are silent the PM decides and records
 it "the operating contract lists each project term with its id"
 has "project term ${CROP} crop defaults: PM picks it again" "$RULES"
 it "the operating contract lists reserved areas as Shawn's"
-has "reserved for Shawn ${DEPLOYS} deploys: Shawn deploys on Fridays" "$RULES"
+has "reserved for Shawn ${DEPLOYS} deploys: Shawn deploys" "$RULES"
 has "pricing copy: Shawn writes every price string" "$RULES"
+it "the rules view asks Shawn to record each old reserved area again as a Ruling with a kind"
+has "legacy restrict td3910y deploys has no decision kind: \"Shawn deploys\"; ask Shawn to record it again as a Ruling with a kind" "$RULES"
+has "legacy restrict tc0ffee pricing copy has no decision kind" "$RULES"
 it "the operating contract lists R11's escalation list"
 has "bring Shawn only decisions that: change the outcome or acceptance; reopen a settled human decision; touch a reserved area; exceed a risk or cost limit; need a permission that was refused" "$RULES"
 it "the operating contract lists every protected escalation as overriding any project term"
@@ -403,15 +416,15 @@ it "on an unaccepted programme no write verb but accept-agreement writes the sta
 step propose-agreement --project-term "naming=kebab case files" --source "repo files" --term cadence=fixed
 step edit-project-term "$(term_id naming)" "kebab case for every file"
 step amend-term stop_rule never_stop --prompt "$(prompt typed 'stop rule never_stop')"
-step record-instruction --prompt "$(prompt typed 'keep the PR small')"
+step record-ruling r-small --kind technical_approach --effect decided --scope "keep the PR small" \
+  --prompt "$(prompt typed 'r-small: keep the PR small')"
 step add-item linear:AI-1 --title "Crop" --kind fix_only
 step log-decision linear:AI-1 --kind technical_approach --silent --why "smaller diff"
 step rules
 check "0000000 false" "$CODES $(field '"contract_version" in prog["agreement"]')"
 
 RUN="$(new_run w6)"
-prog propose-agreement --project-term "crop defaults=PM picks the crop default" \
-  --reserved-term "pricing copy=Shawn writes every price string" --source "repo README" --run "$RUN"
+prog propose-agreement --project-term "crop defaults=PM picks the crop default" --source "repo README" --run "$RUN"
 prog accept-agreement --prompt "$(prompt typed 'yes, I accept the agreement')" --run "$RUN"
 run_py "$RUN" <<'EOF' >/dev/null
 def unstamp(rec):

@@ -73,10 +73,8 @@ from this session's lease.
    | Shawn's answer | Verb |
    | --- | --- |
    | Ship or decline a handed item | `P answer-handed <item> --choice ship\|decline --prompt <id>` (ship also needs `--kind <change-kind>`) |
-   | A standing instruction ("always...", "until...") | `P record-instruction --prompt <id> [--applies-to <item>] [--until <text>]` |
-   | Withdraw an instruction | `P close-instruction <instruction-id> --as withdrawn --prompt <id>` |
-   | A message that starts "Instruction for <item title>:" | `P record-instruction --prompt <id> --applies-to <item>` |
-   | A message that starts "Withdraw instruction" and quotes it | `P close-instruction <instruction-id> --as withdrawn --prompt <id>` |
+   | A standing order or decision ("always...", "until...") | `P record-ruling <id> --effect decided\|grant\|restrict --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>] --prompt <id>` |
+   | Withdraw a Ruling | `P close-ruling <ruling-id> --as withdrawn --prompt <id>` |
    | Accept a proposed term change | `P amend-term <key> <proposed value> --prompt <id>` (add `--seconds <n>` for a fixed cadence) |
    | Add or turn off a tool of record | `P amend-term tools_of_record <list> --prompt <id>`, where the list holds the tools that stay on |
    | Adopt a proposed rule | `P adopt-rule <rule-id> --prompt <id>` (add `--widening` only when he approved the wider autonomy) |
@@ -87,11 +85,8 @@ from this session's lease.
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
    | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
-   | He corrects who decides a kind of choice ("that didn't need me") | `P correct-term --prompt <id> --replies-to <ask-or-decision-id> --to pm\|worker\|shawn --reading "<your reading>"`, then see below |
-   | He corrects a preferred tool or what acceptance means, in passing | `P record-instruction --prompt <id>` |
+   | He corrects who decides a kind of choice ("that didn't need me") | `P record-ruling <id> --effect grant\|restrict --scope <text> --replies-to <ask-or-decision-id> --prompt <id>`, then see below |
    | He names a project term and its new text | `P edit-project-term <term-id> "<new text>" --prompt <id>` (the term ids are in `P status --terms`) |
-   | Undo a correction | `P undo-correction <correction-id> --prompt <id>` |
-   | Apply a correction to all projects | `P promote-correction <correction-id> --prompt <id>` (only when his message says "all projects" with no negation before it) |
    | Accept a pending decision or requirement | `P accept-context <decision-or-requirement-id> --prompt <id>` |
    | Lift a safety pause | `P lift-pause <pause-id> --prompt <id>` |
    | Settle an uncertain action after end | `P dispose-action (--attempt <id>\|--resource <id>) --as abandoned_unknown\|accepted_unknown --prompt <id>` |
@@ -99,16 +94,10 @@ from this session's lease.
    A correction replies to an ask or a decision you logged: `--replies-to`
    takes the ask id from the handed item (`ask_id` in `P status --json`) or
    the decision-log id from `P log-decision`. The verb takes
-   the decision kind from it. Show Shawn the one-line notice it prints. When it
-   moves a handed item back to open, decide it under the new term:
-   `P log-decision <item> --kind <the same kind> --term <correction-id> --why "<why>"`.
+   the decision kind and the item from it. Show Shawn the one-line notice it
+   prints. When a grant moves a handed item back to open, decide it:
+   `P log-decision <item> --kind <the same kind> --why "<why>"`.
    A correction changes who decides only.
-
-   While corrections are switched off, `correct-term`, `undo-correction` and
-   `promote-correction` refuse with "corrections are not on yet" and write
-   nothing. On that refusal, record his words as a standing instruction
-   (`P record-instruction --prompt <id>`), and tell Shawn in one line:
-   "Corrections are not on yet, so I recorded this as a standing instruction."
 
    The cited message must name what it approves, or the verb refuses it and
    lists the missing words: the item id or key (`AI-753`) for the item rows, the
@@ -122,8 +111,8 @@ from this session's lease.
    needs the word "widen" in his message too. When his message does not name the
    target, do not run the verb: ask him to confirm in words that name it, for
    example "adopt merge_around_gate at act, widen it", and cite that reply.
-   An answer that fits no row is an instruction: record it. A scope he sets is a
-   decision record (`P record-decision`), what must be true for an item to count is a
+   An answer that fits no row is a Ruling: record it. A scope he sets is a
+   decided Ruling (`P record-ruling --effect decided`), what must be true for an item to count is a
    requirement (`P define-requirement`), and an item tied to a decision is
    `P assign-item <item> --decision-id <id>`. A decision or requirement recorded
    without his typed prompt waits for `accept-context`. `P describe` lists every verb with its arguments

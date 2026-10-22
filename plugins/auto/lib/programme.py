@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Programme agreement, instruction and rule verbs.
+"""Programme agreement and rule verbs.
 
 Every write verb runs in the programme's driving session, refuses while the compact
 flag is set, and journals. Approval verbs cite a typed prompt from the journal and
@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,7 +36,6 @@ _Verb = run_record._Verb
 PROG = "programme.py"
 RULES_TAG = "auto-rules"
 SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep."
-INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
 APPROVAL_KINDS = ("rule_adopted",)
 _OPERATION = {"id": None}
@@ -157,10 +155,11 @@ def active_instructions(programme) -> list:
     for entry in programme.get("instructions") or []:
         if entry.get("state") != "active":
             continue
-        target = entry.get("applies_to") or "programme"
+        # merge-item leaves an instruction's target as written; without this an old id loses its waiver after a merge.
+        target = programme_rulings.pc._canonical(programme.get("items") or {}, entry.get("applies_to") or "programme")
         if target != "programme" and not _item_open(programme, target):
             continue
-        out.append({k: entry.get(k) for k in ("id", "quote", "applies_to", "until", "at", "prompt_id")})
+        out.append(dict({k: entry.get(k) for k in ("id", "quote", "until", "at", "prompt_id")}, applies_to=target))
     return out
 
 
@@ -201,9 +200,9 @@ def rules_in_force(record, journals=None, protocol=None) -> dict:
         "instructions": active_instructions(programme),
         "permission_proposals": programme_permission.in_force(programme),
     }
-    corrections = programme_terms.active_corrections(programme)
-    if corrections:
-        out["corrections"] = corrections
+    legacy = programme_rulings.legacy_restricts(programme)
+    if legacy:
+        out["legacy_restricts"] = legacy
     if contract:
         out["operating_contract"] = contract
     return out
@@ -374,7 +373,7 @@ def _check_value(term, value, extra):
     if value not in (term.get("options") or []):
         raise ProgrammeError(
             f"{value!r} is not an option of {term.get('key')!r} (options: {term.get('options')}); "
-            "wording that fits no option is an instruction: use `record-instruction`"
+            "wording that fits no option is a Ruling: use `record-ruling`"
         )
     if value == "until_time":
         if run_record_core.parse_iso(extra.get("until")) is None:
@@ -456,7 +455,7 @@ def _h_rules(argv):
 
 def _h_propose_agreement(argv):
     _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source"),
-                     multi=("term", "project-term", "reserved-term"))
+                     multi=("term", "project-term"))
     host = sys.modules[__name__]
     parsed, source = programme_terms.parse_specs(host, opts)
 
@@ -520,46 +519,6 @@ def _h_amend_term(argv):
 
     return _write(opts, change, "term_amended", prompt_id=opts.get("prompt"), needs_prompt=True,
                   verb="amend-term", target=key)
-
-
-def _h_record_instruction(argv):
-    _, opts = _parse(argv, values=("run", "prompt", "applies-to", "until", "why"))
-    target = opts.get("applies-to") or "programme"
-    if target != "programme" and not programme_home._ITEM_ID_RE.match(target):
-        raise ValueError(f"--applies-to must be 'programme' or an item id source:key, got {target!r}")
-
-    def change(programme, prompt, rec):
-        entry = {"id": "i" + secrets.token_hex(3), "state": "active", "at": _now(),
-                 "applies_to": target, "until": opts.get("until"), "why": opts.get("why"),
-                 "prompt_id": prompt["prompt_id"], "quote": prompt["quote"], "closed": None}
-        programme["instructions"].append(entry)
-        return {"instruction": entry["id"], "applies_to": target, "until": entry["until"]}
-
-    return _write(opts, change, "instruction_recorded", prompt_id=opts.get("prompt"), needs_prompt=True,
-                  verb="record-instruction", target="instruction")
-
-
-def _h_close_instruction(argv):
-    positional, opts = _parse(argv, values=("run", "prompt", "as", "why", "origin"))
-    if len(positional) != 1 or opts.get("as") not in INSTRUCTION_ENDINGS:
-        raise ValueError("usage: close-instruction <id> --as fulfilled|withdrawn")
-    withdrawn = opts["as"] == "withdrawn"
-    origin = programme_proposals.origin_of(opts)
-    if not withdrawn and not opts.get("why"):
-        raise ValueError("close-instruction --as fulfilled needs --why")
-
-    def change(programme, prompt, rec):
-        hits = [e for e in programme["instructions"] if e.get("id") == positional[0]]
-        if not hits or hits[0].get("state") != "active":
-            raise ProgrammeError(f"no active instruction {positional[0]!r}")
-        hits[0]["state"] = opts["as"]
-        hits[0]["closed"] = {"at": _now(), "why": opts.get("why"),
-                             "prompt_id": prompt and prompt["prompt_id"]}
-        return {"instruction": positional[0], "as": opts["as"], "why": opts.get("why"),
-                "origin": origin}
-
-    return _write(opts, change, "instruction_closed", prompt_id=opts.get("prompt"),
-                  needs_prompt=withdrawn, beat=withdrawn, verb="close-instruction", target=positional[0])
 
 
 def _h_propose_rule(argv):
@@ -731,11 +690,11 @@ _VERBS = {
     "propose-agreement": _Verb(
         _h_propose_agreement,
         "[--run <id>] [--term <key>=<value>]... [--project-term <area>=<text>]... "
-        "[--reserved-term <area>=<text>]... [--source <evidence>] [--why <text>] [--until <iso>] "
+        "[--source <evidence>] [--why <text>] [--until <iso>] "
         "[--seconds <n>]",
         rejects="an accepted agreement; a value outside the term's options; a project term without "
         "--source, without <area>=<text>, for an area that already has one, or whose area or text names a "
-        "protected escalation without being reserved for Shawn.",
+        "protected escalation.",
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,
@@ -746,20 +705,10 @@ _VERBS = {
     "amend-term": _Verb(
         _h_amend_term,
         "<key> <value> --prompt <id> [--why <text>] [--until <iso>] [--seconds <n>] [--run <id>]",
-        rejects="a value outside the term's options (use record-instruction); a prompt that is "
+        rejects="a value outside the term's options (use record-ruling); a prompt that is "
         "not typed or does not name the term key and the value; until_time without --until. "
         "The tools_of_record term takes a comma list of its tools, or none; its prompt must name each tool "
         "it turns on or off. Settles a pending proposal: accepted when the value matches it, else superseded.",
-    ),
-    "record-instruction": _Verb(
-        _h_record_instruction,
-        "--prompt <id> [--applies-to programme|<item-id>] [--until <text>] [--why <text>] [--run <id>]",
-        rejects="a prompt that is unknown or not typed.",
-    ),
-    "close-instruction": _Verb(
-        _h_close_instruction,
-        "<id> --as fulfilled|withdrawn [--prompt <id>] [--why <text>] [--origin pm|ui] [--run <id>]",
-        rejects="withdrawn without a typed --prompt; fulfilled without --why; an inactive id.",
     ),
     "propose-rule": _Verb(
         _h_propose_rule,

@@ -113,7 +113,7 @@ session.
   the write. `claim` changes only the claims, so a new claim shows in the view at
   the next write or `status`. With `--terms` (or the bare word terms, as
   `/auto:programme-status terms` sends it) it prints only the terms page: project
-  terms and active corrections, each decision-log entry under the term it used
+  terms, each decision-log entry under the term it used
   (silent ones under "no term"), and the 20 most recent term changes with their
   source and redacted quote; `--json` then emits `{run, generated_at, terms, rows}`.
   Viewing never counts as approval.
@@ -172,21 +172,22 @@ session.
 - **Re-read requests**: `request-reread` asks the PM to re-read the rules in force
   at its next sweep. It needs no prompt, leaves the compact flag as it is, never
   counts as a beat, and takes --origin ui as a display label.
-- **Project terms**: `propose-agreement --project-term "<area>=<text>"` (or
-  `--reserved-term` for an area Shawn keeps for himself) adds a free-text project
-  term with `--source <evidence>`; a term without `--source` is refused, and so is
-  a second term for an area that has one. Project terms sit beside the fixed terms,
-  never inside them. A term whose area names a protected escalation (production
-  deploys, releases, spend over cap, merge around the gate, refused permissions,
-  risk or cost limits, settled human decisions) is refused unless it is reserved:
-  no project term gives one of these to the PM or a worker. The check reads the
-  area only, and refuses any area that contains a protected word. Before
+- **Project terms**: `propose-agreement --project-term "<area>=<text>"` adds a
+  free-text project term, such as a preferred tool, with `--source <evidence>`; a
+  term without `--source` is refused, and so is a second term for an area that has
+  one. Project terms sit beside the fixed terms, never inside them. Who decides an
+  area is a Ruling, not a project term. A term whose area or text names a
+  protected escalation (production deploys, releases, spend over cap, merge around
+  the gate, refused permissions, risk or cost limits, settled human decisions) is
+  refused: no project term gives one of these to the PM or a worker. Before
   acceptance, `edit-project-term <id> <text>` replaces the text (and with
-  `--source`, `--reserved` or `--unreserved`, the source or reservation) with no
-  history, and journals `project_term_edited`. After acceptance it needs a typed
-  `--prompt` that names the area and the new text, never changes the reservation,
-  keeps the previous value in the term's history list, and journals
-  `project_term_amended`. A project term is text in the run record: it never
+  `--source`, the source) with no history, and journals `project_term_edited`.
+  After acceptance it needs a typed `--prompt` that names the area and the new
+  text, keeps the previous value in the term's history list, and journals
+  `project_term_amended`. A reserved term from an older record reads as a
+  kind-less legacy restrict Ruling carrying its area: `edit-project-term` refuses
+  it, the gate never reads it, and the rules block asks Shawn to record it again
+  as a Ruling with a kind. A project term is text in the run record: it never
   changes a permission setting or a protocol layer file, and a preferred tool it
   names is not a permission.
 - **Contract stamp**: `accept-agreement` writes `contract_version` beside the
@@ -195,56 +196,22 @@ session.
   journal holds before the last `agreement_proposed` or `project_term_edited`
   line, or before the last `remit_set` line that pre-filled a carried-over term,
   so Shawn accepts the terms he last saw.
-- **Corrections** (switched off): `correct-term --prompt <id> --replies-to
-  <ask-or-choice-id> --to pm|worker|shawn --reading <text>` and
-  `undo-correction <correction-id> --prompt <id>`. Both refuse with "corrections
-  are not on yet" and write nothing while the code constant `CORRECTIONS_ON` in
-  `lib/programme_terms.py` is false. No environment variable turns it on, the
-  test-harness hatches included. With the switch on, `correct-term` changes who
-  decides one kind of choice. It takes the kind from the anchor (a handed ask's
-  `handed.id` or a recorded choice's id); the PM never names it. It needs a typed
-  prompt from the driving session, and it refuses: an unknown anchor; an anchor
-  whose journal line comes after the prompt's line; a kind outside the closed
-  correctable list (technical_approach, work_sequencing, worker_coordination,
-  tool_choice, optimisation_depth); a prompt that already drove a correction or an
-  undo; and a kind the new owner already decides. It records the quote from the
-  journal, the PM's reading labelled as the PM's, the anchor, the kind, the new
-  owner and the previous owner, and journals `term_corrected`. Its output carries
-  one notice line with the quote, the reading and the change. When the anchor is
-  a handed ask and the new owner is the PM or a worker, the same write moves the
-  item back to open, so `log-decision --term <correction-id>` works on it
-  without `answer-handed`. `undo-correction` needs a typed prompt whose journal
-  line comes after the correction's prompt. It reverts only the latest active
-  correction of that kind, and refuses naming the later correction otherwise. It
-  journals `correction_undone`, and its notice lists the choices recorded under
-  the corrected kind, which the undo does not reverse. The rules block lists each
-  active correction.
-- **Carry-over** (switched off with corrections): `keep-corrections --prompt <id>
-  <correction-id>...` stores each named active correction for the next programme on
-  the same project, under every remit repo's key (its GitHub owner/name, or its
-  path when it has none); it refuses a remit with no repo. `promote-correction
-  --prompt <id> <correction-id>` stores one correction under the key "all", for
-  every project. Its prompt must name all projects with no negation word anywhere
-  before the name, must come after the correction's own prompt in the journal, and
-  must not have driven another promotion. Both need a typed prompt from the
-  driving session, write each entry with an adoption block like the personal
-  protocol's, and journal one `rule_adopted` approval record per entry (entry
-  carryover or promotion, target `carryover:<key>:<entry id>`). `keep-corrections`
-  then journals `corrections_kept` and `promote-correction` journals
-  `correction_promoted`. The store is one JSON file per machine beside the personal
-  protocol (`CLAUDE_AUTO_CARRYOVER_STORE` overrides the path). When `set-remit`
-  stores repos on an agreement that is not yet accepted, it adds a project term for
-  each verified entry under each remit repo's key and under "all", one per area,
-  with the repo key ahead of "all", each marked with its origin key. It drops an
-  entry whose adoption does not verify on this machine and prints a notice naming
-  the entry. An accepted programme never reads the store, so a promotion never
-  changes a running programme. With the switch on, `end` prints each active
-  correction it applied, so the PM can offer them for keeping. Keep them before
-  ending: once `end` releases the lease, the programme takes no more prompts.
-- **Instructions**: `record-instruction` records the cited words, what they apply
-  to (the programme or one item), and until when; `close-instruction` marks one
-  fulfilled (needs `--why`) or withdrawn (needs `--prompt`). Closing as fulfilled
-  never counts as a beat, and takes --origin ui as a display label.
+- **Carry-over store**: one JSON file per machine beside the personal protocol
+  (`CLAUDE_AUTO_CARRYOVER_STORE` overrides the path) keeps entries for the next
+  programme on a project, under each remit repo's key (its GitHub owner/name, or
+  its path when it has none) or under "all". Each entry carries an adoption block
+  like the personal protocol's and one `rule_adopted` approval record. When
+  `set-remit` stores repos on an agreement that is not yet accepted, it adds a
+  project term for each verified entry under each remit repo's key and under
+  "all", one per area, with the repo key ahead of "all", each marked with its
+  origin key. It drops an entry whose adoption does not verify on this machine
+  and prints a notice naming the entry. An accepted programme never reads the
+  store.
+- **Old instructions**: a programme record written before Rulings keeps its
+  instructions, and each reads as a kind-less legacy Ruling with the effect
+  decided, under the instruction's id. A Ruling already stored under that id wins.
+  The gate never reads a kind-less Ruling, `record-ruling` refuses to revise one,
+  and `close-ruling` closes one with a typed prompt naming it.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
   proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
   an adoption record (machine, run, prompt id, redacted quote, prompt hash, content
@@ -259,19 +226,16 @@ session.
   gives an item a new id and keeps the old one as an alias; when the new id
   already exists, the two items merge. `merge-item` folds one item into another.
   A merge combines sessions, aliases, linked task runs and evidence (confirmed
-  evidence wins), and moves queue, watcher, instruction and proposed-rule
-  references to the surviving id. `drop-item` needs `--reason`, and a typed
+  evidence wins), and moves queue, watcher and proposed-rule
+  references to the surviving id; a Ruling or old instruction naming the old id
+  resolves to the surviving item when it is read. `drop-item` needs `--reason`, and a typed
   `--prompt` when the item is issue-backed (its source is not herdr) and has an
   open deliverable. `reopen-item` reopens a dropped item and always needs a
   typed `--prompt`. No verb sets an item to done: done is derived from confirmed
   evidence.
-- **Decisions and acceptance**: `record-decision` keeps a decision as numbered
-  revisions (scope, reason, limits, the items or programme it applies to, linked
-  requirements, and where it came from). A typed `--prompt` that names the id
-  accepts a revision; one that adds a target or drops a limit waits for
-  `accept-context`, whose typed prompt names the id and each added target, while
-  the prior revision stays in force. The same content again adds nothing.
-  `define-requirement` links a requirement to item checks (`<item-id>=<deliverable>`,
+- **Decisions and acceptance**: decision records written before Rulings stay in
+  the same store as kind-less revisions; Shawn's decisions are now decided
+  Rulings. `define-requirement` links a requirement to item checks (`<item-id>=<deliverable>`,
   a deliverable the protocol requires of that item). `assign-item` binds an item to
   the decision revision in force, compared by canonical id. `raise-blocker` gates a
   requirement only when it names the requirement, one of its checks, the dependency
@@ -337,8 +301,8 @@ session.
   kinds existed).
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
-  log (`programme.decisions`), which is separate from the decision records
-  `record-decision` keeps under `programme.context`. An entry has an id ("d" + 6
+  log (`programme.decisions`), which is separate from the Rulings kept under
+  `programme.context`. An entry has an id ("d" + 6
   hex), the decision kind, the term it used or silent when no term covered it,
   and why. It journals `pm_decided`. The decision kinds are a closed list in
   `lib/programme_decisions.py`: the plugin autonomy actions plus
@@ -677,8 +641,7 @@ the repo and the check key (for example `verified.lookup`); for `answer-handed`,
 With `--widening`, the text must also contain "widen", "widening" or "widened". A prompt that does not
 name them is refused, and the refusal lists the missing words.
 For `edit-project-term` after acceptance, the text must contain the term's area and
-its new text. `accept-agreement`, `record-instruction` and `close-instruction --as withdrawn`
-accept any typed prompt, because the quote is what they record; `accept-agreement`
+its new text. `accept-agreement` accepts any typed prompt, because the quote is what it records; `accept-agreement`
 also needs the prompt to come after the last proposal or project-term edit.
 
 The action hook guards each driver's pane. In a session that is not the driving

@@ -33,8 +33,7 @@ HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
 HOOK_KINDS = ("blocked_settings_write",)
 TERM_CHANGES_LIMIT = 20
-TERM_CHANGE_KINDS = (programme_terms.EDITED, programme_terms.AMENDED,
-                     programme_terms.CORRECTED, programme_terms.UNDONE)
+TERM_CHANGE_KINDS = (programme_terms.EDITED, programme_terms.AMENDED)
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
@@ -339,11 +338,7 @@ def _rules(block, rules) -> dict:
             "permission_proposals": []}
 
 
-def _change_text(kind, p) -> tuple:
-    if kind == programme_terms.CORRECTED:
-        return p.get("correction"), f"{p.get('kind')} now decided by {p.get('to')} (was {programme_terms.owner_text(p.get('previous'))})"
-    if kind == programme_terms.UNDONE:
-        return p.get("correction"), f"{p.get('kind')} back to {programme_terms.owner_text(p.get('restored'))}"
+def _change_text(p) -> tuple:
     was = f"{p['previous']} -> " if p.get("previous") else ""
     return p.get("term_id"), f"{p.get('area')}: {was}{p.get('value')}"
 
@@ -354,7 +349,7 @@ def _term_changes(journal_entries) -> list:
         if not isinstance(row, dict) or row.get("kind") not in TERM_CHANGE_KINDS:
             continue
         payload = _dict(row.get("payload"))
-        term, text = _change_text(row["kind"], payload)
+        term, text = _change_text(payload)
         prompt_id = payload.get("prompt_id")
         source = payload.get("source") or (f"typed prompt {prompt_id}" if prompt_id else "the PM")
         quote = programme_journal.redact(payload["quote"]) if payload.get("quote") else None
@@ -365,10 +360,7 @@ def _term_changes(journal_entries) -> list:
 
 def _terms(block, journal_entries) -> dict:
     entries = programme_home.project_terms(block)
-    corrections = programme_terms.active_corrections(block)
     labels = {e.get("id"): f"{e.get('area')}: {e.get('value')}" for e in entries}
-    labels.update((c.get("id"), f"correction: {c.get('kind')} decided by {c.get('to')}"
-                   + (" (undone)" if c.get("undone") else "")) for c in programme_terms.corrections(block))
     groups = {}
     for entry in block.get("decisions") or []:
         entry = _dict(entry)
@@ -383,10 +375,6 @@ def _terms(block, journal_entries) -> dict:
         "contract_version": _dict(block.get("agreement")).get(programme_decisions.STAMP_KEY),
         "project_terms": [{k: e.get(k) for k in ("id", "area", "value", "reserved", "source", "set_by")}
                           for e in entries],
-        "corrections": [{"id": c.get("id"), "kind": c.get("kind"), "to": c.get("to"),
-                         "previous": c.get("previous"), "prompt_id": c.get("prompt_id"),
-                         "quote": programme_journal.redact(c.get("quote")), "pm_reading": c.get("pm_reading")}
-                        for c in corrections],
         "by_term": by_term,
         "changes": changes[:TERM_CHANGES_LIMIT],
         "changes_total": len(changes),
@@ -561,7 +549,10 @@ def rules_texts(r) -> list:
     out = rule_texts(r)
     if r.get("operating_contract"):
         out += [(text, "text") for text in programme_terms.contract_lines(r["operating_contract"])]
-    return out + [(text, "text") for text in programme_terms.correction_lines(r.get("corrections") or [])]
+    return out + [(programme_sanitize.clean(
+        f"legacy restrict {_dict(e).get('id')} {_dict(e).get('area')} has no decision kind: "
+        f"\"{_dict(e).get('scope')}\"; ask Shawn to record it again as a Ruling with a kind", cap=0), "warn")
+        for e in r.get("legacy_restricts") or []]
 
 
 def _blocker_text(waiting_on) -> str:
@@ -692,9 +683,7 @@ def terms_rows(terms) -> list:
     out = []
     version = terms.get("contract_version")
     _section(out, "Project terms" + (f" (operating contract v{version})" if version else ""),
-             [_row(_project_term_text(t)) for t in terms["project_terms"]]
-             + [_row(f"  {c['id']} {c['kind']} decided by {c['to']} (Shawn: \"{c['quote']}\"; "
-                     f"PM's reading: \"{c['pm_reading']}\")") for c in terms["corrections"]],
+             [_row(_project_term_text(t)) for t in terms["project_terms"]],
              "no project terms")
     _section(out, "Decisions by term",
              [line for g in terms["by_term"] for line in

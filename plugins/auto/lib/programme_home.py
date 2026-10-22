@@ -341,6 +341,52 @@ def session_ids(item) -> list:
     return [s for s in dict.fromkeys(sids) if isinstance(s, str) and s]
 
 
+def _legacy_revision(entry, legacy, effect, scope, applies_to, until) -> dict:
+    at = entry.get("at")
+    prompt_id = entry.get("prompt_id")
+    closed = entry.get("state") not in (None, "active")
+    out = {"rev": 1, "state": "closed" if closed else "accepted", "at": at, "kind": None, "effect": effect,
+           "legacy": legacy, "scope": scope, "reason": entry.get("why"), "limits": [], "requirements": [],
+           "applies_to": applies_to, "until": until, "quote": entry.get("quote"), "replies_to": None,
+           "baseline": None, "delta": None, "supersedes": None, "superseded_by": None,
+           "source": {"class": "human_input" if prompt_id else "derived", "prompt_id": prompt_id,
+                      "origin_label": "typed" if prompt_id else None, "origin_verified": False},
+           "accepted": {"at": at, "prompt_id": prompt_id, "origin_verified": False}}
+    if closed:
+        ended = entry.get("closed") if isinstance(entry.get("closed"), dict) else {}
+        out["closed"] = {"at": ended.get("at"), "as": entry.get("state"), "why": ended.get("why"),
+                         "prompt_id": ended.get("prompt_id")}
+    return out
+
+
+def _legacy_rulings(block) -> dict:
+    out = {}
+    for entry in block.get("instructions") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+            out[entry["id"]] = _legacy_revision(entry, "instruction", "decided", entry.get("quote"),
+                                                [entry.get("applies_to") or "programme"], entry.get("until"))
+    for entry in project_terms(block):
+        if entry.get("reserved") and isinstance(entry.get("id"), str):
+            revision = _legacy_revision(dict(entry, why=None), "project_term", "restrict", entry.get("value"),
+                                        ["programme"], None)
+            revision["area"] = entry.get("area")
+            out[entry["id"]] = revision
+    return out
+
+
+def _with_legacy_rulings(block) -> None:
+    legacy = _legacy_rulings(block)
+    context = block.get("context")
+    if not legacy or not isinstance(context or {}, dict) or not isinstance((context or {}).get("decisions", {}), dict):
+        return
+    context = dict(context or {})
+    decisions = dict(context.get("decisions") or {})
+    for rid, revision in legacy.items():
+        decisions.setdefault(rid, [revision])
+    context["decisions"] = decisions
+    block["context"] = context
+
+
 def normalize_programme(block: dict) -> dict:
     if not isinstance(block, dict):
         raise ProgrammeHomeError(f"programme block must be a dict: {block!r}")
@@ -371,6 +417,7 @@ def normalize_programme(block: dict) -> dict:
         tracker.setdefault(part, [])
     remit["tracker"] = tracker
     out["remit"] = remit
+    _with_legacy_rulings(out)
     return out
 
 

@@ -171,8 +171,8 @@
 #                          load it back.
 #   programme_proposals  → programme_home, programme_sanitize
 #   programme_rulings    → run_record_core, programme_journal, programme_sanitize,
-#                          programme_decisions, programme_context (never programme_terms:
-#                          programme_terms loads it for the correction anchor checks)
+#                          programme_decisions, programme_context (never programme_terms or
+#                          programme_record: record is the host's)
 #   programme_naming     → programme_home
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
 #                          session_registry, driver_session, programme_sanitize,
@@ -644,9 +644,9 @@ else
   pass
 fi
 
-it "programme_rulings.py loads neither programme_terms nor programme_record (terms loads it; record is the host's)"
+it "programme_rulings.py loads neither programme_terms nor programme_record (record is the host's)"
 if loads_sibling "programme_rulings.py" "programme_terms" || loads_sibling "programme_rulings.py" "programme_record"; then
-  fail "programme_rulings.py must not load programme_terms (cycle) or programme_record (reach it as host.programme_record)"
+  fail "programme_rulings.py must not load programme_terms or programme_record (reach it as host.programme_record)"
 else
   pass
 fi
