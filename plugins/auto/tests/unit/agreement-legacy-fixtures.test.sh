@@ -146,12 +146,12 @@ print(json.dumps([p["rejected"], rule.get("layer"), rule.get("adopted_on"), rule
                   auto.get("level"), auto.get("layer"), auto.get("adopted_on")]))
 PYEOF
 )"
-it "the personal protocol loads with no entry rejected"
-check "[]" "$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])[0]))' "$PERSONAL" 2>&1)"
-it "the adopted rule carrying autonomy verifies on this machine against its journaled prompt"
-check '["personal", null, "act_and_tell"]' "$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])[1:4]))' "$PERSONAL" 2>&1)"
-it "the adopted autonomy entry verifies on this machine against its journaled prompt"
-check '["never", "personal", null]' "$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])[4:7]))' "$PERSONAL" 2>&1)"
+it "the personal protocol rejects only its adopted entry on a protected kind"
+check '[["personal", "prod_deploy", "protected_kind"]]' "$("$PY" -c 'import json,sys; print(json.dumps([[r.get("layer"), r.get("id"), r.get("reason")] for r in json.loads(sys.argv[1])[0]]))' "$PERSONAL" 2>&1)"
+it "the adopted rule carrying legacy autonomy verifies on this machine and the merged rule drops it"
+check '["personal", null, null]' "$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])[1:4]))' "$PERSONAL" 2>&1)"
+it "a protected kind takes its level from the plugin layer, not the adopted personal entry"
+check '["propose", "plugin", null]' "$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])[4:7]))' "$PERSONAL" 2>&1)"
 
 it "no read crashed with a traceback"
 check "" "$CRASHES"
