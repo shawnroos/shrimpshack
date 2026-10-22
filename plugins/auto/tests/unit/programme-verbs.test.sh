@@ -542,8 +542,7 @@ doc["rules"].append(rule)
 doc["autonomy"]["merge_at_gate"] = gate
 '
 prog status
-has "rule laptop-docs: " "$OUT"
-has ", requires merged, adopted on laptop" "$OUT"
+has "rule laptop-docs: requires merged, adopted on laptop" "$OUT"
 has "autonomy merge_at_gate: propose, adopted on laptop" "$OUT"
 lacks "adopted on studio" "$OUT"
 personal_doc 'doc["rules"] = [r for r in doc["rules"] if r["id"] != "laptop-docs"]; del doc["autonomy"]["merge_at_gate"]'
