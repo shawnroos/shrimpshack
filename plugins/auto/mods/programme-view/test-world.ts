@@ -94,6 +94,17 @@ export function contractPart(terms: Record<string, unknown>[] = defaultTerms()) 
         until: null,
         reliant_steps: 1,
       },
+      {
+        id: 'g1',
+        quote: 'pick the test runner yourself',
+        applies_to: ['programme'],
+        scope: 'inherited',
+        effect: 'grant',
+        kind: 'tool_choice',
+        legacy: null,
+        until: null,
+        reliant_steps: 0,
+      },
     ],
   }
 }

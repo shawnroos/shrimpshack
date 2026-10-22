@@ -170,27 +170,38 @@ test('f on a Ruling closes it as fulfilled through close-ruling with the why typ
   const calls = verbs(on)
   const pane = await contractPane($)
   expect(await pane.find({ key: 'act:fulfil' })).toBeUndefined()
-  await personFocus($, 'ruling:i1')
+  await personFocus($, 'ruling:g1')
   await settle()
   await press(pane, 'act:fulfil')
-  await type(pane, 'why:i1', 'closed in PR 12')
+  await type(pane, 'why:g1', 'closed in PR 12')
   expect(calls.map(call => call.argv.slice(1))).toEqual([
-    ['close-ruling', 'i1', '--as', 'fulfilled', '--why', 'closed in PR 12', '--origin', 'ui'],
+    ['close-ruling', 'g1', '--as', 'fulfilled', '--why', 'closed in PR 12', '--origin', 'ui'],
   ])
   expect(await has(pane, 'Ruling closed as fulfilled')).toBe(true)
+})
+
+test('a decided or restrict Ruling offers no close as fulfilled: closing it needs the typed reply', async ($, on) => {
+  world(on, { [LEASE]: lease(), [VIEW]: viewText() })
+  const calls = verbs(on)
+  const pane = await contractPane($)
+  await personFocus($, 'ruling:i1')
+  await settle()
+  expect(await pane.find({ key: 'act:fulfil' })).toBeUndefined()
+  expect(await lineAfter(pane, 'Type this:')).toBe('Withdraw ruling i1 "ask before closing"')
+  expect(calls).toEqual([])
 })
 
 test('while the compact flag is set, close as fulfilled shows the compaction error and keeps the Ruling', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   verbs(on, () => ({ exitCode: 1, stdout: 'Rules in force:\n  cadence: fixed\n', stderr: `${COMPACTED}\n` }))
   const pane = await contractPane($)
-  await personFocus($, 'ruling:i1')
+  await personFocus($, 'ruling:g1')
   await settle()
   await press(pane, 'act:fulfil')
-  await type(pane, 'why:i1', 'done')
+  await type(pane, 'why:g1', 'done')
   expect(await has(pane, 'context was compacted')).toBe(true)
   expect(await has(pane, 'Rules in force')).toBe(false)
-  expect(await has(pane, '"ask before closing"')).toBe(true)
+  expect(await has(pane, '"pick the test runner yourself"')).toBe(true)
 })
 
 test('ticking two tools and adding "sentry" with a description, then p, runs one propose-term call with all three', async ($, on) => {
@@ -262,7 +273,7 @@ test('the action keys are drawn only while the pane is focused, with their hotke
   expect(await hotkey('act:clear')).toBe('x')
   expect(await hotkey('act:note')).toBe('n')
   expect(await hotkey('act:reread')).toBe('e')
-  await personFocus($, 'ruling:i1')
+  await personFocus($, 'ruling:g1')
   await settle()
   expect(await hotkey('act:fulfil')).toBe('f')
 

@@ -37,10 +37,10 @@ test('no action in the pane submits, suggests or fills a prompt', async ($, on) 
     await type(`note:${key}`, 'a note')
   }
   await press('act:reread')
-  await personFocus($, 'ruling:i1')
+  await personFocus($, 'ruling:g1')
   await settle()
   await press('act:fulfil')
-  await type('why:i1', 'done')
+  await type('why:g1', 'done')
 
   expect(calls.length).toBe(11)
   const drawn = await lines(pane)
