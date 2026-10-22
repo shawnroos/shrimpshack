@@ -136,6 +136,7 @@ Removal is refused when any of these is true:
 | It holds ignored files outside dependency and build-cache folders (`node_modules`, `dist`, `build`, `.venv` and similar) | Move or delete them |
 | Its HEAD holds a commit that no branch or remote reaches | Create a branch at its HEAD |
 | The command's own cwd is inside the worktree | `cd` to the main checkout |
+| Another worktree is registered inside it | Remove or move that worktree |
 
 A refused worktree stays `pending`, and `check-archive` names it under the
 `resources` check. Fix the cause and run `release-resources` again. To keep

@@ -556,6 +556,24 @@ prog release-resources --run "$RUN"
 it "ignored dependency and cache folders alone do not block removal"
 check "released no" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no)"
 
+wt_programme w63
+printf '__pycache__/\nnode_modules/\n' >> "${WORK}/repo-w63/.git/info/exclude"
+mkdir -p "${WT}/pkg/lib/__pycache__" "${WT}/packages/a/node_modules/caf\303\251"
+echo c > "${WT}/pkg/lib/__pycache__/m.pyc"; echo d > "${WT}/packages/a/node_modules/caf\303\251/i.js"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "nested and non-ASCII dependency and cache folders do not block removal"
+check "released no" "$(wt_state "$RUN") $([ -e "$WT" ] && echo yes || echo no)"
+
+wt_programme w64
+printf 'dist/\n' >> "${WORK}/repo-w64/.git/info/exclude"
+git -C "$WT" worktree add -q --detach "${WT}/dist/inner"
+echo wip > "${WT}/dist/inner/wip.txt"
+end_typed "$RUN" >/dev/null
+prog release-resources --run "$RUN"
+it "a worktree inside a cache folder still blocks removal"
+check "pending wip" "$(wt_state "$RUN") $(cat "${WT}/dist/inner/wip.txt")"
+
 wt_programme w42
 git -C "$WT" commit -q --allow-empty -m "detached work"
 end_typed "$RUN" >/dev/null

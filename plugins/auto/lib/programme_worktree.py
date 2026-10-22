@@ -164,7 +164,20 @@ REGENERABLE = frozenset({"node_modules", ".DS_Store", "__pycache__", ".pytest_ca
 
 
 def _regenerable(entry) -> bool:
-    return entry.strip().strip("/").split("/")[0] in REGENERABLE
+    return any(part in REGENERABLE for part in entry.strip("/").split("/"))
+
+
+def _entries(porcelain_z) -> list:
+    tokens, out = porcelain_z.split("\0"), []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if len(token) > 3:
+            out.append((token[:2], token[3:]))
+            if token[0] in "RC":
+                i += 1
+        i += 1
+    return out
 
 
 def release(value) -> dict:
@@ -176,14 +189,18 @@ def release(value) -> dict:
     if inside(_cwd(), path):
         return _seen("refused", path, (
             f"this command ran inside {path}; cd {shlex.quote(main)} and run release-resources again"))
-    status = _git(path, "status", "--porcelain", "--untracked-files=all", "--ignored=matching")
+    nested = [p for p in (_listing(main) or {}) if p != _real(path) and inside(p, path)]
+    if nested:
+        return _seen("refused", path, (
+            f"{path} contains another worktree ({nested[0]}); remove or move it first, {later}"))
+    status = _git(path, "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching")
     if not _ok(status):
         return _seen("failed", path, f"{programme_exec.failure(status, 'git status')}; {later}")
-    lines = status["stdout"].splitlines()
-    if any(line[:2] != "!!" for line in lines if line.strip()):
+    entries = _entries(status["stdout"])
+    if any(code != "!!" for code, _ in entries):
         return _seen("refused", path, (
             f"{path} has uncommitted or untracked changes; commit or clean them, {later}"))
-    kept = [line[3:] for line in lines if line[:2] == "!!" and not _regenerable(line[3:])]
+    kept = [name for code, name in entries if not _regenerable(name)]
     if kept:
         return _seen("refused", path, (
             f"{path} holds ignored files that removing it would delete ({', '.join(kept[:5])}); "
