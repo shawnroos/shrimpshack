@@ -40,6 +40,9 @@ DECISION_KINDS = AUTONOMY_ACTIONS + (
     "technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
     "optimisation_depth", "product_scope", "acceptance", "denied_operation",
 )
+PROTECTED_KINDS = ("prod_deploy", "full_release", "spend_over_cap", "merge_around_gate", DENIED_KIND)
+# Narrowest first. Duplicates programme_protocol.AUTONOMY_WIDTH: this module stays a leaf.
+LEVEL_ORDER = ("never", "propose", "act_and_tell", "act")
 
 
 class DecisionError(Exception):
@@ -87,6 +90,55 @@ def add_decision(programme, *, kind, by, item, why, term=None, silent=False, **e
 def shawn_decision(programme, *, kind, item, prompt, **extra) -> dict:
     return add_decision(programme, kind=kind, by="shawn", item=item, why=prompt["quote"],
                         prompt_id=prompt["prompt_id"], **extra)
+
+
+def _protected(kind) -> bool:
+    return kind in PROTECTED_KINDS
+
+
+def _in_force(ruling, now) -> bool:
+    until = ruling.get("until")
+    if not until:
+        return True
+    end = run_record_core.parse_iso(until)
+    if end is None:
+        raise DecisionError(f"Ruling {ruling.get('id')!r} has an end date the gate cannot read: {until!r}")
+    return now < end
+
+
+def _restricting(rulings) -> list:
+    return [r for r in rulings if r.get("effect") == "restrict"]
+
+
+def _verdict(level, reason, conflict=False) -> dict:
+    decider = "shawn" if level in SHAWN_LEVELS else "pm"
+    return {"decider": decider, "level": level, "reason": reason, "conflict": conflict}
+
+
+def who_decides(kind, item, *, level, rulings, now, accepted) -> dict:
+    check_kind(kind)
+    if _protected(kind):
+        return _verdict("never", "protected")
+    if kind in PRODUCT_DECISION_KINDS and not accepted:
+        return _verdict("propose", "unaccepted")
+    when = run_record_core.parse_iso(now)
+    applying = [r for r in rulings if r.get("kind") == kind and item in (r.get("items") or ())
+                and _in_force(r, when)]
+    if _restricting(applying):
+        return _verdict("propose", "restrict")
+    grants = [r for r in applying if r.get("effect") == "grant"]
+    if not grants:
+        return _verdict(level, "authority")
+    # A grant with no recorded baseline is compared as if it was made at act, so it never outranks Authority.
+    if level is not None and any(LEVEL_ORDER.index(level) < LEVEL_ORDER.index(g.get("baseline") or "act")
+                                 for g in grants):
+        return _verdict(level, "conflict", conflict=True)
+    return _verdict("act", "grant")
+
+
+def refusal(kind, verdict) -> str:
+    return (f"kind {kind!r} stays with Shawn ({verdict['reason']}); the PM does not record it as its own: "
+            "use hand-item")
 
 
 def _decide_product_question(record, protocol, programme, key) -> str:

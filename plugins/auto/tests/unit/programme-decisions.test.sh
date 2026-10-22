@@ -325,6 +325,149 @@ P_SHIP1="$(prompt typed 'ship AI-1')"
 prog answer-handed linear:AI-1 --choice ship --prompt "$P_SHIP1"
 check '0 ["unknown", null]' "$CODE $(field '[prog["decisions"][-1]["kind"], prog["decisions"][-1]["ask"]]')"
 
+# The who-decides gate, called with plain data. MUTATE patches one branch out in-process.
+gate() {
+  MUTATE="${MUTATE:-}" run_py "$@" <<'EOF'
+pd = load_lib_module("programme_decisions")
+mutate = os.environ.get("MUTATE")
+if mutate == "protected":
+    pd._protected = lambda kind: False
+elif mutate == "restrict":
+    pd._restricting = lambda rulings: []
+NOW = "2026-10-22T12:00:00Z"
+def ruling(effect, kind, until=None, baseline="act", items=("linear:AI-1",), rid="r1"):
+    return {"id": rid, "effect": effect, "kind": kind, "items": list(items), "until": until,
+            "baseline": baseline}
+def scenarios(kind):
+    return {
+        "none": [],
+        "decided": [ruling("decided", kind)],
+        "grant": [ruling("grant", kind)],
+        "restrict": [ruling("restrict", kind)],
+        "expired-grant": [ruling("grant", kind, until="2026-10-01T00:00:00Z")],
+        "grant+restrict": [ruling("grant", kind), ruling("restrict", kind, rid="r2")],
+    }
+mode = args[0]
+if mode == "table":
+    for kind in pd.DECISION_KINDS:
+        for name, rulings in scenarios(kind).items():
+            v = pd.who_decides(kind, "linear:AI-1", level="act", rulings=rulings, now=NOW, accepted=True)
+            print(kind, name, v["decider"], v["reason"])
+else:
+    kind, level, accepted, spec = args[1], args[2], args[3] == "1", json.loads(args[4])
+    v = pd.who_decides(kind, "linear:AI-1", level=None if level == "-" else level,
+                       rulings=[ruling(**r) for r in spec], now=NOW, accepted=accepted)
+    print(v["decider"], v["level"] or "-", v["reason"], v["conflict"])
+EOF
+}
+
+expected_row() {
+  local kind="$1" scenario="$2" protected="$3"
+  if [ "$protected" = 1 ]; then echo "$kind $scenario shawn protected"; return; fi
+  case "$scenario" in
+    restrict|grant+restrict) echo "$kind $scenario shawn restrict" ;;
+    grant) echo "$kind $scenario pm grant" ;;
+    *) echo "$kind $scenario pm authority" ;;
+  esac
+}
+
+KINDS="$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+print(" ".join(pd.DECISION_KINDS))
+EOF
+)"
+PROTECTED=" prod_deploy full_release spend_over_cap merge_around_gate denied_operation "
+SCENARIOS="none decided grant restrict expired-grant grant+restrict"
+
+it "the protected kinds are exactly the five decision kinds no layer or Ruling can hand to the PM"
+check "['denied_operation', 'full_release', 'merge_around_gate', 'prod_deploy', 'spend_over_cap'] True" "$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+print(sorted(pd.PROTECTED_KINDS), set(pd.PROTECTED_KINDS) <= set(pd.DECISION_KINDS))
+EOF
+)"
+
+it "the truth table covers 20 decision kinds"
+check 20 "$(printf '%s\n' $KINDS | wc -l | tr -d ' ')"
+
+table_mismatches() {
+  local got="$1" kind scenario prot
+  for kind in $KINDS; do
+    case "$PROTECTED" in *" $kind "*) prot=1 ;; *) prot=0 ;; esac
+    for scenario in $SCENARIOS; do
+      printf '%s\n' "$got" | grep -F -x -q -- "$(expected_row "$kind" "$scenario" "$prot")" \
+        || printf '%s %s\n' "$kind" "$scenario"
+    done
+  done
+}
+
+TABLE="$(gate table)"
+for kind in $KINDS; do
+  case "$PROTECTED" in *" $kind "*) label="protected" ;; *) label="not protected" ;; esac
+  it "truth table: ${kind} (${label}) under no Ruling, decided, grant, restrict, expired grant, grant plus restrict"
+  check "" "$(table_mismatches "$TABLE" | grep "^${kind} ")"
+done
+
+it "mutation: with the protected check patched out exactly the protected rows fail"
+check "$(for k in $PROTECTED; do for s in $SCENARIOS; do echo "$k $s"; done; done | sort)" \
+  "$(table_mismatches "$(MUTATE=protected gate table)" | sort)"
+it "mutation: with the restrict branch patched out exactly the unprotected restrict rows fail"
+check "$(for k in $KINDS; do case "$PROTECTED" in *" $k "*) ;; *) echo "$k restrict"; echo "$k grant+restrict" ;; esac; done | sort)" \
+  "$(table_mismatches "$(MUTATE=restrict gate table)" | sort)"
+
+for kind in product_call product_scope; do
+  it "${kind} on an unaccepted programme stays with Shawn even with a grant Ruling"
+  check "shawn propose unaccepted False" "$(gate one "$kind" act 0 "[{\"effect\":\"grant\",\"kind\":\"$kind\"}]")"
+  it "${kind} on an accepted programme follows Authority"
+  check "shawn propose authority False" "$(gate one "$kind" propose 1 '[]')"
+done
+it "default Authority (act) on an accepted programme makes product_call PM-decidable"
+check "pm act authority False" "$(gate one product_call act 1 '[]')"
+it "a non-product kind on an unaccepted programme follows Authority"
+check "pm act authority False" "$(gate one tool_choice act 0 '[]')"
+
+it "AE3: an act level on prod_deploy from any Authority layer still returns Shawn decides"
+check "shawn never protected False" "$(gate one prod_deploy act 1 '[]')"
+it "AE4: a grant Ruling on prod_deploy still returns Shawn decides"
+check "shawn never protected False" "$(gate one prod_deploy act 1 '[{"effect":"grant","kind":"prod_deploy"}]')"
+
+it "a grant whose kind Authority now holds at propose returns the narrower level and a conflict"
+check "shawn propose conflict True" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","baseline":"act"}]')"
+it "a grant whose kind Authority now holds at act_and_tell leaves the PM deciding at act_and_tell with a conflict"
+check "pm act_and_tell conflict True" "$(gate one tool_choice act_and_tell 1 '[{"effect":"grant","kind":"tool_choice","baseline":"act"}]')"
+it "a grant made while Authority was already at propose returns PM decides, not a conflict"
+check "pm act grant False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","baseline":"propose"}]')"
+it "an expired grant behaves as no Ruling"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","until":"2026-10-01T00:00:00Z"}]')"
+it "a grant whose end date is the current time has expired"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","until":"2026-10-22T12:00:00Z"}]')"
+it "a grant with a later end date still applies"
+check "pm act grant False" "$(gate one tool_choice act 1 '[{"effect":"grant","kind":"tool_choice","until":"2026-11-01T00:00:00Z"}]')"
+it "an end date the gate cannot read refuses and names the Ruling"
+has "Ruling 'r1' has an end date the gate cannot read" "$(gate one tool_choice act 1 '[{"effect":"restrict","kind":"tool_choice","until":"next week"}]')"
+it "a grant plus a restrict on the same item and kind returns Shawn decides"
+check "shawn propose restrict False" "$(gate one tool_choice act 1 '[{"effect":"grant","kind":"tool_choice"},{"effect":"restrict","kind":"tool_choice","rid":"r2"}]')"
+it "a decided Ruling alone falls through to the Authority level"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"decided","kind":"tool_choice"}]')"
+it "a Ruling for another item does not apply"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","items":["linear:AI-2"]}]')"
+it "a Ruling for another kind does not apply"
+check "pm act authority False" "$(gate one tool_choice act 1 '[{"effect":"restrict","kind":"work_sequencing"}]')"
+it "act_and_tell Authority lets the PM decide at that level"
+check "pm act_and_tell authority False" "$(gate one tool_choice act_and_tell 1 '[]')"
+it "never Authority keeps the kind with Shawn"
+check "shawn never authority False" "$(gate one tool_choice never 1 '[]')"
+it "a kind with no Authority level lets the PM decide, as log-decision does today"
+check "pm - authority False" "$(gate one tool_choice - 1 '[]')"
+it "an unknown kind refuses"
+has "unknown decision kind" "$(gate one no_such_kind act 1 '[]')"
+it "the refusal keeps the hand-item message shape"
+check "kind 'prod_deploy' stays with Shawn (protected); the PM does not record it as its own: use hand-item" "$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+v = pd.who_decides("prod_deploy", "linear:AI-1", level="act", rulings=[], now="2026-10-22T12:00:00Z", accepted=True)
+print(pd.refusal("prod_deploy", v))
+EOF
+)"
+
 echo ""
 echo "programme-decisions.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
