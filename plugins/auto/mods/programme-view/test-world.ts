@@ -228,7 +228,7 @@ export function setupPart() {
       setupStep('where', 'scope', 'done', { values: 'AI-Editor' }),
       setupStep('sources', 'scope', 'current', { recommendation: 'tracker, tasks, plans', recommendation_source: 'plugin default' }),
       setupStep('cadence', 'pacing', 'upcoming'),
-      setupStep('rulings', 'rulings', 'upcoming', { label: 'rulings and reserved areas', needs_typed: true, reply: 'approve the proposed rulings' }),
+      setupStep('rulings', 'rulings', 'upcoming', { label: 'rulings', needs_typed: true, reply: 'approve the proposed rulings' }),
       setupStep('shared', 'shared', 'upcoming', { label: 'shared settings', values: 'using existing', needs_typed: true }),
       setupStep('items', 'items', 'upcoming', {
         label: 'items to adopt',

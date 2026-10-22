@@ -150,7 +150,7 @@ test('a step that needs a typed reply shows "Type this:" and the reply, and no p
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ setup }) })
   const pane = await openPane($, false, 60)
   const all = await lines(pane)
-  const rulings = all.findIndex(line => line.includes('Rulings and reserved areas'))
+  const rulings = all.findIndex((line, index) => line.includes('Rulings') && all[index + 1]?.trim() === 'Type this:')
   expect(rulings).toBeGreaterThan(-1)
   expect(all[rulings + 1]?.trim()).toBe('Type this:')
   expect(all[rulings + 2]?.trim()).toBe('approve the proposed rulings')

@@ -1,6 +1,6 @@
 # Programme protocol format
 
-The protocol is the set of rules that map a kind of change to its required deliverables and evidence bar. A programme run uses it to decide what "done" means for each item. `lib/programme_protocol.py` loads and checks it. This document is the format that the loader enforces.
+The protocol holds two standing settings that every programme reads live: **Done standards**, the rules that map a kind of change to its required deliverables and evidence bar, and **Authority**, the level at which the PM may decide each decision kind. A programme run uses Done standards to decide what "done" means for each item, and Authority to decide who makes each call. Neither is copied into a programme's agreement. `lib/programme_protocol.py` loads and checks it. This document is the format that the loader enforces.
 
 ## 1. Layers
 
@@ -28,19 +28,20 @@ A missing personal file is not an error. A personal path that cannot be read (a 
 {
   "protocol_format": 1,
   "rules": [ /* rule objects, section 3 */ ],
-  "autonomy": { "<action>": { "level": "act", "adoption": { } } },
+  "autonomy": { "<decision kind>": { "level": "act", "adoption": { } } },
   "checks": { /* section 6 */ }
 }
 ```
 
+- `rules` holds the Done standards and `autonomy` holds Authority. The section key stays `autonomy` on disk, so every existing adoption still matches its journal approval; Authority is the display name.
 - All keys are optional. Any other top-level key rejects the whole layer (`unknown_key`).
 - A layer that is not a JSON object, or that has a key of the wrong type, is rejected whole (`malformed_layer`).
 - A `protocol_format` above 1 rejects the whole layer (`newer_format`).
 - A rejected layer does not stop the other layers from loading.
 
-## 3. Rule
+## 3. Rule (Done standard)
 
-Every rule has all nine fields. A missing field rejects the rule (`missing_field`, with the field name as detail). Any other key rejects the rule (`unknown_key`). The only optional key is `adoption`.
+Every rule has all eight fields below. A missing field rejects the rule (`missing_field`, with the field name as detail). Any other key rejects the rule (`unknown_key`). The optional keys are `adoption` and the legacy `autonomy`.
 
 | Field | Type | Check |
 | --- | --- | --- |
@@ -49,10 +50,11 @@ Every rule has all nine fields. A missing field rejects the rule (`missing_field
 | `requires` | list | Not empty, no repeats. Each entry is a deliverable or an outcome (below), else `unknown_deliverable`. |
 | `evidence_bar` | object | One non-empty string for each entry in `requires`, and no other keys. |
 | `caveat` | string | Can be empty. |
-| `autonomy` | string | `act`, `act_and_tell`, `propose` or `never`, else `unknown_autonomy`. |
 | `added_by` | string | Not empty. |
 | `added_at` | string | UTC time as `YYYY-MM-DDTHH:MM:SSZ`. |
 | `why` | string | Not empty. |
+
+`autonomy` is a legacy key. A rule written before Authority carried its own level; the loader still accepts the key and checks its value (`act`, `act_and_tell`, `propose` or `never`, else `unknown_autonomy`), and the adoption hash still covers the entry exactly as written, so old adoptions verify. The merged rule, `match()` and `summary()` drop it, and no gate reads it. `adopt-rule` still writes it, with the level of the plugin rule of the same id or `propose` for a new id, so a machine on an older plugin reading the synced personal file never sees a widening it must reject.
 
 Deliverables: `merged`, `flagged`, `verified`, `released`, `recorded`.
 
@@ -62,7 +64,7 @@ Change kinds in the plugin layer: `flagged_code`, `fix_only`, `shared_package`, 
 
 ## 4. Adoption record
 
-Every personal or project rule, autonomy entry and check needs an `adoption` object. If it is missing, the entry does not load (`not_adopted`, or `check_not_adopted` for a check).
+Every personal or project rule, Authority entry and check needs an `adoption` object. If it is missing, the entry does not load (`not_adopted`, or `check_not_adopted` for a check). One exception: an Authority entry whose adoption is missing or does not verify still applies when its level is no wider than the layer below it, so a hand edit that narrows Authority takes effect at once (section 5).
 
 ```json
 {
@@ -81,32 +83,36 @@ Every personal or project rule, autonomy entry and check needs an `adoption` obj
 - `machine` is compared with `machine_name()`. The env var `CLAUDE_AUTO_MACHINE` replaces the host name (tests use it).
 - `prompt_hash` is the prompt's `text_hash`: `"sha256:"` followed by the hex SHA-256 of the prompt's `payload.text` in the run journal, encoded as UTF-8. That text is already redacted when the journal stores it, so the hash is over the redacted text. `programme.text_hash(text)` computes it, and the adopt verbs write `prompt_hash` with it.
 - When `machine` is this machine, the loader calls `prompt_lookup(run_id, prompt_id)`. The result must be an object with `origin` equal to `typed`, `text_hash` equal to `prompt_hash`, and `approved` containing `approval_key(target, hash)`. A missing prompt, another origin, a different hash, no matching approval (detail `no approval`), no lookup, or a lookup that raises gives `adoption_unverified`.
-- `target` names the place the entry loads into: `rule:<id>`, `autonomy:<action>`, or `check:<repo>:<check>` (for a project-layer check, `<repo>` is the repo key the loader was given). `target_of(section, name, repo)` builds it, and `approval_key(target, hash)` is `<target>@<hash>`. The target matters because an autonomy entry or a check hashes only its body: `{"level": "act"}` has the same hash for every action, so an approval for one action must not load the same body under another.
+- `target` names the place the entry loads into: `rule:<id>`, `autonomy:<action>`, or `check:<repo>:<check>` (for a project-layer check, `<repo>` is the repo key the loader was given). `target_of(section, name, repo)` builds it, and `approval_key(target, hash)` is `<target>@<hash>`. The target matters because an Authority entry or a check hashes only its body: `{"level": "act"}` has the same hash for every action, so an approval for one action must not load the same body under another.
 - `approved` lists `approval_key(payload.target, payload.hash)` for every approval record in the cited run's journal that cites `prompt_id`. An approval record is a `rule_adopted` entry whose `cites[0]` and `payload.prompt_id` both equal `prompt_id`. A hash beside the entry is not proof by itself: anyone can recompute it after changing the entry, so the loader needs the journal record that the approval wrote at that time.
-- When `machine` is another machine, only a personal-layer rule or autonomy entry loads without a lookup, and `adopted_on` names that machine. Syncthing syncs the personal layer between Shawn's machines; nothing else carries an adoption from another machine. Such an entry is checked only by its own `hash`, which anyone who can write the synced file can recompute, so it may keep or narrow a level but never widen one: an entry from another machine whose adoption has `"widening": true`, or whose level is wider than the entry it replaces, gives `widening_not_adopted_here`. To widen on this machine, adopt the entry here. `programme.py status` and the rules in force show a loaded entry from another machine as `adopted on <machine>`. A project-layer rule or autonomy entry from another machine gives `not_adopted_here`, and a check from another machine does not load (section 6).
+- When `machine` is another machine, only a personal-layer rule or Authority entry loads without a lookup, and `adopted_on` names that machine. Syncthing syncs the personal layer between Shawn's machines; nothing else carries an adoption from another machine. Such an entry is checked only by its own `hash`, which anyone who can write the synced file can recompute, so it may keep or narrow a level but never widen one: an entry from another machine whose adoption has `"widening": true`, or whose level is wider than the entry it replaces, gives `widening_not_adopted_here`. To widen on this machine, adopt the entry here. `programme.py status` and the rules in force show a loaded entry from another machine as `adopted on <machine>`. A project-layer rule or Authority entry from another machine gives `not_adopted_here`, and a check from another machine does not load (section 6).
 - Three verbs adopt into the personal layer, each with a typed `--prompt`:
-  - `adopt-rule <rule-id>` adopts a proposed rule (`entry: "rule"`).
-  - `adopt-autonomy <action> <level> [--widening]` sets one autonomy entry (`entry: "autonomy"`). A level wider than the plugin default needs `--widening`, which also writes `"widening": true`.
+  - `adopt-rule <rule-id>` adopts a proposed rule (`entry: "rule"`). A rule carries no level, so it takes no `--widening`.
+  - `adopt-autonomy <decision kind> <level> [--widening]` sets one Authority entry (`entry: "autonomy"`). A level wider than the plugin default needs `--widening`, which also writes `"widening": true`. A protected kind is refused (section 5).
   - `adopt-check <repo> <check> <argv-json>` sets one command of a repo's checks block (`entry: "check"`). The checker uses a repo's commands only when both `verified.lookup` and `verified.deployed_sha` load, so adopt both.
-- The cited prompt must name what it approves: for `adopt-rule`, the rule id; for `adopt-autonomy`, the action and the level; for `adopt-check`, the repo and the check key (for example `verified.lookup`). With `--widening`, the text must also contain `widen`, `widening` or `widened`. Each name must appear in the redacted text as whole words, case ignored: a run of words that, with `_` and `-` dropped, spells the name. So `merge_pr`, `merge-pr`, `merge pr` and `MergePR` all name `merge_pr`, while `AI-801` does not name `AI-80`, `1800` does not name `180`, `actually` does not name `act`, and `auto-merge-docs-only` does not name `auto-merge`. Levels are read longest first, so `act and tell` names `act_and_tell` and never `act`. An occurrence right after `not`, `never`, `no` or a `n't` word (`don't`, `do not widen`, `never act`) does not count. A prompt that does not name them is refused, and the refusal lists the words it lacks. The check stops a prompt about something else from being cited; it does not prove intent, and other negations (`without widening`, `rather than act`) are not detected.
+- The cited prompt must name what it approves: for `adopt-rule`, the rule id; for `adopt-autonomy`, the decision kind and the level; for `adopt-check`, the repo and the check key (for example `verified.lookup`). With `--widening`, the text must also contain `widen`, `widening` or `widened`. Each name must appear in the redacted text as whole words, case ignored: a run of words that, with `_` and `-` dropped, spells the name. So `merge_pr`, `merge-pr`, `merge pr` and `MergePR` all name `merge_pr`, while `AI-801` does not name `AI-80`, `1800` does not name `180`, `actually` does not name `act`, and `auto-merge-docs-only` does not name `auto-merge`. Levels are read longest first, so `act and tell` names `act_and_tell` and never `act`. An occurrence right after `not`, `never`, `no` or a `n't` word (`don't`, `do not widen`, `never act`) does not count. A prompt that does not name them is refused, and the refusal lists the words it lacks. The check stops a prompt about something else from being cited; it does not prove intent, and other negations (`without widening`, `rather than act`) are not detected.
 - Each verb writes the entry and its adoption record in one atomic rename, then journals `rule_adopted` with `entry`, `target`, `hash`, `prompt_id`, `quote` and `cites: [prompt_id]`. Until that journal entry exists, the entry does not load. A project-layer entry is committed by hand, so on this machine it loads only when a `rule_adopted` entry for its target and hash is journaled.
 
-## 5. Merge and autonomy width
+## 5. Merge and Authority width
 
-Layers merge in order. A rule with the same `id` as a loaded rule replaces it. An autonomy entry with the same action replaces it.
+Layers merge in order. A rule with the same `id` as a loaded rule replaces it. An Authority entry with the same decision kind replaces it.
 
-Width order, widest first: `act`, `act_and_tell`, `propose`, `never`. A replacement may keep or narrow the level with a plain adoption. A replacement that widens the level loads only when its adoption record has `"widening": true`, else `widening_unmarked`. A new id or a new action is an addition, not a widening.
+Width order, widest first: `act`, `act_and_tell`, `propose`, `never`. A replacement may keep or narrow the level with a plain adoption. A replacement that widens the level loads only when its adoption record has `"widening": true`, else `widening_unmarked`. A new id or a new decision kind is an addition, not a widening. An Authority entry that is not adopted, or whose adoption does not verify (`not_adopted`, `adoption_malformed`, `adoption_unverified`, `not_adopted_here`), still loads when its level is no wider than the entry it replaces, and the loader reports an `unverified_narrowing` notice for it. A widening hand edit is still rejected. Unverified rules and checks are rejected as before.
 
-The plugin layer maps these actions:
+When several project layers load (one per remit repo), the narrowest Authority level for each kind wins.
 
-| Level | Actions |
+Authority lists every decision kind. The plugin layer sets:
+
+| Level | Decision kinds |
 | --- | --- |
-| `act` | `merge_at_gate`, `prod_off_flag`, `file_issue` |
+| `act` | `merge_at_gate`, `prod_off_flag`, `file_issue`, `product_call`, `technical_approach`, `work_sequencing`, `worker_coordination`, `tool_choice`, `optimisation_depth`, `product_scope`, `acceptance` |
 | `act_and_tell` | `eval_backed_prerelease`, `worker_session_approval` |
-| `propose` | `prod_deploy`, `full_release`, `eval_waiver`, `spend_over_cap`, `product_call` |
-| `never` | `fix_other_team_code`, `merge_around_gate` |
+| `propose` | `eval_waiver` |
+| `never` | `fix_other_team_code` |
 
-The programme's autonomy term overrides these levels. They are defaults only.
+The protected kinds `prod_deploy`, `full_release`, `spend_over_cap`, `merge_around_gate` and `denied_operation` are fixed in code (`programme_decisions.PROTECTED_KINDS`): they always stay with Shawn, no layer stores a level for them, and a personal or project entry for one is rejected as `protected_kind`. Neither Authority nor a Ruling can hand them to the PM.
+
+These levels are the standing answer. A programme's Rulings may widen or narrow a kind for named items until an end date, and before the agreement is accepted `product_call` and `product_scope` stay with Shawn whatever Authority says. The order the gate applies is in agent-tool-surface.md (Decision log).
 
 ## 6. Checks
 
@@ -149,12 +155,12 @@ A proposed rule lives in the programme record at `programme.proposed_rules`, nev
 
 ## 8. Loader interface
 
-`load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None)` returns:
+`load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None, repos=None)` returns the merged protocol. `repos` is a list of repo paths or `(path, key)` pairs, one project layer each, merged with the narrowest Authority level winning; a single `repo_path` still works.
 
 ```json
 {
   "rules":    { "<id>": { "<rule fields>": "...", "layer": "personal", "adopted_on": null, "adoption": {} } },
-  "autonomy": { "<action>": { "level": "act", "layer": "plugin", "adopted_on": null } },
+  "autonomy": { "<decision kind>": { "level": "act", "layer": "plugin", "adopted_on": null, "verified": true } },
   "checks":   { "<repo>": { "verified.lookup": { "argv": [], "layer": "project" } } },
   "rejected": [ { "layer": "personal", "id": "docs-verified", "reason": "not_adopted", "detail": null } ],
   "notices":  [ { "layer": "personal", "kind": "sync_conflict", "path": "..." } ],
@@ -162,19 +168,21 @@ A proposed rule lives in the programme record at `programme.proposed_rules`, nev
 }
 ```
 
-- `adopted_on` is null for the plugin layer and for an adoption from this machine.
+- `rules` carry the eight section 3 fields plus `layer`, `adopted_on` and `adoption`; the legacy `autonomy` key is dropped.
+- `adopted_on` is null for the plugin layer and for an adoption from this machine. `verified` is false on an Authority entry that loaded as an unverified narrowing.
+- `notices` kinds: `sync_conflict` (with `path`) and `unverified_narrowing` (with `id` and `reason`).
 - A rejection for a whole layer has `id` null. A rejection for one check has id `<repo>:<command key>`.
 - `prompt_lookup(run_id, prompt_id)` returns `{"origin": ..., "text_hash": ..., "approved": ["<target>@<hash>", ...]}` or null. `programme.prompt_lookup` is the real supplier: it finds the prompt in the run journal, hashes its stored text, and collects the approval records as section 4 defines. The loader never loads the journal itself.
 
-Rejection reasons: `malformed_layer`, `newer_format`, `no_default_branch`, `unknown_key`, `missing_field`, `bad_value`, `unknown_deliverable`, `unknown_autonomy`, `duplicate_id`, `not_adopted`, `not_adopted_here`, `adoption_malformed`, `adoption_unverified`, `widening_unmarked`, `widening_not_adopted_here`, `unknown_check`, `check_not_adopted`, `check_not_adopted_here`.
+Rejection reasons: `malformed_layer`, `newer_format`, `no_default_branch`, `unknown_key`, `missing_field`, `bad_value`, `unknown_deliverable`, `unknown_autonomy`, `duplicate_id`, `not_adopted`, `not_adopted_here`, `adoption_malformed`, `adoption_unverified`, `protected_kind`, `widening_unmarked`, `widening_not_adopted_here`, `unknown_check`, `check_not_adopted`, `check_not_adopted_here`.
 
 `match(protocol, change_kinds)` returns the rules whose `change_kinds` include any given kind:
 
 ```json
 { "matched_rule": ["flagged-code"], "requires": ["merged", "flagged", "verified", "recorded"],
-  "deliverables": ["merged", "flagged", "verified", "recorded"], "autonomy": "act", "reason": null }
+  "deliverables": ["merged", "flagged", "verified", "recorded"], "reason": null }
 ```
 
 - `requires` is the union of the matched rules, in the fixed order of deliverables and then outcomes. `deliverables` is the same list without outcomes.
-- `autonomy` is the narrowest level of the matched rules.
+- The result carries no level: who decides is Authority's job, not a Done standard's.
 - With no match, `matched_rule` is null, both lists are empty, and `reason` is `no_matching_rule`. Such an item cannot reach "done" until a rule matches it.

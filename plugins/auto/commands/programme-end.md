@@ -8,24 +8,22 @@ Shawn typed this to end the programme. The prompt hook has already journaled the
 request. It is accepted when typed in the driving session, or from any session
 when the lease is orphaned.
 
-First offer to keep corrections. `end` releases the lease, and every verb
-refuses an ended programme, so this comes before it.
+First offer to carry Rulings. `end` releases the lease, so the offer comes
+before it.
 
-1. Run `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --terms --json`
-   and read its `terms.corrections` list (the corrections still applied). While
-   corrections are switched off this list is always empty.
-2. Empty list: go straight to the dispatch line.
-3. Otherwise, list each correction in one line (its id, the kind of choice,
-   who decides it now, and Shawn's quote), and ask which ones to keep for the
-   next programme on this project. Then wait for his typed reply.
-4. When he names corrections to keep, run
-   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-corrections --prompt <id> <correction-id>...`,
-   citing his reply's prompt id. Keep none when he says none.
-   - It refuses with "corrections are not on yet": tell him so in one line and
-     go on.
-   - It refuses because this session does not drive the programme (an
-     orphaned lease): tell him in one line that corrections can be kept only
-     from the driving session, and go on.
+1. Run `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" carry-rulings`. It lists
+   each active Ruling on a `carry-over offer:` line and records that the offer
+   was made. If it refuses because this session does not drive the programme
+   (an orphaned lease), tell Shawn in one line that Rulings can be carried only
+   from the driving session, and go straight to the dispatch line.
+2. No `carry-over offer:` lines: go straight to the dispatch line.
+3. Otherwise, show Shawn those lines and ask which Rulings to carry to the next
+   programme on this project. Then wait for his typed reply.
+4. When he names Rulings to carry, run
+   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" carry-rulings --prompt <id> <ruling-id>...`,
+   citing his reply's prompt id. Carry none when he says none.
+   - Carried Rulings arrive in the next programme pending, with no items, and
+     bind only when his typed prompt there names the items.
 
 Run the dispatch line below:
 

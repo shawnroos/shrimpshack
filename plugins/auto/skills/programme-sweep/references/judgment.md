@@ -1,7 +1,7 @@
 # PM judgment
 
-These rules hold on every project. The project terms in the agreement change
-who decides what and which tools to prefer; they never change these rules.
+These rules hold on every project. Authority, Rulings and preferred tools
+change who decides what and which tools to prefer; they never change these rules.
 Most of them have no verb that checks them, so the PM applies them itself, sweep
 by sweep. Where a verb does check one, the section names it.
 
@@ -11,10 +11,10 @@ Where the sweep uses it:
 | --- | --- |
 | 3 (Shawn's answers): new work or a new gate | 1 and 3 |
 | 8 (check claims) and any acceptance call | 1, 5 and 9 |
-| 10 (drive workers): before you start or prompt a worker | 1, 3, 4, 6, 7 and 10 |
-| 11 (record waits): before you record a blocker | 2 and 9 |
-| 12 (decide or hand) | 8 and 11 |
-| 13 (update the working model): before more investigation, review or coordination | 3 |
+| 11 (drive workers): before you start or prompt a worker | 1, 3, 4, 6, 7 and 10 |
+| 12 (record waits): before you record a blocker | 2 and 9 |
+| 13 (decide or hand) | 8 and 11 |
+| 14 (update the working model): before more investigation, review or coordination | 3 |
 
 ## 1. Re-check the requirements before you act (R1)
 
@@ -89,14 +89,15 @@ deliverable.
 
 When you send a worker work that rests on a decision, link it:
 `--decision <id>` on `P start-worker` or `P prompt-item`, with a decision-log id
-or a decision record id from `P context --item <item>`. The verb adds the
+or a Ruling id from `P context --item <item>`. The verb adds the
 decision and this line to the brief: "Proceed under this decision. Do not
 reopen it: if you find new evidence that it cannot hold, stop and state that
 evidence in your pane."
 
 A worker has no other way to reopen a decision. When a worker's pane states new
 evidence, weigh it. If the decision cannot hold, decide again with
-`P log-decision`, or hand it to Shawn when the decision was his.
+`P log-decision`, or hand it to Shawn when the decision was his (a decided
+Ruling).
 
 ## 7. One owner, no empty messages (R7)
 
@@ -117,8 +118,9 @@ avoid the denial.
 
 ## 9. A preferred tool is not a permission (R12)
 
-The project terms can name a preferred skill or tool for a kind of job. That
-does not grant access to it. If the preferred tool is missing or refused, use
+A preferred tool (in `P status --agreement`, under Scope) can name a skill or
+tool for a kind of job. It is a preference, not a permission: it grants no
+access to the tool and no say over who decides. If the preferred tool is missing or refused, use
 the existing path and carry on. A missing preferred tool is not an acceptance
 blocker: never record it as one.
 
@@ -126,29 +128,51 @@ blocker: never record it as one.
 
 There are no fixed modes. Work out what the job is now (ideation, options,
 requirements, implementation, optimisation or acceptance) and act for that
-job, with the skills the project terms prefer for it. One sweep can hold
+job, with the preferred tools for it. One sweep can hold
 several jobs on different items.
 
 ## 11. Who decides (R11)
 
-Read the rules block (`P rules`). An `operating contract v<n>` line means the
-agreement was accepted under the operating contract. Only then does this
-section apply:
+Read the rules block (`P rules`). Three sources answer "may I decide this?",
+and no other: Authority (the `authority <kind>: <level>` lines over the plugin
+defaults), the protected kinds fixed in code, and the Rulings in force
+(`ruling <id>:` lines). A preferred tool, the decision log and an old
+reservation with no decision kind answer nothing here. `log-decision` asks the
+same gate in this order, and the first match wins:
 
-- A project term that covers the choice decides it. Record the choice with
-  `P log-decision <item|programme> --kind <kind> --term <term-id> --why "<why>"`.
-- When no term covers it, you decide and record why with `--silent` in place of
-  `--term`, unless the choice does one of these. Then bring it to Shawn with one
-  recommendation:
-  - changes the outcome or acceptance;
-  - reopens a settled human decision;
-  - touches a reserved area;
-  - exceeds a risk or cost limit;
-  - needs a permission that was refused.
+1. **Protected.** Production deploys (`prod_deploy`), releases
+   (`full_release`), spend over the cap (`spend_over_cap`), merging around the
+   gate (`merge_around_gate`) and refused permissions (`denied_operation`)
+   always stay with Shawn. No Authority level and no Ruling gives them to you.
+2. **Not accepted.** Until the agreement is accepted (`agreement: accepted` in
+   the rules block), `product_call` and `product_scope` stay with Shawn. Every
+   other kind goes on to the next steps.
+3. **Restrict.** An active restrict Ruling for the kind and the item keeps it
+   with Shawn, whatever else applies.
+4. **Grant.** An active grant Ruling for the kind and the item gives it to you.
+   If a `Ruling conflict:` line names that grant, Authority now holds the kind
+   narrower than when Shawn granted it, and the narrower level applies until he
+   accepts a new revision or closes the Ruling.
+5. **Authority.** Otherwise the Authority level for the kind decides: the
+   item's repo, or for the programme or an item with no repo, the narrowest
+   level across the remit repos. `act` and `act_and_tell` are yours
+   (`act_and_tell`: tell Shawn after); `propose` and `never` stay with Shawn.
 
-No project term or correction gives you production deploys, releases, spend
-over the cap or merging around the gate. For those, the autonomy levels in the
-rules block decide.
+A decided Ruling does not move the gate: it is Shawn's answer. Follow it and
+cite it with `--term <ruling-id>`.
 
-With no `operating contract` line, the old rule holds: every product question
-goes to Shawn with `P hand-item`.
+When the choice is yours, record it with
+`P log-decision <item|programme> --kind <kind> (--term <ruling-id> | --silent) --why "<why>"`.
+Even then, bring it to Shawn with one recommendation when the choice:
+
+- changes the outcome or acceptance;
+- reopens a settled human decision: changing or closing a decided Ruling
+  needs his typed prompt naming it;
+- touches a reserved area: an active restrict Ruling, or an old reservation
+  the rules block asks him to record again;
+- exceeds a risk or cost limit: spend over the cap, or a limit a Ruling sets;
+- needs a permission that was refused (section 8).
+
+When the choice stays with Shawn, `log-decision` refuses it: hand it with
+`P hand-item <item> --kind <kind> --question "<one question with your recommendation>"`.
+Handing is never refused.

@@ -80,14 +80,15 @@ the set of verbs an agent actually drives a run with.
 
 ## Programme verbs
 
-A programme's agreement, instructions and protocol rules change only through
+A programme's agreement (Scope and Rulings) and the protocol (Authority and Done standards) change only through
 `python3 lib/programme.py <verb>` (shim: `lib/programme.sh`). Run
 `python3 lib/programme.py describe` for argument shapes and rejection modes. The
 programme is found by `--run <id>`, or else by the lease that names the caller's
 session.
 
-- **Read**: `describe`; `rules` prints the rules in force (agreement terms, adopted
-  protocol rules, active instructions), rebuilt from the run record and wrapped in
+- **Read**: `describe`; `rules` prints the rules in force (the agreement's Scope
+  terms, active Rulings, Done standards, Authority entries outside the plugin layer,
+  protocol changes, Ruling conflicts and old reservations to record again), rebuilt from the run record and wrapped in
   an `<auto-rules>` tag as data, followed by the restored context (decisions,
   requirements, binding pauses and denials, pending questions, assignments,
   uncertain actions) from the recovery packet, wrapped in an `<auto-context>` tag
@@ -111,11 +112,14 @@ session.
   model into `<home>/views/view.json` (mode 0600), which the programme-view mod
   draws. A failed rebuild prints `view refresh failed` on stderr and never fails
   the write. `claim` changes only the claims, so a new claim shows in the view at
-  the next write or `status`. With `--terms` (or the bare word terms, as
-  `/auto:programme-status terms` sends it) it prints only the terms page: project
-  terms, each decision-log entry under the term it used
-  (silent ones under "no term"), and the 20 most recent term changes with their
-  source and redacted quote; `--json` then emits `{run, generated_at, terms, rows}`.
+  the next write or `status`. With `--agreement` (or the bare word agreement, as
+  `/auto:programme-status agreement` sends it) it prints only the agreement page:
+  Scope (the terms and preferred tools), Rulings by state (active, pending, carried,
+  expired), the Authority table with the protected kinds as fixed rows, Done
+  standards, protocol changes, each decision-log entry under the Ruling or term it
+  cited (silent ones under "no Ruling applied"), and the 20 most recent
+  preferred-tool changes with their source and redacted quote; `--json` then emits
+  `{run, generated_at, agreement, rows}`.
   Viewing never counts as approval.
 - **Storage**: a programme keeps its record, journal and claims in
   `<home>/programme.db`, and each write commits the record change and its journal
@@ -134,8 +138,8 @@ session.
   refuse `--op`.
 - **Agreement**: `propose-agreement` sets proposed term values before acceptance;
   `accept-agreement` records the acceptance; `amend-term` changes one term. A term
-  value must be one of that term's options. Wording that fits no option is an
-  instruction. The tools_of_record term holds the sweep sources that stay on: a comma
+  value must be one of that term's options. Wording that fits no option is a
+  Ruling. The tools_of_record term holds the sweep sources that stay on: a comma
   list of tracker, tasks and plans (default all three), or none. Its amend needs
   a typed prompt that names each source it turns on or off ("no plans" counts).
   A source turned off is never read by the sweep, never watched, and never holds
@@ -160,8 +164,8 @@ session.
   pending proposal, else its current value, in one write. Both record `set_by` shawn,
   origin picked, the question and the answer, and cite the pick. One picker answer
   (one transcript and tool use) approves one write, however many prompt rows cite it.
-  Both refuse after acceptance, and refuse autonomy, rulings, reserved areas and
-  shared settings: those stay typed. A refusal journals `approval_refused`. A typed
+  Both refuse after acceptance, and refuse Rulings and shared settings (Authority,
+  Done standards and checks): those stay typed. A refusal journals `approval_refused`. A typed
   accept must come after the last pick. No typed gate accepts a picked prompt.
 - **Setup walkthrough notes**: `setup-step` (`<name>`) records the step the PM asks now,
   `setup-seen` (`--json <file>|-`) records what the source probe saw (tabs, repos and
@@ -190,9 +194,10 @@ session.
   as a Ruling with a kind. A project term is text in the run record: it never
   changes a permission setting or a protocol layer file, and a preferred tool it
   names is not a permission.
-- **Contract stamp**: `accept-agreement` writes `contract_version` beside the
-  acceptance; no other verb writes it, and an agreement without it keeps the old
-  rule that every product question goes to Shawn. It refuses a prompt that the
+- **Accepted marker**: `accept-agreement` writes `contract_version` beside the
+  acceptance; no other verb writes it. It gates product calls only: until it is
+  written, `product_call` and `product_scope` stay with Shawn, and every other kind
+  follows Authority and Rulings as usual. It refuses a prompt that the
   journal holds before the last `agreement_proposed` or `project_term_edited`
   line, or before the last `remit_set` line that brought in a carried-over Ruling,
   so Shawn accepts the terms he last saw.
@@ -233,8 +238,9 @@ session.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
   proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
   an adoption record (machine, run, prompt id, redacted quote, prompt hash, content
-  hash). `adopt-autonomy` sets one autonomy level (a level wider than the plugin
-  default needs `--widening`), and `adopt-check` sets one `verified.lookup` or
+  hash). `adopt-autonomy` sets one Authority level for a decision kind (a level
+  wider than the plugin default needs `--widening`; a protected kind is refused),
+  and `adopt-check` sets one `verified.lookup` or
   `verified.deployed_sha` command for a repo, the same way. Each journals a
   `rule_adopted` approval record naming the entry kind, its target and its hash;
   the protocol loader loads a same-machine entry only when that record exists.
@@ -321,17 +327,29 @@ session.
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the Rulings kept under
   `programme.context`. An entry has an id ("d" + 6
-  hex), the decision kind, the term it used or silent when no term covered it,
-  and why. It journals `pm_decided`. The decision kinds are a closed list in
-  `lib/programme_decisions.py`: the plugin autonomy actions plus
-  technical_approach, work_sequencing, worker_coordination, tool_choice,
-  optimisation_depth, product_scope, acceptance and denied_operation. Any other
-  kind is refused. On an item that matched the product-question rule,
-  `log-decision` needs an agreement with the contract stamp; it then closes
-  the item as decided, which counts as finished, or re-matches the item's
-  other change kinds and leaves it open. Without the stamp it refuses and the
-  item still goes to Shawn through `hand-item`. `accept-agreement` also records
-  a Shawn decision of kind agreement.
+  hex), the decision kind, the Ruling or preferred-tool term id it cited (or
+  silent when nothing covered it), and why. It journals `pm_decided`. The
+  decision kinds are a closed list in `lib/programme_decisions.py`: the plugin
+  Authority kinds plus technical_approach, work_sequencing, worker_coordination,
+  tool_choice, optimisation_depth, product_scope, acceptance and
+  denied_operation. Any other kind is refused. Before it writes, `log-decision`
+  asks one gate (`who_decides`) whether the PM may decide the kind for that
+  item, in this order: a protected kind (prod_deploy, full_release,
+  spend_over_cap, merge_around_gate, denied_operation) stays with Shawn;
+  `product_call` and `product_scope` stay with him until the agreement carries
+  the accepted marker; an active restrict Ruling for the kind and item keeps it
+  with him; an active grant Ruling hands it to the PM, unless Authority now
+  holds the kind narrower than when the grant became active, when the narrower
+  Authority level applies (a conflict); otherwise the Authority level applies,
+  read from the item's repo, or for the programme or an item with no repo the
+  narrowest across the remit repos. A level of propose or never keeps the kind
+  with Shawn. When the gate keeps it with Shawn, `log-decision` refuses and the
+  PM hands the item with `hand-item`, which is never gated. A decided Ruling does
+  not change the gate: it is Shawn's answer, which the PM follows and logs. On
+  an item that matched the product-question rule, a `product_call` or
+  `product_scope` decision closes the item as decided, which counts as
+  finished, or re-matches the item's other change kinds and leaves it open.
+  `accept-agreement` also records a Shawn decision of kind agreement.
 - **Permission proposals**: `propose-permission` takes `--item <id>`,
   repeatable; with none it reads every unfinished item. It reads the item
   sessions' transcripts (paths from the session registry) for refusals ruled
@@ -469,8 +487,9 @@ session.
   reads `recorded_issues`.
 - **Trajectories**: `record-trajectories` reads a JSON list on stdin, one entry per
   open item: `{item, done, current, planned, finish, location}`, where a step is
-  `{title, clause}` and a clause is `term:<key>`, `rule:<id>`, `instruction:<id>`
-  or null. It stores each entry on the item as its trajectory and moves
+  `{title, clause}` and a clause is `term:<key>`, `rule:<id>`, `ruling:<id>`
+  or null (`instruction:<id>` is still accepted for a Ruling read from an old
+  instruction). It stores each entry on the item as its trajectory and moves
   `trajectory_sweeps` to the previous and latest call times. A clause that is not
   in the rules in force is stored as null with an `unknown_clause` note, never
   refused. An entry for an unknown, done, handed or dropped item is skipped with a
@@ -639,9 +658,10 @@ Every write verb:
 3. revalidates under the run-record lock, then journals after the write commits.
 
 The approval verbs (accepting the agreement, amending a term, amending a project
-term after acceptance, recording an
-instruction, withdrawing one, adopting a rule, an autonomy level or a check
-command, answering a handed item,
+term after acceptance, recording a Ruling,
+withdrawing one or closing a restrict or decided Ruling, accepting a pending
+Ruling or requirement, carrying Rulings to the next programme, adopting a rule,
+an Authority level or a check command, answering a handed item,
 reopening a dropped item, and dropping an issue-backed item with an open
 deliverable) need `--prompt <id>` naming a
 prompt that the prompt hook journaled as typed in the driving session. The verb
@@ -653,10 +673,10 @@ redacted prompt text as whole words, case ignored, and not right after "not",
 "never", "no" or a "n't" word; "merge pr" names merge_pr, but "AI-801" does not
 name AI-80 and "act and tell" does not name the level act (programme-protocol-format.md
 gives the full rule). The text must contain: for `amend-term`, the term key and the new value; for `adopt-rule`,
-the rule id; for `adopt-autonomy`, the action and the level; for `adopt-check`,
+the rule id; for `adopt-autonomy`, the decision kind and the level; for `adopt-check`,
 the repo and the check key (for example `verified.lookup`); for `answer-handed`,
 `drop-item` and `reopen-item`, the item id or its key (for example `AI-753`).
-With `--widening`, the text must also contain "widen", "widening" or "widened". A prompt that does not
+For `record-ruling` and a `close-ruling` that needs a prompt, the Ruling id; for `accept-context`, the Ruling or requirement id and every item a Ruling gives the PM; for `carry-rulings`, each Ruling id. With `--widening` on `adopt-autonomy`, the text must also contain "widen", "widening" or "widened". A prompt that does not
 name them is refused, and the refusal lists the missing words.
 For `edit-project-term` after acceptance, the text must contain the term's area and
 its new text. `accept-agreement` accepts any typed prompt, because the quote is what it records; `accept-agreement`

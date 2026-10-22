@@ -32,27 +32,27 @@ vocabulary to learn, not two.
 | a PM-managed collection of work | **programme** | A run kind beside task runs: a PM agent managing every **item** within a **remit**. A task run drives steps; a programme drives items. |
 | the boundary of a programme | **remit** | What a programme covers — by default one herdr space. One live programme per remit. |
 | one piece of work in a programme | **item** | A namespaced entry (`linear:AI-753`) with a state, owner sessions, and **deliverables** backed by PM-checked evidence. |
-| a run's settled operating terms | **agreement** | Remit, stop rule, autonomy, cadence and budget — set at start, amended in plain chat, reloaded after compaction. |
-| what varies per project in an agreement | **project term** | A free-text entry on the agreement, outside its fixed terms: an area, who decides it or which tool to prefer, and the evidence it came from. It can reserve an area for Shawn; it never gives the PM or a worker a protected escalation (production deploys, releases, spend over cap, merge around the gate, refused permissions, risk or cost limits, settled human decisions). |
-| which contract an agreement was accepted under | **contract stamp** | `contract_version`, written only when the agreement is accepted. An agreement without it keeps the old rule that every product question goes to Shawn. |
-| the PM's authority on a stamped agreement | **operating contract** | What the contract stamp turns on: the PM decides what the project terms cover or leave silent, records why, and brings Shawn only choices that change the outcome or acceptance, reopen a settled human decision, touch a reserved area, exceed a risk or cost limit, or need a refused permission. The rules block shows it as an `operating contract v<n>` line. |
-| a scoped ruling workers are assigned under | **decision record** | `record-decision`: numbered revisions of a scope, reason, limits and the items it applies to, kept under the programme's context. A revision binds only once a typed prompt accepts it. |
-| the list of calls made while a programme runs | **decision log** | `log-decision`, answered asks and the accepted agreement: who decided, the decision kind, and the project term used or silent. It records calls; it approves nothing and is not a decision record. |
-| what sort of choice a decision is | **decision kind** | One of a closed list in `lib/programme_decisions.py`: the protocol's autonomy actions plus technical approach, work sequencing, worker coordination, tool choice, optimisation depth, product scope, acceptance and denied operation. `hand-item` and `log-decision` require one; an unknown kind is refused. Not the same as a change kind, which maps an item to its deliverables. |
-| Shawn's typed fix to who decides | **correction** | A change to who decides one decision kind, from Shawn's typed reply to an ask or a decision the PM recorded. It applies to this project at once, with a one-line notice, and undo reverts it. While corrections are switched off, the PM records the words as an instruction. |
-| which decision kinds a correction may move | **correctable kind** | The default-deny list a correction can reach: technical approach, work sequencing, worker coordination, tool choice and optimisation depth. Product scope, acceptance, reserved areas and the protected escalations are never on it. |
-| corrections kept past a programme's end | **carry-over store** | A per-machine JSON file beside the personal protocol. Corrections Shawn keeps at the end are stored under each remit repo's key, or under "all" for all projects, and pre-fill the project terms of the next programme on that repo. Running programmes never read it. |
+| a programme's own settings | **agreement** | Two sections, Scope and Rulings, specific to one programme: set at start, changed only by Shawn's typed messages, reloaded after compaction. Authority and Done standards are not in it; every programme reads them live from the protocol. |
+| what a programme covers | **Scope** | The agreement section holding the remit, the stop rule, cadence and budget, the sources watched (tools of record) and the preferred tools. |
+| a tool to prefer for a kind of job | **preferred tool** | A free-text Scope entry naming an existing skill or tool for a kind of job (ideation, options, requirements, implementation, optimisation, acceptance), with the evidence it came from. A preference, not a permission: it grants no access and never says who decides. Stored as `project_terms` until Behaviours replaces it. |
+| Shawn's standing order or decision | **Ruling** | One of Shawn's dated, scoped orders or decisions, kept as numbered revisions under the programme's context: his words, a decision kind, an effect (decided is his own call, grant hands the kind to the PM for the named items, restrict pulls it back to him), the items, limits, an end date. It binds only when a prompt he typed accepts it, and a revision that gives the PM more needs a new typed prompt naming what it adds. A casual typed correction ("that didn't need me") is a Ruling that applies at once. |
+| who decides each kind of choice | **Authority** | The protocol table that says, for each decision kind, whether the PM may act, act and tell, propose, or never, across the plugin, personal and project layers. It is the standing answer; a Ruling may widen or narrow it for named items until its end date. On disk it is still the protocol's `autonomy` section. |
+| choices no setting can hand to the PM | **protected kind** | `prod_deploy`, `full_release`, `spend_over_cap`, `merge_around_gate` and `denied_operation`, a closed tuple in `lib/programme_decisions.py`. They always stay with Shawn; no Authority level and no Ruling moves them. |
+| what done means for a kind of change | **Done standards** | The protocol rules that map a kind of change to its required deliverables and evidence bar. They carry no level: who decides is Authority's job. |
+| whether Shawn has accepted the agreement | **accepted marker** | `contract_version`, written only when the agreement is accepted. Until it is written, `product_call` and `product_scope` stay with Shawn; it gates nothing else. |
+| the decision rules an accepted agreement prints | **operating contract** | The lines the rules block adds once the accepted marker is written (`operating contract v<n>`): the PM decides what Authority and the Rulings leave to it, records why, and brings Shawn only choices that change the outcome or acceptance, reopen a settled human decision, touch a reserved area (one an active restrict Ruling covers), exceed a risk or cost limit, or need a refused permission. |
+| the list of calls made while a programme runs | **decision log** | `log-decision`, answered asks and the accepted agreement: who decided, the decision kind, and the Ruling or preferred tool cited, or silent. It records calls; it approves nothing and is not a Ruling. |
+| what sort of choice a decision is | **decision kind** | One of a closed list in `lib/programme_decisions.py`: the Authority kinds plus technical approach, work sequencing, worker coordination, tool choice, optimisation depth, product scope, acceptance and denied operation. `hand-item`, `log-decision` and `record-ruling` require one; an unknown kind is refused. Not the same as a change kind, which maps an item to its deliverables. |
+| Rulings kept past a programme's end | **carry-over store** | A per-machine JSON file beside the personal protocol. Rulings Shawn picks at the end (`carry-rulings`) are stored under each remit repo's key, and arrive in the next programme on that repo pending, with no items, until his typed prompt names the items. Running programmes never read it. |
 | why a worker may not do something | **restriction source** | Where a restriction in a worker's brief came from: `human`, `runtime`, `requirement`, `pm_choice` or `worker_assumption`. The PM handles each by its source: it never routes around a runtime refusal, and it may lift its own `pm_choice`. |
-| standing rules across runs | **protocol** | Rules mapping a kind of change to its required deliverables, evidence bar and autonomy level; three layers (plugin, personal, project). |
+| standing settings across programmes | **protocol** | Authority and Done standards, in three layers (plugin, personal, project). Every programme reads them live; `ack-protocol` records what a programme last acknowledged, so the PM can report each change once. |
 | the PM's live state of mind | **working model** | Now, queue, watching, waits, decisions for the human, just did, rules in force — shown in a PM-only mod. |
 | a programme's record of actions | **journal** | An append-only log beside the run-record: Shawn's prompts, items joining, evidence checked, terms amended, rules adopted, ownership changes. |
-| a standing order from chat | **instruction** | Something Shawn says that is not a term change ("skip full eval"), recorded with his words, what it applies to, and until when. |
 | a setup answer chosen in a picker | **picked prompt** | Shawn's answer to the PM's AskUserQuestion during setup, verified from the session transcript. Before acceptance it sets one per-programme setting; it never approves the accept, a shared setting, a ruling or anything after acceptance. |
 | the claim on a remit | **lease** | The per-space record that makes a programme the only live one in its remit. Only a typed takeover moves it: at once when herdr shows the old PM's pane closed or running another session, after two missed cadences, or when the typed takeover names the old PM with `--replace`. |
 | which session runs in which pane | **session registry** | A per-space log the SessionStart hook writes inside herdr: each session's id, pane, terminal and whether it is interactive. The PM reads it to know who owns a pane. |
 | a worker's report of finished work | **claim** | A line a worker session adds to the programme's **inbox** (`claims.jsonl`) naming an item, a deliverable and a ref. The PM checks the evidence before it believes it; a claim alone never makes an item done. |
 | when the PM may stop | **stop rule** | An agreement term: stop when nothing is left it can act on (the default), only when every item is done, at a set time, or never. Code computes "may stop" from it; the PM does not decide. |
-| how far the PM may act alone | **autonomy** | An agreement term. Its one option today, `protocol`, means the protocol rules decide action by action. No code reads it before the PM queues a step. |
 | how often the PM sweeps | **cadence** | An agreement term: sweep on change (the default) or on a fixed interval, with a daily eval budget and quiet hours. A lease whose heartbeat misses two cadences counts as orphaned. |
 | where the PM looks for state | **tools of record** | An agreement term listing the sources the PM reads each sweep: the tracker, each session's task list, and plan files in the remit's repos. Formerly the `sources` term. |
 | one PM pass over the programme | **sweep** | Prune prompts, re-check evidence, read the remit and the inbox, check claims, drive workers, record waits with watchers, update the working model, re-arm the wake-ups, then stop. |
@@ -66,7 +66,7 @@ vocabulary to learn, not two.
 | a change the store did not make | **foreign write** | A change found in a promoted programme's exports, such as a write from old plugin code. Appended rows are kept as a record but never count as approval; rewritten files are set aside. |
 | a request to allow a refused read | **permission proposal** | The PM asks Shawn once to apply a narrow native allow rule after a worker's read is refused. It grants nothing itself; Shawn applies the rule. Not a protocol proposal, which changes completion rules. |
 | an item's path through its steps | **trajectory** | Steps done, the current step, the planned steps and the finish, as the PM writes them each sweep. It belongs to the item, not the session doing it, and fades once it is older than about two sweeps. |
-| the rule a step relies on | **clause** | The term, protocol rule or active instruction a step cites. A step with no clause is shown as such; that is a warning, never a block. |
+| the rule a step relies on | **clause** | The Scope term, Done standard or active Ruling a step cites (`term:`, `rule:`, `ruling:`). A step with no clause is shown as such; that is a warning, never a block. |
 
 ## The shape in one line
 
@@ -82,8 +82,13 @@ Nine identifiers were retired when the code adopted this vocabulary. They surviv
 plan documents written before the rename, in run-records and workflow files on disk,
 and in anything you pulled from an older version. This table is how you read them —
 it is **historical**, not a live alias list. Nothing in `lib/`, `skills/`,
-`commands/`, or `docs/contracts/` spells the left column any more, and
+`commands/`, or `docs/contracts/` spells those nine any more, and
 `tests/unit/vocabulary-audit.test.sh` fails the build if it starts to.
+
+The rows from `instructions` down are the Programme concepts retired when the
+agreement was cut down to Scope and Rulings. Their persisted keys still read (see the
+read-compat guarantee below), so `lib/programme_home.py` still spells them in its read
+fallback; the verbs are gone, with no alias.
 
 | retired identifier | current term | where you still meet it | <!--legacy--> |
 |---|---|---|---|
@@ -96,6 +101,17 @@ it is **historical**, not a live alias list. Nothing in `lib/`, `skills/`,
 | `tick` | **pulse** | `/auto:auto-tick` in an in-flight rearm prompt; `lib/tick.sh` | <!--legacy--> |
 | `seam` | **handoff** | the `"seam"` phase value and `seam_paused` | <!--legacy--> |
 | `ledger` | **run-record** | `lib/ledger.py` (shim); the term throughout older plans | <!--legacy--> |
+| `instructions` | **Ruling** (kind-less, effect decided) | `programme.instructions[]` in older records; `instruction:<id>` step clauses | <!--legacy--> |
+| `record-instruction` / `close-instruction` | `record-ruling` / `close-ruling` | old transcripts and plans | <!--legacy--> |
+| `record-decision` (decision record) | `record-ruling` (**Ruling**) | kind-less revisions under `context.decisions` | <!--legacy--> |
+| correction (`correct-term`, `undo-correction`) | `record-ruling --replies-to` / `close-ruling` | old plans; corrections were never switched on | <!--legacy--> |
+| `keep-corrections` / `promote-correction` | `carry-rulings` | old plans and `/auto:programme-end` text | <!--legacy--> |
+| `autonomy` (agreement term) | none: **Authority** answers who decides | `agreement.terms.autonomy` in older records, dropped on read | <!--legacy--> |
+| `autonomy` (rule field) | none: **Done standards** carry no level | a protocol rule's optional legacy key, still validated and hashed | <!--legacy--> |
+| reserved project term (`--reserved-term`) | restrict **Ruling** (kind-less) | `agreement.project_terms[]` entries with `reserved: true` | <!--legacy--> |
+| project term (who decides an area) | **Ruling** with a decision kind | older agreements; preferred-tool text stays as a project term | <!--legacy--> |
+| contract stamp | **accepted marker** | the same `contract_version` key | <!--legacy--> |
+| `status --terms` | `status --agreement` | `/auto:programme-status terms` in older notes | <!--legacy--> |
 
 ### The read-compat guarantee
 
@@ -107,6 +123,15 @@ never version-gated and never skipped:
   and complete unchanged. They migrate to the current shape lazily, on their first
   write, because every mutation funnels through one atomic-write path. No migration
   command, no bulk rewrite, nothing to run.
+- **Programme records and protocol files** written before Rulings keep reading
+  correctly, with no bulk rewrite. Programme records read through
+  `normalize_programme` in `lib/programme_home.py`, not `lib/format_compat.py`, which
+  passes programme blocks through untouched: old instructions and reserved project
+  terms read as kind-less legacy Rulings under their own ids, the agreement's
+  autonomy term is dropped, and when a retired key and its replacement both exist the
+  new one wins. Protocol files keep loading: a rule's `autonomy` field is accepted as
+  a legacy key, and each adoption hash still covers the entry as written, so old
+  adoptions verify.
 - **Workflow files** you authored resolve and validate unchanged — both in
   `.claude/auto/workflows/` and in the pre-rename directories the table above names,
   which stay readable as legacy tiers. auto never rewrites a file you wrote, so this

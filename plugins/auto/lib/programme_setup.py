@@ -66,7 +66,7 @@ def _pickable(host, programme, key) -> dict:
     if key not in terms or not isinstance(terms[key], dict):
         raise host.ProgrammeError(
             f"{key!r} is not a per-programme agreement term, so it stays typed: a pick sets only "
-            f"{sorted(terms)}; rulings, reserved areas and shared "
+            f"{sorted(terms)}; Rulings and shared "
             "settings need the reply Shawn types")
     return terms[key]
 
@@ -300,8 +300,8 @@ def _h_setup_keep(host, argv):
 _SPECS = (
     ("pick-term", _h_pick_term,
      "<key> <value> --pick <id> [--seconds <n>] [--until <iso>] [--why <text>] [--run <id>]",
-     "an accepted agreement; a key that is not a per-programme agreement term (rulings, reserved "
-     "areas and shared settings stay typed); a value outside the term's options; a prompt that is not a "
+     "an accepted agreement; a key that is not a per-programme agreement term (Rulings and shared "
+     "settings stay typed); a value outside the term's options; a prompt that is not a "
      "verified pick from the driving session; a pick already used; a pick whose question does not name "
      "the term alone, or whose answer does not name the value (for a list, exactly the value's options). "
      "A refusal journals approval_refused."),

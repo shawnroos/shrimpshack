@@ -66,10 +66,9 @@ def _rulings_step(block, kept) -> dict:
     entries = programme_home.project_terms(block)
     proposed = [e for e in entries if e.get("set_by") == "proposal"]
     done = RULINGS in kept or (bool(entries) and not proposed)
-    values = "; ".join(f"{e.get('area')}: {e.get('value')}" + (" (reserved)" if e.get("reserved") else "")
-                       for e in entries) or "none"
+    values = "; ".join(f"{e.get('area')}: {e.get('value')}" for e in entries) or "none"
     source = next((e.get("source") for e in proposed if e.get("source")), "PM proposal") if proposed else None
-    return _step(RULINGS, "rulings and reserved areas", RULINGS, done, values,
+    return _step(RULINGS, "rulings", RULINGS, done, values,
                  f"{len(proposed)} proposed" if proposed else "none", source, needs_typed=True, pending=bool(proposed))
 
 

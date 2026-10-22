@@ -194,25 +194,53 @@ A writer that chose the plain-file path before promotion must check again under 
 A change found in a promoted Programme's exports that the store did not make.
 Appended rows are absorbed into the store as a record of what happened, but they never count as approval; rewritten files are set aside.
 
-### Decision record
-A scoped, revisioned ruling in a Programme's context (`record-decision`): its scope, reason, limits and
-the items it applies to. A revision binds only once a typed prompt accepts it, and workers are assigned under it.
+### Agreement
+What is specific to one Programme, in two sections: Scope and Rulings. Only the human's own
+typed messages change it. Authority and Done standards are not part of it; every Programme
+reads them live from the protocol.
+
+### Scope
+The agreement section that says what a Programme covers: the remit, when the PM may stop,
+cadence and budget, the sources watched (tools of record) and the preferred tools.
+
+### Preferred tool
+A Scope entry naming an existing skill or tool to prefer for a kind of job, with the evidence
+it came from. It is a preference, not a permission: it grants no access and never says who
+decides.
+
+### Ruling
+One of the human's dated, scoped orders or decisions: their words, a decision kind, an effect
+(decided, grant or restrict), the items it applies to, its limits, until when, and its revision
+history. It binds only when a prompt the human typed accepts it, and a revision that gives the
+PM more needs a new typed prompt naming what it adds. A casual typed correction ("that didn't
+need me") is a Ruling that applies at once.
+
+### Authority
+The protocol's one table of who decides each decision kind and at what level (act, act and
+tell, propose, never), across the plugin, personal and project layers. It is the standing
+answer; a Ruling may widen or narrow it for named items until its end date.
+
+### Protected kind
+A decision kind fixed in code as the human's: production deploys, releases, spend over the cap,
+merging around a gate and refused permissions. Neither Authority nor a Ruling can hand one to
+the PM.
+
+### Done standards
+The protocol rules that say, for each kind of change, the required deliverables and evidence
+bar. They carry no level; who decides is Authority's job.
+
+### Accepted marker
+The mark written when the human accepts a Programme's agreement. Until it exists, product calls
+stay with the human; it gates nothing else.
 
 ### Decision log
 The flat list of choices made while a Programme runs (`log-decision`, answered asks, the accepted agreement):
-who decided, the decision kind, and the project term it used or that it was silent. It is a record of calls
-made, not a ruling, and it approves nothing.
+who decided, the decision kind, and the Ruling or preferred tool it cited, or that it was silent. It is a
+record of calls made, not a Ruling, and it approves nothing.
 
-### Project terms
-The part of a programme's agreement that states who decides each area, which existing skills
-and tools the PM prefers for each kind of job, and what acceptance means for that project. When
-the terms are silent, the PM decides and brings the human only decisions that change the outcome.
-
-### Correction
-A change to the project terms that the human types in chat while the programme runs. It applies
-to that project immediately with a one-line notice, can be undone, and reaches other projects
-only on the human's explicit yes. Only the human's own typed messages count; a worker message,
-summary or watcher event never does.
+### Carry-over store
+A per-machine file that keeps the Rulings the human picks at a Programme's end, so the next
+Programme on the same project starts with them pending until the human names their items.
 
 ### Permission proposal
 A request for the human to apply a narrow native permission that resolves blocked read-only work. It does not grant permission itself. Programme protocol proposals instead concern completion rules and evidence requirements.
@@ -228,9 +256,12 @@ written: a display must measure it against the current clock, because one that f
 write time freezes exactly when the PM stops sweeping, and shows stalled work as fresh.
 
 ### Clause
-The part of the agreement a step relies on: a term, an adopted protocol rule or an active
-instruction. A step with no clause is allowed and shown as such; it is a warning, never a
-block.
+What a step relies on: a Scope term, a Done standard or an active Ruling. A step with no
+clause is allowed and shown as such; it is a warning, never a block.
+
+Instructions, decision records, project terms as a who-decides source, corrections, the
+agreement's autonomy term and the contract stamp are retired; `plugins/auto/CONCEPTS.md`
+shows how older records name them.
 
 ### Tools of record
 The programme-wide set of tools where work and evidence live and that the PM checks each

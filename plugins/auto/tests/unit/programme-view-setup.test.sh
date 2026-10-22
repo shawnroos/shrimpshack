@@ -124,6 +124,8 @@ b["agreement"]["project_terms"] = [{"id": "t1", "area": "deploys", "value": "ask
 p = setup.build(b)
 check("a proposed ruling needs a typed reply", step(p, "rulings")["needs_typed"]
       and isinstance(step(p, "rulings")["reply"], str) and step(p, "rulings")["state"] != "done", step(p, "rulings"))
+check("the rulings step names no reserved area: an old reserved flag reads as a legacy Ruling, not a step value",
+      step(p, "rulings")["label"] == "rulings" and "reserved" not in step(p, "rulings")["values"], step(p, "rulings"))
 b["setup"] = {"kept": ["rulings", "shared"]}
 p = setup.build(b)
 check("a typed-reply step listed in kept is done with no reply",

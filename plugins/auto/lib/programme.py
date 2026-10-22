@@ -728,9 +728,9 @@ _VERBS = {
     ),
     "adopt-rule": _Verb(
         _h_adopt_rule,
-        "<rule-id> --prompt <id> [--widening] [--run <id>]",
-        rejects="no proposal with that id; a prompt that is not typed or does not name the rule id "
-        "(and the word widen with --widening); a widening without --widening.",
+        "<rule-id> --prompt <id> [--run <id>]",
+        rejects="no proposal with that id; a rule that fails the protocol rule format; a prompt that is "
+        "not typed or does not name the rule id.",
     ),
     "adopt-autonomy": _Verb(
         _h_adopt_autonomy,
@@ -879,10 +879,11 @@ _VERBS["inbox"] = _Verb(
 )
 _VERBS["status"] = _Verb(
     _h_status,
-    "[<run>|--run <id>] [--terms] [--json]  (prints the working model: doing now, queue, watching, "
+    "[<run>|--run <id>] [--agreement] [--json]  (prints the working model: doing now, queue, watching, "
     "who waits on whom, decisions for Shawn, just did, acceptance, end and archive state, rules in "
-    "force, items; rebuilds a missing view for an active programme; --terms prints only the project "
-    "terms, decision-log entries by term and recent term changes)",
+    "force, items; rebuilds a missing view for an active programme; --agreement prints only the "
+    "agreement page: Scope, Rulings, Authority, Done standards, protocol changes, decision-log entries "
+    "by Ruling and recent preferred-tool changes)",
     reads=True,
 )
 
