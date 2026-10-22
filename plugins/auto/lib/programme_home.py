@@ -500,6 +500,30 @@ def leases_for_session(session_id) -> list:
         return []
 
 
+def replace_name(text) -> str | None:
+    words = str(text or "").split()
+    if "--replace" not in words:
+        return None
+    rest = words[words.index("--replace") + 1:]
+    name = " ".join(rest[:next((i for i, w in enumerate(rest) if w.startswith("--")), len(rest))])
+    return name.strip("'\"") or None
+
+
+def lease_driven_by(session_id):
+    if not session_id:
+        return None
+    try:
+        for key, lease in iter_leases():
+            if not lease or lease.get("corrupt"):
+                continue
+            driver = (_read_record(lease.get("run")) or {}).get("driving_session_id") or lease.get("session_id")
+            if driver == session_id:
+                return dict(lease, key=key)
+    except Exception:
+        return None
+    return None
+
+
 def driven_runs(session_id, now=None) -> list:
     found = []
     for lease in leases_for_session(session_id):

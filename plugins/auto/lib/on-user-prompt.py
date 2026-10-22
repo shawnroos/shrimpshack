@@ -103,7 +103,8 @@ def _space_lease(session_id, env):
 
 
 def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease, source):
-    lease = driving_lease or _space_lease(session_id, env)
+    named = programme_home.lease_driven_by(programme_home.replace_name(text)) if verb == "takeover" else None
+    lease = driving_lease or named or _space_lease(session_id, env)
     if lease is None:
         return
     status = programme_home.lease_status(lease)

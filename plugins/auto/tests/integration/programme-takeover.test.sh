@@ -170,12 +170,12 @@ it "the refusal names the PM by its pane and tab name"
 has 'the PM in pane "PM" in tab "Work" (w2:p10)' "$OUT"
 
 it "the refusal gives the exact reply that replaces it, and what happens either way"
-has "To replace it, type: /auto:programme-takeover --replace PM " "$OUT"
+has "To replace it, type: /auto:programme-takeover --replace sess-pm " "$OUT"
 has "that PM's next programme write is refused" "$OUT"
 has "If you type nothing, that PM keeps driving" "$OUT"
 
 it "the refusal is journaled with the reply"
-has "--replace PM" "$(last_entry "$RUN" request_refused)"
+has "--replace sess-pm" "$(last_entry "$RUN" request_refused)"
 
 it "a replace naming another pane is refused and says so"
 typed sess-b '/auto:programme-takeover --replace scratch' >/dev/null
@@ -320,6 +320,42 @@ typed sess-g '/auto:programme-takeover' >/dev/null
 set_beat "$RUN" 3
 as sess-g takeover
 check "1 sess-h" "$CODE $(driver_of "$RUN")"
+
+as_in() {
+  local ws="$1" sid="$2"; shift 2
+  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID="$ws" "$PY" "$PROG" "$@" 2>&1)"
+  CODE=$?
+}
+
+typed_in() {
+  ( cd "$NOREPO" && HERDR_WORKSPACE_ID="$1" "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$2" "$3" 2>/dev/null )
+}
+
+set_beat "$RUN" 0
+CUR="$(driver_of "$RUN")"
+register "$CUR" w2:p70 term_p70
+register sess-w5 w5:p1 term_w5 w5
+snapshot "w2:p70|PM|${CUR}|term_p70" "w2:p31|scratch|sess-w2|term_p31"
+
+it "a plain takeover from another workspace is refused and names the session-id route"
+typed_in w5 sess-w5 '/auto:programme-takeover' >/dev/null
+as_in w5 sess-w5 takeover
+check "1 $CUR" "$CODE $(driver_of "$RUN")"
+has "no programme holds default.w5" "$OUT"
+has "--replace <session id>" "$OUT"
+
+it "a replace from another workspace naming a session that drives nothing is refused"
+typed_in w5 sess-w5 '/auto:programme-takeover --replace sess-nobody' >/dev/null
+as_in w5 sess-w5 takeover --replace sess-nobody
+check "1 $CUR" "$CODE $(driver_of "$RUN")"
+
+it "a typed replace naming the live PM's session id takes over from another workspace"
+typed_in w5 sess-w5 "/auto:programme-takeover --replace $CUR" >/dev/null
+as_in w5 sess-w5 takeover --replace "$CUR"
+check "0 sess-w5" "$CODE $(driver_of "$RUN")"
+
+it "the cross-workspace request was journaled under the PM's programme"
+has "--replace $CUR" "$(last_entry "$RUN" takeover_request)"
 
 echo
 echo "programme-takeover.test.sh: ${PASS} passed, ${FAIL} failed"
