@@ -282,6 +282,24 @@ session.
   not accepted, with each check's result (confirmed, refuted, unknown, not_run,
   stale or missing), the follow-ups no requirement gates on, and completed, handed,
   dropped, decided and open items apart. Acceptance never changes the stop rule.
+- **Rulings**: `record-ruling` keeps one of Shawn's orders or decisions as
+  numbered revisions in the same store, with a decision kind, an effect
+  (decided is Shawn's own call, grant hands the kind to the PM for the named
+  items, restrict pulls it back to Shawn), limits, an optional `--until` end
+  date and Shawn's words. A typed `--prompt` that names the id makes it active;
+  without one it waits for `accept-context`. A revision that gives the PM more
+  power (a grant that adds items, drops a limit or ends later; a restrict that
+  loses items, drops a limit or ends sooner) waits for an `accept-context`
+  prompt naming each item it adds, while the prior revision stays in force. A
+  grant records the Authority level for its kind when it becomes active, and a
+  narrowing revision keeps it. A grant or decided Ruling of a protected kind is
+  refused. Changing a decided Ruling needs a typed prompt naming it.
+  `--replies-to <ask-or-decision-id>` records a casual correction: the anchor
+  gives the item and kind, the typed prompt must come after the anchor, and the
+  Ruling applies at once with a one-line notice. A Ruling past its end date
+  reads as expired. `close-ruling` closes one: as fulfilled it needs `--why`;
+  as withdrawn, or closing a restrict or decided Ruling, needs a typed prompt
+  naming it.
 - **Safety pauses and denials**: `pause` (`--risk safety|data_loss`) holds named
   items or the whole programme, notifies Shawn, holds the stop, and makes
   `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed

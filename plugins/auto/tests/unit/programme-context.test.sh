@@ -196,6 +196,12 @@ prog record-decision d-docs --scope "fix the docs page" --reason "stale install 
 check "0 pending_acceptance 2 [\"herdr:linux-probe\"]" \
   "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"]') $(pyget "$OUT" 'd["delta"]["added"]')"
 
+it "a kind-less decision's delta lists the added target as what the accepting prompt must name"
+check "[\"herdr:linux-probe\"]" "$(pyget "$("$PY" "$PROG" context --run "$RUN" 2>&1)" "d['decisions']['d-docs']['pending']['delta']['added']")"
+
+it "the context view reads the decision as active while its wider revision waits"
+check "active" "$(pyget "$("$PY" "$PROG" context --run "$RUN" 2>&1)" "d['decisions']['d-docs']['state']")"
+
 it "work on the widened target waits: assign-item refuses until the delta is accepted"
 prog assign-item herdr:linux-probe --decision-id d-docs --run "$RUN"
 check "1" "$CODE"
@@ -501,7 +507,7 @@ check "block" "$(pyget "$(stop_decide)" 'd["decision"]')"
 it "describe lists the context verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-for verb in record-decision define-requirement accept-context assign-item raise-blocker clear-blocker pause lift-pause record-denial context; do
+for verb in record-decision record-ruling close-ruling define-requirement accept-context assign-item raise-blocker clear-blocker pause lift-pause record-denial context; do
   case " $VERBS " in *" $verb "*) ;; *) VERBS="MISSING:$verb $VERBS" ;; esac
 done
 lacks "MISSING:" "$VERBS"

@@ -27,6 +27,7 @@ programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_decisions = load_lib_module("programme_decisions")
 programme_carryover = load_lib_module("programme_carryover")
+programme_rulings = load_lib_module("programme_rulings")
 
 CONTRACT_VERSION = 1
 PROPOSED = "agreement_proposed"
@@ -235,7 +236,6 @@ UNDONE = "correction_undone"
 CORRECTABLE_KINDS = ("technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
                      "optimisation_depth")
 OWNERS = ("pm", "worker", "shawn")
-_ANCHOR_ROWS = {"item_handed": "ask", "pm_decided": "decision_id", "handed_answered": "decision_id"}
 
 
 def corrections(programme) -> list:
@@ -273,40 +273,19 @@ def _check_switch() -> None:
         raise TermsError(CORRECTIONS_OFF)
 
 
-def _row_index(rows, kind, key, value):
-    return next((i for i, row in enumerate(rows) if row.get("kind") == kind
-                 and (row.get(key) == value or (row.get("payload") or {}).get(key) == value)), None)
-
-
-def _prompt_index(rows, prompt_id) -> int:
-    index = _row_index(rows, "prompt", "prompt_id", prompt_id)
-    if index is None:
-        raise TermsError(f"no prompt {prompt_id!r} in this programme's journal")
-    return index
+_prompt_index = programme_rulings.prompt_index
+_check_anchor_order = programme_rulings.check_anchor_order
 
 
 def _anchor(programme, anchor_id) -> tuple:
-    for entry in programme.get("decisions") or []:
-        if isinstance(entry, dict) and entry.get("id") == anchor_id:
-            return entry.get("kind"), None
-    for key, item in programme["items"].items():
-        if programme_decisions.ask_id(item) == anchor_id:
-            return programme_decisions.ask_kind(item), key
-    raise TermsError(f"no ask or recorded choice {anchor_id!r} in this programme")
+    found = programme_rulings.anchor(programme, anchor_id)
+    return found["kind"], found["item"] if found["ask"] else None
 
 
 def _check_correctable(kind) -> None:
     if kind not in CORRECTABLE_KINDS:
         raise TermsError(f"kind {kind!r} is not correctable; a correction may change only "
                          f"{', '.join(CORRECTABLE_KINDS)}")
-
-
-def _check_anchor_order(rows, anchor_id, prompt_id) -> None:
-    anchor = min((i for kind, key in _ANCHOR_ROWS.items()
-                  for i in [_row_index(rows, kind, key, anchor_id)] if i is not None), default=None)
-    if anchor is None or anchor > _prompt_index(rows, prompt_id):
-        raise TermsError(f"{anchor_id!r} was not recorded before prompt {prompt_id!r}; a correction "
-                         "replies only to an ask or choice Shawn had already seen")
 
 
 def _check_prompt_unused(programme, prompt_id) -> None:

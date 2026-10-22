@@ -42,7 +42,8 @@ RISKS = ("safety", "data_loss")
 CHECK_SEP = "="
 PROGRAMME_SCOPE = "programme"
 JOURNAL_KINDS = ("decision_recorded", "requirement_defined", "context_accepted", "item_assigned",
-                 "blocker_raised", "blocker_cleared", "pause_raised", "pause_lifted", "denial_recorded")
+                 "blocker_raised", "blocker_cleared", "pause_raised", "pause_lifted", "denial_recorded",
+                 "ruling_recorded", "ruling_closed")
 AUTHORITY_NOTE = ("context, not approval: decisions and requirements here are retained records; "
                   "only a typed prompt through an approval verb accepts a change")
 CHECK_RESULTS = ("confirmed", "refuted", "unknown", "not_run", "stale", "missing")
@@ -295,8 +296,81 @@ def _item_options(item_id) -> list:
 
 
 DECISION_KEYS = ("scope", "reason", "limits", "applies_to", "requirements")
+RULING_KEYS = DECISION_KEYS + ("kind", "effect", "until")
+EFFECTS = ("decided", "grant", "restrict")
 REQUIREMENT_KEYS = ("text", "checks", "decision_id")
 ID_FIELDS = {"decisions": "decision_id", "requirements": "requirement_id"}
+
+
+def is_ruling(revisions) -> bool:
+    return any(_dict(r).get("effect") in EFFECTS for r in revisions or [])
+
+
+def _end(until):
+    return run_record_core.parse_iso(until) if until else None
+
+
+def _until_change(old, new):
+    before, after = _end(old), _end(new)
+    if before == after:
+        return None
+    if after is None or (before is not None and after > before):
+        return "extended"
+    return "shortened"
+
+
+def ruling_delta(current, content):
+    if current is None:
+        return None
+    old, new = set(current.get("applies_to") or []), set(content["applies_to"])
+    delta = {"added": sorted(new - old), "removed": sorted(old - new),
+             "removed_limits": sorted(set(current.get("limits") or []) - set(content["limits"])),
+             "until": _until_change(current.get("until"), content.get("until"))}
+    if content["effect"] == "restrict":
+        names, longer = delta["removed"], delta["until"] == "shortened"
+    else:
+        names, longer = delta["added"], content["effect"] == "grant" and delta["until"] == "extended"
+    delta["names"] = names
+    delta["wider"] = bool(names or delta["removed_limits"] or longer)
+    return delta
+
+
+def ruling_state(revisions, now) -> str:
+    current = in_force(revisions)
+    if current is not None:
+        end = _end(current.get("until"))
+        return "expired" if end is not None and now is not None and end <= now else "active"
+    if pending(revisions):
+        return "pending"
+    if any(_dict(r).get("state") == "closed" for r in revisions or []):
+        return "closed"
+    return "none"
+
+
+def _canonical(items, target) -> str:
+    if target == PROGRAMME_SCOPE:
+        return target
+    found = _item(items, target)
+    return _dict(found).get("id") or target
+
+
+def rulings_for(programme, item, kind, now) -> list:
+    when = run_record_core.parse_iso(now)
+    items = _dict(programme.get("items"))
+    out = []
+    for rid, revisions in sorted(block(programme)["decisions"].items()):
+        current = in_force(revisions)
+        if current is None or current.get("kind") != kind or ruling_state(revisions, when) != "active":
+            continue
+        targets = {_canonical(items, t) for t in current.get("applies_to") or []}
+        # A programme-wide Ruling covers every item, as programme scope does for assign-item.
+        if PROGRAMME_SCOPE in targets:
+            targets.add(item)
+        if item in targets:
+            out.append({"id": rid, "rev": current.get("rev"), "kind": kind, "effect": current.get("effect"),
+                        "items": sorted(targets), "until": current.get("until") or "",
+                        "baseline": current.get("baseline")})
+    return out
 
 
 def _decision_delta(current, content):
@@ -342,7 +416,10 @@ def _h_record_decision(host, record, argv):
     def change(programme, prompt, rec):
         content = {"scope": scope, "reason": reason, "limits": limits,
                    "applies_to": _scope(record, programme, opts["applies-to"]), "requirements": requirements}
-        current = in_force(_dict(_guarded(record, block, programme)["decisions"]).get(cid))
+        revisions = _dict(_guarded(record, block, programme)["decisions"]).get(cid)
+        if is_ruling(revisions):
+            raise record.RecordError(f"{cid!r} is a Ruling; change it with record-ruling")
+        current = in_force(revisions)
         delta = _decision_delta(current, content)
         wider = bool(delta and (delta["added"] or delta["removed_limits"]))
         return _guarded(record, _record_revision, host, "decisions", cid, content, delta, wider, prompt, programme)
@@ -384,26 +461,6 @@ def _h_define_requirement(host, record, argv):
         return _guarded(record, _record_revision, host, "requirements", cid, content, delta, False, prompt, programme)
 
     return host._write(opts, change, "requirement_defined", prompt_id=opts.get("prompt"))
-
-
-def _h_accept_context(host, record, argv):
-    positional, opts = host._parse(argv, values=("run", "prompt"))
-    if len(positional) != 1:
-        raise ValueError("usage: accept-context <decision-or-requirement-id> --prompt <id>")
-    cid = positional[0]
-
-    def change(programme, prompt, rec):
-        ctx = _guarded(record, _mutable, programme)
-        kind = "decisions" if cid in ctx["decisions"] else "requirements" if cid in ctx["requirements"] else None
-        revision = pending(ctx[kind].get(cid)) if kind else None
-        if revision is None:
-            raise record.RecordError(f"no pending revision of {cid!r} to accept")
-        added = _dict(revision.get("delta")).get("added") or []
-        host.require_named(prompt, cid, *[_item_options(t) if t != PROGRAMME_SCOPE else t for t in added])
-        _accept(ctx[kind][cid], revision, prompt)
-        return {ID_FIELDS[kind]: cid, "rev": revision["rev"], "state": "accepted", "supersedes": revision["supersedes"]}
-
-    return host._write(opts, change, "context_accepted", prompt_id=opts.get("prompt"), needs_prompt=True)
 
 
 def _h_assign_item(host, record, argv):
@@ -551,7 +608,9 @@ def _h_record_denial(host, record, argv):
 
 
 def _revisions_view(section) -> dict:
-    return {cid: {"in_force": in_force(revs), "pending": pending(revs), "revisions": revs}
+    now = run_record_core.parse_iso(_now())
+    return {cid: {"in_force": in_force(revs), "pending": pending(revs), "revisions": revs,
+                  "state": ruling_state(revs, now)}
             for cid, revs in sorted(section.items())}
 
 
@@ -619,9 +678,6 @@ SPECS = (
      "<id> --text <text> --check <item-id>=<deliverable>... [--decision-id <id>] [--prompt <id>] [--run <id>]",
      "a check on a deliverable the protocol does not require of the item; an unknown item or decision; a "
      "prompt that is not typed or does not name the id. Without a prompt the revision waits for accept-context."),
-    ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
-     "no pending revision; a prompt that is not typed, came from a legacy journal or an obsolete writer, or "
-     "does not name the id and every target the revision adds."),
     ("assign-item", _h_assign_item, "<item-id> --decision-id <id> [--run <id>]",
      "an item outside the scope of the decision's revision in force (compared by canonical id, so a merge "
      "never widens it); a target only a pending revision adds."),

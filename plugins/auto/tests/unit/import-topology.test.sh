@@ -162,12 +162,15 @@
 #                          programme_authority, programme_protocol, session_registry,
 #                          driver_session, verb_cli; programme_resume, programme_store,
 #                          programme_import [lazy];
-#                          then, after its verb table is built: programme_record,
+#                          then, after its verb table is built: programme_record, programme_rulings,
 #                          programme_evidence, programme_sources, programme_terms, programme_proposals,
 #                          programme_trajectory, programme_view, programme_lifecycle, programme_archive
 #                          Those eight receive `programme` as a `host` argument and never
 #                          load it back.
 #   programme_proposals  → programme_home, programme_sanitize
+#   programme_rulings    → run_record_core, programme_journal, programme_sanitize,
+#                          programme_decisions, programme_context (never programme_terms:
+#                          programme_terms loads it for the correction anchor checks)
 #   programme_naming     → programme_home
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
 #                          session_registry, driver_session, programme_sanitize,
@@ -507,7 +510,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
            programme_recovery.py programme_archive.py programme_resume.py \
            programme_terms.py programme_proposals.py programme_trajectory.py programme_view_work.py \
-           programme_naming.py; do
+           programme_naming.py programme_rulings.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -528,7 +531,8 @@ done
 # ─── programme family: forbidden edges ─────────────────────────────────────
 for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
              programme-watch run_record_evidence programme_lifecycle programme_archive \
-             programme_resume programme_terms programme_proposals programme_view_work programme_naming; do
+             programme_resume programme_terms programme_proposals programme_view_work programme_naming \
+             programme_rulings; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
@@ -626,6 +630,13 @@ if loads_sibling "programme_context.py" "programme" || loads_sibling "programme_
    || loads_sibling "programme_context.py" "programme_protocol" \
    || loads_sibling "programme_context.py" "programme_predicate"; then
   fail "programme_context.py must stay pure — the predicate loads it, and programme_record passes itself in"
+else
+  pass
+fi
+
+it "programme_rulings.py loads neither programme_terms nor programme_record (terms loads it; record is the host's)"
+if loads_sibling "programme_rulings.py" "programme_terms" || loads_sibling "programme_rulings.py" "programme_record"; then
+  fail "programme_rulings.py must not load programme_terms (cycle) or programme_record (reach it as host.programme_record)"
 else
   pass
 fi

@@ -121,6 +121,8 @@ KINDS = (
     "pause_raised",
     "pause_lifted",
     "denial_recorded",
+    "ruling_recorded",
+    "ruling_closed",
     "code_captured",
     "code_capture_failed",
     "operation_admitted",
