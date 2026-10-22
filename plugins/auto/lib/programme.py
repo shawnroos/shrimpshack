@@ -223,9 +223,9 @@ def render_rules(record, revision=None) -> str:
     )
 
 
-def render_restore(run_id) -> str:
+def render_restore(run_id, session_id=None, cwd=None) -> str:
     record, revision = _resume().head(run_id)
-    return render_rules(record, revision)
+    return render_rules(record, revision) + load_lib_module("programme_worktree").restore_line(record, session_id, cwd)
 
 
 def _guard(home, record, *, compact_exempt=False):
@@ -235,7 +235,7 @@ def _guard(home, record, *, compact_exempt=False):
     if (record.get("programme") or {}).get("ended"):
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
-        sys.stdout.write(render_rules(record))
+        sys.stdout.write(render_rules(record) + load_lib_module("programme_worktree").restore_line(record, sid))
         raise ProgrammeError(
             "context was compacted or handed over: read the rules in force and the restored "
             "context above, then run `programme.py rules --ack`"

@@ -368,7 +368,7 @@ def _h_takeover(host, argv):
     _finish(host, run, "taken_over", sid, moved, journal=False)
     if moved.get("evidence"):
         sys.stdout.write(f"Took over from {_driver_words(moved['evidence'])}: {moved['evidence'].get('why')}.\n")
-    sys.stdout.write(host.render_restore(run))
+    sys.stdout.write(host.render_restore(run, sid, os.getcwd()))
     sys.stdout.write("Re-arm the remit watcher, the cron fallback and every watcher listed above "
                      "from this session; the old session's watchers can no longer beat.\n")
     return 0

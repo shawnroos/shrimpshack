@@ -240,6 +240,16 @@ def move_line(record_or_programme, session_id, cwd) -> str:
             "and a cd run here would not last.")
 
 
+def restore_line(record_or_programme, session_id, cwd=None) -> str:
+    if not session_id:
+        return ""
+    try:
+        line = move_line(record_or_programme, session_id, cwd if cwd is not None else _cwd())
+    except Exception:
+        return ""  # The move line is advice: a registry it cannot read must not cost the PM its rules.
+    return line + "\n" if line else ""
+
+
 def _in_remit(repo, programme) -> bool:
     paths = [r.get("path") for r in ((programme.get("remit") or {}).get("repos") or [])
              if isinstance(r, dict)]
