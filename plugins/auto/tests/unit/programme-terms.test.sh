@@ -378,7 +378,7 @@ has "protected escalations override every project term: prod_deploy, full_releas
 it "a stamped programme's rules block drops the plugin product-question caveat"
 lacks "The PM never decides a product question" "$RULES"
 it "the product-question rule points at the operating contract instead"
-has "rule product-question: propose, requires handed; caveat: The PM decides unless the operating contract's escalation list applies." "$RULES"
+has "rule product-question: requires handed; caveat: The PM decides unless the operating contract's escalation list applies." "$RULES"
 it "a stamped programme's status page drops the product-question caveat too"
 prog status
 lacks "The PM never decides a product question" "$OUT"
@@ -431,12 +431,12 @@ cadence: on_change, seconds 3600
 remit: space
 stop_rule: nothing_it_can_act_on
 tools_of_record: tracker, tasks, plans
-rule evals-or-docs: act, requires merged, recorded
-rule fix-only: act, requires merged, verified, recorded; caveat: Use this only when the change stops broken behaviour and adds nothing new.
-rule flagged-code: act, requires merged, flagged, verified, recorded; caveat: A prod flag stays off until Shawn says otherwise.
-rule product-question: propose, requires handed; caveat: The PM never decides a product question.
-rule shared-blocker: never, requires debugged; caveat: The PM never fixes another team's code. It debugs and records only.
-rule shared-package: act_and_tell, requires merged, released, recorded; caveat: A full release needs Shawn's yes. An eval waiver must be a named instruction.
+rule evals-or-docs: requires merged, recorded
+rule fix-only: requires merged, verified, recorded; caveat: Use this only when the change stops broken behaviour and adds nothing new.
+rule flagged-code: requires merged, flagged, verified, recorded; caveat: A prod flag stays off until Shawn says otherwise.
+rule product-question: requires handed; caveat: The PM never decides a product question.
+rule shared-blocker: requires debugged; caveat: The PM never fixes another team's code. It debugs and records only.
+rule shared-package: requires merged, released, recorded; caveat: A full release needs Shawn's yes. An eval waiver must be a named instruction.
 </auto-rules>" "${OUT%%</auto-rules>*}</auto-rules>"
 it "an unstamped programme's rules JSON has no operating contract"
 check false "$(run_py "$RUN" <<'EOF'

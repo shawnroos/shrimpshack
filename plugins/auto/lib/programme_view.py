@@ -530,7 +530,7 @@ def _instruction_text(entry) -> str:
 
 
 def _rule_text(rule) -> str:
-    text = (f"rule {rule.get('id')}: {rule.get('autonomy')}, requires "
+    text = (f"rule {rule.get('id')}: requires "
             f"{', '.join(rule.get('requires') or []) or 'nothing'}{_adopted_on(rule)}")
     return text + (f"; caveat: {rule['caveat']}" if rule.get("caveat") else "")
 
