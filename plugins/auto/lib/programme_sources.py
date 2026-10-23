@@ -35,6 +35,7 @@ programme_tasks = load_lib_module("programme_tasks")
 programme_plans = load_lib_module("programme_plans")
 programme_recovery = load_lib_module("programme_recovery")
 session_registry = load_lib_module("session_registry")
+programme_behaviours = load_lib_module("programme_behaviours")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -578,7 +579,7 @@ def _decision_line(decision_id, logged, records) -> str:
             f"reason: {current.get('reason')}; limits: {limits}")
 
 
-def _brief_tail(host, programme, decision_ids, restrictions) -> str:
+def _brief_tail(host, programme, decision_ids, restrictions, behaviours=()) -> str:
     logged = {d.get("id"): d for d in programme.get("decisions") or [] if isinstance(d, dict)}
     try:
         records = programme_context.block(programme)["decisions"]
@@ -601,6 +602,7 @@ def _brief_tail(host, programme, decision_ids, restrictions) -> str:
     if restrictions:
         lines.append("Restrictions on this work:")
         lines += [f"- {r['text']} (source: {r['source']})" for r in restrictions]
+    lines += programme_behaviours.brief_lines(behaviours)
     return "\n\n" + "\n".join(lines) if lines else ""
 
 
@@ -611,8 +613,8 @@ def _record_restrictions(item, restrictions, via) -> None:
 
 def _read_brief(extra) -> tuple:
     if "--handoff" not in extra[:-1]:
-        raise ValueError("start-worker with --decision or --restriction needs --handoff <file> "
-                         "among the spinoff arguments")
+        raise ValueError("start-worker with --decision, --restriction or a behaviour in force needs --handoff "
+                         "<file> among the spinoff arguments")
     at = extra.index("--handoff") + 1
     try:
         with open(extra[at], encoding="utf-8") as fh:
@@ -630,7 +632,7 @@ def _brief_copy(home, item_id, extra, at, brief, tail) -> list:
     return extra[:at] + [copy] + extra[at + 1:]
 
 
-def _launch_assign(started, session_name, restrictions=()):
+def _launch_assign(started, session_name, restrictions=(), behaviour_ids=()):
     def assign(prog, op):
         item = prog["items"][programme_record._resolve(prog, op["item"])]
         entry = {k: started.get(k) for k in ("session_id", "pane", "terminal_id", "ok", "reason", "spinoff_exit")}
@@ -641,6 +643,8 @@ def _launch_assign(started, session_name, restrictions=()):
                                                "terminal-id": started["terminal_id"],
                                                "session-name": session_name})
             _record_restrictions(item, restrictions, "start-worker")
+            for bid in behaviour_ids:
+                programme_behaviours.record_delivery(item, bid, "brief", "start-worker")
         item["history"].append({"at": entry["at"], "kind": "started" if started.get("ok") else "start_failed",
                                 "session_id": started["session_id"]})
         return True
@@ -681,11 +685,12 @@ def _h_start_worker(host, argv):
     cut = argv.index("--", 1) if "--" in argv[1:] else len(argv)
     own, extra = argv[:cut], argv[cut + 1:]
     own, decision_ids = _take(own, "--decision")
+    own, chosen = _take(own, "--behaviour")
     positional, opts = host._parse(own, values=("run", "session-name"),
                                    multi=("restriction", "source", "despite"))
     if len(positional) != 1 or not extra:
         raise ValueError("usage: start-worker <item> [--session-name <name>] [--despite <attempt>]... "
-                         "[--decision <id>]... [--restriction <text> --source <source>]... "
+                         "[--decision <id>]... [--behaviour <id>]... [--restriction <text> --source <source>]... "
                          "-- <spinoff arguments>")
     if any(a == "--session-id" or a.startswith("--session-id=") for a in extra):
         raise host.ProgrammeError("start-worker mints the session id; do not pass --session-id")
@@ -697,7 +702,10 @@ def _h_start_worker(host, argv):
     key = programme_record._resolve(programme, item_id)
     if programme["items"][key]["state"] in programme_home.FINISHED_ITEM_STATES:
         raise host.ProgrammeError(f"item {key!r} is {programme['items'][key]['state']}")
-    tail = _brief_tail(host, programme, decision_ids, restrictions)
+    behaviours, held_back = programme_behaviours.brief_entries(
+        dict(record, programme=programme), programme["items"][key], chosen, lookup=host.prompt_lookup)
+    behaviour_ids = [b["id"] for b in behaviours]
+    tail = _brief_tail(host, programme, decision_ids, restrictions, behaviours)
     refusal = programme_context.unsafe_reason(programme, key, "start_worker")
     if refusal:
         raise host.ProgrammeError(refusal)
@@ -708,7 +716,7 @@ def _h_start_worker(host, argv):
     op = programme_recovery.admit(host, opts, run_id, home, kind="launch", item=key,
                                   target={"session_id": str(uuid.uuid4())},
                                   request={"spinoff": extra, "decision_ids": decision_ids,
-                                           "restrictions": restrictions},
+                                           "restrictions": restrictions, "behaviour_ids": behaviour_ids},
                                   expect_epoch=programme_recovery.owner_epoch(programme),
                                   despite=opts.get("despite") or ())
     if op["replayed"]:
@@ -724,10 +732,10 @@ def _h_start_worker(host, argv):
     started = launch_worker(spinoff, extra, op["target"]["session_id"])
     programme_recovery.pause(run_id, "after_invoke")
     payload = dict(item=key, started=started["ok"], decision_ids=decision_ids, restrictions=restrictions,
-                   **{k: v for k, v in started.items() if k != "ok"})
+                   behaviour_ids=behaviour_ids, behaviours_held_back=held_back, **{k: v for k, v in started.items() if k != "ok"})
     done = _settled(host, run_id, home, op, "worker_started" if started["ok"] else "worker_start_failed",
                     payload, started["outcome"],
-                    assign=_launch_assign(started, opts.get("session-name"), restrictions))
+                    assign=_launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids))
     host._emit(dict({"ok": True, "run": run_id, "kind": "worker_started" if started["ok"] else
                      "worker_start_failed", "attempt": op["attempt"], "operation_state": done["state"],
                      "late": not done["receipt"]["authority_current"]}, **payload))
@@ -800,6 +808,16 @@ def _h_prompt_item(host, argv):
         if len(text) > PROMPT_CAP:
             raise host.ProgrammeError(f"prompt with its decisions and restrictions is {len(text)} characters; "
                                       f"the cap is {PROMPT_CAP}")
+    on_sent = None
+    if restrictions:
+        def on_sent(item):
+            _record_restrictions(item, restrictions, "prompt-item")
+    return send_to_item(host, opts, (run_id, home, record, sid), programme, key, text,
+                        extra={"decision_ids": decision_ids, "restrictions": restrictions}, on_sent=on_sent)
+
+
+def send_to_item(host, opts, located, programme, key, text, *, kind="prompt_sent", extra=None, on_sent=None):
+    run_id, home, record, sid = located
     refusal = programme_context.unsafe_reason(programme, key, "prompt_item")
     if refusal:
         raise host.ProgrammeError(refusal)
@@ -834,16 +852,14 @@ def _h_prompt_item(host, argv):
                                       ("uncertain" if sent["timed_out"] else "not_executed"))
     payload.update(sent=ok, session_unknown=target["session_unknown"], owner_source=target["owner_source"],
                    text=programme_journal.redact(programme_sanitize.clean(text, QUOTE_CAP)),
-                   error=None if ok else _failure(sent, "herdr agent prompt"),
-                   decision_ids=decision_ids, restrictions=restrictions)
+                   error=None if ok else _failure(sent, "herdr agent prompt"), **(extra or {}))
     assign = None
-    if ok and restrictions:
+    if ok and on_sent:
         def assign(prog, settled):
-            _record_restrictions(prog["items"][programme_record._resolve(prog, settled["item"])], restrictions,
-                                 "prompt-item")
+            on_sent(prog["items"][programme_record._resolve(prog, settled["item"])])
             return True
-    done = _settled(host, run_id, home, op, "prompt_sent", payload, outcome, assign=assign)
-    host._emit(dict({"ok": ok, "run": run_id, "kind": "prompt_sent", "attempt": op["attempt"],
+    done = _settled(host, run_id, home, op, kind, payload, outcome, assign=assign)
+    host._emit(dict({"ok": ok, "run": run_id, "kind": kind, "attempt": op["attempt"],
                      "operation_state": done["state"]}, **payload))
     return 0 if ok else 1
 

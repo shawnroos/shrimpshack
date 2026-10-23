@@ -1,7 +1,8 @@
 # PM judgment
 
 These rules hold on every project. The project terms in the agreement change
-who decides what and which tools to prefer; they never change these rules.
+who decides what, and behaviours say which tools to prefer and how to work;
+neither changes these rules.
 Most of them have no verb that checks them, so the PM applies them itself, sweep
 by sweep. Where a verb does check one, the section names it.
 
@@ -11,11 +12,11 @@ Where the sweep uses it:
 | --- | --- |
 | 3 (Shawn's answers): new work or a new gate | 1 and 3 |
 | 8 (check claims) and any acceptance call | 1, 5 and 9 |
-| 10 (drive workers): before you start or prompt a worker | 1, 3, 4, 6, 7 and 10 |
-| 11 (record waits): before you record a blocker | 2 and 9 |
-| 12 (decide or hand) | 8, 11 and 12 |
+| 11 (drive workers): before you start or prompt a worker | 1, 3, 4, 6, 7, 9 and 10 |
+| 12 (record waits): before you record a blocker | 2 and 9 |
+| 13 (decide or hand) | 8, 11 and 12 |
 | Any message to Shawn | 12 |
-| 13 (update the working model): before more investigation, review or coordination | 3 |
+| 14 (update the working model): before more investigation, review or coordination | 3 |
 
 ## 1. Re-check the requirements before you act (R1)
 
@@ -118,16 +119,17 @@ avoid the denial.
 
 ## 9. A preferred tool is not a permission (R12)
 
-The project terms can name a preferred skill or tool for a kind of job. That
+A behaviour can name a preferred skill, tool or agent for a kind of job. That
 does not grant access to it. If the preferred tool is missing or refused, use
 the existing path and carry on. A missing preferred tool is not an acceptance
-blocker: never record it as one.
+blocker: never record it as one. A project term that still names a tool counts
+only until Shawn moves it into a behaviour; after that, read the behaviour.
 
 ## 10. Follow the job in front of you (R13)
 
 There are no fixed modes. Work out what the job is now (ideation, options,
 requirements, implementation, optimisation or acceptance) and act for that
-job, with the skills the project terms prefer for it. One sweep can hold
+job, with the skills the behaviours in force prefer for it. One sweep can hold
 several jobs on different items.
 
 ## 11. Who decides (R11)

@@ -679,6 +679,7 @@ keys and keeps unknown ones.
 | `agreement.terms.<key>.notes` | `[{text, at, origin}]`, at most 20; `note-term` adds one and `note-term --clear` removes the key |
 | `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
 | `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the scoped, revisioned decision records live under `context.decisions` and are written by `record-decision`. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
+| `behaviours[]` | programme-layer behaviour entries, in every state (`active`, `proposed`, `retired`), with no `adoption`. Written by `record-behaviour`, `propose-behaviour`, `move-behaviour`, `retire-behaviour` and `keep-behaviours`. A moved entry stays with `moved_to` (and `moved_repo_key`) and is never deleted. Entry fields, layers and resolution: programme-behaviours-format.md. A record without the key reads it as `[]` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `permission_proposals[]` | `{id: "perm-"+n, destination, settings_file, operations, rules, reach, exclusions, key: {operations, destination}, items, evidence, state, created_at, changed_at, notified_at, answers, explanation, confirmed, verified?, reservation?, attempts?, pending_answer?, outcome?, covering?, redenied_at?}`. A separate list from `proposed_rules`. `state` is open, postponed, rejected, retrying, resolved, ineffective or retry_unobserved. `propose-permission` adds and folds entries, `answer-permission` and `settle-permissions` move them. Fields, states and rules: programme-permission-proposals.md |
 | `items` | `{"<source>:<key>": item}` (below) |
@@ -711,6 +712,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `permission_block` | `{cause, detail, at, proposals}`: the item's latest permission explanation, written by the permission verbs |
 | `permission_scan` | `{<session id>: byte offset}`: how far `propose-permission` has read each session's transcript for this item |
 | `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id, relayed_at?}}`, plus on an ask handed with structured facts: `options[{label, effect, cost}]`, `if_nothing`, `recommendation`, `recommendation_why`, `risks[]`, `evidence[]`, `pr {url, title}`, `issue {url, title}`, `readiness`, `fingerprint`, `facts_at`, `shown {at, fingerprint}`, `replies {ship, decline}` and `superseded_answers[]` (voided answers, each with `voided_at` and the `fingerprint` it answered). `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
+| `behaviour_deliveries` | `[{id, reason, at, via, trigger?, trigger_at?, timing?}]`: each behaviour sent to the item's worker. `reason` is `brief` (`via: start-worker`), `relevant` or `sent_back` (`via: remind-behaviour`, which adds `trigger` (claim, merge or block), `trigger_at` and `timing` (`before_trigger`, `send_back` or `remind_only`)). Absent on items that never had one |
 | `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
@@ -734,7 +736,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `rule_proposed`,
+`term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviours_kept`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`, `claim`, `claims_read`, `working_now`,
@@ -748,7 +750,10 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - `trajectory_changed {item, old_hash, new_hash}`: one row per item whose step path changed under the same
   driving session. A first recording, a recording under a new driving session and an unchanged path write no row.
 - `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
-  (a list of decision ids) and `restrictions` (a list of `{text, source}`).
+  (a list of decision ids) and `restrictions` (a list of `{text, source}`). `worker_started` and
+  `worker_start_failed` also add `behaviour_ids` (the behaviours in the brief) and
+  `behaviours_held_back` (worker behaviours gated only by PM checks that the PM did not name with
+  `--behaviour`); the launch's recovery request carries `behaviour_ids` too.
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`; `taken_over` adds
   `reason: orphaned|driver_gone|replaced` and, for the last two, `evidence {state, session_id,
@@ -774,8 +779,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   only because its text names the driver's pane; `target` is then the pane id or
   terminal id it named. `command` is redacted and capped at 2000 characters.
 - `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
-  `adopt-check` (and, for the carry-over store, by `keep-corrections` and `promote-correction`;
-  see below): `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
+  `adopt-check` (and, for the carry-over store, by `keep-corrections` and `promote-correction`,
+  and for the behaviours store, by `move-behaviour` and `retire-behaviour`; see below): `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
   quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
   autonomy entry, and `repo` and `check` for a check. `target` is `rule:<id>`,
   `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
@@ -817,6 +822,21 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   store_path}`; `correction_promoted` carries `{promoted, kind, stored, store_path}`. Both add the
   approval fields. Before either line, the verb journals one `rule_adopted` line per stored entry
   with `entry: carryover|promotion`, `target: carryover:<key>:<entry id>` and the entry's hash.
+- `behaviour_recorded` carries `{behaviour, layer, when, checks, overrides, from_proposal, related,
+  undo}`; `behaviour_proposed` carries `{behaviour, state, when, checks, from_term}`;
+  `behaviour_moved` carries `{behaviour, from, to, repo_key, target, hash, store_path}`;
+  `behaviour_retired` carries `{behaviour, as, layers, target}`. All but `behaviour_proposed` add
+  the approval fields. After `behaviour_moved` or `behaviour_retired` commits, the verb journals one
+  `rule_adopted` line for the stored entry it wrote, with `entry: move|retire`, `target:
+  behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the entry's hash.
+- `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
+  field (the send writes no separate `prompt_sent` row) plus `{behaviour, reason, trigger, trigger_at,
+  timing, sent_back_count, already_reminded}`. `trigger_at` is the item's first claim (claims store),
+  its `merged` deliverable's `confirmed_at`, or its first `waiting` or `handed` history row.
+  `sent_back_count` counts this send. A refused send journals `prompt_refused` as `prompt-item` does.
+- `behaviours_kept` carries `{kept, not_named, to, repo_key, targets, store_path}` plus the approval
+  fields. After it commits, the verb journals one `rule_adopted` line per kept entry with
+  `entry: keep`, `target: behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the hash.
 - `remit_set` adds `carried_over: [{id, area, value, origin, carried}]` when it pre-filled project
   terms, and `notices` naming each store entry it dropped. `accept-agreement` treats a `remit_set`
   line with `carried_over` like a proposal: a prompt older than it does not accept.
@@ -989,6 +1009,7 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_SECRETS_FILE` | `~/.secrets` | journal redaction and checker tokens; the path and values are never printed |
 | `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
 | `CLAUDE_AUTO_CARRYOVER_STORE` | `carryover.json` beside the personal protocol | `keep-corrections`, `promote-correction` and the `set-remit` pre-fill. The file is `{format: 1, keys: {<key>: [{id: "k"+6hex, key, correction, kind, to, area, value, reserved, quote, pm_reading, run_id, at, adoption}]}}`; a new entry replaces an older one of the same kind under its key |
+| `CLAUDE_AUTO_BEHAVIOURS_STORE` | `behaviours.json` beside the personal protocol | the behaviour resolver, `move-behaviour` and `retire-behaviour`. The file is `{format: 1, personal: [behaviour], repos: {<key>: [behaviour]}}`; each entry carries an adoption block, and a new entry replaces one with the same id |
 | `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
 | `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |
 | `CLAUDE_AUTO_SOURCE_TIMEOUT` | herdr 5 s, each tracker provider 15 s | every source read in `sweep` |

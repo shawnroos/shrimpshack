@@ -54,7 +54,7 @@ ITEM_FIELDS = (
 )
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "instructions", "decisions", "items",
-    "working_model", "watchers", "inbox_offset", "ended", "permission_proposals",
+    "working_model", "watchers", "inbox_offset", "ended", "permission_proposals", "behaviours",
     "pm_worktree",
 )
 
@@ -305,6 +305,7 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         "inbox_offset": 0,
         "ended": None,
         "permission_proposals": [],
+        "behaviours": [],
         "pm_worktree": None,
     }
 

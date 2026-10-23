@@ -241,6 +241,63 @@ session.
   changes a running programme. With the switch on, `end` prints each active
   correction it applied, so the PM can offer them for keeping. Keep them before
   ending: once `end` releases the lease, the programme takes no more prompts.
+- **Behaviours**: standing guidance on how the PM and its workers do the work. A
+  behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
+  --when <text>`) with `--do` or `--dont` lines (plus optional `--pm-check`,
+  `--agent-check`, `--applies-to`, skills, tools, agents, formats, communication
+  lines, evidence, stop, examples and why) applies one at once at the programme
+  layer and journals `behaviour_recorded`. Its output lists the drafted checks, the
+  undo command and the behaviours in force whose situation or tools share words
+  with the new one, so the PM can name a conflict to Shawn. `--conflicts-with <id>`
+  sets the new entry to override that behaviour (the narrower layer wins). A do
+  line, skill, tool or agent that names a protected escalation (production deploys,
+  releases, spend over cap, merging around the gate, refused permissions) is
+  refused. `propose-behaviour` stores a proposal with no prompt, because a proposal
+  applies nothing; `--from-term <term-id>` drafts one from a project term's area and
+  value and leaves the term unchanged. It journals `behaviour_proposed`.
+  `record-behaviour --from-proposal <id> --prompt <id>` applies a proposal; the
+  prompt must name the proposal id. `move-behaviour` (`<id> --to programme|repo|personal
+  --prompt <id>`) needs a prompt that names the id and the layer ("programme",
+  "repo", or "personal", "global" or "all projects" for the personal layer) with no
+  negation word anywhere before the layer word. `--to repo` takes the remit's repo
+  key when the remit has one repo, and needs `--repo <key>` naming one when it has
+  several. The verb reads `behaviours.json` before it commits and refuses when the
+  file is unreadable. A move out of the programme marks the programme entry as
+  moved instead of deleting it; the store write and one `rule_adopted` record
+  (entry move, target `behaviour:personal:<id>` or `behaviour:repo:<key>:<id>`) run
+  after the commit, and the programme entry stays in force until the store holds a
+  verified copy. It journals `behaviour_moved`. `retire-behaviour` (`<id> --as
+  retired|undone --prompt <id>`) retires the entry on every layer that holds it; the
+  entry stays visible as retired, and a stored entry is adopted again with the new
+  state. It journals `behaviour_retired`. All three need a typed prompt from the
+  driving session, and a refused one journals `approval_refused`. The store is one
+  JSON file per machine beside the personal protocol
+  (`CLAUDE_AUTO_BEHAVIOURS_STORE` overrides the path).
+  `start-worker` appends a "Behaviours this work follows:" block to the brief
+  copy: one line per worker behaviour in force for the item (id, when, do, don't,
+  evidence, and the checks the worker judges). A behaviour with no checks or an
+  agent check is included; one gated only by PM checks is included when the PM
+  names it with `--behaviour <id>`, having seen those checks hold. A matching
+  behaviour makes the tail non-empty, so the start needs `--handoff <file>`. The
+  item records each brief behaviour in `behaviour_deliveries` with reason brief,
+  and the ids join the launch's recovery request.
+  `remind-behaviour` (`<item> <id> --reason relevant|sent_back`, optional
+  `--trigger claim|merge|block`, default claim) sends one behaviour to the item's
+  worker through the `prompt-item` path (same owner-pane checks, cut to the
+  4000-character cap with the id first) and records the delivery on the item.
+  It compares the behaviour's start (its last recorded event) with the time the
+  item passed the trigger: `sent_back` is refused when the trigger has not
+  passed or the behaviour started at or after it (remind only, R19). Its output
+  reports the timing and `sent_back_count` (this send included), and it journals
+  `behaviour_reminded` instead of `prompt_sent`.
+  `keep-behaviours` (`<id>... --to repo|personal --prompt <id>`, `--repo <key>`
+  for a remit of several repos) is the end-of-programme carry-over for
+  programme-layer behaviours. The prompt must name the layer with no negation
+  before it; ids the prompt does not name are left out and listed as
+  not_named. Kept entries are adopted into `behaviours.json`, replacing any
+  entry with the same id, so a second run adds nothing; the programme copy is
+  marked moved. It journals `behaviours_kept` and is refused once the programme
+  has ended.
 - **Instructions**: `record-instruction` records the cited words, what they apply
   to (the programme or one item), and until when; `close-instruction` marks one
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`). Closing as fulfilled
@@ -572,7 +629,7 @@ session.
   `decision:<id>@<rev>` with its scope, reason and limits, and the
   clause "Proceed under this decision. Do not reopen it: if you find new
   evidence that it cannot hold, stop and state that evidence in your pane."
-  `start-worker` with a decision or restriction needs `--handoff <file>` among
+  `start-worker` with a decision, restriction or behaviour block needs `--handoff <file>` among
   the spinoff arguments, appends to a copy under `<programme home>/briefs/` and
   passes the copy; the original is unchanged. `prompt-item` refuses when its
   text plus the appended block exceeds 4000 characters. Unknown ids, bad

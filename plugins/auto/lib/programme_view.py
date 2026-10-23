@@ -16,6 +16,8 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 programme_permission_rules = load_lib_module("programme_permission_rules")
+programme_behaviours = load_lib_module("programme_behaviours")
+programme_carryover = load_lib_module("programme_carryover")
 programme_journal = load_lib_module("programme_journal")
 programme_decisions = load_lib_module("programme_decisions")
 programme_asks = load_lib_module("programme_asks")
@@ -440,9 +442,11 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "items": items,
         "terms": _terms(block, journal_entries or []),
     }
+    model["terms"]["behaviours"] = model["rules_in_force"].get("behaviours") or []
     model = _clean(model)
     parts = _clean(programme_view_work.build(record, block, journal_entries, now,
-                                             model["rules_in_force"].get("instructions")))
+                                             model["rules_in_force"].get("instructions"),
+                                             model["rules_in_force"].get("behaviours")))
     view = {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
             "model": model, **parts, "asks": programme_asks.view_asks(block["items"])}
     setup = programme_view_setup.build(block, protocol)
@@ -540,6 +544,78 @@ def _instruction_text(entry) -> str:
     return f"instruction {entry.get('id')}: \"{entry.get('quote')}\" ({scope})"
 
 
+def _behaviour_row(entry, forced, overriders, deliveries) -> dict:
+    source = _dict(entry.get("source"))
+    checks = entry["when"].get("checks") or []
+    row = {"id": entry["id"], "layer": entry["layer"], "repo_key": entry.get("repo_key"),
+           "state": entry.get("state", programme_behaviours.ACTIVE), "applies_to": entry["applies_to"],
+           "when": entry["when"]["text"], "do": list(entry.get("do") or []), "dont": list(entry.get("dont") or []),
+           "pm_checks": [c["text"] for c in checks if c["by"] == "pm"],
+           "agent_checks": [c["text"] for c in checks if c["by"] == "agent"],
+           "evidence": entry.get("evidence"), "stop": entry.get("stop"),
+           "deliveries": deliveries.get(entry["id"], []),
+           "prompt_id": source.get("prompt_id"),
+           "quote": programme_journal.redact(source["quote"]) if source.get("quote") else None,
+           "in_force": (entry["layer"], entry.get("repo_key"), entry["id"]) in forced}
+    if row["state"] == programme_behaviours.ACTIVE and not row["in_force"]:
+        row["overridden_by"] = sorted(overriders.get(entry["id"], ()))
+    return row
+
+
+def behaviours_view(record, lookup) -> dict:
+    programme = programme_home.normalize_programme(_dict(record.get("programme")))
+    loaded = programme_behaviours.load_store(lookup)
+    remit = [r for r in _dict(programme.get("remit")).get("repos") or [] if isinstance(r, dict) and r.get("path")]
+    keys = programme_carryover.repo_keys(programme)
+    base = programme_behaviours.resolve(record, None, store=loaded)
+    forced = [e for repo in remit or [None]
+              for e in programme_behaviours.resolve(record, None, repo, store=loaded)["in_force"]]
+    rejected = [r for r in base["rejected"] if r.get("layer") != "repo" or r.get("key") in keys]
+    entries = programme_behaviours.shown_programme_entries(programme, loaded)
+    entries += [e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
+    overriders = {}
+    for e in forced:
+        for name in e.get("overrides") or ():
+            overriders.setdefault(name, set()).add(e["id"])
+    seen = {(e["layer"], e.get("repo_key"), e["id"]) for e in forced}
+    deliveries = {}
+    for key, item in sorted(_dict(programme.get("items")).items()):
+        reasons = {}
+        for d in _dict(item).get("behaviour_deliveries") or []:
+            if isinstance(d, dict) and d.get("id"):
+                reasons.setdefault(d["id"], []).append(d.get("reason"))
+        for bid, rs in reasons.items():
+            deliveries.setdefault(bid, []).append({"item": key, "reasons": rs})
+    out = {"behaviours": [_behaviour_row(e, seen, overriders, deliveries) for e in entries]}
+    if rejected:
+        out["rejected_behaviours"] = [{k: r.get(k) for k in ("id", "layer", "key", "reason")} for r in rejected]
+    if base["notices"]:
+        out["behaviour_notices"] = base["notices"]
+    return out
+
+
+def _behaviour_text(b) -> str:
+    layer = f"repo {b.get('repo_key')}" if b.get("layer") == "repo" else b.get("layer")
+    status = [layer, b.get("state")]
+    if b.get("overridden_by"):
+        status.append(f"overridden by {', '.join(b['overridden_by'])}")
+    status.append(f"applies to {b.get('applies_to')}")
+    parts = [f"when {b.get('when')}"] + [f"{label}: {' / '.join(b[key])}" for key, label in
+                                         (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"),
+                                          ("agent_checks", "agent checks")) if b.get(key)]
+    parts += [f"{key}: {b[key]}" for key in ("evidence", "stop") if b.get(key)]
+    parts.append(f"source: Shawn: \"{b['quote']}\"" if b.get("quote") else "source: none recorded")
+    return f"behaviour {b.get('id')} ({', '.join(status)}): " + "; ".join(parts)
+
+
+def behaviour_texts(r) -> list:
+    out = [(_behaviour_text(_dict(b)), "text") for b in r.get("behaviours") or []]
+    rejected = [str(_dict(b).get("id")) for b in r.get("rejected_behaviours") or []]
+    if rejected:
+        out.append((f"rejected behaviours: {len(rejected)} ({', '.join(rejected)})", "warn"))
+    return out + [(f"behaviours store: {n}", "warn") for n in r.get("behaviour_notices") or []]
+
+
 def _rule_text(rule) -> str:
     text = (f"rule {rule.get('id')}: {rule.get('autonomy')}, requires "
             f"{', '.join(rule.get('requires') or []) or 'nothing'}{_adopted_on(rule)}")
@@ -558,6 +634,7 @@ def rule_texts(r) -> list:
     out = [("agreement: " + (f"accepted {accepted.get('at')}" if accepted else "not accepted"), "text")]
     out += [(_term_text(key, _dict(term)), "text") for key, term in sorted(_dict(agreement.get("terms")).items())]
     out += [(_instruction_text(_dict(e)), "text") for e in r.get("instructions") or []]
+    out += behaviour_texts(r)
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
     out += [(f"autonomy {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
             for e in r.get("autonomy") or []]
@@ -717,6 +794,8 @@ def terms_rows(terms) -> list:
               + [_row(f"    {d['id']} {d['kind']} by {d['by']}" + (f" (ask {d['ask']})" if d.get("ask") else "")
                       + f": {d['why']}", "dim") for d in g["decisions"]]],
              "none recorded")
+    if terms.get("behaviours"):
+        _section(out, "Behaviours", [_row(f"  {_behaviour_text(_dict(b))}") for b in terms["behaviours"]], "none")
     hidden = terms["changes_total"] - len(terms["changes"])
     _section(out, "Recent term changes", [_change_row(c) for c in terms["changes"]]
              + ([_row(f"  {hidden} older changes not shown", "dim")] if hidden else []), "none")
