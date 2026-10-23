@@ -614,7 +614,8 @@ session.
   authorizes nothing.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
-  the driving session, or an orphaned lease. Takeover and handover rewrite every
+  the driving session, or an orphaned lease; on an expired lease it needs none and
+  ends the programme as `expire` does. Takeover and handover rewrite every
   lease of the run and the record's `driving_session_id` together (leases lock,
   then run-record lock), stamp the driver beat, and journal both session ids.
   Takeover prints the rules in force and the waits and watchers to re-arm. `end`

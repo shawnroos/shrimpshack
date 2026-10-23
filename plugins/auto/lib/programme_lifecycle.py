@@ -13,6 +13,7 @@ import functools
 import json
 import os
 import re
+import shlex
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,7 @@ driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
 programme_terms = load_lib_module("programme_terms")
+programme_worktree = load_lib_module("programme_worktree")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
@@ -50,8 +52,14 @@ class _Refused(Exception):
 
 
 def _tokens(argv) -> list:
-    # A slash command passes "$ARGUMENTS" as one string; split it back into options.
-    return list(argv[:1]) + [t for arg in argv[1:] for t in str(arg).split()]
+    # A slash command passes "$ARGUMENTS" as one string; split it back into options. Several
+    # arguments came from a shell that already split them, so a quoted --why stays whole.
+    if len(argv) != 2:
+        return list(argv)
+    try:
+        return [argv[0]] + shlex.split(str(argv[1]))
+    except ValueError:
+        return [argv[0]] + str(argv[1]).split()
 
 
 def _caller(host) -> str:
@@ -79,13 +87,18 @@ def _lease_for(host, opts, sid):
         return hits[0][1]
     for lease in programme_home.leases_for_session(sid):
         return lease
+    named = programme_home.lease_driven_by(opts.get("replace"))
+    if named:
+        return named
     space = session_registry.space_of_session(sid, os.environ) if sid else None
     if not space:
-        raise host.ProgrammeError("this session is not in a herdr space; pass --run <id>")
+        raise host.ProgrammeError("this session is not in a herdr space; name the PM by its session id "
+                                  "(/auto:programme-takeover --replace <session id>) or pass --run <id>")
     key = programme_home.space_key(*space)
     lease = programme_home.read_lease(programme_home.lease_path(*space))
     if lease is None:
-        raise host.ProgrammeError(f"no programme holds {key}")
+        raise host.ProgrammeError(f"no programme holds {key}; to take over a programme in another space, "
+                                  "name its PM by session id: /auto:programme-takeover --replace <session id>")
     if lease.get("corrupt"):
         raise host.ProgrammeError(f"the lease for {key} is unreadable; nothing to take over")
     return lease
@@ -195,6 +208,27 @@ def _rearm_list(record) -> dict:
     return {"waits": waits, "watchers": sorted((programme.get("watchers") or {}).keys())}
 
 
+def _make_worktree(run, programme=None):
+    programme = programme if programme is not None else \
+        ((programme_home._read_record(run) or {}).get("programme") or {})
+    repo = programme_worktree.remit_repo(programme)
+    if programme_worktree.recorded(programme) or not repo:
+        return None
+    try:
+        return programme_worktree.create(repo, run)
+    except OSError as exc:
+        return {"status": "failed", "path": None, "record": None, "error": f"could not create the worktree: {exc}"}
+
+
+def _record_worktree(made, programme) -> dict:
+    if not made:
+        return {}
+    if made["record"] and not programme_worktree.recorded(programme):
+        programme["pm_worktree"] = made["record"]
+        return {"pm_worktree": made["record"]}
+    return {"pm_worktree_error": made["error"]} if made["error"] else {}
+
+
 def _locked(body):
     return programme_home._with_leases_lock(body)
 
@@ -219,13 +253,7 @@ def _h_start(host, argv):
     return 0
 
 
-def _replace_name(text) -> str | None:
-    words = str(text or "").split()
-    if "--replace" not in words:
-        return None
-    rest = words[words.index("--replace") + 1:]
-    name = " ".join(rest[:next((i for i, w in enumerate(rest) if w.startswith("--")), len(rest))])
-    return name.strip("'\"") or None
+_replace_name = programme_home.replace_name
 
 
 def _names_driver(name, presence) -> bool:
@@ -277,7 +305,7 @@ def _live_driver(lease, presence, name) -> str:
     label = presence.get("pane_label")
     typable = label and not any(w.startswith("--") for w in label.split()) and label[0] not in "'\"" \
         and label[-1] not in "'\""
-    reply = (label if typable else None) or presence.get("pane_id") or presence.get("session_id")
+    reply = presence.get("session_id") or (label if typable else None) or presence.get("pane_id")
     wrong = f"--replace {name} does not name the current PM. " if name else ""
     space = programme_home.space_key(lease.get("server"), lease.get("workspace"))
     return (f"{wrong}{_driver_words(presence)} is still the live PM for space {space}: "
@@ -299,12 +327,15 @@ def _h_takeover(host, argv):
     # herdr reads take seconds; they run before the leases lock and the driver is re-checked under it.
     status = _fresh_status(lease)
     presence = None if orphan_asks(status) or status not in MOVABLE_STATES else _presence(lease, run)
+    asked_now = status in MOVABLE_STATES and _since_driver_changed(run, _requests(run, "takeover", sid))
+    made = _make_worktree(run) if asked_now else None
 
     def move(request, reason, evidence):
         extra = {"reason": reason, "evidence": evidence} if evidence else {"reason": reason}
         return _move(run, sid, "taken_over", sid,
                      lambda moved, rec: dict(_rearm_list(rec), request=_request_ref(request),
-                                             request_text=(request.get("payload") or {}).get("text"), **extra))
+                                             request_text=(request.get("payload") or {}).get("text"),
+                                             **_record_worktree(made, rec["programme"]), **extra))
 
     def body():
         status = _fresh_status(lease)
@@ -343,7 +374,7 @@ def _h_takeover(host, argv):
     _finish(host, run, "taken_over", sid, moved, journal=False)
     if moved.get("evidence"):
         sys.stdout.write(f"Took over from {_driver_words(moved['evidence'])}: {moved['evidence'].get('why')}.\n")
-    sys.stdout.write(host.render_restore(run))
+    sys.stdout.write(host.render_restore(run, sid, os.getcwd()))
     sys.stdout.write("Re-arm the remit watcher, the cron fallback and every watcher listed above "
                      "from this session; the old session's watchers can no longer beat.\n")
     return 0
@@ -357,6 +388,7 @@ def _h_handover(host, argv):
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
     run = lease["run"]
+    made = _make_worktree(run) if session_registry.caller_drives(programme_home._read_record(run), sid) else None
 
     def body():
         status = _fresh_status(lease)
@@ -373,7 +405,8 @@ def _h_handover(host, argv):
             raise _Refused(f"no typed /auto:programme-handover {target} in the driving session", status)
         cites = list(asked[-1]["cites"])
         moved = _move(run, target, "handed_over", sid,
-                      lambda moved, rec: {"request": _request_ref(asked[-1])}, cites=cites)
+                      lambda moved, rec: dict(_record_worktree(made, rec["programme"]),
+                                              request=_request_ref(asked[-1])), cites=cites)
         return dict(moved, prompt_id=cites[0])
 
     try:
@@ -422,7 +455,9 @@ def _watcher_ids(record) -> dict:
 
 
 def _h_end(host, argv):
-    _, opts = host._parse(_tokens(argv), values=("run", "why"))
+    stray, opts = host._parse(_tokens(argv), values=("run", "why"))
+    if stray:
+        raise ValueError(f"end takes no argument {stray[0]!r}; quote a --why of several words")
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
     run = lease["run"]
@@ -632,6 +667,14 @@ def _h_set_remit(host, argv):
         doc = json.loads(raw)
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
+    # git worktree add is slow: it runs on the remit-to-be before the leases lock, recorded under it.
+    run, _, record = host._locate(opts)
+    current = programme_home.normalize_programme(record.get("programme") or {})
+    try:
+        drives = session_registry.caller_drives(record, driver_session.driving_session_id())
+        made = _make_worktree(run, dict(current, remit=parse_remit(doc, current["remit"]))) if drives else None
+    except (ValueError, programme_home.ProgrammeHomeError):
+        made = None
 
     def change(programme, prompt, rec):
         before = programme["remit"]
@@ -652,6 +695,8 @@ def _h_set_remit(host, argv):
             term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
         out = {"remit": after,
                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
+        if after["repos"]:
+            out.update(_record_worktree(made, programme))
         if not accepted:
             carried, notices = programme_carryover.prefill(host, programme)
             out.update({"carried_over": carried} if carried else {}, **({"notices": notices} if notices else {}))
@@ -676,9 +721,11 @@ _SPECS = (
      "a caller that is not the driving session; no typed /auto:programme-handover <session-id> in "
      "the driving session. Refusals are journaled as request_refused."),
     ("end", _h_end, "[--why <text>] [--run <id>]",
-     "no typed /auto:programme-end from the driving session, unless the lease is orphaned; an "
-     "ended programme. Prints CronDelete for each cron watcher and TaskStop for each Monitor "
-     "watcher. Refusals are journaled."),
+     "no typed /auto:programme-end from the driving session, unless the lease is orphaned or "
+     "expired (an agreement never accepted, which ends with reason agreement_unaccepted as "
+     "expire does); an ended programme. Prints CronDelete for each cron watcher and TaskStop for "
+     "each Monitor watcher. Refusals are journaled. Exits 2, unjournaled, on words left over "
+     "after an unquoted --why of several words."),
     ("expire", _h_expire, "[--run <id>]",
      "nothing: it ends the programme only when its agreement stayed unaccepted past one cadence."),
     ("set-remit", _h_set_remit, "[--prompt <id>] [--run <id>] < JSON {spaces, repos, tracker}",

@@ -333,6 +333,11 @@ def db_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), DB_NAME)
 
 
+def bound_waits(ms: int) -> None:
+    global BUSY_TIMEOUT_MS
+    BUSY_TIMEOUT_MS = min(BUSY_TIMEOUT_MS, ms)
+
+
 def _required_pragmas() -> dict:
     return {"busy_timeout": BUSY_TIMEOUT_MS, "journal_mode": "delete", "synchronous": SYNC_EXTRA,
             "fullfsync": 1, "foreign_keys": 1}

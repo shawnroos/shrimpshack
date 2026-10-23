@@ -687,6 +687,7 @@ keys and keeps unknown ones.
 | `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `tools_of_record` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
 | `recorded_issues` | `{provider: "linear-mcp", at, dropped, issues: {"<key>": {title, state, state_type, state_id, url, project: {id, name} \| null, initiatives: [{id, name}] \| null, source: "linear-mcp"}}}`, written by `record-issues` from the PM's MCP read. It claims the tracker provider only when no other provider has it available. `state_type` is one of triage, backlog, unstarted, started, completed, canceled, or null; `state_id` is a UUID or null. The tracker guard reads it to resolve state names and ids; the recorded check never reads it |
 | `trajectory_sweeps` | `[<iso>]`, at most two: the times of the previous and latest `record-trajectories` call that stored a trajectory. The view reads the gap between them. A record without it reads as `[]` |
+| `pm_worktree` | `null \| {path, repo, created_at}`. The programme worktree: a detached git worktree at `<repo>/worktrees/programme-<run>` the PM works from, where `repo` is the main checkout of the first remit repo at creation. Written once through `programme_authority.write` and never re-derived from the remit, so it stays put when the remit's repos change. `null` while the remit has no repo. A record without it reads as `null`. Mechanics: `lib/programme_worktree.py` |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -867,7 +868,9 @@ session took the programme over by handover). It does not repeat the block.
 
 `<home>/views/view.json` is a display copy rebuilt after every programme write:
 `{view_format: 3, run, generated_at, model, work, contract, reread, rows}`. `model` holds
-`programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
+`programme {run, ended, done, may_stop, stop_rule, reasons, reason_counts, counts,
+unread_claims}` (`reasons` names each may-stop reason kind once; `reason_counts` maps
+each kind to how many items or sources gave it),
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`, plus the
 additive `terms`: `contract_version`; `project_terms[] {id, area, value, reserved,
@@ -928,6 +931,19 @@ The nag file is `<repo>/.claude/auto/.stop-nag-<sid>.json`, or
 `<home>/.claude/auto/.stop-nag-<sid>.json` when there is no repo. `<sid>` keeps only
 `[A-Za-z0-9_-]` and is capped at 128 characters. A stop with no session id uses
 `.stop-nag.json`. A programme holds only its driving session's stop.
+
+Drift: when the driving PM of a live programme with a `pm_worktree` stops, the hook
+compares the `cwd` in the hook's stdin (never the shell's `$PWD` or herdr's pane cwd)
+with the recorded worktree path, by realpath; a subdirectory of the worktree is inside
+it. The check runs before holds whose programme may stop are dropped. When the cwd is
+outside and the worktree is inside the session's start directory (§10.10, newest
+`startup` or `resume` row), the stop is blocked with a `cwd_drift` reason whose fix is
+`cd <worktree>`, and that reason is part of the nag signature. When the `cd` would not
+last, the stop is let through with a `systemMessage` naming `/cd <worktree>`.
+`cwd_drift` is a hook-only reason kind: it is not in `REASON_KINDS` and status does not
+show it. A missing `cwd`, a null or malformed `pm_worktree`, a worktree path that no
+longer exists, an ended programme or any error lets the stop through. The hook writes
+nothing to the record, and no environment variable turns the check off.
 
 ### 10.10 Session registry
 

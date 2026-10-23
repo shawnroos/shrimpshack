@@ -848,5 +848,20 @@ has "safety_pause" "$(acc_q 'm["programme"]["reasons"]')"
 it "status text is still the view rows, line for line"
 check "True" "$(acc_q '"\n".join(r["text"] for r in d["rows"]) == sys.argv[3]' "$ACC_TEXT")"
 
+REP="$(new_run w13)"
+run_py "$REP" <<'EOF' >/dev/null
+def seed(p):
+    p["items"] = {i: ph.new_item(i, "open, ownerless, no rule", now_iso="2026-10-01T00:00:00Z")
+                  for i in ("herdr:a", "herdr:b", "herdr:c")}
+mutate(args[0], seed)
+EOF
+REP_JSON="$("$PY" "$PROG" status --run "$REP" --json 2>&1)"
+rep_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); m=d["model"]; print(eval(sys.argv[2]))' "$REP_JSON" "$1" 2>&1; }
+it "three items with the same may-stop reasons list each reason once, with its count"
+check "no_rule_proposed ownerless_item open_item|[('no_rule_proposed', 3), ('open_item', 3), ('ownerless_item', 3)]" \
+  "$(rep_q '" ".join(m["programme"]["reasons"]) + "|" + str(sorted(m["programme"]["reason_counts"].items()))')"
+it "the title row names each may-stop reason once, with its count"
+has "may stop: no (no_rule_proposed ×3, ownerless_item ×3, open_item ×3)" "$(rep_q 'd["rows"][0]["text"]')"
+
 echo "programme-view.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

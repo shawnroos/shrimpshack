@@ -55,6 +55,7 @@ ITEM_FIELDS = (
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "instructions", "decisions", "items",
     "working_model", "watchers", "inbox_offset", "ended", "permission_proposals",
+    "pm_worktree",
 )
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -304,6 +305,7 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         "inbox_offset": 0,
         "ended": None,
         "permission_proposals": [],
+        "pm_worktree": None,
     }
 
 
@@ -405,7 +407,25 @@ def read_lease(path: str):
     return lease
 
 
+_READS = None
+
+
+def cache_reads() -> None:
+    # Only for a short-lived process that writes nothing it reads back: a hook reads the same run
+    # once per lease and per guard, and each read of a held store costs a busy wait.
+    global _READS
+    _READS = {} if _READS is None else _READS
+
+
 def read_programme(run_id: str) -> tuple:
+    if _READS is None:
+        return _read_programme(run_id)
+    if run_id not in _READS:
+        _READS[run_id] = _read_programme(run_id)
+    return _READS[run_id]
+
+
+def _read_programme(run_id: str) -> tuple:
     try:
         return run_record_core.read_run_record(home_path(run_id), run_id), None
     except run_record_core.RunRecordError as exc:
@@ -498,6 +518,30 @@ def leases_for_session(session_id) -> list:
                 if lease and not lease.get("corrupt") and lease.get("session_id") == session_id]
     except Exception:
         return []
+
+
+def replace_name(text) -> str | None:
+    words = str(text or "").split()
+    if "--replace" not in words:
+        return None
+    rest = words[words.index("--replace") + 1:]
+    name = " ".join(rest[:next((i for i, w in enumerate(rest) if w.startswith("--")), len(rest))])
+    return name.strip("'\"") or None
+
+
+def lease_driven_by(session_id):
+    if not session_id:
+        return None
+    try:
+        for key, lease in iter_leases():
+            if not lease or lease.get("corrupt"):
+                continue
+            driver = (_read_record(lease.get("run")) or {}).get("driving_session_id") or lease.get("session_id")
+            if driver == session_id:
+                return dict(lease, key=key)
+    except Exception:
+        return None
+    return None
 
 
 def driven_runs(session_id, now=None) -> list:

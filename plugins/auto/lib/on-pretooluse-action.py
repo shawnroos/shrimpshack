@@ -690,14 +690,8 @@ def driver_send_denial(stdin_raw: str) -> dict | None:
         if hit is None:
             continue
         verb, target = hit
-        try:
-            journal = load_lib_module("programme_journal")
-            journal.append(driver["run"], "blocked_driver_send", session_id, {
-                "verb": verb, "target": target, "pane_id": driver["pane_id"],
-                "command": journal.redact(command)[:2000],
-            })
-        except Exception:
-            pass
+        row = (driver["run"], "blocked_driver_send", session_id, {
+            "verb": verb, "target": target, "pane_id": driver["pane_id"], "command": command})
         what = f"`herdr {verb}` into pane" if verb else "a command naming pane"
         reason = (
             f"auto: blocked {what} {driver['pane_id']}, the driver's pane of programme "
@@ -709,7 +703,7 @@ def driver_send_denial(stdin_raw: str) -> dict | None:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
-        }}
+        }}, row
     return None
 
 
@@ -850,11 +844,8 @@ def tracker_write_denial(stdin_raw: str) -> dict | None:
         what = _proof_write(tool_input, programme) or _remit_write(data["tool_name"], tool_input, programme)
     if what is None:
         return None
-    try:
-        load_lib_module("programme_journal").append(run_id, "blocked_tracker_write", session_id, {
-            "tool": data["tool_name"][:200], "reason": what[:300]})
-    except Exception:
-        pass
+    row = (run_id, "blocked_tracker_write", session_id, {
+        "tool": data["tool_name"][:200], "reason": what[:300]})
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
@@ -862,7 +853,42 @@ def tracker_write_denial(stdin_raw: str) -> dict | None:
             f"auto: the programme's PM may not make this tracker write; this call {what}. "
             "A done or canceled state and a root-cause comment come from a worker or Shawn, "
             "and the PM writes only inside the remit."),
-    }}
+    }}, row
+
+
+# The hook is killed at its 10 s timeout and a killed hook denies nothing, so a guard never
+# waits out a held programme store: each read gives up quickly (a hold denies), and the
+# journal row is written after the deny is on stdout, giving up if the lock stays held.
+STORE_WAIT_MS = 250
+JOURNAL_LOCK_WAIT = 1.0
+COMMAND_CAP = 2000
+
+
+def _journal(row) -> None:
+    if row is None:
+        return
+    try:
+        run_id, kind, session_id, payload = row
+        journal = load_lib_module("programme_journal")
+        if isinstance(payload.get("command"), str):
+            # Redact before truncating: a cut can split a secret so the redactor no longer sees it.
+            payload = dict(payload, command=journal.redact(payload["command"])[:COMMAND_CAP])
+        journal.append(run_id, kind, session_id, payload, lock_timeout=JOURNAL_LOCK_WAIT)
+    except Exception:
+        pass
+
+
+def _emit(decision) -> None:
+    json.dump(decision, sys.stdout)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _guarded(check, stdin_raw):
+    try:
+        return check(stdin_raw) or (None, None)
+    except Exception:
+        return None, None
 
 
 def _cli(argv) -> int:
@@ -874,21 +900,18 @@ def _cli(argv) -> int:
         except Exception:
             stdin_raw = ""
     try:
-        tracker_denial = tracker_write_denial(stdin_raw)
+        load_lib_module("programme_store").bound_waits(STORE_WAIT_MS)
+        load_lib_module("programme_home").cache_reads()
     except Exception:
-        tracker_denial = None
+        pass
+    tracker_denial, tracker_row = _guarded(tracker_write_denial, stdin_raw)
     if tracker_denial is not None:
-        json.dump(tracker_denial, sys.stdout)
-        sys.stdout.write("\n")
+        _emit(tracker_denial)
+        _journal(tracker_row)
         return 0
-    try:
-        settings_denial = load_lib_module("programme_settings_guard").denial(stdin_raw)
-    except Exception:
-        settings_denial = None
-    try:
-        driver_denial = driver_send_denial(stdin_raw)
-    except Exception:
-        driver_denial = None
+    settings_denial, settings_row = _guarded(
+        lambda raw: load_lib_module("programme_settings_guard").decision(raw), stdin_raw)
+    driver_denial, driver_row = _guarded(driver_send_denial, stdin_raw)
     try:
         decision = decide(repo_root, stdin_raw) if repo_root else None
     except Exception:
@@ -898,8 +921,9 @@ def _cli(argv) -> int:
     if decision is None:
         decision = settings_denial or driver_denial
     if decision is not None:
-        json.dump(decision, sys.stdout)
-        sys.stdout.write("\n")
+        _emit(decision)
+    _journal(settings_row)
+    _journal(driver_row)
     return 0
 
 
