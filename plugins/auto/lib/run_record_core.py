@@ -227,6 +227,10 @@ class RoutedToAuthority(Exception):
     """The programme home was promoted after the caller chose the JSON path."""
 
 
+class LockBusy(RunRecordError):
+    """Raised when a bounded lock wait ends before the lock is free."""
+
+
 class RunRecordExists(RunRecordError):
     """Raised when init would clobber an existing run_record."""
 
@@ -415,7 +419,7 @@ def _read_json(path: str) -> dict:
     return _lazy_load("format_compat").upgrade_run_record(led)
 
 
-def _flock_run(lpath: str, body):
+def _flock_run(lpath: str, body, timeout=None):
     """Hold the per-run exclusive flock for the duration of ``body()`` and return
     its result. The SINGLE lock-acquisition primitive — both the RMW path
     (``_with_locked_run_record``) and the create path (``init_run_record``) route their
@@ -440,7 +444,7 @@ def _flock_run(lpath: str, body):
     lock_file = open(lpath, "a+")
     try:
         if not no_lock:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            _acquire(lock_file, lpath, timeout)
         return body()
     finally:
         if not no_lock:
@@ -449,6 +453,21 @@ def _flock_run(lpath: str, body):
             except OSError:
                 pass
         lock_file.close()
+
+
+def _acquire(lock_file, lpath, timeout) -> None:
+    if timeout is None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        return
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise LockBusy(f"{lpath} stayed locked for {timeout}s")
+            time.sleep(0.05)
 
 
 def _with_locked_run_record(repo_root: str, run_id: str, mutate, *, reroute=True):

@@ -213,11 +213,11 @@ def journal_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), JOURNAL_NAME)
 
 
-def _locked(path: str, body):
+def _locked(path: str, body, timeout=None):
     folder = os.path.dirname(path)
     os.makedirs(folder, mode=0o700, exist_ok=True)
     os.chmod(folder, 0o700)
-    return run_record_core._flock_run(os.path.join(folder, LOCK_NAME), body)
+    return run_record_core._flock_run(os.path.join(folder, LOCK_NAME), body, timeout)
 
 
 def _write_line(path: str, entry: dict) -> None:
@@ -288,7 +288,8 @@ def claims_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), CLAIMS_NAME)
 
 
-def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None) -> dict:
+def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None,
+               lock_timeout=None) -> dict:
     if isinstance(row, dict) and row.get("kind") == "prompt" and provenance != "derived":
         raise JournalError(f"a {provenance} copy is never journaled as a prompt; it approves nothing")
     if not _promoted(run_id):
@@ -304,14 +305,17 @@ def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived
             return row
 
         try:
-            return _locked(path, body)
+            return _locked(path, body, lock_timeout)
         except _RoutedToAuthority:
             pass
-    return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard)
+    return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard,
+                                   lock_timeout=lock_timeout)
 
 
-def append(run_id: str, kind: str, session_id, payload=None, *, cites=None, now=None) -> dict:
-    return append_row(run_id, entry(kind, session_id, payload, cites=cites, now=now))
+def append(run_id: str, kind: str, session_id, payload=None, *, cites=None, now=None,
+           lock_timeout=None) -> dict:
+    return append_row(run_id, entry(kind, session_id, payload, cites=cites, now=now),
+                      lock_timeout=lock_timeout)
 
 
 def _refuse_after_end(record) -> None:

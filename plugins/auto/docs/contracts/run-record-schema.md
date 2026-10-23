@@ -867,7 +867,9 @@ session took the programme over by handover). It does not repeat the block.
 
 `<home>/views/view.json` is a display copy rebuilt after every programme write:
 `{view_format: 3, run, generated_at, model, work, contract, reread, rows}`. `model` holds
-`programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
+`programme {run, ended, done, may_stop, stop_rule, reasons, reason_counts, counts,
+unread_claims}` (`reasons` names each may-stop reason kind once; `reason_counts` maps
+each kind to how many items or sources gave it),
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`, plus the
 additive `terms`: `contract_version`; `project_terms[] {id, area, value, reserved,

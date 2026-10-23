@@ -6,7 +6,11 @@ allowed-tools: Bash, CronDelete, TaskStop
 
 Shawn typed this to end the programme. The prompt hook has already journaled the
 request. It is accepted when typed in the driving session, or from any session
-when the lease is orphaned.
+when the lease is orphaned. When the lease is expired (the agreement was never
+accepted within one cadence), `end` needs no typed request and ends the programme
+the way `expire` does, with reason agreement_unaccepted: there is no accepted
+agreement to protect. A `--why` of several words must be in single quotes
+(`--why 'nothing left to do'`): the dispatch line wraps the arguments in double quotes.
 
 First offer to keep corrections. `end` releases the lease, and every verb
 refuses an ended programme, so this comes before it.
@@ -32,6 +36,8 @@ Run the dispatch line below:
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" end "$ARGUMENTS"`
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
+- Exit 2: the arguments did not parse (for example, an unquoted `--why` of
+  several words). Show Shawn the line and ask him to quote the reason.
 - Success: the leases are released and the run shows "ended" (apart from done).
   Ended is not archived: no new work starts, and the home keeps everything.
   1. Run each `CronDelete <task id>` line it prints, then record it with
