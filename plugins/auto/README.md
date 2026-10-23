@@ -45,6 +45,9 @@ take a worker's word for it.
   session is gone, or replaces a PM you name with `--replace <pane name>`. **`/auto:programme-handover`**, typed in the PM session, passes
   it to another session. **`/auto:programme-end`** ends it and frees the space.
   Each of these works only from a typed message, and auto records the request.
+- **`/auto:programme-resume`**, typed in the PM session after a crash, a quit or a
+  login reset, re-arms the PM's watcher and cron, restarts every worker pane in the
+  remit with `claude --resume`, briefs each one once, then sweeps.
 
 The PM can stop only when the stop rule allows it, for example when nothing is left
 that it can act on. Workers report finished work with a `claim`, and the PM confirms
