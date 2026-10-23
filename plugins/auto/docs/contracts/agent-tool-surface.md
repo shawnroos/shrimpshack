@@ -374,6 +374,27 @@ session.
   `--kind`); decline drops it. Either way it records a Shawn decision linked to
   the ask id, with the ask's decision kind (unknown for an ask handed before
   kinds existed).
+- **Asks**: `hand-item` also takes the ask's structured facts: `--option
+  '<label> | <effect> [| <cost>]'` (up to 6), `--if-nothing`, `--recommend`,
+  `--recommend-why`, `--risk` (up to 10), `--evidence` (up to 12), `--pr-url`,
+  `--pr-title`, `--issue-url`, `--issue-title` and `--readiness <fingerprint>`
+  (the `check-mergeable` fingerprint). Each field has its own cap, at most 500
+  characters, and a value over its cap is refused, never cut. The ask stores a
+  16-hex fingerprint of its facts, `facts_at`, a shown mark, `superseded_answers` and
+  replies (`{ship, decline}`: the exact reply to type, by the item's shortest
+  unique title or session name, else its id; recomputed on every write, so a
+  name that became ambiguous falls back to the id). `update-ask` (args: item,
+  the same fact flags) replaces the given facts and keeps the rest. Facts that
+  hash to the current fingerprint change nothing and write no journal row; new facts move `facts_at`, so a
+  name reply typed before them no longer approves. On an answered ask that was
+  not relayed, new facts void the answer: it moves to `superseded_answers`, the
+  decision gets `voided_at`, the item is handed again and the row is
+  `ask_answer_voided` (else `ask_updated`). An ask already relayed is refused.
+  `ask-shown` (args: item, `--fingerprint`) records which facts were posted in
+  chat and refuses a fingerprint that is not current. `ask-relayed` (args: item)
+  sets `answered.relayed_at` after the PM relays Shawn's answer to the worker,
+  and refuses an ask with no recorded answer or one already relayed. The view's
+  top-level asks list carries every open ask and every answered, unrelayed one.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the decision records
@@ -535,6 +556,15 @@ session.
   writes nothing. Only an item whose step path changed under the same driving
   session gets a `trajectory_changed` journal row; moving the current step to
   done is not a change, and neither is a first recording.
+- **Merge readiness**: `check-mergeable` (args: a PR as owner/repo#N or URL,
+  optional --pin <item>) reads an open PR's state, draft flag, mergeable and merge
+  state, review decision, base branch, head, required checks and unresolved review
+  threads in one GraphQL read. It prints ready, not_ready with the unmet gates, or
+  unknown, plus a fingerprint of those facts. Only CLEAN with no unmet gate is
+  ready; a gh failure, a merge state GitHub has not computed, or a head with no
+  checks is unknown. Without --pin it writes nothing. With --pin and a ready PR it
+  journals `merge_pinned` with the item, the owner/repo#N ref and the head, which
+  the merged check then compares against the merged head.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)
@@ -641,7 +671,8 @@ session.
   authorizes nothing.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
-  the driving session, or an orphaned lease. Takeover and handover rewrite every
+  the driving session, or an orphaned lease; on an expired lease it needs none and
+  ends the programme as `expire` does. Takeover and handover rewrite every
   lease of the run and the record's `driving_session_id` together (leases lock,
   then run-record lock), stamp the driver beat, and journal both session ids.
   Takeover prints the rules in force and the waits and watchers to re-arm. `end`

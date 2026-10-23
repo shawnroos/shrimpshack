@@ -151,6 +151,9 @@ check "block" "$(verdict "$OUT")"
 it "the PM's block reason names the unwatched item"
 if printf '%s' "$OUT" | grep -q 'linear:AI-7' && printf '%s' "$OUT" | grep -q 'unwatched'; then pass; else fail "got: $OUT"; fi
 
+it "AE6: the PM's first full hold carries no extra systemMessage"
+case "$OUT" in *systemMessage*) fail "got: $OUT" ;; *) pass ;; esac
+
 it "the PM's re-fire is allowed"
 check "allow" "$(verdict "$(stop_py "" sess-pm 1)")"
 
@@ -347,6 +350,20 @@ if printf '%s' "$OUT" | grep -q '"permissionDecision": "deny"'; then pass; else 
 it "the PM's AskUserQuestion from a lease with no repo is not redirected"
 OUT="$( cd "$NOREPO" && "$PY" "$ASKUSER" "" <<< '{"session_id":"sess-pm","tool_name":"AskUserQuestion"}' 2>/dev/null )"
 check "" "$OUT"
+
+it "a programme hold names the item by its title beside its id"
+prog "$PM_RUN" <<'EOF' >/dev/null
+rec = load(args[0])
+rec["programme"]["items"]["linear:AI-7"]["title"] = "Reframe skill: skills vs code"
+save(args[0], rec)
+EOF
+NAMED="$(stop_py "" sess-pm)"
+check "block" "$(verdict "$NAMED")"
+case "$NAMED" in *"Reframe skill: skills vs code (linear:AI-7)"*) pass ;; *) fail "got: $NAMED" ;; esac
+
+it "the repeated hold still names the item by title"
+AGAIN="$(stop_py "" sess-pm)"
+case "$AGAIN" in *"Reframe skill: skills vs code (linear:AI-7)"*) pass ;; *) fail "got: $AGAIN" ;; esac
 
 echo ""
 echo "stop-session-scope.test.sh: ${PASS} passed, ${FAIL} failed"

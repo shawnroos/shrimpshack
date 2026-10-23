@@ -372,6 +372,17 @@ EOF
 )"
 check "[] herdr:w2/p26 open 1 3600" "$OUT"
 
+it "pm_worktree is a programme field: null on a new block and back-filled null, a recorded value kept"
+OUT="$(run_py <<'EOF'
+kept = {"path": "/r/worktrees/programme-x", "repo": "/r", "created_at": "2026-10-22T00:00:00Z"}
+print("pm_worktree" in ph.PROGRAMME_FIELDS,
+      ph.new_programme_block([], "2026-10-22T00:00:00Z")["pm_worktree"],
+      ph.normalize_programme({})["pm_worktree"],
+      ph.normalize_programme({"pm_worktree": kept})["pm_worktree"] == kept)
+EOF
+)"
+check "True None None True" "$OUT"
+
 it "normalize_programme leaves project terms and the contract stamp absent on an old agreement"
 OUT="$(run_py <<'EOF'
 blk = ph.normalize_programme({"agreement": {"accepted": {"at": "2026-10-01T00:00:00Z"}}})

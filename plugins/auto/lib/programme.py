@@ -22,6 +22,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record = load_lib_module("run_record")
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
+programme_asks = load_lib_module("programme_asks")
 programme_journal = load_lib_module("programme_journal")
 programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
@@ -112,6 +113,10 @@ def _parse(argv, *, values=(), flags=(), multi=()):
 
 def _resume():
     return load_lib_module("programme_resume")
+
+
+def _worktree():
+    return load_lib_module("programme_worktree")
 
 
 def _run_from_leases(sid):
@@ -227,9 +232,9 @@ def render_rules(record, revision=None) -> str:
     )
 
 
-def render_restore(run_id) -> str:
+def render_restore(run_id, session_id=None, cwd=None) -> str:
     record, revision = _resume().head(run_id)
-    return render_rules(record, revision)
+    return render_rules(record, revision) + _worktree().restore_line(record, session_id, cwd)
 
 
 def _guard(home, record, *, compact_exempt=False):
@@ -239,7 +244,7 @@ def _guard(home, record, *, compact_exempt=False):
     if (record.get("programme") or {}).get("ended"):
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
-        sys.stdout.write(render_rules(record))
+        sys.stdout.write(render_rules(record) + _worktree().restore_line(record, sid))
         raise ProgrammeError(
             "context was compacted or handed over: read the rules in force and the restored "
             "context above, then run `programme.py rules --ack`"
@@ -289,7 +294,7 @@ def _widen_word(opts) -> tuple:
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True):
+           journal=True, after=None, verb=None, target=None, beat=True, names_change=True):
     run_id, home, _ = _locate(opts)
     seen = {}
 
@@ -300,6 +305,8 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
+        if names_change:
+            programme_asks.refresh_replies(rec["programme"])
         seen["prompt"] = prompt
         seen["record"] = rec
 
@@ -433,7 +440,7 @@ def _h_rules(argv):
     _, opts = _parse(argv, values=("run", "context"), flags=("ack",))
     if not opts.get("ack"):
         run_id = _locate(opts)[0]
-        sys.stdout.write(render_restore(run_id))
+        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
         return 0
 
     def ack(programme, prompt, rec):
@@ -451,11 +458,11 @@ def _h_rules(argv):
     except _resume().StaleAck as stale:
         run_id, home, _ = _locate(opts)
         _resume().rebind(home, stale.current)
-        sys.stdout.write(render_restore(run_id))
+        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
         raise ProgrammeError(
             f"stale acknowledgement: the decision context changed since it was restored (now "
             f"{stale.current}); read the block above, then run `programme.sh rules --ack` again") from None
-    sys.stdout.write(render_restore(_locate(opts)[0]))
+    sys.stdout.write(render_restore(_locate(opts)[0], driver_session.driving_session_id()))
     return 0
 
 
@@ -886,6 +893,9 @@ def _h_status(argv):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
+        line = _worktree().status_line(record)
+        if line:
+            sys.stdout.write(line + "\n")
     return 0
 
 
@@ -977,6 +987,8 @@ programme_lifecycle = load_lib_module("programme_lifecycle")
 _VERBS.update(programme_lifecycle.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

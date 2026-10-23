@@ -365,9 +365,10 @@ def _plan_ids(panes, plans) -> dict:
     return out
 
 
-def _sweep_sources(programme, scope, panes, workers):
+def _sweep_sources(programme, scope, panes, workers, drivers):
     enabled = programme_home.enabled_sources(programme)
-    cwds = [p["cwd"] for p in panes or [] if p["cwd"]] + [r["path"] for r in scope["repos"]]
+    cwds = [p["cwd"] for p in panes or [] if p["cwd"] and role(p, drivers) != "pm"]
+    cwds += [r["path"] for r in scope["repos"]]
     plans = programme_plans.read(list(dict.fromkeys(cwds))) if "plans" in enabled else None
     plan_ids = _plan_ids(panes or [], plans) if plans else {}
     candidates = {i for pane in workers for i in named_issues(pane, {})}
@@ -384,7 +385,7 @@ def sweep(record) -> dict:
     panes = pane_views(snap, scope) if snap is not None else None
     drivers = _drivers(record)
     workers = [p for p in panes or [] if role(p, drivers) == "worker"]
-    tracker, tasks, plans, plan_ids = _sweep_sources(programme, scope, panes, workers)
+    tracker, tasks, plans, plan_ids = _sweep_sources(programme, scope, panes, workers, drivers)
     verified = set(tracker["issues"]) if tracker and not tracker["unavailable"] else None
     found = {}
     for pane in workers:
@@ -584,6 +585,10 @@ def _brief_tail(host, programme, decision_ids, restrictions, behaviours=()) -> s
         records = programme_context.block(programme)["decisions"]
     except programme_context.ContextError as exc:
         raise host.ProgrammeError(str(exc)) from None
+    voided = [d for d in decision_ids if (logged.get(d) or {}).get("voided_at")]
+    if voided:
+        raise host.ProgrammeError(f"decision {', '.join(voided)} was voided when its ask's facts changed; "
+                                  "cite the answer Shawn gave after the change")
     found = {d: _decision_line(d, logged, records) for d in decision_ids}
     unknown = [d for d, line in found.items() if line is None]
     if unknown:

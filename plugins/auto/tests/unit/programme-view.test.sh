@@ -132,8 +132,20 @@ check "herdr:w2-p3 ci False" "$(view_q '" ".join(str(w[k]) for w in m["waiting_o
 it "watching explains the unwatched wait"
 has "herdr:w2-p3" "$(view_q 'json.dumps(m["watching"])')"
 
+it "the status model lists the unwatched wait as an actionable reason with its target and name"
+check "unwatched_wait|herdr:w2-p3|True" "$(view_q '"|".join([r["kind"] + "|" + str(r["target"]) + "|" + str(bool(r["name"])) for r in m["programme"]["actionable_reasons"] if r["kind"] == "unwatched_wait"])')"
+
 it "decisions for Shawn lists the handed item with its question"
 check "linear:AI-3|Turn the flag on for everyone?" "$(view_q '"|".join([d["item"] + "|" + d["question"] for d in m["decisions_for_shawn"] if d["kind"] == "handed"])')"
+
+it "the top-level asks list carries an ask handed before structured fields, with its live replies"
+check "linear:AI-3|open|Flag rollout (linear:AI-3)|ship Flag rollout|2026-10-03T01:00:00Z|None" \
+  "$(view_q '"|".join(str(a[k]) if not isinstance(a[k], dict) else a[k]["ship"] for a in v["asks"] for k in ("item", "status", "name", "replies", "at", "fingerprint"))')"
+
+it "the Decisions for Shawn row names the item by name and id and gives the reply"
+DECISION_ROWS="$(view_q '"\n".join(r["text"] for r in v["rows"])')"
+has "  Flag rollout (linear:AI-3): Turn the flag on for everyone?" "$DECISION_ROWS"
+has "    reply: \"ship Flag rollout\" or \"decline Flag rollout\"" "$DECISION_ROWS"
 
 it "just did shows the latest journal write first"
 check "working_now" "$(view_q 'm["just_did"][0]["kind"]')"
@@ -987,6 +999,20 @@ BEH_JSON3="$("$PY" "$PROG" status --run "$BEH_RUN3" --json 2>&1)"
 it "a copy moved to one repo of a two-repo remit still shows at the programme layer for the other repo"
 check "programme repo" "$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(" ".join(sorted(b["layer"] for b in d["contract"]["behaviours"] if b["id"] == "bsplit")))' "$BEH_JSON3" 2>&1)"
 unset CLAUDE_AUTO_BEHAVIOURS_STORE
+REP="$(new_run w13)"
+run_py "$REP" <<'EOF' >/dev/null
+def seed(p):
+    p["items"] = {i: ph.new_item(i, "open, ownerless, no rule", now_iso="2026-10-01T00:00:00Z")
+                  for i in ("herdr:a", "herdr:b", "herdr:c")}
+mutate(args[0], seed)
+EOF
+REP_JSON="$("$PY" "$PROG" status --run "$REP" --json 2>&1)"
+rep_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); m=d["model"]; print(eval(sys.argv[2]))' "$REP_JSON" "$1" 2>&1; }
+it "three items with the same may-stop reasons list each reason once, with its count"
+check "no_rule_proposed ownerless_item open_item|[('no_rule_proposed', 3), ('open_item', 3), ('ownerless_item', 3)]" \
+  "$(rep_q '" ".join(m["programme"]["reasons"]) + "|" + str(sorted(m["programme"]["reason_counts"].items()))')"
+it "the title row names each may-stop reason once, with its count"
+has "may stop: no (no_rule_proposed ×3, ownerless_item ×3, open_item ×3)" "$(rep_q 'd["rows"][0]["text"]')"
 
 echo "programme-view.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

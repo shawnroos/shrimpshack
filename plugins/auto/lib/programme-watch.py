@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Programme wake watcher: polls cheap signals and prints one line when the remit changes.
+"""Programme wake watcher: polls cheap signals and prints one line per remit change.
 
-Remit mode beats the `remit` watcher each interval and exits after printing the change.
+Remit mode beats the `remit` watcher each interval and keeps polling after each change, until
+its Monitor expires or kills it. A superseded or ended watcher prints `remit-watcher-exit
+superseded` or `remit-watcher-exit ended` and exits 0; a crash prints
+`remit-watcher-exit crashed: <error>` and exits 1.
 Item mode runs a watch command, beats that item's watcher until it exits, then prints
 its exit status. Record writes go only through the programme CLI.
 """
@@ -167,6 +170,9 @@ def _other_remit_watcher(record):
     pid = watcher.get("process_id")
     if not pid or str(pid) == str(os.getpid()):
         return None
+    # After a takeover the old session's watcher still beats fresh until its beats are refused.
+    if watcher.get("session_id") != record.get("driving_session_id"):
+        return None
     now = run_record_core.parse_iso(run_record_core.now_iso())
     live = programme_predicate.watcher_live(watcher, now, programme_home.cadence_seconds(record))
     return str(pid) if live and _pid_alive(pid) else None
@@ -329,23 +335,26 @@ def _listed(kind, parts) -> list:
 class Source:
     def __init__(self, name, read, diff):
         self.name, self.read, self.diff = name, read, diff
-        self.baseline, self.down, self.reported = None, False, False
+        self.baseline, self.state = None, None
 
     def poll(self, ctx, record) -> list:
         if not programme_home.source_enabled(_programme(record), self.name):
-            self.baseline, self.down, self.reported = None, False, False
+            self.baseline, self.state = None, None
             return []
         known = (_programme(record).get("sources") or {}).get(self.name) or {}
-        recorded_down = isinstance(known, dict) and bool(known.get("unavailable_since"))
+        # The record's outage counts only until this process has seen the source itself; the PM may
+        # not clear unavailable_since for several polls after the recovery line.
+        recorded_down = self.state is None and isinstance(known, dict) and bool(known.get("unavailable_since"))
         value, err = self.read(ctx)
         if err:
-            if not (self.down or self.reported or recorded_down):
+            if self.state != "down" and not recorded_down:
                 _say(f"source-unavailable {self.name} {err}")
-                self.reported = True
-            self.down = True
+            self.state = "down"
             return []
-        if self.down or recorded_down:
+        if self.state == "down" or recorded_down:
+            self.state, self.baseline = "up", value
             return [f"source-available {self.name}"]
+        self.state = "up"
         if self.baseline is None:
             self.baseline = value
             return []
@@ -408,6 +417,7 @@ class RemitSignals:
 def _ended(record) -> bool:
     if _programme(record).get("ended"):
         _warn("programme ended; not watching")
+        _say("remit-watcher-exit ended")
         return True
     return False
 
@@ -416,22 +426,33 @@ def _superseded(record) -> bool:
     other = _other_remit_watcher(record)
     if other:
         _warn(f"remit watcher {other} is current; exiting")
+        _say("remit-watcher-exit superseded")
     return bool(other)
 
 
 def _remit_mode(run_id, opts) -> int:
     record = _read(run_id)
+    try:
+        return _remit_loop(run_id, opts, record)
+    except Exception as exc:  # noqa: BLE001 — the sweep re-arms on a crash line, never on silence
+        _say(f"remit-watcher-exit crashed: {type(exc).__name__}")
+        _warn(f"{type(exc).__name__}: {exc}")
+        return 1
+
+
+def _remit_loop(run_id, opts, record) -> int:
     if _ended(record) or _superseded(record):
         return 0
     if opts["tracker"] and not programme_home.source_enabled(_programme(record), "tracker"):
         _warn("the agreement turns the tracker off; not watching it")
+    # Beat before the first poll: herdr and tracker reads can take seconds, and until the first beat
+    # a wait this watcher covers reads as unwatched.
+    if not _beat(run_id, REMIT_WATCHER):
+        return 1
     signals = RemitSignals({"home": programme_home.home_path(run_id)}, opts["tracker"])
     changes = signals.poll(record)
     if changes:
         _say("; ".join(changes))
-        return 0
-    if not _beat(run_id, REMIT_WATCHER):
-        return 1
     interval, deadline, polls, refused = _interval(), time.monotonic(), 0, 0
     while True:
         deadline += interval
@@ -443,7 +464,6 @@ def _remit_mode(run_id, opts) -> int:
         changes = signals.poll(record)
         if changes:
             _say("; ".join(changes))
-            return 0
         refused = 0 if _beat(run_id, REMIT_WATCHER) else refused + 1
         if refused >= REFUSED_BEATS_LIMIT:
             _warn(f"{refused} beats refused in a row; exiting")

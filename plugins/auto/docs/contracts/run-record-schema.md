@@ -688,6 +688,7 @@ keys and keeps unknown ones.
 | `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `tools_of_record` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
 | `recorded_issues` | `{provider: "linear-mcp", at, dropped, issues: {"<key>": {title, state, state_type, state_id, url, project: {id, name} \| null, initiatives: [{id, name}] \| null, source: "linear-mcp"}}}`, written by `record-issues` from the PM's MCP read. It claims the tracker provider only when no other provider has it available. `state_type` is one of triage, backlog, unstarted, started, completed, canceled, or null; `state_id` is a UUID or null. The tracker guard reads it to resolve state names and ids; the recorded check never reads it |
 | `trajectory_sweeps` | `[<iso>]`, at most two: the times of the previous and latest `record-trajectories` call that stored a trajectory. The view reads the gap between them. A record without it reads as `[]` |
+| `pm_worktree` | `null \| {path, repo, created_at}`. The programme worktree: a detached git worktree at `<repo>/worktrees/programme-<run>` the PM works from, where `repo` is the main checkout of the first remit repo at creation. Written once through `programme_authority.write` and never re-derived from the remit, so it stays put when the remit's repos change. `null` while the remit has no repo. A record without it reads as `null`. Mechanics: `lib/programme_worktree.py` |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -710,7 +711,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `waiting_on` | `null \| {who, watcher, reporter, kind?: "blocker", trace_id?, job_id?, due_at?, serves?, evidence?, unblocks_when?, safety?, permission?}`. A non-empty `reporter` or a live watcher makes the wait watched. `set-waiting --due <iso>` writes `due_at`, and the wake watcher reads it. A blocker written by `set-waiting` carries `serves`, `evidence` and `unblocks_when`, or `safety: true` for a safety or data-loss pause; one written before these fields has none, and the view says so `propose-permission` writes `{who: shawn, reporter: shawn, watcher: null, permission: <perm-id>}`; `settle-permissions` clears it when that proposal resolves. `set-waiting` refuses a new wait while `permission` is set; `--clear` releases it |
 | `permission_block` | `{cause, detail, at, proposals}`: the item's latest permission explanation, written by the permission verbs |
 | `permission_scan` | `{<session id>: byte offset}`: how far `propose-permission` has read each session's transcript for this item |
-| `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id}}`. `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
+| `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id, relayed_at?}}`, plus on an ask handed with structured facts: `options[{label, effect, cost}]`, `if_nothing`, `recommendation`, `recommendation_why`, `risks[]`, `evidence[]`, `pr {url, title}`, `issue {url, title}`, `readiness`, `fingerprint`, `facts_at`, `shown {at, fingerprint}`, `replies {ship, decline}` and `superseded_answers[]` (voided answers, each with `voided_at` and the `fingerprint` it answered). `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
 | `behaviour_deliveries` | `[{id, reason, at, via, trigger?, trigger_at?, timing?}]`: each behaviour sent to the item's worker. `reason` is `brief` (`via: start-worker`), `relevant` or `sent_back` (`via: remind-behaviour`, which adds `trigger` (claim, merge or block), `trigger_at` and `timing` (`before_trigger`, `send_back` or `remind_only`)). Absent on items that never had one |
 | `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
@@ -738,7 +739,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviours_kept`, `rule_proposed`,
 `rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
-`item_handed`, `handed_answered`, `pm_decided`, `claim`, `claims_read`, `working_now`,
+`item_handed`, `handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
 `evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
 `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
@@ -800,7 +801,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - Request lines (`takeover_request`, `handover_request`, `end_request`) carry
   `{verb, text, origin, space, lease_status, driving}`.
 - `pm_decided` carries `{decision_id, item, decision_kind, term, silent, outcome, state, why}`;
-  `item_handed` adds `{ask, ask_kind, op?}`; `handed_answered` and `agreement_accepted` add
+  `item_handed` adds `{ask, ask_kind, op?, title, fingerprint, replies}`; `ask_updated` and `ask_answer_voided` carry `{item, ask, fingerprint, changed, voided, replies?}` (`voided` is the voided decision id or null); `ask_shown` carries `{item, ask, fingerprint}` and `ask_relayed` `{item, ask, choice, decision_id}`; `handed_answered` and `agreement_accepted` add
   `decision_id`, the id of the decision they recorded. `agreement_accepted` also carries
   `contract_version`.
 - `agreement_proposed` adds `{project_terms: [{id, area, value, reserved}], source}` when the
@@ -887,7 +888,9 @@ session took the programme over by handover). It does not repeat the block.
 
 `<home>/views/view.json` is a display copy rebuilt after every programme write:
 `{view_format: 3, run, generated_at, model, work, contract, reread, rows}`. `model` holds
-`programme {run, ended, done, may_stop, stop_rule, reasons, counts, unread_claims}`,
+`programme {run, ended, done, may_stop, stop_rule, reasons, reason_counts, counts,
+unread_claims}` (`reasons` names each may-stop reason kind once; `reason_counts` maps
+each kind to how many items or sources gave it),
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`, plus the
 additive `terms`: `contract_version`; `project_terms[] {id, area, value, reserved,
@@ -948,6 +951,19 @@ The nag file is `<repo>/.claude/auto/.stop-nag-<sid>.json`, or
 `<home>/.claude/auto/.stop-nag-<sid>.json` when there is no repo. `<sid>` keeps only
 `[A-Za-z0-9_-]` and is capped at 128 characters. A stop with no session id uses
 `.stop-nag.json`. A programme holds only its driving session's stop.
+
+Drift: when the driving PM of a live programme with a `pm_worktree` stops, the hook
+compares the `cwd` in the hook's stdin (never the shell's `$PWD` or herdr's pane cwd)
+with the recorded worktree path, by realpath; a subdirectory of the worktree is inside
+it. The check runs before holds whose programme may stop are dropped. When the cwd is
+outside and the worktree is inside the session's start directory (§10.10, newest
+`startup` or `resume` row), the stop is blocked with a `cwd_drift` reason whose fix is
+`cd <worktree>`, and that reason is part of the nag signature. When the `cd` would not
+last, the stop is let through with a `systemMessage` naming `/cd <worktree>`.
+`cwd_drift` is a hook-only reason kind: it is not in `REASON_KINDS` and status does not
+show it. A missing `cwd`, a null or malformed `pm_worktree`, a worktree path that no
+longer exists, an ended programme or any error lets the stop through. The hook writes
+nothing to the record, and no environment variable turns the check off.
 
 ### 10.10 Session registry
 

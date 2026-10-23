@@ -30,7 +30,8 @@ LINES_PER_PANE = 50
 PANE_GET_TIMEOUT = 1.0
 REPORT_TIMEOUT = 1.0
 FIELD_CAP = 512
-DRIVER_LEASE_STATES = ("live", "orphaned", "expired")
+# "unavailable": a programme whose store is held still has a driver pane to protect.
+DRIVER_LEASE_STATES = ("live", "orphaned", "expired", "unavailable")
 
 _CONTROL = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x00-\x1f\x7f]")
 
@@ -207,6 +208,12 @@ def _all_rows() -> list:
     for name in names:
         rows.extend(_read_rows(os.path.join(folder, name)))
     return rows
+
+
+def session_rows(session_id) -> list:
+    if not session_id:
+        return []
+    return [r for r in _all_rows() if r.get("session_id") == session_id]
 
 
 def lookup(session_id, server=None, workspace=None, *, include_headless=False):

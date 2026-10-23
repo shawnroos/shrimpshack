@@ -6,7 +6,11 @@ allowed-tools: Bash, CronDelete, TaskStop
 
 Shawn typed this to end the programme. The prompt hook has already journaled the
 request. It is accepted when typed in the driving session, or from any session
-when the lease is orphaned.
+when the lease is orphaned. When the lease is expired (the agreement was never
+accepted within one cadence), `end` needs no typed request and ends the programme
+the way `expire` does, with reason agreement_unaccepted: there is no accepted
+agreement to protect. A `--why` of several words must be in single quotes
+(`--why 'nothing left to do'`): the dispatch line wraps the arguments in double quotes.
 
 First make one carry-over offer: the corrections still applied and the
 programme-layer behaviours. `end` releases the lease, and every verb refuses an
@@ -51,6 +55,8 @@ Run the dispatch line below:
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" end "$ARGUMENTS"`
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
+- Exit 2: the arguments did not parse (for example, an unquoted `--why` of
+  several words). Show Shawn the line and ask him to quote the reason.
 - Success: the leases are released and the run shows "ended" (apart from done).
   Ended is not archived: no new work starts, and the home keeps everything.
   1. Run each `CronDelete <task id>` line it prints, then record it with
@@ -59,7 +65,11 @@ Run the dispatch line below:
      the task id; an id the programme does not owe is refused.
   2. Run each `TaskStop <task id>` line it prints, record it the same way, then
      stop any other watcher Monitor this session still runs.
-  3. Run `release-resources --run <run>`. It removes leftover lease files and
+  3. If this session is inside the programme worktree, leave it first, because
+     release refuses to remove the worktree while the caller is inside it:
+     `cd` to its main checkout (the worktree path without
+     `/worktrees/programme-<run>`), or have Shawn type `/cd <main checkout>`.
+     Then run `release-resources --run <run>`. It removes leftover lease files and
      checks watcher processes and worker sessions without stopping anything.
   4. Run `check-archive --run <run>`. Each failed check names its remedy: for
      an unfinished item, `dispose-item <id> --as stopped_unfinished|handed_over

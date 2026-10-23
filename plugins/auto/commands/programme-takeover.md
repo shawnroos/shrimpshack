@@ -1,6 +1,6 @@
 ---
 description: Take over this herdr space's auto programme from this session when its PM is gone, or replace a named PM
-argument-hint: "[--replace <PM pane name>]"
+argument-hint: "[--replace <PM session id>]"
 allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop, AskUserQuestion
 ---
 
@@ -10,7 +10,10 @@ old PM is gone: the pane that ran it is closed, or now runs another session or
 terminal. It also works when the lease is orphaned (the PM stopped beating for
 two cadence periods) and the request was typed while it was. Otherwise it needs
 Shawn to name the PM he is replacing: `/auto:programme-takeover --replace <PM
-pane name>`. The old PM's next programme write is then refused. If herdr cannot
+session id>` (a pane name also works inside the PM's own herdr workspace). The
+session id works from any workspace or machine, because herdr pane and tab ids
+differ per workspace and per machine. The old PM's next programme write is then
+refused. If herdr cannot
 be read, auto does not count the PM as gone. Pass `--replace` on the dispatch
 line only when Shawn typed it; the typed text, not the argument, is what counts.
 
@@ -26,7 +29,10 @@ Run the dispatch line below:
   decisions with their reasons and limits, requirements, binding pauses and
   denials, pending questions, assignments and uncertain actions, at one store
   revision). They bind you from now on; they approve nothing. Read any cut entry
-  in full with `programme.sh recover --get <id>`. Then:
+  in full with `programme.sh recover --get <id>`. Before anything else, act on
+  the move line if it printed one: run the `cd <worktree>` it names, or ask
+  Shawn to type the `/cd <worktree>` it names and wait until he has. The PM
+  works from the programme worktree from now on. Then:
   1. If `programme.sh status --json` has a `setup` part, the agreement is not
      accepted yet: resume `/auto:programme` step 5 at the first step not done,
      and finish the setup before you arm any wake-up.
