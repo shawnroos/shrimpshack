@@ -132,8 +132,20 @@ check "herdr:w2-p3 ci False" "$(view_q '" ".join(str(w[k]) for w in m["waiting_o
 it "watching explains the unwatched wait"
 has "herdr:w2-p3" "$(view_q 'json.dumps(m["watching"])')"
 
+it "the status model lists the unwatched wait as an actionable reason with its target and name"
+check "unwatched_wait|herdr:w2-p3|True" "$(view_q '"|".join([r["kind"] + "|" + str(r["target"]) + "|" + str(bool(r["name"])) for r in m["programme"]["actionable_reasons"] if r["kind"] == "unwatched_wait"])')"
+
 it "decisions for Shawn lists the handed item with its question"
 check "linear:AI-3|Turn the flag on for everyone?" "$(view_q '"|".join([d["item"] + "|" + d["question"] for d in m["decisions_for_shawn"] if d["kind"] == "handed"])')"
+
+it "the top-level asks list carries an ask handed before structured fields, with its live replies"
+check "linear:AI-3|open|Flag rollout (linear:AI-3)|ship Flag rollout|2026-10-03T01:00:00Z|None" \
+  "$(view_q '"|".join(str(a[k]) if not isinstance(a[k], dict) else a[k]["ship"] for a in v["asks"] for k in ("item", "status", "name", "replies", "at", "fingerprint"))')"
+
+it "the Decisions for Shawn row names the item by name and id and gives the reply"
+DECISION_ROWS="$(view_q '"\n".join(r["text"] for r in v["rows"])')"
+has "  Flag rollout (linear:AI-3): Turn the flag on for everyone?" "$DECISION_ROWS"
+has "    reply: \"ship Flag rollout\" or \"decline Flag rollout\"" "$DECISION_ROWS"
 
 it "just did shows the latest journal write first"
 check "working_now" "$(view_q 'm["just_did"][0]["kind"]')"

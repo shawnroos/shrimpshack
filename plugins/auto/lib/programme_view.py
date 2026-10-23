@@ -18,6 +18,7 @@ programme_home = load_lib_module("programme_home")
 programme_permission_rules = load_lib_module("programme_permission_rules")
 programme_journal = load_lib_module("programme_journal")
 programme_decisions = load_lib_module("programme_decisions")
+programme_asks = load_lib_module("programme_asks")
 programme_predicate = load_lib_module("programme_predicate")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
@@ -276,7 +277,8 @@ def _context_decisions(acceptance) -> list:
 
 def _decisions(block, items) -> list:
     out = [{"kind": "handed", "item": i["id"], "question": i["question"], "ask_kind": i["ask_kind"],
-            "ask_id": i["ask_id"]}
+            "ask_id": i["ask_id"], "name": programme_asks.item_name(i["id"], block["items"][i["id"]]),
+            "details": programme_asks.detail_lines(block["items"], i["id"])}
            for i in items if i["effective_state"] == "handed" and i["needs_shawn"]]
     out += [{"kind": "stopped_unwatched", "item": i["id"],
              "question": "the PM stopped while this wait had no watcher"}
@@ -418,6 +420,10 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
             "stop_rule": status["stop_rule"],
             "reasons": list(reason_counts),
             "reason_counts": reason_counts,
+            "actionable_reasons": [
+                {"kind": r.get("kind"), "target": r.get("item") or r.get("system") or r.get("count"),
+                 "name": r.get("name")}
+                for r in status.get("actionable_reasons") or [] if isinstance(r, dict)],
             "counts": status["items"],
             "unread_claims": max(inbox_size - offset, 0) if isinstance(inbox_size, int) else None,
         },
@@ -438,7 +444,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
     parts = _clean(programme_view_work.build(record, block, journal_entries, now,
                                              model["rules_in_force"].get("instructions")))
     view = {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
-            "model": model, **parts}
+            "model": model, **parts, "asks": programme_asks.view_asks(block["items"])}
     setup = programme_view_setup.build(block, protocol)
     if setup is not None:
         view["setup"] = _clean(setup)
@@ -642,6 +648,12 @@ def _acceptance_lines(acceptance) -> list:
     return out
 
 
+def _decision_lines(d) -> list:
+    head = _row(f"  {d.get('name') or d.get('item') or d['kind']}"
+                + (f" (ask {d['ask_id']})" if d.get("ask_id") else "") + f": {d['question']}", "warn")
+    return [head] + [_row(f"    {text}") for text in d.get("details") or []]
+
+
 def rows(model, work=None) -> list:
     out = [_header(model["programme"])]
     _section(out, "Remit", [_row(f"  {text}") for text in remit_texts(model.get("remit"))], "none")
@@ -657,10 +669,8 @@ def rows(model, work=None) -> list:
                                              f"({'watched' if w['watched'] else 'unwatched'})",
                                              "text" if w["watched"] else "warn")
                                         for w in model["waiting_on_whom"]], "nobody")
-    _section(out, "Decisions for Shawn", [_row(f"  {d.get('item') or d['kind']}"
-                                               + (f" (ask {d['ask_id']})" if d.get("ask_id") else "")
-                                               + f": {d['question']}", "warn")
-                                          for d in model["decisions_for_shawn"]], "none")
+    _section(out, "Decisions for Shawn", [line for d in model["decisions_for_shawn"] for line in _decision_lines(d)],
+             "none")
     _section(out, "Just did", [_row(f"  {j['at']} {j['kind']}"
                                     + (f" {j['item']}" if j.get("item") else "")
                                     + (f": {j['summary']}" if j.get("summary") else "")

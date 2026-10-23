@@ -22,6 +22,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record = load_lib_module("run_record")
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
+programme_asks = load_lib_module("programme_asks")
 programme_journal = load_lib_module("programme_journal")
 programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
@@ -289,7 +290,7 @@ def _widen_word(opts) -> tuple:
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True):
+           journal=True, after=None, verb=None, target=None, beat=True, names_change=True):
     run_id, home, _ = _locate(opts)
     seen = {}
 
@@ -300,6 +301,8 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
+        if names_change:
+            programme_asks.refresh_replies(rec["programme"])
         seen["prompt"] = prompt
         seen["record"] = rec
 
@@ -975,6 +978,8 @@ programme_lifecycle = load_lib_module("programme_lifecycle")
 _VERBS.update(programme_lifecycle.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

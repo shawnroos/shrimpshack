@@ -1,0 +1,62 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "baseRefName": "main",
+    "commits": {
+     "nodes": [
+      {
+       "commit": {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "statusCheckRollup": {
+         "contexts": {
+          "nodes": [
+           {
+            "__typename": "CheckRun",
+            "conclusion": "SUCCESS",
+            "isRequired": true,
+            "name": "plugin tests",
+            "status": "COMPLETED"
+           },
+           {
+            "__typename": "CheckRun",
+            "conclusion": "SKIPPED",
+            "isRequired": true,
+            "name": "e2e",
+            "status": "COMPLETED"
+           },
+           {
+            "__typename": "StatusContext",
+            "context": "CodeRabbit",
+            "isRequired": false,
+            "state": "SUCCESS"
+           }
+          ],
+          "totalCount": 3
+         },
+         "state": "SUCCESS"
+        }
+       }
+      }
+     ]
+    },
+    "headRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "isDraft": false,
+    "mergeStateStatus": "CLEAN",
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "reviewThreads": {
+     "nodes": [
+      {
+       "isResolved": true
+      }
+     ],
+     "totalCount": 1
+    },
+    "state": "OPEN",
+    "title": "Editor places missed crop",
+    "url": "https://github.com/shawnroos/shrimpshack/pull/120"
+   }
+  }
+ }
+}

@@ -20,8 +20,9 @@ A watcher counts as live only while its heartbeat is newer than the cadence
 term. A watcher whose Monitor expired stops beating, so the wait turns
 unwatched and the Stop hook holds the PM until it is re-armed.
 
-The remit watcher (`programme-watch.sh` with no `--item`) prints one line and
-exits when anything in the space changes:
+The remit watcher (`programme-watch.sh` with no `--item`) prints one line each
+time anything in the space changes, and keeps polling. It runs until its Monitor
+expires or is killed:
 
 | Line | Do |
 |---|---|
@@ -34,13 +35,25 @@ exits when anything in the space changes:
 | `source-unavailable <name> missing`, or a reason naming `op unsupported` | `set-source <name> --unsupported` (this machine cannot read it; it never holds the stop) |
 | any other `source-unavailable <name> <reason>` | `set-source <name> --unavailable --watcher remit` (a watched outage does not hold the stop) |
 | `source-available <name>` | `set-source <name> --available` |
+| `remit-watcher-exit superseded` | nothing: another live watcher from the driving session owns the remit; do not re-arm |
+| `remit-watcher-exit ended` | nothing: the programme has ended; do not re-arm |
+
+A source prints `source-unavailable` once when it goes down and
+`source-available` once when it comes back, so a second outage prints again.
+
+The PM's `watcher-beat --task-id <id> --kind monitor` records the Monitor's task
+id but does not refresh the heartbeat. Only the watcher process's own beats do,
+so a dead Monitor stops counting as live. A `--kind cron` beat still refreshes
+it. A process beat also records the driving session, and a live watcher
+supersedes a new one only when that session still drives the programme.
 
 Record every watcher's kind with its task id: `--kind cron` for the cadence
 cron, `--kind monitor` for a Monitor. `/auto:programme-end` prints
 `CronDelete <id>` for cron watchers and `TaskStop <id>` for Monitor watchers.
 
-Every Monitor expires after at most 30 minutes; re-arm the remit watcher at the
-end of every sweep. The cron fallback (default hourly) wakes the PM when no
+Every Monitor expires after at most 30 minutes. Re-arm the remit watcher only
+when its Monitor stream ends by expiry or crash, never because a sweep ran and
+never after a `remit-watcher-exit` line. An expiry wake is quiet. The cron fallback (default hourly) wakes the PM when no
 watcher is running, and survives a resume.
 
 After a takeover or handover, the old session's watchers can no longer beat

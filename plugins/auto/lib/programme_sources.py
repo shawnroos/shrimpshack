@@ -584,6 +584,10 @@ def _brief_tail(host, programme, decision_ids, restrictions) -> str:
         records = programme_context.block(programme)["decisions"]
     except programme_context.ContextError as exc:
         raise host.ProgrammeError(str(exc)) from None
+    voided = [d for d in decision_ids if (logged.get(d) or {}).get("voided_at")]
+    if voided:
+        raise host.ProgrammeError(f"decision {', '.join(voided)} was voided when its ask's facts changed; "
+                                  "cite the answer Shawn gave after the change")
     found = {d: _decision_line(d, logged, records) for d in decision_ids}
     unknown = [d for d, line in found.items() if line is None]
     if unknown:
