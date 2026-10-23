@@ -112,6 +112,8 @@
 #                          session_registry [lazy]. programme_record reaches it lazily.
 #   session_registry     → run_record_core, programme_home, driver_session
 #   programme_exec       → programme_sanitize
+#   programme_worktree   → _bootstrap [plain], run_record_core, programme_exec, session_registry
+#                          (callers write its record value through programme_authority)
 #   programme_tracker    → programme_exec, programme_journal, programme_sanitize
 #   programme_tasks      → programme_sanitize
 #   programme_plans      → programme_exec, programme_sanitize, programme_tracker
@@ -298,6 +300,16 @@ if loads_sibling "programme_permission_settle.py" "programme_permission" \
    || loads_sibling "programme_permission_state.py" "programme_permission_settle" \
    || loads_sibling "permission_transcript.py" "programme_permission"; then
   fail "only programme_permission loads programme_permission_settle; a load back closes a cycle"
+else
+  pass
+fi
+
+it "lib/programme_worktree.py exists and loads neither programme nor programme_authority"
+if [ ! -f "${LIB}/programme_worktree.py" ]; then
+  fail "lib/programme_worktree.py missing"
+elif loads_sibling "programme_worktree.py" "programme" \
+   || loads_sibling "programme_worktree.py" "programme_authority"; then
+  fail "programme_worktree returns a record value; programme and the authority path call it, never the reverse"
 else
   pass
 fi
