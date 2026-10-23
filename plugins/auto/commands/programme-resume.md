@@ -15,14 +15,18 @@ secrets included. Never `git add -A`.
 
 1. Run `P beat`. If a verb refuses and prints the rules in force, read them and
    run `P rules --ack`, then repeat it.
-2. If the lease names another session and that PM is gone, run
-   `/auto:programme-takeover` instead and come back here after it. Never take over
-   a PM that is still running.
-3. Find this session's real pane. A resumed session keeps the `HERDR_PANE_ID` of
-   the pane it ran in before, and the remit watcher skips only that pane. A stale
-   id makes the watcher fire on every PM turn.
-   `herdr pane list` → the pane whose label is the PM's (e.g. "PM AI Editor").
-4. Arm the remit watcher with the real id, under Monitor at the longest timeout:
+2. If the lease names another session, stop and ask Shawn to type
+   `/auto:programme-takeover --replace <that session id>` in this session. A
+   takeover counts only when Shawn types it, so never run it yourself. Come back
+   here after it succeeds. Never take over a PM that is still running.
+3. Check this session's pane. The remit watcher skips only the pane in
+   `HERDR_PANE_ID`, and a resumed session can carry the id of the pane it ran in
+   before, so a stale id makes the watcher fire on every PM turn. Read that pane
+   (`herdr pane read "$HERDR_PANE_ID" --lines 20`). If it does not show this
+   conversation, ask Shawn which tab the PM runs in, with a picker over the
+   labels from `herdr pane list`. Pane ids and labels differ per machine, so
+   never take one from another machine or an earlier run.
+4. Arm the remit watcher with that pane id, under Monitor at the longest timeout:
    `HERDR_PANE_ID=<real pane> bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --tracker`
    Then `P watcher-beat remit --task-id <Monitor task id> --kind monitor`.
    Use the same prefix every time you re-arm it.
@@ -37,7 +41,7 @@ secrets included. Never `git add -A`.
    P status --json | python3 -c '
    import json,sys; d=json.load(sys.stdin)
    for i in d["model"]["items"]:
-       if i.get("effective_state") not in ("done","dropped"):
+       if i.get("effective_state") not in ("done","handed","dropped","decided"):
            print(i["id"], i.get("effective_state"), i.get("owner_pane"), i.get("session"), "|", i.get("title"))'
    ```
 2. Read the remit's panes: `herdr pane list`. For each pane note `agent`,
@@ -56,34 +60,40 @@ For each item to resume:
 
 1. Read the pane first: `herdr pane read <pane> --lines 30`. Never close a pane or
    type into it without reading it.
-2. If the worktree directory is gone, recreate it (`mkdir -p` the path, or
-   `git worktree add` the item's branch) before you resume.
+2. If the worktree directory is gone, recreate it at the same path with
+   `git worktree add <path> <the item's branch>`. Never create the directory
+   any other way: a worker resumed in a folder that is not a checkout works
+   outside the repo. `claude --resume` finds a session only from the directory
+   it started in, so the path must match. If you cannot recreate it, skip the
+   item and list it for Shawn.
 3. Resume in place:
-   `herdr pane run <pane> "cd <worktree> && claude --model opus --resume <session id>"`
+   `herdr pane run <pane> "cd <worktree> && claude --resume <session id>"`
 4. Or resume in a new tab, named `<ticket> <max 3 words>`:
    ```
    herdr tab create --workspace <ws> --cwd <worktree> --label "<ticket> <words>" --no-focus
-   herdr pane run <new pane> "claude --model opus --resume <session id>"
+   herdr pane run <new pane> "claude --resume <session id>"
    ```
+   Add the launch flags the programme's rules name (a model, for example);
+   add none of your own.
 5. Re-own the item on the pane it now runs in:
    `P add-item <item> --pane <pane> --session <session id>`.
 
 ## 4. Brief each resumed session once
 
 When a resumed session is idle (`herdr pane list` shows `agent_status` idle), send
-one prompt with `P prompt-item <item> "<text>"`. If prompt-item refuses, use
-`herdr agent prompt <pane> "<text>"`. The text:
+one prompt with `P prompt-item <item> "<text>"`. If prompt-item refuses, do not
+send it another way: list the item and the refusal for Shawn. The text:
 
 > PM: your session was resumed after a <crash | quit | login reset>. Re-read your
-> last state. Check your CI watchers and open PRs: their heads may have moved (a
-> dev-env sync bot may have merged develop into your branch). Re-arm any background
-> watchers you still need, then carry on where you stopped. Same rules: commits and
-> pushes with HUSKY=0; no local whole-repo checks, builds or evals; headless
-> agent-browser only, with your own session; technical calls to the PM, product
+> last state. Check your CI watchers and open PRs: their heads may have moved
+> since you stopped. Re-arm any background watchers you still need, then carry on
+> where you stopped. The same rules apply: technical calls to the PM, product
 > calls to Shawn by picker. Never prompt the PM's pane. Report with
 > `programme.sh claim`.
 
-Add the programme's own standing rules from the rules block when they apply.
+Then add the standing rules from the programme's rules block (`P rules`) that
+apply to workers, for example its commit, test and browser rules. Write no
+repo-specific rule here that the rules block does not hold.
 
 ## 5. Expired logins
 
