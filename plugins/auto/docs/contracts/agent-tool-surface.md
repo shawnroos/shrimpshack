@@ -303,7 +303,10 @@ session.
   fulfilled (needs `--why`) or withdrawn (needs `--prompt`). Closing as fulfilled
   never counts as a beat, and takes --origin ui as a display label.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
-  proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
+  proposal. Repeated `--item <id>` options link it to known programme items;
+  raw rule JSON cannot carry those links. Links cover only the missing-proposal
+  stop check, not an unwatched wait or rule authority. `adopt-rule` removes the
+  links before validation, hashing, and writing the personal protocol layer atomically, with
   an adoption record (machine, run, prompt id, redacted quote, prompt hash, content
   hash). `adopt-autonomy` sets one autonomy level (a level wider than the plugin
   default needs `--widening`), and `adopt-check` sets one `verified.lookup` or

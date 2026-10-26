@@ -7,7 +7,7 @@ when every unfinished item waits on someone else and each wait is covered:
 |---|---|---|
 | Something the PM can poll (a CI run, a deploy, a job) | a live watcher | Monitor `programme-watch.sh --item <item> -- <command>`; it beats the item's watcher each interval until the command exits, then prints `item-exited <item> exit=<n>` |
 | A person who will report back | a named reporter | `set-waiting <item> --who <who> --reporter <name>` |
-| An item no rule matches | Shawn | `propose-rule`, then `set-waiting <item> --who shawn --reporter shawn` |
+| An item no rule matches | Shawn | `propose-rule '<rule json>' --item <item>`, then `set-waiting <item> --who shawn --reporter shawn` |
 | A checker that returned unknown twice | a retry watcher | the queued `arm_retry_watcher` entry; arm it, then remove the entry |
 | A permission Shawn must apply | Shawn | `propose-permission` records the wait itself, with the proposal id; never `set-waiting` it. `settle-permissions` returns the item to open when the blocked read runs |
 

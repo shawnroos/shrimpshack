@@ -401,7 +401,7 @@ not "nothing changed". You apply every programme write yourself.
       wait only: a blocker on a check of an accepted requirement also takes
       `P raise-blocker`, and a safety or data-loss risk also takes `P pause`
       (section 6 of [references/sequencing.md](references/sequencing.md)).
-    - An item no protocol rule matches: `P propose-rule '<rule json>'`, then
+    - An item no protocol rule matches: `P propose-rule '<rule json>' --item <item>`, then
       `P set-waiting <item> --who shawn --reporter shawn`.
 13. **Decide or hand.** Read the rules block (`P rules`). Follow section 11 of
     [references/judgment.md](references/judgment.md):

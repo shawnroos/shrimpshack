@@ -575,9 +575,9 @@ def _h_close_instruction(argv):
 
 
 def _h_propose_rule(argv):
-    positional, opts = _parse(argv, values=("run",))
+    positional, opts = _parse(argv, values=("run",), multi=("item",))
     if len(positional) != 1:
-        raise ValueError("usage: propose-rule <rule-json>")
+        raise ValueError("usage: propose-rule <rule-json> [--item <id>]...")
     rule = json.loads(positional[0])
     verdict = programme_protocol.validate_proposal(rule)
     if not verdict["ok"]:
@@ -587,8 +587,11 @@ def _h_propose_rule(argv):
         proposals = programme.setdefault("proposed_rules", [])
         if any(isinstance(r, dict) and r.get("id") == rule["id"] for r in proposals):
             raise ProgrammeError(f"rule {rule['id']!r} is already proposed")
-        proposals.append(rule)
-        return {"rule": rule["id"]}
+        items = list(dict.fromkeys(programme_record._resolve(programme, programme_record.check_item_id(i))
+                                   for i in opts["item"]))
+        proposal = dict(rule, items=items) if items else rule
+        proposals.append(proposal)
+        return {"rule": rule["id"], "items": items}
 
     return _write(opts, change, "rule_proposed")
 
@@ -668,7 +671,8 @@ def _h_adopt_rule(argv):
         hits = [r for r in proposals if isinstance(r, dict) and r.get("id") == rule_id]
         if not hits:
             raise ProgrammeError(f"no proposed rule {rule_id!r}")
-        rule = {k: v for k, v in hits[0].items() if k != "adoption"}
+        rule = programme_protocol.proposal_rule(hits[0])
+        rule.pop("adoption", None)
         verdict = programme_protocol.validate_proposal(rule)
         if not verdict["ok"]:
             raise ProgrammeError(f"rule refused: {verdict['reason']} ({verdict['detail']})")
@@ -775,8 +779,8 @@ _VERBS = {
     ),
     "propose-rule": _Verb(
         _h_propose_rule,
-        "<rule-json> [--run <id>]",
-        rejects="a rule that fails the protocol rule format, carries adoption, or is already proposed.",
+        "<rule-json> [--item <id>]... [--run <id>]",
+        rejects="a rule failing the rule format, with adoption or item keys, or already proposed; an unknown --item.",
     ),
     "adopt-rule": _Verb(
         _h_adopt_rule,

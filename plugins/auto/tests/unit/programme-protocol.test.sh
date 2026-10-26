@@ -371,25 +371,26 @@ check "[('personal', 'sync_conflict', 'protocol.sync-conflict-20261006-101010-AB
 fresh
 it "a proposed rule in the record changes no item's deliverables and is listed as proposed"
 OUT="$(run_py <<'EOF'
-record = {"run_kind": "programme", "programme": {"proposed_rules": [rule("docs-flagged", ["evals_or_docs"], ["flagged"])]}}
+record = {"run_kind": "programme", "programme": {"proposed_rules": [dict(rule("docs-flagged", ["evals_or_docs"], ["flagged"]), items=["linear:AI-753"])]}}
 p = pp.load(prompt_lookup=lookup)
 before = pp.match(p, ["evals_or_docs"])
 after = pp.match(pp.load(prompt_lookup=lookup), ["evals_or_docs"])
 rows = pp.summary(p, record)
-print(before == after, after["deliverables"], [(r["id"], r["status"]) for r in rows if r["id"] == "docs-flagged"])
+print(before == after, after["deliverables"], [(r["id"], r["status"], r["reason"]) for r in rows if r["id"] == "docs-flagged"])
 EOF
 )"
-check "True ['merged', 'recorded'] [('docs-flagged', 'proposed')]" "$OUT"
+check "True ['merged', 'recorded'] [('docs-flagged', 'proposed', None)]" "$OUT"
 
 it "validate_proposal accepts the R19 format and refuses an adoption record or an unknown level"
 OUT="$(run_py <<'EOF'
 good = rule("docs-flagged", ["evals_or_docs"], ["flagged"])
 print(pp.validate_proposal(good)["ok"],
       pp.validate_proposal(adopt(good))["reason"],
-      pp.validate_proposal(rule("x", ["evals_or_docs"], ["flagged"], autonomy="sometimes"))["reason"])
+      pp.validate_proposal(rule("x", ["evals_or_docs"], ["flagged"], autonomy="sometimes"))["reason"],
+      pp.validate_proposal(dict(good, items=["linear:AI-753"]))["reason"])
 EOF
 )"
-check "True unknown_key unknown_autonomy" "$OUT"
+check "True unknown_key unknown_autonomy unknown_key" "$OUT"
 
 it "an item kind no rule matches gives no matching rule"
 OUT="$(run_py <<'EOF'
