@@ -327,7 +327,8 @@ def _programme_reason_texts(status) -> list:
 
 _REASON_FIXES = {
     "no_rule_proposed": ("no rule says when {t} is done: `programme.sh propose-rule '<rule json>' --item {t}` "
-                         "with a rule id not proposed before, then `programme.sh set-waiting {t} --who shawn --reporter shawn`"),
+                         "with a rule id not proposed before, "
+                         "then `programme.sh set-waiting {t} --who shawn --reporter shawn`"),
     "unwatched_wait": ("{t} waits with nothing watching: Monitor `programme-watch.sh --item {t} -- <command>`, "
                        "or `programme.sh set-waiting {t} --who <who> --reporter <name>`"),
     "unproven_done": "{t} is done but unproven: `programme.sh check-deliverable {t} <deliverable>`",
