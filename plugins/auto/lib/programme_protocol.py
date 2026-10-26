@@ -486,6 +486,12 @@ def proposed_rules(record) -> list:
     return rules if isinstance(rules, list) else []
 
 
+def proposal_rule(proposal):
+    if isinstance(proposal, dict):
+        return {k: v for k, v in proposal.items() if k != "items"}
+    return proposal
+
+
 def summary(protocol: dict, record=None) -> list:
     rows = []
     for rid, rule in sorted(protocol["rules"].items()):
@@ -496,7 +502,7 @@ def summary(protocol: dict, record=None) -> list:
         rows.append({"id": entry["id"], "status": "rejected", "layer": entry["layer"],
                      "reason": entry["reason"]})
     for rule in proposed_rules(record):
-        verdict = validate_proposal(rule)
+        verdict = validate_proposal(proposal_rule(rule))
         rows.append({"id": rule.get("id") if isinstance(rule, dict) else None,
                      "status": "proposed", "layer": "record", "reason": verdict["reason"]})
     return rows

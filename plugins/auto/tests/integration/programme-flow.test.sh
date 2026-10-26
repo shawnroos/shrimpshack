@@ -672,6 +672,138 @@ print(load(args[0])["loop"]["last_beat_at"])
 EOF
 )"
 
+WS=w13
+as sess-links start
+RUN13="$(json_of 'd["run"]')"
+as sess-links propose-agreement
+P13="$(prompt_id_of "$(typed sess-links 'accept the agreement')")"
+as sess-links accept-agreement --prompt "$P13"
+as sess-links add-item herdr:w13/p1 --title "Unmatched coordination"
+as sess-links set-waiting herdr:w13/p1 --who shawn --reporter shawn
+RULE_JSON='{"id":"coordination","applies_when":{"change_kinds":["coordination"]},"requires":["recorded"],"evidence_bar":{"recorded":"a retained receipt"},"caveat":"proposal only","autonomy":"propose","added_by":"pm","added_at":"2026-10-23T10:00:00Z","why":"coordination has no matching rule"}'
+
+it "an unmatched watched wait still blocks before a proposal is linked"
+as sess-links status --json
+check "0" "$CODE"
+check '["no_rule_proposed"]' "$(json_of 'd["model"]["programme"]["reasons"]')"
+check "block" "$(verdict "$(stop_hook sess-links)")"
+
+it "a proposal without item links remains supported but does not cover the wait"
+as sess-links propose-rule "$RULE_JSON"
+check "0" "$CODE"
+as sess-links status --json
+check '["no_rule_proposed"]' "$(json_of 'd["model"]["programme"]["reasons"]')"
+
+LINKED_RULE="${RULE_JSON/\"id\":\"coordination\"/\"id\":\"coordination-linked\"}"
+it "unknown proposal targets reject the whole proposal without a record or journal change"
+BEFORE_LINKS="$(run_py "$RUN13" <<'EOF'
+print(json.dumps(load(args[0]), sort_keys=True))
+print(json.dumps(pj.read(args[0]), sort_keys=True))
+EOF
+)"
+as sess-links propose-rule "$LINKED_RULE" --item herdr:w13/p1 --item herdr:w13/missing
+check "1" "$CODE"
+has "no item" "$OUT"
+check "$BEFORE_LINKS" "$(run_py "$RUN13" <<'EOF'
+print(json.dumps(load(args[0]), sort_keys=True))
+print(json.dumps(pj.read(args[0]), sort_keys=True))
+EOF
+)"
+
+it "a linked proposal lets the same watched wait pause without adoption"
+as sess-links propose-rule "$LINKED_RULE" --item herdr:w13/p1 --item herdr:w13/p1
+check "0" "$CODE"
+check '["herdr:w13/p1"]' "$(run_py "$RUN13" <<'EOF'
+print(json.dumps(load(args[0])["programme"]["proposed_rules"][-1].get("items")))
+EOF
+)"
+as sess-links status --json
+check "0" "$CODE"
+check "true" "$(json_of 'd["model"]["programme"]["may_stop"]')"
+check "false" "$(json_of 'd["model"]["programme"]["done"]')"
+check '[]' "$(json_of 'd["model"]["programme"]["reasons"]')"
+check "allow" "$(verdict "$(stop_hook sess-links)")"
+check "absent" "$([ -e "$CLAUDE_AUTO_PERSONAL_PROTOCOL" ] && echo present || echo absent)"
+check '[null, {}]' "$(run_py "$RUN13" <<'EOF'
+item = load(args[0])["programme"]["items"]["herdr:w13/p1"]
+print(json.dumps([item.get("matched_rule"), item.get("deliverables")]))
+EOF
+)"
+
+it "a linked proposal does not cover an unrelated watched wait"
+as sess-links add-item herdr:w13/p2 --title "Unrelated coordination"
+as sess-links set-waiting herdr:w13/p2 --who shawn --reporter shawn
+as sess-links status --json
+check "false" "$(json_of 'd["model"]["programme"]["may_stop"]')"
+check '[["no_rule_proposed", "herdr:w13/p2"]]' "$(json_of '[[r["kind"], r["target"]] for r in d["model"]["programme"]["actionable_reasons"]]')"
+
+MULTI_RULE="${RULE_JSON/\"id\":\"coordination\"/\"id\":\"coordination-multi\"}"
+it "repeated --item links cover multiple known waits"
+as sess-links propose-rule "$MULTI_RULE" --item herdr:w13/p1 --item herdr:w13/p2
+check "0" "$CODE"
+as sess-links status --json
+check "true" "$(json_of 'd["model"]["programme"]["may_stop"]')"
+
+it "a linked proposal still blocks an unwatched wait"
+as sess-links set-waiting herdr:w13/p1 --who shawn
+as sess-links status --json
+check "false" "$(json_of 'd["model"]["programme"]["may_stop"]')"
+check '[["unwatched_wait", "herdr:w13/p1"]]' "$(json_of '[[r["kind"], r["target"]] for r in d["model"]["programme"]["actionable_reasons"]]')"
+check "block" "$(verdict "$(stop_hook sess-links)")"
+
+it "raw rule JSON cannot smuggle item links past the strict schema"
+RAW_ITEMS="${RULE_JSON/\"id\":\"coordination\"/\"id\":\"raw-items\"}"
+RAW_ITEMS="${RAW_ITEMS%\}} ,\"items\":[\"herdr:w13/p2\"]}"
+as sess-links propose-rule "$RAW_ITEMS" --item herdr:w13/p2
+check "1" "$CODE"
+has "unknown_key" "$OUT"
+
+it "a duplicate proposal cannot replace its original item links"
+as sess-links propose-rule "$LINKED_RULE" --item herdr:w13/p2
+check "1" "$CODE"
+has "already proposed" "$OUT"
+check '["herdr:w13/p1"]' "$(run_py "$RUN13" <<'EOF'
+rules = load(args[0])["programme"]["proposed_rules"]
+print(json.dumps(next(r for r in rules if r["id"] == "coordination-linked").get("items")))
+EOF
+)"
+
+it "an alias target is stored as its canonical item id"
+as sess-links alias-item herdr:w13/p2 herdr:w13/p3
+check "0" "$CODE"
+ALIAS_RULE="${RULE_JSON/\"id\":\"coordination\"/\"id\":\"coordination-alias\"}"
+as sess-links propose-rule "$ALIAS_RULE" --item herdr:w13/p2 --item herdr:w13/p3
+check "0" "$CODE"
+check '["herdr:w13/p3"]' "$(run_py "$RUN13" <<'EOF'
+print(json.dumps(load(args[0])["programme"]["proposed_rules"][-1].get("items")))
+EOF
+)"
+
+it "a different session cannot propose a linked rule"
+as sess-stranger propose-rule "$RULE_JSON" --item herdr:w13/p3 --run "$RUN13"
+check "1" "$CODE"
+has "driving session" "$OUT"
+
+it "running the stop hook's own no_rule_proposed advice clears that block"
+as sess-links add-item herdr:w13/p9 --title "Advice follow-through"
+as sess-links set-waiting herdr:w13/p9 --who shawn --reporter shawn
+HOOK_OUT="$(stop_hook sess-links)"
+check "block" "$(verdict "$HOOK_OUT")"
+ADVICE="$("$PY" - "$HOOK_OUT" <<'PYEOF'
+import json, re, sys
+reason = json.loads(sys.argv[1])["reason"]
+line = next(l for l in reason.splitlines() if "herdr:w13/p9" in l and "propose-rule" in l)
+print(re.search(r"`programme\.sh (propose-rule [^`]*)`", line).group(1))
+PYEOF
+)"
+has "--item herdr:w13/p9" "$ADVICE"
+ADVICE_RULE="${RULE_JSON/\"id\":\"coordination\"/\"id\":\"advice-follow-through\"}"
+eval "set -- ${ADVICE/\'<rule json>\'/\"\$ADVICE_RULE\"}"
+as sess-links "$@"
+check "0" "$CODE"
+as sess-links status --json
+check "[]" "$(json_of '[r["kind"] for r in d["model"]["programme"]["actionable_reasons"] if r["target"] == "herdr:w13/p9"]')"
+
 echo
 echo "programme-flow.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
