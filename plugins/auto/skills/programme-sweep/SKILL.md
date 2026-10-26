@@ -90,12 +90,12 @@ not "nothing changed". You apply every programme write yourself.
 3. **Apply Shawn's answers.** For each message Shawn typed since the last
    sweep, cite the prompt id from its `<auto-data>` tag with `--prompt <id>`.
    When a change needs Shawn's approval, ask in one AskUserQuestion picker with
-   a single question; put the exact rule id, path or value in each option
-   label, starting with the action ("Adopt r1", "Add <path> to the remit"),
-   because only his answer counts as naming it. Cite the pick's prompt id with
-   `--prompt <id>`. One pick approves one change. An answer that does not start
-   with an action word, or holds "no", "not" or "never", approves nothing, so
-   word decline options plainly ("Skip for now"). Picks work for rules, remit,
+   a single question. Run `P approval-label <verb> <args>` for the exact command
+   you will run (without `--prompt`) and use what it prints, word for word, as
+   the approve option; say what it does in that option's description. Every
+   other option approves nothing, so word declines however reads best. Then run
+   that same command with `--prompt <pick id>`. One pick approves one change,
+   and only the command its label names. Picks work for rules, remit,
    terms, keeping corrections, items, moving and keeping behaviours, context,
    pauses, permissions and disposals. Accepting the agreement, rulings,
    instructions, decisions, requirements, corrections and new or retired

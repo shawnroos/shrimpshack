@@ -754,8 +754,10 @@ its new text. `accept-agreement`, `record-instruction` and `close-instruction --
 accept any typed prompt, because the quote is what they record; `accept-agreement`
 also needs the prompt to come after the last proposal or project-term edit.
 The verbs on the pick list also accept a verified pick or an accepted suggestion;
-every other verb needs a typed prompt. For a pick, the naming rules above read only
-the answer (programme-prompt-source.md gives the list and the full rule).
+every other verb needs a typed prompt. A pick approves only when its answer is the
+exact label `approval-label <verb> <args>` prints for the command being run
+(programme-prompt-source.md gives the list and the full rule). `approval-label`
+needs no prompt, writes nothing, and refuses a verb a pick cannot approve.
 
 The action hook guards each driver's pane. In a session that is not the driving
 session of a live, orphaned or expired lease, it denies any Bash command whose

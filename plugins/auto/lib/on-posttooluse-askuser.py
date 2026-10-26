@@ -41,8 +41,8 @@ def handle(raw: str) -> dict | None:
                                             "unknown", source=source)
     payload = {"run": run, "prompt_id": entry["prompt_id"], "kind": "pick", "answers": source["answers"]}
     text = ("auto journaled this picker answer. Cite its prompt_id with --pick in setup verbs, or with --prompt "
-            "in an approval verb on the pick list (programme_approval.PICK_VERBS); it counts only once the "
-            "transcript shows Shawn picked it.\n" + json.dumps(payload, sort_keys=True))
+            "in an approval verb on the pick list when the answer is that command's `approval-label`; it counts "
+            "only once the transcript shows Shawn picked it.\n" + json.dumps(payload, sort_keys=True))
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                    "additionalContext": f"<{DATA_TAG}>\n{text}\n</{DATA_TAG}>"}}
 

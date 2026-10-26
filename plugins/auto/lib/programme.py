@@ -42,10 +42,10 @@ SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the firs
 INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
 APPROVAL_KINDS = ("rule_adopted",)
-_OPERATION = {"id": None, "verb": None}
+_OPERATION = {"id": None, "verb": None, "argv": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
-               "reconcile-operations", "release-resources", "create-successor", "sweep")
+               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label")
 
 
 _name_words, _squash, _runs, _affirmed, _NEGATIONS = (
@@ -254,7 +254,8 @@ def _guard(home, record, *, compact_exempt=False):
 
 
 def _typed_prompt(run_id, record, prompt_id, verb=None) -> dict:
-    return programme_approval.prompt(run_id, record, prompt_id, _OPERATION["verb"] or verb, ProgrammeError, text_hash)
+    return programme_approval.prompt(run_id, record, prompt_id, _OPERATION["verb"] or verb,
+                                     ProgrammeError, text_hash, _OPERATION["argv"])
 
 
 def require_named(prompt, *needs) -> None:
@@ -970,7 +971,7 @@ def _cli(argv) -> int:
     except ValueError as exc:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2
-    _OPERATION["verb"] = argv[0] if argv else None
+    _OPERATION["verb"], _OPERATION["argv"] = (argv[0] if argv else None), argv
     return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
 
 
@@ -980,6 +981,7 @@ _VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__nam
 _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

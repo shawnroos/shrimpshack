@@ -223,10 +223,11 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                         (('adopt-rule', 'r1'), 'adopt-rule'),
                         (('accept-context', 'd1'), 'accept-context'),
                         (('dispose-action', '--attempt', 'o1', '--as', 'abandoned_unknown'), 'dispose-action (archive)')):
-        result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{label}?': 'yes'}))
+        result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{label}?': 'Approve ' + ' '.join(args)}))
         out = result.stdout + result.stderr
-        check(f'{label} gets past the origin check for a picked prompt id',
-              'is not typed' not in out and 'needs a typed prompt' not in out and 'already used' not in out, out)
+        check(f'{label} accepts a pick of its exact approval label past the origin and label checks',
+              'is not typed' not in out and 'needs a typed prompt' not in out and 'already used' not in out
+              and 'approval label' not in out, out)
     for args in (('record-instruction',), ('close-instruction', 'i1', '--as', 'withdrawn')):
         result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{args[0]}?': 'No'}))
         check(f'{args[0]} refuses a pick: it records the prompt words as content',
@@ -288,16 +289,17 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     declined = pick(a_sid, run, {'Adopt rule pick-rule?': 'No'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', declined)
     check('adopt-rule refuses a pick whose question names the rule but whose answer declines',
-          refused(result, 'does not start with an action word') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
-    for decline in ('Skip pick-rule', 'Reject pick-rule', 'Hold off on pick-rule'):
+          refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    for decline in ('Skip pick-rule', 'Reject pick-rule', 'Hold off on pick-rule', 'Keep pick-rule as a proposal',
+                    'Approve adopt-rule other-rule', 'Approve adopt-rule pick-rule --widening'):
         result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', pick(a_sid, run, {'Adopt which rule?': decline}))
         check(f'adopt-rule refuses a decline-worded pick that names the rule: {decline!r}',
-              refused(result, 'does not start with an action word') and 'pick-rule' in proposed_ids(),
+              refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(),
               result.stdout + result.stderr)
     bare_yes = pick(a_sid, run, {'Adopt rule pick-rule?': 'Yes'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', bare_yes)
     check('adopt-rule refuses a pick whose rule id is only in the PM-written question',
-          refused(result, 'does not name') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+          refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     two = pick(a_sid, run, {'Adopt which rule?': 'adopt pick-rule', 'Anything else?': 'no'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', two)
     check('adopt-rule refuses a pick with more than one question',
@@ -305,13 +307,20 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     negated = pick(a_sid, run, {'Adopt which rule?': 'Adopt pick-rule? No, not now'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', negated)
     check('adopt-rule refuses a pick whose answer names the rule but negates it',
-          refused(result, 'not a plain yes') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+          refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', spent_by_setup)
     check('a pick spent by a setup verb is refused by an approval verb',
           refused(result, 'already used') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
-    yes = pick(a_sid, run, {'Adopt which rule?': 'adopt pick-rule'})
+    printed = verb(a_sid, run, 'approval-label', 'adopt-rule', 'pick-rule')
+    check('approval-label prints the exact option that approves the command',
+          printed.returncode == 0 and printed.stdout.strip() == 'Approve adopt-rule pick-rule',
+          printed.stdout + printed.stderr)
+    result = verb(a_sid, run, 'approval-label', 'record-instruction')
+    check('approval-label refuses a verb a pick cannot approve', refused(result, 'needs a typed prompt'),
+          result.stdout + result.stderr)
+    yes = pick(a_sid, run, {'Adopt which rule?': printed.stdout.strip() + ' (Recommended)'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', yes)
-    check('adopt-rule accepts a verified pick whose answer names the rule',
+    check('adopt-rule accepts a pick of its exact approval label, marked recommended',
           result.returncode == 0 and 'pick-rule' not in proposed_ids(), result.stdout + result.stderr)
     loaded = protocol.load(prompt_lookup=programme_mod.prompt_lookup)
     check('a rule adopted by a pick loads as adopted',
