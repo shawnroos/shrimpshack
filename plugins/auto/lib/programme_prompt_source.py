@@ -14,6 +14,8 @@ programme_pick_source = load_lib_module("programme_pick_source")
 
 _MAX_TRANSCRIPT_BYTES = programme_pick_source._MAX_TRANSCRIPT_BYTES
 _hash = programme_pick_source._hash
+# Accepting Claude Code's suggested prompt is Shawn pressing Enter on it; any other source stays unverified.
+_HUMAN_SOURCES = ('typed', 'suggestion_accepted')
 _COMMAND = re.compile(
     r'<command-message>([^<>\n]+)</command-message>\n'
     r'<command-name>(/[^<>\n]+)</command-name>'
@@ -48,7 +50,7 @@ def _human_text(row):
     text = message.get('content')
     if message.get('role') != 'user' or not isinstance(text, str):
         return None
-    if row.get('promptSource') == 'typed':
+    if row.get('promptSource') in _HUMAN_SOURCES:
         return text
     command = _COMMAND.fullmatch(text)
     if row.get('promptSource') is None and row.get('entrypoint') == 'cli' and command:
