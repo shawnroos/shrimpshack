@@ -252,6 +252,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           len(lifecycle._requests(run, 'end', a_sid)) == len(requests), lifecycle._requests(run, 'end', a_sid))
 
     protocol = load_lib_module('programme_protocol')
+    approval_mod = load_lib_module('programme_approval')
     programme_mod = load_lib_module('programme')
 
     def adoption_reject(prompt_id):
@@ -287,7 +288,12 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     declined = pick(a_sid, run, {'Adopt rule pick-rule?': 'No'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', declined)
     check('adopt-rule refuses a pick whose question names the rule but whose answer declines',
-          refused(result, 'not a plain yes') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+          refused(result, 'does not start with an action word') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    for decline in ('Skip pick-rule', 'Reject pick-rule', 'Hold off on pick-rule'):
+        result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', pick(a_sid, run, {'Adopt which rule?': decline}))
+        check(f'adopt-rule refuses a decline-worded pick that names the rule: {decline!r}',
+              refused(result, 'does not start with an action word') and 'pick-rule' in proposed_ids(),
+              result.stdout + result.stderr)
     bare_yes = pick(a_sid, run, {'Adopt rule pick-rule?': 'Yes'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', bare_yes)
     check('adopt-rule refuses a pick whose rule id is only in the PM-written question',
@@ -296,7 +302,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', two)
     check('adopt-rule refuses a pick with more than one question',
           refused(result, 'exactly one question') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
-    negated = pick(a_sid, run, {'Adopt which rule?': 'No, do not adopt pick-rule'})
+    negated = pick(a_sid, run, {'Adopt which rule?': 'Adopt pick-rule? No, not now'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', negated)
     check('adopt-rule refuses a pick whose answer names the rule but negates it',
           refused(result, 'not a plain yes') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
@@ -324,6 +330,16 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(a_sid, run, 'adopt-rule', 'suggested-rule', '--prompt', suggested)
     check('adopt-rule accepts an accepted suggestion that names the rule',
           result.returncode == 0 and 'suggested-rule' not in proposed_ids(), result.stdout + result.stderr)
+    propose('negated-rule')
+    suggested = typed_prompt(run, a_sid, 'No, do not adopt negated-rule', prompt_source='suggestion_accepted')['prompt_id']
+    result = verb(a_sid, run, 'adopt-rule', 'negated-rule', '--prompt', suggested)
+    check('adopt-rule refuses an accepted suggestion that negates the rule',
+          refused(result, 'not a plain yes') and 'negated-rule' in proposed_ids(), result.stdout + result.stderr)
+    for name in ('retire-behaviour', 'correct-term', 'undo-correction', 'promote-correction', 'record-behaviour',
+                 'record-decision', 'define-requirement'):
+        check(f'{name} is not on the pick list: it does not bind its target', name not in approval_mod.PICK_VERBS)
+    check('every pick-list verb is a real CLI verb', approval_mod.PICK_VERBS <= set(programme_mod._VERBS),
+          approval_mod.PICK_VERBS - set(programme_mod._VERBS))
     suggested = typed_prompt(run, a_sid, f"{ruling['area']}: use snake case",
                              prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', suggested)

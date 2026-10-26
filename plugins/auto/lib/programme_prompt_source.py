@@ -64,7 +64,7 @@ def _human_text(row):
 def origin(row):
     payload = row.get('payload') or {}
     claimed = payload.get('origin')
-    if claimed not in ('typed', 'unknown', 'picked'):
+    if claimed not in ('typed', 'unknown', 'picked', 'suggested'):
         return claimed
     source = payload.get('source')
     if isinstance(source, dict) and source.get('kind') == 'pick':

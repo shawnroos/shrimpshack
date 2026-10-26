@@ -50,7 +50,7 @@ A verified pick shows that Shawn chose the answer. Each verb that takes a pick c
 
 A verified pick, or a `suggested` prompt, also approves the `--prompt` verbs on the pick list (`PICK_VERBS` in `lib/programme_approval.py`). Every verb on that list checks that the approval names its target. Any other verb, including `accept-agreement`, `edit-project-term`, `record-instruction`, `close-instruction`, `record-behaviour`, `record-decision` and `define-requirement`, needs a typed prompt. The list is default-deny: a new verb refuses picks until it is added.
 
-A pick cited this way must hold exactly one question. Naming checks read only its answer, because the PM writes the question. An answer containing a negation word approves nothing. One pick approves one change: a pick that any earlier row cites, under any prompt id journaled for the same picker answer, is refused. The approval records `origin: picked` or `origin: suggested`.
+A pick cited this way must hold exactly one question. Naming checks read only its answer, because the PM writes the question. A pick answer must start with an action word from `PICK_OPENERS` (yes, adopt, approve, add, set, keep and so on), so a decline the PM worded as "Skip r1" approves nothing. A pick answer or accepted suggestion containing a negation word (including "never") approves nothing; type it instead. One pick approves one change: a pick that any earlier row cites, under any prompt id journaled for the same picker answer, is refused. The approval records `origin: picked` or `origin: suggested`.
 
 ## Failure behavior
 
