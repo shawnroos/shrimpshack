@@ -241,7 +241,7 @@ def _now() -> str:
 def _source(prompt) -> dict:
     return {"class": "human_input" if prompt else "derived",
             "prompt_id": prompt and prompt["prompt_id"],
-            "origin_label": prompt.get("origin", "typed") if prompt else None,
+            "origin_label": prompt["origin"] if prompt else None,
             "origin_verified": _verified(prompt)}
 
 

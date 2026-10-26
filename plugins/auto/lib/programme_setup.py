@@ -31,7 +31,6 @@ STEPS = (programme_view_setup.RULINGS, programme_view_setup.SHARED, programme_vi
          programme_view_setup.ACCEPT)
 TAKE_ALL = "take all recommendations"
 _RECOMMENDED_SUFFIX = re.compile(r"\s*\(recommended\)$", re.IGNORECASE)
-PICK_KINDS = (programme_terms.PICKED, programme_terms.RECOMMENDED)
 
 
 def _picked(host, run_id, rec, pick_id) -> dict:

@@ -92,8 +92,12 @@ not "nothing changed". You apply every programme write yourself.
    When a change needs Shawn's approval, ask in one AskUserQuestion picker with
    a single question; put the exact rule id, path or value in each option
    label, because only his answer counts as naming it. Cite the pick's prompt
-   id with `--prompt <id>`. One pick approves one change. `accept-agreement`
-   and `edit-project-term` still need a line he types.
+   id with `--prompt <id>`. One pick approves one change, and an answer with
+   any "no" or "not" in it approves nothing. Picks work for rules, remit, terms,
+   corrections, items, behaviour moves, context, pauses, permissions and
+   disposals. Accepting the agreement, rulings, instructions, decisions,
+   requirements and new behaviours still need a line he types; an accepted
+   grey suggestion does not count for those either.
 
    After compaction (a verb refused with the rules in force and you ran
    `P rules --ack`), re-check what you may have lost. Read `<home>/journal.jsonl`

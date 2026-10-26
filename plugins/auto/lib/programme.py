@@ -42,7 +42,7 @@ SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the firs
 INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
 APPROVAL_KINDS = ("rule_adopted",)
-_OPERATION = {"id": None}
+_OPERATION = {"id": None, "verb": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
                "reconcile-operations", "release-resources", "create-successor", "sweep")
@@ -254,7 +254,7 @@ def _guard(home, record, *, compact_exempt=False):
 
 
 def _typed_prompt(run_id, record, prompt_id, verb=None) -> dict:
-    return programme_approval.prompt(run_id, record, prompt_id, verb, ProgrammeError, text_hash)
+    return programme_approval.prompt(run_id, record, prompt_id, _OPERATION["verb"] or verb, ProgrammeError, text_hash)
 
 
 def require_named(prompt, *needs) -> None:
@@ -970,6 +970,7 @@ def _cli(argv) -> int:
     except ValueError as exc:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2
+    _OPERATION["verb"] = argv[0] if argv else None
     return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
 
 

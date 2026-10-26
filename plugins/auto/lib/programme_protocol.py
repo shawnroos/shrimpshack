@@ -24,6 +24,9 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 
+# Origins whose human source is verified; programme_approval reads this too, so both gates agree.
+HUMAN_ORIGINS = ("typed", "picked", "suggested")
+
 PERSONAL_PATH_ENV = "CLAUDE_AUTO_PERSONAL_PROTOCOL"
 MACHINE_ENV = "CLAUDE_AUTO_MACHINE"
 DEFAULT_PERSONAL_PATH = "~/.claude/shared/auto/protocol.json"
@@ -219,7 +222,7 @@ def _verify_adoption(entry: dict, prompt_lookup, target, *, local_only=False, mi
         raise _Reject("adoption_unverified", "prompt lookup failed")
     if not isinstance(prompt, dict):
         raise _Reject("adoption_unverified", "prompt missing")
-    if prompt.get("origin") not in ("typed", "picked"):
+    if prompt.get("origin") not in HUMAN_ORIGINS:
         raise _Reject("adoption_unverified", "prompt not typed")
     if prompt.get("text_hash") != adoption["prompt_hash"]:
         raise _Reject("adoption_unverified", "prompt hash")

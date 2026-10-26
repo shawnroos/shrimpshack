@@ -31,8 +31,8 @@ SECRETS_ENV = "CLAUDE_AUTO_SECRETS_FILE"
 DEFAULT_SECRETS_FILE = "~/.secrets"
 REDACTED = "[redacted]"
 STORED_PROMPT_ORIGINS = ("typed", "cron", "unknown")
-# "picked" is only ever resolved from a pick source record, never stored as a label.
-PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked",)
+# "picked" and "suggested" are only ever resolved from a transcript check, never stored as a label.
+PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked", "suggested")
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
@@ -409,6 +409,7 @@ def pick_use(rows, source):
             continue
         payload = row.get("payload") or {}
         refs = set(row.get("cites") or []) | {payload.get("prompt_id")}
+        # Setup verbs record the pick's path and tool_use_id on their own payload, not as a cite.
         if ids & refs or _same_pick(payload, path, tool_use_id):
             return row
     return None

@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
         check(name + ' refuses', pj.prompt_origin(row), 'unknown')
 
     path.write_text(json.dumps(dict(human, promptSource='suggestion_accepted')) + '\n')
-    check('accepted suggestion verifies typed', pj.prompt_origin(row), 'typed')
+    check('accepted suggestion verifies as suggested', pj.prompt_origin(row), 'suggested')
 
     path.write_text('{not-json}\n')
     check('malformed transcript refuses', pj.prompt_origin(row), 'unknown')

@@ -205,8 +205,8 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('pick-term on a list refuses a value that drops a source the answer names',
           refused(result, 'plans') and terms(run)['tools_of_record']['set_by'] == 'default',
           result.stdout + result.stderr)
-    result = verb(a_sid, run, 'pick-term', 'tools_of_record', 'tracker,tasks', '--pick',
-                  pick(a_sid, run, {tools_q: 'tracker, tasks'}))
+    spent_by_setup = pick(a_sid, run, {tools_q: 'tracker, tasks'})
+    result = verb(a_sid, run, 'pick-term', 'tools_of_record', 'tracker,tasks', '--pick', spent_by_setup)
     check('pick-term on a list accepts an answer naming exactly the value',
           result.returncode == 0 and terms(run)['tools_of_record']['value'] == ['tracker', 'tasks'],
           (result.stdout + result.stderr, terms(run)['tools_of_record']))
@@ -219,16 +219,19 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('accept-agreement refuses a picked prompt id', refused(result, 'accept-agreement needs a typed prompt'),
           result.stdout + result.stderr)
 
-    gate_pick = pick(a_sid, run, {'Cadence: on change?': 'on change'})
     for args, label in ((('amend-term', 'cadence', 'on_change'), 'amend-term'),
-                        (('record-instruction',), 'record-instruction'),
                         (('adopt-rule', 'r1'), 'adopt-rule'),
                         (('accept-context', 'd1'), 'accept-context'),
                         (('dispose-action', '--attempt', 'o1', '--as', 'abandoned_unknown'), 'dispose-action (archive)')):
-        result = verb(a_sid, run, *args, '--prompt', gate_pick)
+        result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{label}?': 'yes'}))
+        out = result.stdout + result.stderr
         check(f'{label} gets past the origin check for a picked prompt id',
-              'is not typed' not in result.stdout + result.stderr and 'typed prompt' not in result.stderr,
-              result.stdout + result.stderr)
+              'is not typed' not in out and 'needs a typed prompt' not in out and 'already used' not in out, out)
+    for args in (('record-instruction',), ('close-instruction', 'i1', '--as', 'withdrawn')):
+        result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{args[0]}?': 'No'}))
+        check(f'{args[0]} refuses a pick: it records the prompt words as content',
+              refused(result, f'{args[0]} needs a typed prompt'), result.stdout + result.stderr)
+    gate_pick = pick(a_sid, run, {'Cadence: on change?': 'on change'})
 
     lifecycle = load_lib_module('programme_lifecycle')
     typed_end = typed_prompt(run, a_sid, '/auto:programme-end')['prompt_id']
@@ -284,11 +287,22 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     declined = pick(a_sid, run, {'Adopt rule pick-rule?': 'No'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', declined)
     check('adopt-rule refuses a pick whose question names the rule but whose answer declines',
+          refused(result, 'not a plain yes') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    bare_yes = pick(a_sid, run, {'Adopt rule pick-rule?': 'Yes'})
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', bare_yes)
+    check('adopt-rule refuses a pick whose rule id is only in the PM-written question',
           refused(result, 'does not name') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     two = pick(a_sid, run, {'Adopt which rule?': 'adopt pick-rule', 'Anything else?': 'no'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', two)
     check('adopt-rule refuses a pick with more than one question',
           refused(result, 'exactly one question') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    negated = pick(a_sid, run, {'Adopt which rule?': 'No, do not adopt pick-rule'})
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', negated)
+    check('adopt-rule refuses a pick whose answer names the rule but negates it',
+          refused(result, 'not a plain yes') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', spent_by_setup)
+    check('a pick spent by a setup verb is refused by an approval verb',
+          refused(result, 'already used') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     yes = pick(a_sid, run, {'Adopt which rule?': 'adopt pick-rule'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', yes)
     check('adopt-rule accepts a verified pick whose answer names the rule',
@@ -305,6 +319,16 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', ruling_pick)
     check('edit-project-term refuses a pick after acceptance', refused(result, 'edit-project-term needs a typed prompt'),
           result.stdout + result.stderr)
+    propose('suggested-rule')
+    suggested = typed_prompt(run, a_sid, 'adopt suggested-rule', prompt_source='suggestion_accepted')['prompt_id']
+    result = verb(a_sid, run, 'adopt-rule', 'suggested-rule', '--prompt', suggested)
+    check('adopt-rule accepts an accepted suggestion that names the rule',
+          result.returncode == 0 and 'suggested-rule' not in proposed_ids(), result.stdout + result.stderr)
+    suggested = typed_prompt(run, a_sid, f"{ruling['area']}: use snake case",
+                             prompt_source='suggestion_accepted')['prompt_id']
+    result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', suggested)
+    check('edit-project-term refuses an accepted suggestion',
+          refused(result, 'edit-project-term needs a typed prompt'), result.stdout + result.stderr)
     pathlib.Path(os.environ['CLAUDE_AUTO_PERSONAL_PROTOCOL']).unlink()
     context_mod = load_lib_module('programme_context')
     check('an approval by pick is recorded with origin label picked',

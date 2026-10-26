@@ -47,6 +47,13 @@ A suggested prompt is written by a model that sees the PM's conversation, so the
 
 ---
 
+## Revision after code review (2026-10-26)
+
+Shawn re-decided two points after review found that a declined pick could still record or withdraw an instruction:
+- Picks use a default-deny allowlist (`PICK_VERBS` in `lib/programme_approval.py`), not "all but two". Verbs that record the prompt's words as content (instructions, decisions, requirements, new behaviours) stay typed-only, with accept-agreement and edit-project-term. This supersedes R3 and KTD2.
+- An accepted suggestion resolves to its own origin, `suggested`, and approves only what a pick may approve. Typed-only verbs and the takeover/handover/end requests need text Shawn typed. This supersedes KTD1.
+- A pick whose answer contains a negation word approves nothing.
+
 ## Implementation
 
 ### Key Technical Decisions

@@ -14,7 +14,8 @@ programme_pick_source = load_lib_module("programme_pick_source")
 
 _MAX_TRANSCRIPT_BYTES = programme_pick_source._MAX_TRANSCRIPT_BYTES
 _hash = programme_pick_source._hash
-# Accepting Claude Code's suggested prompt is Shawn pressing Enter on it; any other source stays unverified.
+# Accepting Claude Code's suggested prompt is Shawn pressing Enter on model-written text: it resolves to
+# "suggested", which approves what a pick may approve but never a typed-only verb. Other sources stay unverified.
 _HUMAN_SOURCES = ('typed', 'suggestion_accepted')
 _COMMAND = re.compile(
     r'<command-message>([^<>\n]+)</command-message>\n'
@@ -97,7 +98,7 @@ def origin(row):
                 continue
             text = _human_text(candidate)
             if text is not None and _hash(text.encode('utf-8')) == source.get('text_hash'):
-                return 'typed'
+                return 'suggested' if candidate.get('promptSource') == 'suggestion_accepted' else 'typed'
             return 'unknown'
     except (OSError, ValueError, TypeError, AttributeError):
         return 'unknown'
