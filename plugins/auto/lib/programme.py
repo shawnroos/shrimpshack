@@ -99,7 +99,8 @@ def _parse(argv, *, values=(), flags=(), multi=()):
         if name in flags:
             opts[name] = True
         elif name in values or name in multi:
-            if not args:
+            # A value that looks like an option would let "--why --run x" hide an option inside a value.
+            if not args or args[0].startswith("--"):
                 raise ValueError(f"--{name} needs a value")
             if name in multi:
                 opts[name].append(args.pop(0))

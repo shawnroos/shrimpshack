@@ -95,12 +95,13 @@ not "nothing changed". You apply every programme write yourself.
    the approve option; say what it does in that option's description. Every
    other option approves nothing, so word declines however reads best. Then run
    that same command with `--prompt <pick id>`. One pick approves one change,
-   and only the command its label names. Picks work for rules, remit,
+   and only the command its label names. Picks work for rules,
    terms, keeping corrections, items, moving and keeping behaviours, context,
    pauses, permissions and disposals. Accepting the agreement, rulings,
    instructions, decisions, requirements, corrections and new or retired
    behaviours still need a line he types; an accepted grey suggestion does not
-   count for those either.
+   count for those either. A remit change takes a typed line or an accepted
+   suggestion, never a pick, because its change comes in on stdin.
 
    After compaction (a verb refused with the rules in force and you ran
    `P rules --ack`), re-check what you may have lost. Read `<home>/journal.jsonl`

@@ -315,6 +315,16 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('approval-label prints the exact option that approves the command',
           printed.returncode == 0 and printed.stdout.strip() == 'Approve adopt-rule pick-rule',
           printed.stdout + printed.stderr)
+    result = verb(a_sid, run, 'approval-label', 'set-remit')
+    check('approval-label refuses set-remit: its change comes from stdin', refused(result, 'needs a typed prompt'),
+          result.stdout + result.stderr)
+    result = verb(a_sid, run, 'set-remit', '--prompt', pick(a_sid, run, {'Change the remit?': 'Approve set-remit'}),
+                  stdin='{}')
+    check('set-remit refuses a pick of its bare label', refused(result, 'reads its change from stdin'),
+          result.stdout + result.stderr)
+    result = verb(a_sid, run, 'amend-term', 'cadence', 'on_change', '--why', '--run', run)
+    check('an option value that looks like an option is refused', result.returncode == 2 and 'needs a value' in result.stderr,
+          result.stdout + result.stderr)
     result = verb(a_sid, run, 'approval-label', 'record-instruction')
     check('approval-label refuses a verb a pick cannot approve', refused(result, 'needs a typed prompt'),
           result.stdout + result.stderr)

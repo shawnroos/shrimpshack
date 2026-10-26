@@ -21,6 +21,9 @@ PICK_VERBS = frozenset((
     "adopt-rule", "adopt-autonomy", "adopt-check", "set-remit", "amend-term", "keep-corrections",
     "move-behaviour", "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context",
     "lift-pause", "answer-permission", "dispose-action"))
+# set-remit reads its change from stdin, which no label can show, so only typed text or a suggestion
+# approves it.
+_STDIN_VERBS = frozenset(("set-remit",))
 _NOT_APPROVED = ("--prompt", "--run")
 _RECOMMENDED = " (recommended)"
 
@@ -39,6 +42,9 @@ def label(argv) -> str:
 
 def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
     answer = programme_journal.pick_answer(rows, row)
+    if verb_argv and verb_argv[0] in _STDIN_VERBS:
+        raise error(f"{verb_argv[0]} reads its change from stdin, which a pick label cannot show; "
+                    "it needs typed text")
     # Reading a decline's intent from free text leaked three review rounds running ("No", "Skip r1",
     # "Keep item-x" for drop-item); only the exact label the tool printed approves.
     if answer.casefold().endswith(_RECOMMENDED):
@@ -86,7 +92,7 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
 def _h_approval_label(host, argv):
     if len(argv) < 2:
         raise ValueError("usage: approval-label <verb> <args...>")
-    if argv[1] not in PICK_VERBS:
+    if argv[1] not in PICK_VERBS or argv[1] in _STDIN_VERBS:
         raise host.ProgrammeError(f"{argv[1]} needs a typed prompt; a pick cannot approve it")
     print(label(argv[1:]))
     return 0
