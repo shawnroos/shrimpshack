@@ -224,7 +224,7 @@ def _h_edit(host, argv):
                 "source": entry.get("source"), "accepted": accepted, **extra}
 
     return host._write(opts, change, lambda payload: AMENDED if payload["accepted"] else EDITED,
-                       prompt_id=opts.get("prompt"))
+                       prompt_id=opts.get("prompt"), verb="edit-project-term")
 
 
 # No environment override: the PM can set environment variables from its own shell.
@@ -436,7 +436,7 @@ def _check_all_projects(host, prompt) -> None:
     host.require_named(prompt, ALL_PROJECTS)
     # require_named looks only at the word just before the name, so "don't apply that to all
     # projects" would pass it; any negation earlier in the prompt refuses.
-    words = host._name_words(programme_journal.redact(prompt["quote"]))
+    words = host._name_words(programme_journal.named_text(prompt))
     start = min(s for s, _ in host._runs(words, host._squash(ALL_PROJECTS)))
     if set(words[:start]) & set(host._NEGATIONS):
         raise TermsError(f"prompt {prompt['prompt_id']!r} negates {ALL_PROJECTS!r}; a promotion needs a "

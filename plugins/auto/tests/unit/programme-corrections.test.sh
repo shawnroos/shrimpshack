@@ -130,7 +130,7 @@ pt.CORRECTIONS_ON = True
 programme = load_lib_module("programme")
 mutate = os.environ.get("MUTATE")
 if mutate == "typed":
-    def typed(run_id, rec, prompt_id):
+    def typed(run_id, rec, prompt_id, verb=None):
         row = pj.find_prompt(run_id, prompt_id)
         if row is None:
             raise programme.ProgrammeError(f"no prompt {prompt_id!r}")

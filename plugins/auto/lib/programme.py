@@ -30,6 +30,7 @@ session_registry = load_lib_module("session_registry")
 driver_session = load_lib_module("driver_session")
 verb_cli = load_lib_module("verb_cli")
 programme_naming = load_lib_module("programme_naming")
+programme_approval = load_lib_module("programme_approval")
 programme_proposals = load_lib_module("programme_proposals")
 programme_trajectory = load_lib_module("programme_trajectory")
 
@@ -252,27 +253,12 @@ def _guard(home, record, *, compact_exempt=False):
     return sid
 
 
-def _typed_prompt(run_id, record, prompt_id) -> dict:
-    if not prompt_id:
-        raise ProgrammeError("this approval needs --prompt <id> of a typed prompt")
-    row = programme_journal.find_prompt(run_id, prompt_id)
-    if row is None:
-        raise ProgrammeError(f"no prompt {prompt_id!r} in this programme's journal")
-    payload = row.get("payload") or {}
-    if row.get("provenance") in programme_authority.UNVERIFIED:
-        raise ProgrammeError(f"prompt {prompt_id!r} was imported from a legacy journal or appended by an "
-                             "obsolete writer; its typed label is unverified, so it approves nothing new")
-    origin = programme_journal.prompt_origin(row)
-    if origin != "typed":
-        raise ProgrammeError(f"prompt {prompt_id!r} is not typed (origin {origin!r}; human source unverified)")
-    if row.get("session_id") != record.get("driving_session_id"):
-        raise ProgrammeError(f"prompt {prompt_id!r} was not typed in the driving session")
-    return {"prompt_id": prompt_id, "quote": payload.get("text") or "",
-            "text_hash": text_hash(payload.get("text")), "at": row.get("at"), "origin_verified": True}
+def _typed_prompt(run_id, record, prompt_id, verb=None) -> dict:
+    return programme_approval.prompt(run_id, record, prompt_id, verb, ProgrammeError, text_hash)
 
 
 def require_named(prompt, *needs) -> None:
-    missing = programme_naming.missing(programme_journal.redact(prompt["quote"]), needs) if prompt else []
+    missing = programme_naming.missing(programme_journal.named_text(prompt), needs) if prompt else []
     if missing:
         raise ProgrammeError(
             f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
@@ -281,7 +267,7 @@ def require_named(prompt, *needs) -> None:
 
 
 def require_sources_named(prompt, before, after) -> None:
-    quote = programme_journal.redact(prompt["quote"]) if prompt else ""
+    quote = programme_journal.named_text(prompt) if prompt else ""
     missing = programme_naming.missing_sources(quote, before, after) if prompt else []
     if missing:
         raise ProgrammeError(
@@ -302,7 +288,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt)
         if beat:
             rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
-        prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
+        prompt = _typed_prompt(run_id, rec, prompt_id, verb) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
         if names_change:

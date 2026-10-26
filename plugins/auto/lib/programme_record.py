@@ -338,7 +338,7 @@ def _open_deliverables(item) -> list:
 def _require_item_named(prompt, programme, key, choice, ask=None) -> None:
     if prompt is None:
         return
-    why = programme_naming.item_refusal(programme_journal.redact(prompt["quote"]), programme["items"], key,
+    why = programme_naming.item_refusal(programme_journal.named_text(prompt), programme["items"], key,
                                         choice, prompt_at=prompt.get("at"), ask=ask)
     if why:
         raise RecordError(f"prompt {prompt['prompt_id']!r} does not approve {key!r}: {why}")

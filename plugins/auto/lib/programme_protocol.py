@@ -219,7 +219,7 @@ def _verify_adoption(entry: dict, prompt_lookup, target, *, local_only=False, mi
         raise _Reject("adoption_unverified", "prompt lookup failed")
     if not isinstance(prompt, dict):
         raise _Reject("adoption_unverified", "prompt missing")
-    if prompt.get("origin") != "typed":
+    if prompt.get("origin") not in ("typed", "picked"):
         raise _Reject("adoption_unverified", "prompt not typed")
     if prompt.get("text_hash") != adoption["prompt_hash"]:
         raise _Reject("adoption_unverified", "prompt hash")

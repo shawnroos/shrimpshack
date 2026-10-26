@@ -216,7 +216,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           refused(result, 'older than') and not record(run)['programme']['agreement']['accepted'],
           result.stdout + result.stderr)
     result = verb(a_sid, run, 'accept-agreement', '--prompt', twin)
-    check('accept-agreement refuses a picked prompt id', refused(result, "is not typed (origin 'picked'"),
+    check('accept-agreement refuses a picked prompt id', refused(result, 'accept-agreement needs a typed prompt'),
           result.stdout + result.stderr)
 
     gate_pick = pick(a_sid, run, {'Cadence: on change?': 'on change'})
@@ -226,7 +226,8 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                         (('accept-context', 'd1'), 'accept-context'),
                         (('dispose-action', '--attempt', 'o1', '--as', 'abandoned_unknown'), 'dispose-action (archive)')):
         result = verb(a_sid, run, *args, '--prompt', gate_pick)
-        check(f'{label} refuses a picked prompt id', refused(result, "is not typed (origin 'picked'"),
+        check(f'{label} gets past the origin check for a picked prompt id',
+              'is not typed' not in result.stdout + result.stderr and 'typed prompt' not in result.stderr,
               result.stdout + result.stderr)
 
     lifecycle = load_lib_module('programme_lifecycle')
@@ -260,14 +261,54 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
         except protocol._Reject as exc:
             return exc.detail
         return None
-    check('the protocol adoption check refuses a picked prompt', adoption_reject(gate_pick) == 'prompt not typed',
-          adoption_reject(gate_pick))
+    check('the protocol adoption check passes the origin step for a picked prompt',
+          adoption_reject(gate_pick) == 'no approval', adoption_reject(gate_pick))
     check('the protocol adoption check passes the typed step for a typed prompt (control)',
           adoption_reject(typed_end) == 'no approval', adoption_reject(typed_end))
 
     accept = typed_prompt(run, a_sid, 'accept the agreement')['prompt_id']
     result = verb(a_sid, run, 'accept-agreement', '--prompt', accept)
     check('a typed accept after the last pick is accepted', result.returncode == 0, result.stdout + result.stderr)
+
+    def propose(rule_id):
+        rule = {'id': rule_id, 'applies_when': {'change_kinds': ['evals_or_docs']}, 'requires': ['merged'],
+                'evidence_bar': {'merged': 'merged at the gate'}, 'caveat': '', 'autonomy': 'act_and_tell',
+                'added_by': 'pm', 'added_at': '2026-10-26T10:00:00Z', 'why': 'docs need a merge'}
+        out = verb(a_sid, run, 'propose-rule', json.dumps(rule))
+        assert out.returncode == 0, out.stdout + out.stderr
+
+    def proposed_ids():
+        return [r['id'] for r in record(run)['programme'].get('proposed_rules') or []]
+
+    propose('pick-rule')
+    declined = pick(a_sid, run, {'Adopt rule pick-rule?': 'No'})
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', declined)
+    check('adopt-rule refuses a pick whose question names the rule but whose answer declines',
+          refused(result, 'does not name') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    two = pick(a_sid, run, {'Adopt which rule?': 'adopt pick-rule', 'Anything else?': 'no'})
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', two)
+    check('adopt-rule refuses a pick with more than one question',
+          refused(result, 'exactly one question') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    yes = pick(a_sid, run, {'Adopt which rule?': 'adopt pick-rule'})
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', yes)
+    check('adopt-rule accepts a verified pick whose answer names the rule',
+          result.returncode == 0 and 'pick-rule' not in proposed_ids(), result.stdout + result.stderr)
+    loaded = protocol.load(prompt_lookup=programme_mod.prompt_lookup)
+    check('a rule adopted by a pick loads as adopted',
+          loaded['rules'].get('pick-rule') is not None, (sorted(loaded['rules']), loaded['notices']))
+    propose('pick-rule-two')
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule-two', '--prompt', yes)
+    check('a pick that already approved one change is refused for another',
+          refused(result, 'already used') and 'pick-rule-two' in proposed_ids(), result.stdout + result.stderr)
+    ruling = record(run)['programme']['agreement']['project_terms'][0]
+    ruling_pick = pick(a_sid, run, {'Change the ruling?': f"{ruling['area']}: use snake case"})
+    result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', ruling_pick)
+    check('edit-project-term refuses a pick after acceptance', refused(result, 'edit-project-term needs a typed prompt'),
+          result.stdout + result.stderr)
+    pathlib.Path(os.environ['CLAUDE_AUTO_PERSONAL_PROTOCOL']).unlink()
+    context_mod = load_lib_module('programme_context')
+    check('an approval by pick is recorded with origin label picked',
+          context_mod._source({'prompt_id': yes, 'origin': 'picked'})['origin_label'] == 'picked')
 
     late = pick(a_sid, run, {'Stop rule: when should the PM stop?': 'never stop'})
     before_terms, before_refusals = json.dumps(terms(run), sort_keys=True), len(kinds(run, 'approval_refused'))
