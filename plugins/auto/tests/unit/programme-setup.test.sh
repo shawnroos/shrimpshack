@@ -322,6 +322,15 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                   stdin='{}')
     check('set-remit refuses a pick of its bare label', refused(result, 'reads its change from stdin'),
           result.stdout + result.stderr)
+    extra = work / 'remit-extra'
+    subprocess.run(['git', 'init', '-q', str(extra)], check=True)
+    remit_doc = copy.deepcopy(record(run)['programme'].get('remit') or {})
+    remit_doc.setdefault('repos', []).append({'path': str(extra)})
+    suggested = typed_prompt(run, a_sid, f'Add {extra} to the remit', prompt_source='suggestion_accepted')['prompt_id']
+    result = verb(a_sid, run, 'set-remit', '--prompt', suggested, stdin=json.dumps(remit_doc))
+    check('set-remit accepts an accepted suggestion that names the added repo',
+          result.returncode == 0 and str(extra) in json.dumps(record(run)['programme']['remit']),
+          result.stdout + result.stderr)
     result = verb(a_sid, run, 'amend-term', 'cadence', 'on_change', '--why', '--run', run)
     check('an option value that looks like an option is refused', result.returncode == 2 and 'needs a value' in result.stderr,
           result.stdout + result.stderr)
