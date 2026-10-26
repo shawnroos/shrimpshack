@@ -87,8 +87,13 @@ not "nothing changed". You apply every programme write yourself.
    row, run `P rules --ack` and read the rules it prints.
 2. **Prune prompts.** `"${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}" "${CLAUDE_PLUGIN_ROOT}/lib/programme_journal.py" prune --run <run>`.
    The run id is the `run` field of `P status --json`.
-3. **Apply Shawn's typed answers.** For each message Shawn typed since the last
+3. **Apply Shawn's answers.** For each message Shawn typed since the last
    sweep, cite the prompt id from its `<auto-data>` tag with `--prompt <id>`.
+   When a change needs Shawn's approval, ask in one AskUserQuestion picker with
+   a single question; put the exact rule id, path or value in each option
+   label, because only his answer counts as naming it. Cite the pick's prompt
+   id with `--prompt <id>`. One pick approves one change. `accept-agreement`
+   and `edit-project-term` still need a line he types.
 
    After compaction (a verb refused with the rules in force and you ran
    `P rules --ack`), re-check what you may have lost. Read `<home>/journal.jsonl`

@@ -151,7 +151,7 @@ A proposed rule lives in the programme record at `programme.proposed_rules`, nev
 
 An item link satisfies only the `no_rule_proposed` stop check for that item. A wait still needs a named reporter or live watcher. A proposed rule never changes a match result, deliverables, autonomy, or completion. `summary(protocol, record)` checks the rule fields without `items` and lists it with status `proposed`.
 
-`adopt-rule` removes `items` before rule validation, adoption hashing, and writing personal policy. Item links never become policy fields. Adoption still requires a typed prompt naming the rule, plus explicit widening approval where required.
+`adopt-rule` removes `items` before rule validation, adoption hashing, and writing personal policy. Item links never become policy fields. Adoption still requires a typed prompt or a verified pick naming the rule, plus explicit widening approval where required.
 
 ## 8. Loader interface
 

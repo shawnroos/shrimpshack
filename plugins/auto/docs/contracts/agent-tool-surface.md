@@ -753,6 +753,9 @@ For `edit-project-term` after acceptance, the text must contain the term's area 
 its new text. `accept-agreement`, `record-instruction` and `close-instruction --as withdrawn`
 accept any typed prompt, because the quote is what they record; `accept-agreement`
 also needs the prompt to come after the last proposal or project-term edit.
+Every `--prompt` verb also accepts a verified pick, except `accept-agreement` and
+`edit-project-term`. For a pick, the naming rules above read only the answer
+(programme-prompt-source.md gives the full rule).
 
 The action hook guards each driver's pane. In a session that is not the driving
 session of a live, orphaned or expired lease, it denies any Bash command whose

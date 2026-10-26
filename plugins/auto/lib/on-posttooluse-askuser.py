@@ -40,8 +40,9 @@ def handle(raw: str) -> dict | None:
     entry = programme_journal.append_prompt(run, session_id, programme_pick_source.summary(answers),
                                             "unknown", source=source)
     payload = {"run": run, "prompt_id": entry["prompt_id"], "kind": "pick", "answers": source["answers"]}
-    text = ("auto journaled this picker answer. Cite its prompt_id in setup verbs that take a pick; "
-            "it counts only once the transcript shows Shawn picked it.\n" + json.dumps(payload, sort_keys=True))
+    text = ("auto journaled this picker answer. Cite its prompt_id with --pick in setup verbs, or with --prompt "
+            "in any approval verb except accept-agreement and edit-project-term; it counts only once the "
+            "transcript shows Shawn picked it.\n" + json.dumps(payload, sort_keys=True))
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                    "additionalContext": f"<{DATA_TAG}>\n{text}\n</{DATA_TAG}>"}}
 

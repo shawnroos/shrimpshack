@@ -22,7 +22,7 @@ An older human row cannot authorize a later event that reuses its prompt ID, eve
 
 The source reader supports the transcript shapes observed in Claude Code 2.1.302:
 
-- Plain input requires `promptSource: typed`, `turnOrigin: human`, and `origin.kind: human`.
+- Plain input requires `promptSource` of `typed` or `suggestion_accepted`, `turnOrigin: human`, and `origin.kind: human`. `suggestion_accepted` is Shawn pressing Enter on Claude Code's suggested prompt; its text is model-written, and Shawn accepted that trade-off on 2026-10-26. Any other `promptSource` stays `unknown`.
 - Slash commands require human origin, human turn origin, CLI entrypoint, and matching command-name and command-args fields.
 - Slash-command source text reconstructs the original slash command and arguments before comparing their hash.
 - Meta messages, sidechains, compaction summaries, SDK input, and tool-result rows do not supply human authority.
@@ -46,6 +46,8 @@ The transcript check is the second line against a pre-filled answer.
 The source reader supports the picker shapes observed in Claude Code 2.1.304.
 A change to the secrets file can change the redacted map and make an older pick unverifiable.
 A verified pick shows that Shawn chose the answer. Each verb that takes a pick checks what the pick may approve and that it is not cited twice.
+
+A verified pick also approves any `--prompt` verb except `accept-agreement` and `edit-project-term`, which need a typed prompt. Such a pick must hold exactly one question. Naming checks read only its answer, because the PM writes the question. One pick approves one change: a pick that any earlier row cites, under any prompt id journaled for the same picker answer, is refused. The approval records `origin: picked`.
 
 ## Failure behavior
 
