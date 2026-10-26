@@ -85,8 +85,8 @@ a dispatched Agent.
        `programme.sh pick-term <key> <value> --pick <id>`.
      - Never put answers into the AskUserQuestion call yourself; a pre-filled
        picker is refused and approves nothing.
-   - Steps with `needs_typed` (rulings and reserved areas, shared settings, and
-     anything else whose change only a typed reply approves): ask in a picker
+   - Steps with `needs_typed` (rulings and reserved areas, shared settings and
+     the accept): during setup these take a typed reply. Ask in a picker
      whether to keep it as is or change it. Keep: `programme.sh setup-keep
      <key>`. Change: show the step's `reply` as "Type this:" and wait for his
      typed line; then apply it as in step 6.

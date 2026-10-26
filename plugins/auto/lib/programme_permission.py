@@ -235,7 +235,7 @@ def notify_pending(run_id, home) -> dict:
 
 
 def _choices_named(host, prompt) -> set:
-    words = host._name_words(programme_journal.redact(prompt["quote"]))
+    words = host._name_words(programme_journal.named_text(prompt))
     return {choice for choice, options in CHOICE_WORDS.items()
             if any(host._affirmed(words, start) for option in options
                    for start, _ in host._runs(words, host._squash(option)))}

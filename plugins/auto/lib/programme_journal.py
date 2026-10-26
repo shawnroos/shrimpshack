@@ -31,8 +31,8 @@ SECRETS_ENV = "CLAUDE_AUTO_SECRETS_FILE"
 DEFAULT_SECRETS_FILE = "~/.secrets"
 REDACTED = "[redacted]"
 STORED_PROMPT_ORIGINS = ("typed", "cron", "unknown")
-# "picked" is only ever resolved from a pick source record, never stored as a label.
-PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked",)
+# "picked" and "suggested" are only ever resolved from a transcript check, never stored as a label.
+PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked", "suggested")
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
@@ -393,6 +393,44 @@ def claims_count(run_id: str) -> int:
             return sum(1 for _ in fh)
     except OSError:
         return 0
+
+
+def _same_pick(source, path, tool_use_id) -> bool:
+    return isinstance(source, dict) and (source.get("path"), source.get("tool_use_id")) == (path, tool_use_id)
+
+
+def pick_use(rows, source):
+    """The first row that spent this picker answer, under any prompt id it was journaled as."""
+    path, tool_use_id = source.get("path"), source.get("tool_use_id")
+    ids = {r.get("prompt_id") for r in rows
+           if r.get("kind") == "prompt" and _same_pick((r.get("payload") or {}).get("source"), path, tool_use_id)}
+    for row in rows:
+        if row.get("kind") in ("prompt", "approval_refused"):
+            continue
+        payload = row.get("payload") or {}
+        refs = set(row.get("cites") or []) | {payload.get("prompt_id")}
+        # Setup verbs record the pick's path and tool_use_id on their own payload, not as a cite.
+        if ids & refs or _same_pick(payload, path, tool_use_id):
+            return row
+    return None
+
+
+def pick_answer(rows, row) -> str:
+    source = row["payload"]["source"]
+    if len(source["answers"]) != 1:
+        raise ValueError(f"pick {row['prompt_id']!r} must hold exactly one question to approve a change")
+    used = pick_use(rows, source)
+    if used is not None:
+        raise ValueError(f"pick {row['prompt_id']!r} was already used ({used.get('kind')}); "
+                         "one picker answer approves one change")
+    return next(iter(source["answers"].values()))
+
+
+def named_text(prompt) -> str:
+    # A pick's question is PM-written, so only Shawn's answer can name what it approves.
+    if prompt.get("origin") == "picked":
+        return redact(prompt.get("answer") or "")
+    return redact(prompt["quote"])
 
 
 def find_prompt(run_id: str, prompt_id: str, rows=None):

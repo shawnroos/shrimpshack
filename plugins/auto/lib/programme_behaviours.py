@@ -650,7 +650,7 @@ def _check_layer_named(host, prompt, bid, to) -> None:
     host.require_named(prompt, options, *([bid] if bid else []))
     # require_named looks only at the word just before the name, so "not the repo" would
     # pass it; any negation earlier in the prompt refuses, as for promote-correction.
-    words = host._name_words(programme_journal.redact(prompt["quote"]))
+    words = host._name_words(programme_journal.named_text(prompt))
     start = min(s for option in options for s, _ in host._runs(words, host._squash(option)))
     if set(words[:start]) & set(host._NEGATIONS):
         raise BehaviourError(f"prompt {prompt['prompt_id']!r} negates the {to} layer; a move needs a plain yes")
@@ -795,7 +795,7 @@ def _keep(host, programme, prompt, rec, wanted, to, repo) -> dict:
     _check_layer_named(host, prompt, None, to)
     read_store()
     loaded = load_store(host.prompt_lookup)
-    named = [b for b in wanted if not programme_naming.missing(programme_journal.redact(prompt["quote"]), [b])]
+    named = [b for b in wanted if not programme_naming.missing(programme_journal.named_text(prompt), [b])]
     if not named:
         raise BehaviourError(f"prompt {prompt['prompt_id']!r} names none of {', '.join(wanted)}")
     key = _repo_key(programme, repo) if to == "repo" else None
