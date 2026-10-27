@@ -80,6 +80,7 @@ KINDS = (
     "rules_loaded",
     "reread_requested",
     "stopped_unwatched",
+    "stop_quiet",
     "item_added",
     "item_updated",
     "item_aliased",
@@ -338,13 +339,16 @@ def append_claim(run_id: str, session_id, payload) -> dict:
                       provenance="worker_result", guard=_refuse_after_end)
 
 
-def append_prompt(run_id: str, session_id, text: str, origin: str, now=None, *, source=None) -> dict:
+def append_prompt(run_id: str, session_id, text: str, origin: str, now=None, *, source=None, driving=True) -> dict:
     if origin not in STORED_PROMPT_ORIGINS:
         raise JournalError(f"prompt origin must be one of {list(STORED_PROMPT_ORIGINS)}; got {origin!r}")
     prompt_id = "p" + secrets.token_hex(3)
     payload = {"text": redact(text), "origin": origin}
     if source is not None:
         payload["source"] = source
+    # Older rows have no key and are driving rows, so gates must test `is False`, never falsiness.
+    if not driving:
+        payload["driving"] = False
     return append_row(run_id, entry("prompt", session_id, payload, prompt_id=prompt_id, now=now))
 
 

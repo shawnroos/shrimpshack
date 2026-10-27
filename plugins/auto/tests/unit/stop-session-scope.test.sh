@@ -137,7 +137,7 @@ it "a fork with a new session id stops while the PM has an unwatched wait: allow
 check "allow" "$(verdict "$(stop_py "$REPO" sess-fork)")"
 
 it "the fork's stop writes no nag state"
-check "0" "$(find "$REPO/.claude/auto" "$PM_HOME" -name '.stop-nag*' 2>/dev/null | wc -l | tr -d ' ')"
+check "0" "$(find "$REPO/.claude/auto" "$PM_HOME" \( -name '.stop-nag*' -o -name '.stop-shown*' \) 2>/dev/null | wc -l | tr -d ' ')"
 
 it "a fork that ran register-session on the PM's programme and a task run stops: allowed"
 plant_task "$REPO" "pm-task" "sess-pm" "sess-fork"
@@ -245,6 +245,7 @@ EOF
 check "block False" "$GOT"
 
 it "the shim runs the check from a cwd outside any repo when a lease exists"
+rm -f "${PM_HOME}"/.stop-shown-*
 OUT="$( cd "$NOREPO" && bash "$ON_STOP_SH" <<< "$(payload sess-pm)" )"
 check "block" "$(verdict "$OUT")"
 
@@ -293,10 +294,14 @@ check "full full terse terse" "$A1 $B1 $A2 $B2"
 it "nag state lives in per-session dot files"
 check "2" "$(find "${D}/.claude/auto" -maxdepth 1 -name '.stop-nag-*.json' | wc -l | tr -d ' ')"
 
-it "the PM's repeated block is terse the second time"
+it "the PM's hold blocks once, then the same hold is let through"
+rm -f "${PM_HOME}"/.stop-shown-*
 P1="$(stop_py "" sess-pm)"
 P2="$(stop_py "" sess-pm)"
-if printf '%s' "$P2" | grep -q 'still may not stop' && [ "$(verdict "$P2")" = block ]; then pass; else fail "got: $P2"; fi
+check "block allow" "$(verdict "$P1") $(verdict "$P2")"
+
+it "the PM's hold is remembered in the programme home, not the repo"
+check "1 0" "$(find "$PM_HOME" -maxdepth 1 -name '.stop-shown-sess-pm.json' | wc -l | tr -d ' ') $(find "$REPO" -name '.stop-*' | wc -l | tr -d ' ')"
 
 it "after /auto-resume continue from session B, B is held and A is not"
 RS="${WORK}/resumed"
@@ -361,9 +366,8 @@ NAMED="$(stop_py "" sess-pm)"
 check "block" "$(verdict "$NAMED")"
 case "$NAMED" in *"Reframe skill: skills vs code (linear:AI-7)"*) pass ;; *) fail "got: $NAMED" ;; esac
 
-it "the repeated hold still names the item by title"
-AGAIN="$(stop_py "" sess-pm)"
-case "$AGAIN" in *"Reframe skill: skills vs code (linear:AI-7)"*) pass ;; *) fail "got: $AGAIN" ;; esac
+it "the repeated named hold is let through with no message"
+check "allow" "$(verdict "$(stop_py "" sess-pm)")"
 
 echo ""
 echo "stop-session-scope.test.sh: ${PASS} passed, ${FAIL} failed"

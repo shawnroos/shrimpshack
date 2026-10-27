@@ -8,15 +8,20 @@ Start a programme: this session becomes the PM for the herdr space it runs in.
 Do the steps in order. Run every programme verb in your own Bash tool, never from
 a dispatched Agent.
 
+Whenever Shawn asks this session, in any words, to be the PM, to replace the PM
+or to take over as PM, run `programme.sh become-pm` first and follow the one
+step it prints. Only `start` continues with step 1 below. For
+`ask-shawn` or `stand-down`, follow `/auto:programme-takeover`; for
+`already-pm`, run the sweep; for `refused`, run its `fix:` line. When
+`$ARGUMENTS` names spaces, go straight to step 1: become-pm reads only this
+session's own space.
+
 1. Take the lease first. Run the dispatch line below before anything else:
 
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" start "$ARGUMENTS"`
 
    - Exit 1 naming a run and session means another programme holds this space.
-     Show Shawn that line and stop. The holder moves by
-     `/auto:programme-handover` typed in its session, or by
-     `/auto:programme-takeover` typed here once its pane is closed or its lease
-     is orphaned (or with `--replace <its pane name>` while it still runs).
+     Run `programme.sh become-pm` and follow the step it prints.
    - On success, note the `run` id from the JSON line. The other verbs find the
      programme from this session's lease.
 2. Check for a native goal. If a `/goal` condition is active in this session
@@ -85,8 +90,8 @@ a dispatched Agent.
        `programme.sh pick-term <key> <value> --pick <id>`.
      - Never put answers into the AskUserQuestion call yourself; a pre-filled
        picker is refused and approves nothing.
-   - Steps with `needs_typed` (rulings and reserved areas, shared settings and
-     the accept): during setup these take a typed reply. Ask in a picker
+   - Steps with `needs_typed` (rulings and reserved areas, shared settings):
+     during setup these take a typed reply. Ask in a picker
      whether to keep it as is or change it. Keep: `programme.sh setup-keep
      <key>`. Change: show the step's `reply` as "Type this:" and wait for his
      typed line; then apply it as in step 6.
@@ -98,19 +103,28 @@ a dispatched Agent.
      refused when its answer names a source the value leaves out.
    - Items to adopt: ask which of the step's items to adopt (multiSelect), then
      adopt them as in step 7.
-   - Last step: show "Type this: accept the agreement" and wait for his typed
-     line. The accept is never a pick.
+   - Last step: the accept, offered as a pick. Run
+     `programme.sh approval-label accept-agreement`; it prints
+     `Approve accept-agreement --terms <digest>`, where the digest names the
+     terms `status` shows now.
+     Offer that exact text as one AskUserQuestion option. On that pick, run
+     `programme.sh accept-agreement --prompt <pick id> --terms <digest>`.
+     Shawn can also type "accept the agreement"; a typed accept needs no
+     `--terms`.
    - On a re-run, a handover or a takeover before acceptance, start at the first
      step that is not done; never start over.
 6. When he types a reply, the `<auto-data>` tag in your context names the
    prompt id.
-   - Acceptance: `programme.sh accept-agreement --prompt <id>`.
+   - Acceptance: `programme.sh accept-agreement --prompt <id>`, plus
+     `--terms <digest>` when the prompt is a pick.
    - A term change: `programme.sh amend-term <key> <value> --prompt <id>`.
    - A project term change: `programme.sh edit-project-term <term-id> "<text>"
      [--reserved|--unreserved]`, or a new one with `propose-agreement
      --project-term "<area>=<text>" --source "Shawn at startup"`.
-     `accept-agreement` refuses a prompt older than the last proposal, pick or
-     project-term edit, so ask for the accept again after any change.
+     `accept-agreement` refuses a prompt older than the last proposal, pick,
+     term amend or project-term edit, and a `--terms` digest that no longer
+     matches the terms, so ask for the accept again after any change. It
+     refuses an accepted suggestion.
    - Turning sources off or on by a typed reply: `programme.sh amend-term
      tools_of_record <list> --prompt <id>`, where the list holds the sources
      that stay on, comma separated (`tracker,tasks`), or `none`. His reply must

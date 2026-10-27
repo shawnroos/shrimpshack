@@ -21,18 +21,18 @@ WORK="$(mktemp -d -t auto-stop-fixes.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 export CLAUDE_AUTO_DATA_DIR="${WORK}/data"
 
-# reasons JSON -> the full (or terse) programme stop message
+# reasons JSON (+ optional actionable reasons JSON) -> the programme stop message
 msg() {
-  "$PY" - "$AUTO_ROOT" "$WORK" "$1" "${2:-full}" <<'PYEOF'
+  "$PY" - "$AUTO_ROOT" "$WORK" "$1" "${2:-[]}" <<'PYEOF'
 import importlib.util, json, os, sys
-root, home, reasons, mode = sys.argv[1:5]
+root, home, reasons, actionable = sys.argv[1:5]
 sys.path.insert(0, os.path.join(root, "lib"))
 spec = importlib.util.spec_from_file_location("on_stop", os.path.join(root, "lib", "on-stop.py"))
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-hold = {"run": "prog-x", "home": home, "status": {"reasons": json.loads(reasons)}}
-fn = mod._programme_reason_for if mode == "full" else mod._terse_programme_reason_for
-print(fn(hold))
+hold = {"run": "prog-x", "home": home,
+        "status": {"reasons": json.loads(reasons), "actionable_reasons": json.loads(actionable)}}
+print(mod._programme_reason_for(hold))
 PYEOF
 }
 
@@ -46,13 +46,35 @@ lacks "give each wait a live watcher" "$OUT"
 it "a fully hinted hold drops the generic act line"
 lacks "Act on your next step" "$OUT"
 
-it "the terse repeat still carries the fix"
-OUT="$(msg '[{"kind":"no_rule_proposed","item":"linear:AI-1153"}]' terse)"
-has "propose-rule" "$OUT"
-
 it "a reason with no fix keeps the generic act line"
-OUT="$(msg '[{"kind":"not_done"}]')"
+OUT="$(msg '[{"kind":"made_up_kind"}]')"
 has "Act on your next step." "$OUT"
+
+it "until_time names the time it holds until and the sweep"
+OUT="$(msg '[{"kind":"until_time","until":"2026-10-28T09:00:00Z"}]')"
+has 'holds until 2026-10-28T09:00:00Z: run `programme.sh sweep`' "$OUT"
+
+it "never_stop also shows the actionable reasons it would otherwise hide"
+OUT="$(msg '[{"kind":"never_stop"}]' '[{"kind":"open_item","item":"linear:A-9"}]')"
+has "never_stop; open_item linear:A-9" "$OUT"
+it "never_stop fixes the hidden reason"
+has "linear:A-9 is open" "$OUT"
+it "never_stop sends a rule change to Shawn through a picker"
+has "AskUserQuestion picker" "$OUT"
+
+it "an authority hold carries its fix line"
+OUT="$("$PY" - "$AUTO_ROOT" "$WORK" <<'PYEOF'
+import importlib.util, os, sys
+root, home = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "lib"))
+spec = importlib.util.spec_from_file_location("on_stop", os.path.join(root, "lib", "on-stop.py"))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+held = mod._held_status({"outcome": "corrupt", "detail": "bad db"})
+print(mod._programme_reason_for({"run": "prog-x", "home": home, "status": held}))
+PYEOF
+)"
+has '`programme.sh recover` reports what it can rebuild' "$OUT"
 
 it "a source outage names the source"
 OUT="$(msg '[{"kind":"source_unavailable","system":"tracker"}]')"
@@ -62,24 +84,21 @@ it "two items with the same reason each get their own line"
 OUT="$(msg '[{"kind":"open_item","item":"linear:A-1"},{"kind":"open_item","item":"linear:A-2"}]')"
 check "2" "$(printf '%s\n' "$OUT" | grep -c '^- .* is open')"
 
-it "every reason kind is hinted or deliberately unhinted, and cwd_drift is the one hook-only kind"
+it "every reason kind and authority hold has a fix, and no fix names a kind nothing reports"
 GOT="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import importlib.util, os, sys
 root = sys.argv[1]
 sys.path.insert(0, os.path.join(root, "lib"))
 from _bootstrap import load_lib_module
 kinds = set(load_lib_module("programme_predicate").REASON_KINDS)
+kinds |= {"authority_" + h for h in load_lib_module("programme_home").AUTHORITY_HOLDS}
 spec = importlib.util.spec_from_file_location("on_stop", os.path.join(root, "lib", "on-stop.py"))
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 print(" ".join(sorted(kinds - set(mod._REASON_FIXES))), "|", " ".join(sorted(set(mod._REASON_FIXES) - kinds)))
 PYEOF
 )"
-check "corrupt_context corrupt_record never_stop not_done until_time | cwd_drift" "$GOT"
-
-it "the cwd_drift fix names the cd into the worktree"
-OUT="$(msg '[{"kind":"cwd_drift","item":"/x/worktrees/programme-r"}]')"
-has 'cd /x/worktrees/programme-r' "$OUT"
+check " | " "$GOT"
 
 it "every programme.sh verb a fix names is a real verb"
 VERBS="$("$PY" - "$AUTO_ROOT" <<'PYEOF'

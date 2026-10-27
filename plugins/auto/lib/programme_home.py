@@ -60,6 +60,7 @@ PROGRAMME_FIELDS = (
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
 _ITEM_ID_RE = re.compile(r"^[a-z][a-z0-9_-]*:\S+$")
+_SID_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 class ProgrammeHomeError(Exception):
@@ -156,6 +157,11 @@ def _leases_lock_path() -> str:
 
 def home_path(run_id: str) -> str:
     return _contained(os.path.join(programmes_dir(), check_run_id(run_id)))
+
+
+def stop_shown_path(run_id: str, session_id: str) -> str:
+    safe = _SID_UNSAFE_RE.sub("_", str(session_id or ""))[:128] or "_"
+    return os.path.join(home_path(run_id), f".stop-shown-{safe}.json")
 
 
 def parse_space(spec):

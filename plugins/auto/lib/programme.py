@@ -45,7 +45,8 @@ APPROVAL_KINDS = ("rule_adopted",)
 _OPERATION = {"id": None, "verb": None, "argv": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
-               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label")
+               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label",
+               "become-pm")
 
 
 _name_words, _squash, _runs, _affirmed, _NEGATIONS = (
@@ -54,7 +55,9 @@ _name_words, _squash, _runs, _affirmed, _NEGATIONS = (
 
 
 class ProgrammeError(Exception):
-    pass
+    def __init__(self, *args, fix=None):
+        super().__init__(*args)
+        self.fix = fix
 
 
 def text_hash(text) -> str:
@@ -115,10 +118,6 @@ def _parse(argv, *, values=(), flags=(), multi=()):
 
 def _resume():
     return load_lib_module("programme_resume")
-
-
-def _worktree():
-    return load_lib_module("programme_worktree")
 
 
 def _run_from_leases(sid):
@@ -234,23 +233,22 @@ def render_rules(record, revision=None) -> str:
     )
 
 
-def render_restore(run_id, session_id=None, cwd=None) -> str:
+def render_restore(run_id) -> str:
     record, revision = _resume().head(run_id)
-    return render_rules(record, revision) + _worktree().restore_line(record, session_id, cwd)
+    return render_rules(record, revision)
 
 
 def _guard(home, record, *, compact_exempt=False):
     sid = driver_session.driving_session_id()
     if not session_registry.caller_drives(record, sid):
-        raise ProgrammeError("only the programme's driving session may run this verb")
+        raise ProgrammeError("only the programme's driving session may run this verb", fix="programme.sh become-pm")
     if (record.get("programme") or {}).get("ended"):
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
-        sys.stdout.write(render_rules(record) + _worktree().restore_line(record, sid))
+        sys.stdout.write(render_rules(record))
         raise ProgrammeError(
             "context was compacted or handed over: read the rules in force and the restored "
-            "context above, then run `programme.py rules --ack`"
-        )
+            "context above, then run `programme.py rules --ack`", fix="programme.sh rules --ack")
     return sid
 
 
@@ -428,7 +426,7 @@ def _h_rules(argv):
     _, opts = _parse(argv, values=("run", "context"), flags=("ack",))
     if not opts.get("ack"):
         run_id = _locate(opts)[0]
-        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
+        sys.stdout.write(render_restore(run_id))
         return 0
 
     def ack(programme, prompt, rec):
@@ -446,11 +444,11 @@ def _h_rules(argv):
     except _resume().StaleAck as stale:
         run_id, home, _ = _locate(opts)
         _resume().rebind(home, stale.current)
-        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
+        sys.stdout.write(render_restore(run_id))
         raise ProgrammeError(
             f"stale acknowledgement: the decision context changed since it was restored (now "
             f"{stale.current}); read the block above, then run `programme.sh rules --ack` again") from None
-    sys.stdout.write(render_restore(_locate(opts)[0], driver_session.driving_session_id()))
+    sys.stdout.write(render_restore(_locate(opts)[0]))
     return 0
 
 
@@ -480,14 +478,15 @@ def _h_propose_agreement(argv):
 
 
 def _h_accept_agreement(argv):
-    _, opts = _parse(argv, values=("run", "prompt"))
+    _, opts = _parse(argv, values=("run", "prompt", "terms"))
     if not opts.get("prompt"):
-        raise ValueError("accept-agreement needs --prompt <id> of a typed prompt")
+        raise ValueError("accept-agreement needs --prompt <id> of a typed prompt or a terms-bound pick")
 
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
             raise ProgrammeError("the agreement is already accepted")
         programme_terms.check_accept_order(rec["run_id"], prompt["prompt_id"])
+        programme_approval.check_terms(programme, opts.get("terms"), ProgrammeError)
         programme["agreement"]["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
                                               "quote": prompt["quote"]}
         version = programme_terms.stamp(programme)
@@ -743,9 +742,9 @@ _VERBS = {
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,
-        "--prompt <id> [--run <id>]",
-        rejects="no --prompt; a prompt that is unknown, not typed, not from the driving session, or "
-        "older than the last proposal or project-term edit.",
+        "--prompt <id> [--terms <digest>] [--run <id>]",
+        rejects="no --prompt; an accepted suggestion; a prompt not from the driving session or older than the last "
+        "term change or pick; a pick without --terms; a --terms digest that does not match the terms shown.",
     ),
     "amend-term": _Verb(
         _h_amend_term,
@@ -885,9 +884,6 @@ def _h_status(argv):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
-        line = _worktree().status_line(record)
-        if line:
-            sys.stdout.write(line + "\n")
     return 0
 
 
@@ -973,7 +969,8 @@ def _cli(argv) -> int:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2
     _OPERATION["verb"], _OPERATION["argv"] = (argv[0] if argv else None), argv
-    return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
+    return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS,
+                             fixes=lambda verb: load_lib_module("programme_fixes").fix_for(verb))
 
 
 programme_lifecycle = load_lib_module("programme_lifecycle")

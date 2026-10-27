@@ -270,6 +270,40 @@ EOF
 )"
 if [ "$ROW" = "takeover_request sess-new default.w2 False" ] && [ -z "$OUT" ]; then pass; else fail "row [$ROW] out [$OUT]"; fi
 
+askuser_hook() {
+  local hook="$1" sid="$2" tool_use_id="$3" prefill="${4:-}"
+  local payload
+  payload="$("$PY" - "$AUTO_ROOT" "$WORK" "$sid" "$tool_use_id" "$prefill" <<'PYEOF'
+import json, pathlib, sys
+root, work, sid, tool_use_id, prefill = sys.argv[1:]
+ask = json.loads((pathlib.Path(root) / "tests/fixtures/askuser_transcript.jsonl").read_text().splitlines()[0])
+ask["message"]["content"][0]["id"] = tool_use_id
+path = pathlib.Path(work) / (sid + ".jsonl")
+with path.open("a") as stream:
+    stream.write(json.dumps(dict(ask, sessionId=sid)) + "\n")
+asked = ask["message"]["content"][0]["input"]
+answers = {asked["questions"][0]["question"]: asked["questions"][0]["options"][0]["label"]}
+print(json.dumps({"session_id": sid, "transcript_path": str(path), "tool_name": "AskUserQuestion",
+                  "tool_use_id": tool_use_id, "tool_input": dict(asked, answers=answers) if prefill else asked,
+                  "tool_response": {"answers": answers}}))
+PYEOF
+)"
+  ( cd "$NOREPO" && bash "${HOOKS}/${hook}" <<< "$payload" )
+}
+
+it "a registered session in w2 that does not drive journals its pick with driving false"
+OUT="$(askuser_hook on-posttooluse-askuser.sh sess-new toolu_new)"
+ROW="$(run_py "$RUN" <<'EOF'
+r = [x for x in pj.read(args[0]) if x["kind"] == "prompt"][-1]
+print(r["session_id"], r["payload"]["origin"], r["payload"].get("driving"), r["payload"]["source"]["tool_use_id"])
+EOF
+)"
+check "sess-new unknown False toolu_new" "$ROW"
+
+it "the same non-driving session may not pre-fill a picker"
+OUT="$(askuser_hook on-pretooluse-askuser.sh sess-new toolu_new2 prefill)"
+check "deny" "$(printf '%s' "$OUT" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecision"])' 2>/dev/null)"
+
 it "an end request typed in the driving session cites its captured prompt"
 prompt_hook sess-pm "/auto:programme-end all finished" >/dev/null
 OUT="$(run_py "$RUN" <<'EOF'

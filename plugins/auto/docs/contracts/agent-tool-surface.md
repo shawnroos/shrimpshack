@@ -671,7 +671,49 @@ session.
   registry pane, a headless driver, another herdr server, or an open pane that
   reports no session is not proof. A refusal on a live driver names its pane and
   tab and gives the `--replace` line to type. `--replace` on the verb itself
-  authorizes nothing.
+  authorizes nothing. The no-request refusal prints `fix: programme.sh become-pm`.
+  `takeover --prompt <id>` needs no typed request. auto picks the route under the
+  leases lock, from the fresh lease status and the herdr presence:
+  - **Pick route** (a live driver, or an orphaned lease whose driver herdr shows
+    present): the prompt is a verified pick from this session, unused, journaled
+    after the last start, takeover or handover, with one question. Its answer,
+    less a trailing ` (Recommended)`, is exactly
+    `programme.sh approval-label takeover --replace <driver session id>`. The
+    named session must still be the driver. The journaled reason is replaced.
+  - **Stopped route** (an orphaned lease that herdr does not show present, or a
+    live lease whose driver herdr shows gone): the same pick as the pick route,
+    of the same label. A typed prompt or an accepted suggestion never counts,
+    because any instruction Shawn gives a worker would otherwise hand it the PM
+    role. The caller also has a session-registry row in a herdr space the run
+    leases; HERDR_* env alone is not proof. The status comes from a readable run
+    record; a record that fails to load refuses. The journaled reason is
+    orphaned or driver_gone.
+  Both routes journal `taken_over` with `request: null`, the approval
+  `{origin: picked, answer}`, and cite the pick. A pick is used once: a pick
+  journaled before the last start, takeover or handover refuses. Every refusal
+  on these routes prints a `fix:` that offers the picker: run
+  `programme.sh approval-label takeover --replace <driver>`, offer its output as
+  the recommended option of one AskUserQuestion picker, then rerun
+  `programme.sh takeover --prompt <pick id>`, with the id from the `<auto-data>`
+  tag the PostToolUse hook adds after Shawn's answer. Only "the PM changed while
+  auto was checking it" prints `fix: programme.sh become-pm`. The prompt hook
+  does not journal prompts from a session that drives no programme, except a
+  typed `/auto:programme-takeover`, `-handover` or `-end` request.
+  `become-pm` is read-only and needs no driving session. It reads the caller's
+  space lease, its status, herdr presence and whether this session drove the run
+  before, writes nothing, and prints one JSON line with a **step** plus one line
+  naming that step. The steps: **start** (no lease, or a free, ended or expired
+  one); **already-pm** (the caller drives); **stand-down** (the caller drove the run
+  and another session drives it now, and that PM has not stopped: CronList shows
+  this session's programme cron to CronDelete, TaskStop each Monitor task id
+  this session started, then stop, with no message to Shawn); **ask-shawn**
+  (another session holds the lease, live or stopped, including a session that
+  drove the run before when its successor stopped: **label** is the exact
+  `approval-label takeover --replace <driver>` text to offer as the recommended
+  option of one AskUserQuestion picker with a decline option, and **command** is
+  `programme.sh takeover --prompt <pick id>`); **refused** (outside a herdr space,
+  an unreadable lease or run record, or a newer programme), which exits 1 with a
+  `fix:` line. It uses the same stopped-PM rule as the takeover routes.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
   the driving session, or an orphaned lease; on an expired lease it needs none and

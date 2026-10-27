@@ -688,7 +688,7 @@ keys and keeps unknown ones.
 | `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `tools_of_record` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
 | `recorded_issues` | `{provider: "linear-mcp", at, dropped, issues: {"<key>": {title, state, state_type, state_id, url, project: {id, name} \| null, initiatives: [{id, name}] \| null, source: "linear-mcp"}}}`, written by `record-issues` from the PM's MCP read. It claims the tracker provider only when no other provider has it available. `state_type` is one of triage, backlog, unstarted, started, completed, canceled, or null; `state_id` is a UUID or null. The tracker guard reads it to resolve state names and ids; the recorded check never reads it |
 | `trajectory_sweeps` | `[<iso>]`, at most two: the times of the previous and latest `record-trajectories` call that stored a trajectory. The view reads the gap between them. A record without it reads as `[]` |
-| `pm_worktree` | `null \| {path, repo, created_at}`. The programme worktree: a detached git worktree at `<repo>/worktrees/programme-<run>` the PM works from, where `repo` is the main checkout of the first remit repo at creation. Written once through `programme_authority.write` and never re-derived from the remit, so it stays put when the remit's repos change. `null` while the remit has no repo. A record without it reads as `null`. Mechanics: `lib/programme_worktree.py` |
+| `pm_worktree` | `null \| {path, repo, created_at}`. A programme worktree recorded by auto 0.16.2 and earlier: a detached git worktree at `<repo>/worktrees/programme-<run>`, where `repo` is the main checkout. auto no longer writes it; a recorded value is kept so end can release it. A record without it reads as `null`. Mechanics: `lib/programme_worktree.py` |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -737,7 +737,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
 `term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviours_kept`, `rule_proposed`,
-`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`,
+`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
@@ -758,7 +758,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `taken_over` and `handed_over {from_session, to_session, leases, request}`; `taken_over` adds
   `reason: orphaned|driver_gone|replaced` and, for the last two, `evidence {state, session_id,
   herdr_reachable, registry_pane, pane_in_snapshot, session_reported, pane_id, pane_label,
-  tab_label, why}` plus `replace_name` on a replace;
+  tab_label, why}` plus `replace_name` on a typed replace (absent on a pick-route replace). A takeover by `--prompt` has `request: null`,
+  `prompt_id` (also in `cites`) and `approval {origin, answer}`; `origin` is always `picked` and
+  `answer` is the picked takeover label, on every reason;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
   monitor_task_ids, process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
   A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
@@ -844,6 +846,11 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   and the programme applied any.
 - `stopped_unwatched` carries `{items: [item ids]}`, appended on each allowed re-fire
   of the Stop hook; readers dedupe by item.
+- `stop_quiet` carries `{stop_rule, reasons: [reason texts]}`, appended when the Stop hook lets the
+  driving session stop because it already showed that session a block with the same signature.
+  The signature is the stop rule, the reasons (actionable reasons included) and any rules note. It
+  is kept per session in `<home>/.stop-shown-<session>.json`, so a cwd change keeps it. A changed
+  signature blocks again with the full text. Task-run blocks are not quieted.
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
   PR head. No verb writes it yet.
 - Permission lines (programme-permission-proposals.md gives the full rules):
@@ -951,19 +958,6 @@ The nag file is `<repo>/.claude/auto/.stop-nag-<sid>.json`, or
 `<home>/.claude/auto/.stop-nag-<sid>.json` when there is no repo. `<sid>` keeps only
 `[A-Za-z0-9_-]` and is capped at 128 characters. A stop with no session id uses
 `.stop-nag.json`. A programme holds only its driving session's stop.
-
-Drift: when the driving PM of a live programme with a `pm_worktree` stops, the hook
-compares the `cwd` in the hook's stdin (never the shell's `$PWD` or herdr's pane cwd)
-with the recorded worktree path, by realpath; a subdirectory of the worktree is inside
-it. The check runs before holds whose programme may stop are dropped. When the cwd is
-outside and the worktree is inside the session's start directory (§10.10, newest
-`startup` or `resume` row), the stop is blocked with a `cwd_drift` reason whose fix is
-`cd <worktree>`, and that reason is part of the nag signature. When the `cd` would not
-last, the stop is let through with a `systemMessage` naming `/cd <worktree>`.
-`cwd_drift` is a hook-only reason kind: it is not in `REASON_KINDS` and status does not
-show it. A missing `cwd`, a null or malformed `pm_worktree`, a worktree path that no
-longer exists, an ended programme or any error lets the stop through. The hook writes
-nothing to the record, and no environment variable turns the check off.
 
 ### 10.10 Session registry
 

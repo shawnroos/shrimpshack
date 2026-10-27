@@ -15,10 +15,9 @@ secrets included. Never `git add -A`.
 
 1. Run `P beat`. If a verb refuses and prints the rules in force, read them and
    run `P rules --ack`, then repeat it.
-2. If the lease names another session, stop and ask Shawn to type
-   `/auto:programme-takeover --replace <that session id>` in this session. A
-   takeover counts only when Shawn types it, so never run it yourself. Come back
-   here after it succeeds. Never take over a PM that is still running.
+2. If the lease names another session, run `P become-pm` and follow its one
+   step (`/auto:programme-takeover` lists them). Come back here after a
+   takeover succeeds.
 3. Check this session's pane. The remit watcher skips only the pane in
    `HERDR_PANE_ID`, and a resumed session can carry the id of the pane it ran in
    before, so a stale id makes the watcher fire on every PM turn. Read that pane
