@@ -21,6 +21,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record = load_lib_module("run_record")
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
+programme_asks = load_lib_module("programme_asks")
 programme_journal = load_lib_module("programme_journal")
 programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
@@ -28,6 +29,7 @@ session_registry = load_lib_module("session_registry")
 driver_session = load_lib_module("driver_session")
 verb_cli = load_lib_module("verb_cli")
 programme_naming = load_lib_module("programme_naming")
+programme_approval = load_lib_module("programme_approval")
 programme_proposals = load_lib_module("programme_proposals")
 programme_trajectory = load_lib_module("programme_trajectory")
 
@@ -38,10 +40,10 @@ RULES_TAG = "auto-rules"
 SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep."
 PERSONAL_LOCK = ".personal-protocol.lock"
 APPROVAL_KINDS = ("rule_adopted",)
-_OPERATION = {"id": None}
+_OPERATION = {"id": None, "verb": None, "argv": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
-               "reconcile-operations", "release-resources", "create-successor", "sweep")
+               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label")
 
 
 _name_words, _squash, _runs, _affirmed, _NEGATIONS = (
@@ -95,8 +97,9 @@ def _parse(argv, *, values=(), flags=(), multi=()):
         if name in flags:
             opts[name] = True
         elif name in values or name in multi:
-            if not args:
-                raise ValueError(f"--{name} needs a value")
+            # A value that looks like an option would let "--why --run x" hide an option inside a value.
+            if not args or args[0].startswith("--"):
+                raise ValueError(f"--{name} needs a value that does not start with --")
             if name in multi:
                 opts[name].append(args.pop(0))
             else:
@@ -110,6 +113,10 @@ def _parse(argv, *, values=(), flags=(), multi=()):
 
 def _resume():
     return load_lib_module("programme_resume")
+
+
+def _worktree():
+    return load_lib_module("programme_worktree")
 
 
 def _run_from_leases(sid):
@@ -183,10 +190,12 @@ def _protocol(journals) -> dict:
     return programme_protocol.load(prompt_lookup=lambda run_id, prompt_id: prompt_lookup(run_id, prompt_id, journals))
 
 
-def rules_in_force(record, journals=None, protocol=None, changes=True) -> dict:
+def rules_in_force(record, journals=None, protocol=None, changes=True, *, behaviours=True) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     journals = {} if journals is None else journals
-    protocol = _protocol(journals) if protocol is None else protocol
+    def lookup(run_id, prompt_id):
+        return prompt_lookup(run_id, prompt_id, journals)
+    protocol = programme_protocol.load(prompt_lookup=lookup) if protocol is None else protocol
     rules = [{"id": rid, "layer": rule["layer"],
               "requires": list(rule["requires"]), "caveat": rule["caveat"],
               "adopted_on": rule["adopted_on"]}
@@ -214,6 +223,8 @@ def rules_in_force(record, journals=None, protocol=None, changes=True) -> dict:
     report = changes and programme_protocol_changes.report(sys.modules[__name__], programme, journals, protocol)
     if report:
         out["protocol_changes"] = report
+    if behaviours:
+        out.update(programme_view.behaviours_view(record, lookup))
     if contract:
         out["operating_contract"] = contract
     return out
@@ -234,9 +245,9 @@ def render_rules(record, revision=None) -> str:
     )
 
 
-def render_restore(run_id) -> str:
+def render_restore(run_id, session_id=None, cwd=None) -> str:
     record, revision = _resume().head(run_id)
-    return render_rules(record, revision)
+    return render_rules(record, revision) + _worktree().restore_line(record, session_id, cwd)
 
 
 def _guard(home, record, *, compact_exempt=False):
@@ -246,7 +257,7 @@ def _guard(home, record, *, compact_exempt=False):
     if (record.get("programme") or {}).get("ended"):
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
-        sys.stdout.write(render_rules(record))
+        sys.stdout.write(render_rules(record) + _worktree().restore_line(record, sid))
         raise ProgrammeError(
             "context was compacted or handed over: read the rules in force and the restored "
             "context above, then run `programme.py rules --ack`"
@@ -254,27 +265,13 @@ def _guard(home, record, *, compact_exempt=False):
     return sid
 
 
-def _typed_prompt(run_id, record, prompt_id) -> dict:
-    if not prompt_id:
-        raise ProgrammeError("this approval needs --prompt <id> of a typed prompt")
-    row = programme_journal.find_prompt(run_id, prompt_id)
-    if row is None:
-        raise ProgrammeError(f"no prompt {prompt_id!r} in this programme's journal")
-    payload = row.get("payload") or {}
-    if row.get("provenance") in programme_authority.UNVERIFIED:
-        raise ProgrammeError(f"prompt {prompt_id!r} was imported from a legacy journal or appended by an "
-                             "obsolete writer; its typed label is unverified, so it approves nothing new")
-    origin = programme_journal.prompt_origin(row)
-    if origin != "typed":
-        raise ProgrammeError(f"prompt {prompt_id!r} is not typed (origin {origin!r}; human source unverified)")
-    if row.get("session_id") != record.get("driving_session_id"):
-        raise ProgrammeError(f"prompt {prompt_id!r} was not typed in the driving session")
-    return {"prompt_id": prompt_id, "quote": payload.get("text") or "",
-            "text_hash": text_hash(payload.get("text")), "at": row.get("at"), "origin_verified": True}
+def _typed_prompt(run_id, record, prompt_id, verb=None) -> dict:
+    return programme_approval.prompt(run_id, record, prompt_id, _OPERATION["verb"] or verb,
+                                     ProgrammeError, text_hash, _OPERATION["argv"])
 
 
 def require_named(prompt, *needs) -> None:
-    missing = programme_naming.missing(programme_journal.redact(prompt["quote"]), needs) if prompt else []
+    missing = programme_naming.missing(programme_journal.named_text(prompt), needs) if prompt else []
     if missing:
         raise ProgrammeError(
             f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
@@ -283,7 +280,7 @@ def require_named(prompt, *needs) -> None:
 
 
 def require_sources_named(prompt, before, after) -> None:
-    quote = programme_journal.redact(prompt["quote"]) if prompt else ""
+    quote = programme_journal.named_text(prompt) if prompt else ""
     missing = programme_naming.missing_sources(quote, before, after) if prompt else []
     if missing:
         raise ProgrammeError(
@@ -296,7 +293,7 @@ def _widen_word(opts) -> tuple:
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True):
+           journal=True, after=None, verb=None, target=None, beat=True, names_change=True):
     run_id, home, _ = _locate(opts)
     seen = {}
 
@@ -304,9 +301,11 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt)
         if beat:
             rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
-        prompt = _typed_prompt(run_id, rec, prompt_id) if (needs_prompt or prompt_id) else None
+        prompt = _typed_prompt(run_id, rec, prompt_id, verb) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
+        if names_change:
+            programme_asks.refresh_replies(rec["programme"])
         seen["prompt"] = prompt
         seen["record"] = rec
 
@@ -324,7 +323,8 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
 
     try:
         out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"])
-    except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError) as exc:
+    except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
+            programme_behaviours.BehaviourError) as exc:
         if (needs_prompt or prompt_id) and "sid" in seen:
             _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
         raise
@@ -439,7 +439,7 @@ def _h_rules(argv):
     _, opts = _parse(argv, values=("run", "context"), flags=("ack",))
     if not opts.get("ack"):
         run_id = _locate(opts)[0]
-        sys.stdout.write(render_restore(run_id))
+        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
         return 0
 
     def ack(programme, prompt, rec):
@@ -457,11 +457,11 @@ def _h_rules(argv):
     except _resume().StaleAck as stale:
         run_id, home, _ = _locate(opts)
         _resume().rebind(home, stale.current)
-        sys.stdout.write(render_restore(run_id))
+        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
         raise ProgrammeError(
             f"stale acknowledgement: the decision context changed since it was restored (now "
             f"{stale.current}); read the block above, then run `programme.sh rules --ack` again") from None
-    sys.stdout.write(render_restore(_locate(opts)[0]))
+    sys.stdout.write(render_restore(_locate(opts)[0], driver_session.driving_session_id()))
     return 0
 
 
@@ -534,9 +534,9 @@ def _h_amend_term(argv):
 
 
 def _h_propose_rule(argv):
-    positional, opts = _parse(argv, values=("run",))
+    positional, opts = _parse(argv, values=("run",), multi=("item",))
     if len(positional) != 1:
-        raise ValueError("usage: propose-rule <rule-json>")
+        raise ValueError("usage: propose-rule <rule-json> [--item <id>]...")
     rule = json.loads(positional[0])
     verdict = programme_protocol.validate_proposal(rule)
     if not verdict["ok"]:
@@ -546,8 +546,11 @@ def _h_propose_rule(argv):
         proposals = programme.setdefault("proposed_rules", [])
         if any(isinstance(r, dict) and r.get("id") == rule["id"] for r in proposals):
             raise ProgrammeError(f"rule {rule['id']!r} is already proposed")
-        proposals.append(rule)
-        return {"rule": rule["id"]}
+        items = list(dict.fromkeys(programme_record._resolve(programme, programme_record.check_item_id(i))
+                                   for i in opts["item"]))
+        proposal = dict(rule, items=items) if items else rule
+        proposals.append(proposal)
+        return {"rule": rule["id"], "items": items}
 
     return _write(opts, change, "rule_proposed")
 
@@ -626,7 +629,8 @@ def _h_adopt_rule(argv):
         hits = [r for r in proposals if isinstance(r, dict) and r.get("id") == rule_id]
         if not hits:
             raise ProgrammeError(f"no proposed rule {rule_id!r}")
-        rule = {k: v for k, v in hits[0].items() if k != "adoption"}
+        rule = programme_protocol.proposal_rule(hits[0])
+        rule.pop("adoption", None)
         verdict = programme_protocol.validate_proposal(rule)
         if not verdict["ok"]:
             raise ProgrammeError(f"rule refused: {verdict['reason']} ({verdict['detail']})")
@@ -724,8 +728,8 @@ _VERBS = {
     ),
     "propose-rule": _Verb(
         _h_propose_rule,
-        "<rule-json> [--run <id>]",
-        rejects="a rule that fails the protocol rule format, carries adoption, or is already proposed.",
+        "<rule-json> [--item <id>]... [--run <id>]",
+        rejects="a rule failing the rule format, with adoption or item keys, or already proposed; an unknown --item.",
     ),
     "adopt-rule": _Verb(
         _h_adopt_rule,
@@ -841,6 +845,9 @@ def _h_status(argv):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
+        line = _worktree().status_line(record)
+        if line:
+            sys.stdout.write(line + "\n")
     return 0
 
 
@@ -888,11 +895,15 @@ _VERBS["status"] = _Verb(
     reads=True,
 )
 
+programme_behaviours = load_lib_module("programme_behaviours")
+_VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
+
 _ERRORS = (
     ProgrammeError,
     programme_record.RecordError,
     programme_decisions.DecisionError,
     programme_terms.TermsError,
+    programme_behaviours.BehaviourError,
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,
@@ -922,6 +933,7 @@ def _cli(argv) -> int:
     except ValueError as exc:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2
+    _OPERATION["verb"], _OPERATION["argv"] = (argv[0] if argv else None), argv
     return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
 
 
@@ -933,6 +945,9 @@ programme_rulings = load_lib_module("programme_rulings")
 _VERBS.update(programme_rulings.build_verbs(sys.modules[__name__]))
 programme_protocol_changes = load_lib_module("programme_protocol_changes")
 _VERBS.update(programme_protocol_changes.build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

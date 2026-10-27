@@ -627,6 +627,122 @@ it "a listed session of an open item is refused too"
 OUT="$(file_call "$DEST" sess-listed Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
 case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
 
+# The hook timeout in hooks.json is 10 s; the 9 s cap keeps a hung hook from hanging the suite.
+timed_call() {
+  local res
+  res="$("$PY" - "$HOOKS" "$@" <<'EOF'
+import json, subprocess, sys, time
+hooks, cwd, sid, tool, tool_input = sys.argv[1:6]
+payload = json.dumps({"session_id": sid, "hook_event_name": "PreToolUse", "cwd": cwd,
+                      "tool_name": tool, "tool_input": json.loads(tool_input)})
+start = time.time()
+try:
+    p = subprocess.run(["bash", hooks + "/on-pretooluse-action.sh"], input=payload, cwd=cwd,
+                       capture_output=True, text=True, timeout=9)
+    rc, out = p.returncode, p.stdout.strip()
+except subprocess.TimeoutExpired:
+    rc, out = "timeout", ""
+print(f"{rc} {time.time() - start:.1f}")
+print(out)
+EOF
+)"
+  RC="$(printf '%s\n' "$res" | head -1 | cut -d' ' -f1)"
+  ELAPSED="$(printf '%s\n' "$res" | head -1 | cut -d' ' -f2)"
+  OUT="$(printf '%s\n' "$res" | tail -n +2)"
+}
+
+start_writer_paused_at() {
+  WRITER_OUT="${WORK}/writer-$1.out"
+  : > "$WRITER_OUT"
+  env CLAUDE_AUTO_TEST_HARNESS=1 "CLAUDE_AUTO_TEST_STORE_PAUSE_$1=1" "$PY" - "$AUTO_ROOT" "$RUN5" > "$WRITER_OUT" 2>&1 <<'EOF' &
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+ph = load_lib_module("programme_home")
+core = load_lib_module("run_record_core")
+core._with_locked_run_record(ph.home_path(sys.argv[2]), sys.argv[2], lambda rec: rec.setdefault("hold_probe", 1))
+EOF
+  WRITER_PID=$!
+  for _ in $(seq 1 100); do grep -q '^paused:' "$WRITER_OUT" && return 0; "$PY" -c 'import time; time.sleep(0.1)'; done
+  return 1
+}
+
+[ -f "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN5}/programme.db" ] || echo "      fixture: ${RUN5} is not store-backed"
+for point in BEFORE_COMMIT AFTER_COMMIT; do
+  it "while a writer holds the programme store ($point), an owner's settings write is still denied within 3 s"
+  start_writer_paused_at "$point" || fail "the writer never paused: $(head -c 200 "$WRITER_OUT")"
+  timed_call "$DEST" sess-own Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+  kill "$WRITER_PID" 2>/dev/null; wait "$WRITER_PID" 2>/dev/null
+  case "$OUT" in
+    *'"deny"'*) "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 and sys.argv[2] == "0" else 1)' "$ELAPSED" "$RC" \
+                  && pass || fail "rc $RC, denied after ${ELAPSED}s" ;;
+    *) fail "rc $RC, no deny after ${ELAPSED}s (writer: $(head -c 200 "$WRITER_OUT")): $OUT" ;;
+  esac
+done
+
+start_store_lock() {
+  LOCKER_OUT="${WORK}/locker.out"
+  : > "$LOCKER_OUT"
+  "$PY" - "${CLAUDE_AUTO_DATA_DIR}/programmes/${1:-$RUN5}/programme.db" > "$LOCKER_OUT" 2>&1 <<'EOF' &
+import sqlite3, sys, time
+conn = sqlite3.connect(sys.argv[1], isolation_level=None)
+conn.execute("BEGIN EXCLUSIVE")
+print("locked", flush=True)
+time.sleep(60)
+EOF
+  LOCKER_PID=$!
+  for _ in $(seq 1 100); do grep -q '^locked' "$LOCKER_OUT" && return 0; "$PY" -c 'import time; time.sleep(0.1)'; done
+  return 1
+}
+
+it "while the programme store cannot be read, the driver's, an owner's and any space session's settings writes (through a symlinked .claude too) and a send to the driver's pane are denied within 3 s"
+start_store_lock || fail "the store was never locked: $(head -c 200 "$LOCKER_OUT")"
+timed_call "$DEST" sess-own Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+OWN="$OUT|$RC|$ELAPSED"
+timed_call "$DEST" sess-pm5 Bash "{\"command\": \"echo '{}' > .claude/settings.local.json\"}"
+PM="$OUT|$RC|$ELAPSED"
+timed_call "$DEST" sess-idle Write "{\"file_path\": \"${OTHER}/.claude/settings.local.json\", \"content\": \"{}\"}"
+IDLE="$OUT|$RC|$ELAPSED"
+mkdir -p "${WORK}/realclaude" "${WORK}/linkrepo"
+ln -sfn "${WORK}/realclaude" "${WORK}/linkrepo/.claude"
+timed_call "$DEST" sess-own Write "{\"file_path\": \"${WORK}/linkrepo/.claude/settings.local.json\", \"content\": \"{}\"}"
+LINKED="$OUT|$RC|$ELAPSED"
+timed_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+PLAIN="$OUT"
+timed_call "$NOREPO" sess-own Bash "{\"command\": \"herdr agent prompt w5:p1 go\"}"
+SEND="$OUT|$RC|$ELAPSED"
+kill "$LOCKER_PID" 2>/dev/null; wait "$LOCKER_PID" 2>/dev/null
+"$PY" - "$OWN" "$PM" "$IDLE" "$SEND" "$LINKED" "$PLAIN" <<'EOF' && pass || fail "own [$OWN] pm [$PM] idle [$IDLE] send [$SEND] linked [$LINKED] settings.json [$PLAIN]"
+import sys
+def ok_(a):
+    out, rc, elapsed = a.rsplit("|", 2)
+    return '"deny"' in out and rc == "0" and float(elapsed) < 3
+sys.exit(0 if all(ok_(a) for a in sys.argv[1:6]) and sys.argv[6] == "" else 1)
+EOF
+
+it "a programme over many spaces with its store held still denies the driver's settings write within 3 s"
+RUN6="$(run_py <<'EOF'
+print(ph.create_programme([f"w{n}" for n in range(60, 76)], "sess-pm6")["run"])
+EOF
+)"
+start_store_lock "$RUN6" || fail "the store was never locked: $(head -c 200 "$LOCKER_OUT")"
+timed_call "$NOREPO" sess-pm6 Bash "{\"command\": \"echo '{}' > ${DEST}/.claude/settings.local.json\"}"
+kill "$LOCKER_PID" 2>/dev/null; wait "$LOCKER_PID" 2>/dev/null
+case "$OUT" in
+  *'"deny"'*) "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 and sys.argv[2] == "0" else 1)' "$ELAPSED" "$RC" \
+                && pass || fail "rc $RC, denied after ${ELAPSED}s" ;;
+  *) fail "rc $RC, no deny after ${ELAPSED}s: $OUT" ;;
+esac
+run_py "$RUN6" <<'EOF' >/dev/null
+ph.end_programme(args[0], "test")
+EOF
+
+it "when the programme home cannot be read at all, the driver's settings write is denied"
+chmod 000 "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN5}"
+timed_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+chmod 700 "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN5}"
+case "$OUT" in *'"deny"'*) pass ;; *) fail "rc $RC after ${ELAPSED}s, not denied: $OUT" ;; esac
+
 it "the same calls from a session with no item and no driving role, or owning only a done item, are not refused"
 OUT=""
 for call in "${GUARDED_CALLS[@]}"; do OUT="${OUT}$(file_call "$DEST" sess-idle "${call%%|*}" "${call#*|}")"; done

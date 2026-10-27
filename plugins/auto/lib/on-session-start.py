@@ -93,7 +93,7 @@ def programme_context(stdin_raw) -> list:
     sid = pre_compact.main_thread_session(data)
     if not sid:
         return []
-    blocks = [_restore(hold, sid, data.get("source")) for hold in pre_compact.driven_programmes(sid)]
+    blocks = [_restore(hold, sid, data.get("source"), data.get("cwd")) for hold in pre_compact.driven_programmes(sid)]
     resume = load_lib_module("programme_resume")
     # Read-only: an ended or unleased programme is surfaced, never acted for.
     for reader in (resume.closing_lines, resume.unleased_lines):
@@ -104,7 +104,7 @@ def programme_context(stdin_raw) -> list:
     return blocks
 
 
-def _restore(hold, sid, source) -> str:
+def _restore(hold, sid, source, cwd) -> str:
     if hold.get("hold"):
         return _held_block(hold["run"], hold["hold"])
     # Journaled before rendering: the row moves the store revision, and the block must name the latest one.
@@ -113,7 +113,7 @@ def _restore(hold, sid, source) -> str:
     except Exception:
         pass  # rel-001: a lost row only ages "last re-read"; the restore still runs.
     try:
-        return load_lib_module("programme").render_restore(hold["run"])
+        return load_lib_module("programme").render_restore(hold["run"], sid, cwd)
     except Exception as exc:
         outcome = getattr(exc, "outcome", None)
         return _held_block(hold["run"], {"outcome": outcome or "unreadable", "detail": str(exc)})

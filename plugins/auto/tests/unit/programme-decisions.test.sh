@@ -210,9 +210,9 @@ has '"ask_kind": "product_scope"' "$OUT"
 it "status --json shows the ask id on the handed item and on its row for Shawn"
 ASK="$(field 'prog["items"]["linear:AI-4"]["handed"]["id"]')"
 check "${ASK} ${ASK}" "$("$PY" -c 'import json,sys; m=json.load(sys.stdin)["model"]; i=[x for x in m["items"] if x["id"]=="linear:AI-4"][0]; d=[x for x in m["decisions_for_shawn"] if x.get("item")=="linear:AI-4"][0]; print(json.dumps(i.get("ask_id")), json.dumps(d.get("ask_id")))' <<< "$OUT")"
-it "the text status names the ask id beside the question"
+it "the text status names the item by name and id, with the ask id beside the question"
 prog status
-has "linear:AI-4 (ask $(printf '%s' "$ASK" | tr -d '"')): Ship it?" "$OUT"
+has "Ask me (linear:AI-4) (ask $(printf '%s' "$ASK" | tr -d '"')): Ship it?" "$OUT"
 
 it "answer-handed writes a Shawn decision linked to the ask id"
 P_SHIP="$(prompt typed 'ship AI-4')"

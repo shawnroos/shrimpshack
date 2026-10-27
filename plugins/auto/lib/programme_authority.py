@@ -215,8 +215,8 @@ def sealed_info(run_id):
         return store.sealed
 
 
-def _locked(home, run_id, body):
-    return run_record_core._flock_run(run_record_core.lock_path(home, run_id), body)
+def _locked(home, run_id, body, timeout=None):
+    return run_record_core._flock_run(run_record_core.lock_path(home, run_id), body, timeout)
 
 
 def _journal_locked(home, body):
@@ -303,7 +303,7 @@ def mutate(home, run_id, change):
     return write(home, run_id, change)["result"]
 
 
-def append_row(run_id, row, *, channel="journal", provenance="derived", guard=None):
+def append_row(run_id, row, *, channel="journal", provenance="derived", guard=None, lock_timeout=None):
     home = programme_home.home_path(run_id)
 
     def body(absorbed):
@@ -322,7 +322,7 @@ def append_row(run_id, row, *, channel="journal", provenance="derived", guard=No
             export(home, run_id)
         return built
 
-    return _locked(home, run_id, lambda: _export_absorbed(home, run_id, body))
+    return _locked(home, run_id, lambda: _export_absorbed(home, run_id, body), lock_timeout)
 
 
 def create(home, run_id, record) -> dict:

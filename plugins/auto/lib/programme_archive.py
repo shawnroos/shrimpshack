@@ -2,8 +2,8 @@
 """End, checked archive and successor for a programme.
 
 End commits the stop fence together with the resources the programme still owes
-(leases, watchers, workers). Release receipts, item dispositions and a human's
-acceptance of an uncertain action are recorded after it. Archiving checks a capture
+(leases, watchers, workers, the programme worktree). Release receipts, item
+dispositions and a human's acceptance of an uncertain action are recorded after it. Archiving checks a capture
 revision C, publishes a candidate manifest, then seals in one store commit based on
 C while every home writer is held out. A sealed home is read-only; more work goes to
 a successor programme that links the archive and waits for its own acceptance.
@@ -61,6 +61,10 @@ def _artifacts():
     return load_lib_module("programme_artifacts")
 
 
+def _worktree():
+    return load_lib_module("programme_worktree")
+
+
 def _now() -> str:
     return run_record_core.now_iso()
 
@@ -98,6 +102,9 @@ def _owed(record, leases, ended_by) -> dict:
         if sid and sid not in closers and f"worker:{sid}" not in owed:
             owed[f"worker:{sid}"] = _resource("worker", session_id=sid, item=key,
                                              pane=(item.get("owner") or {}).get("pane"))
+    worktree = _worktree().recorded(record)
+    if worktree:
+        owed["worktree"] = _resource("worktree", path=worktree["path"], repo=worktree.get("repo"))
     return owed
 
 
@@ -164,7 +171,7 @@ def _pid_observation(pid):
                            "and auto never stops it")
 
 
-def _observe(run_id, resources, reports, rows, sid) -> bool:
+def _observe(run_id, resources, reports, rows, sid, worktree=None) -> bool:
     changed = False
     for rid, res in sorted(resources.items()):
         if res.get("state") == "released":
@@ -190,6 +197,10 @@ def _observe(run_id, resources, reports, rows, sid) -> bool:
             else:
                 outcome, detail = "confirmed", "herdr no longer lists this worker session"
             changed |= _receipt(res, "worker", outcome, "herdr_agent_list", detail, sid)
+        elif kind == "worktree" and worktree:
+            outcome = {"gone": "confirmed", "removed": "confirmed", "refused": "pending"}.get(
+                worktree["status"], "unconfirmed")
+            changed |= _receipt(res, "worktree", outcome, "git_worktree_list", worktree["detail"], sid)
     return changed
 
 
@@ -198,7 +209,7 @@ def _row_session(row) -> str | None:
     return session.get("value") if isinstance(session, dict) else None
 
 
-def _reconcile(run_id, sid, reports, rows, *, leases_only=False) -> dict:
+def _reconcile(run_id, sid, reports, rows, *, leases_only=False, worktree=None) -> dict:
     home = programme_home.home_path(run_id)
     seen = {}
 
@@ -216,7 +227,7 @@ def _reconcile(run_id, sid, reports, rows, *, leases_only=False) -> dict:
         if unknown:
             raise ArchiveError(f"no owed watcher {unknown[0]!r}", "unknown_resource")
         observed = {k: v for k, v in resources.items() if v.get("kind") == "lease"} if leases_only else resources
-        if not _observe(run_id, observed, reports, rows, sid):
+        if not _observe(run_id, observed, reports, rows, sid, worktree):
             raise _Unchanged()
         seen["summary"] = _summary(resources)
 
@@ -579,6 +590,21 @@ def _h_dispose_action(host, argv):
     return _write(host, opts, change, "uncertainty_accepted", need_ended=False, prompt_id=opts["prompt"])
 
 
+def _release_worktree(record):
+    """Git runs here, before the leases lock; _observe records the outcome under it."""
+    programme = record.get("programme") or {}
+    closure = programme.get(CLOSURE)
+    if isinstance(closure, dict):
+        owed = (closure.get("resources") or {}).get("worktree")
+        if not owed or owed.get("state") == "released":
+            return None
+        if owed.get("disposition"):
+            return _worktree().observe(owed)
+        return _worktree().release(owed)
+    owed = _worktree().recorded(programme)
+    return _worktree().release(owed) if owed else None
+
+
 def _h_release(host, argv):
     _, opts = host._parse(argv, values=("run", "watcher", "why"), flags=("stopped", "denied"))
     reports = {}
@@ -593,10 +619,11 @@ def _h_release(host, argv):
     owes_workers = any(r.get("kind") == "worker" and r.get("state") != "released"
                        for r in ((record.get("programme") or {}).get(CLOSURE) or {}).get("resources", {}).values())
     rows = load_lib_module("programme_sources").agent_rows() if owes_workers else []
+    worktree = _release_worktree(record)
 
     def body():
         programme_home._release_leases(run_id)
-        return _reconcile(run_id, sid, reports, rows)
+        return _reconcile(run_id, sid, reports, rows, worktree=worktree)
 
     summary = programme_home._with_leases_lock(body)
     host.refresh_view(run_id, programme_home.home_path(run_id))
@@ -683,7 +710,10 @@ _SPECS = (
      "a programme that has not ended or is archived; a caller other than the driving session or the "
      "session that ended it. Removes leftover lease files, probes watcher process ids and worker "
      "sessions without stopping anything, and records a receipt for each; a live or unreadable one "
-     "stays unconfirmed. Exempt from the compact flag."),
+     "stays unconfirmed. Removes the programme worktree with a plain git worktree remove (never -f) "
+     "only when it is clean, holds no commit that no branch or remote reaches, and this command's cwd "
+     "is outside it; otherwise it stays pending with the reason and the fix. Exempt from the compact "
+     "flag."),
     ("dispose-item", _h_dispose_item, "<id> --as stopped_unfinished|handed_over --why <text> --run <id>",
      "a programme that has not ended or is archived; an item that is done or dropped. Records how "
      "unfinished work stopped; it confirms no requirement."),

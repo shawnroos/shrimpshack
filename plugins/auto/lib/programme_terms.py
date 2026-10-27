@@ -212,7 +212,7 @@ def _h_edit(host, argv):
                 "source": entry.get("source"), "accepted": accepted, **extra}
 
     return host._write(opts, change, lambda payload: AMENDED if payload["accepted"] else EDITED,
-                       prompt_id=opts.get("prompt"))
+                       prompt_id=opts.get("prompt"), verb="edit-project-term")
 
 
 _SPECS = (

@@ -288,6 +288,10 @@ def _h_accept_context(host, argv):
         revision = pc.pending(ctx[kind].get(cid)) if kind else None
         if revision is None:
             raise record.RecordError(f"no pending revision of {cid!r} to accept")
+        # accept-context is a pick verb for requirements, but a Ruling binds only on words Shawn typed (R5).
+        if kind == "decisions" and prompt.get("origin") != "typed":
+            raise RulingError(f"accepting Ruling {cid!r} needs a typed prompt; prompt {prompt['prompt_id']!r} is "
+                              f"{'a pick' if prompt.get('origin') == 'picked' else 'an accepted suggestion'}")
         if revision.get("carried") and not revision.get("applies_to"):
             raise RulingError(f"bind carried Ruling {cid} with record-ruling naming its items")
         new = kind == "decisions" and pc.in_force(ctx[kind][cid]) is None
@@ -319,10 +323,10 @@ _SPECS = (
      "no Ruling in force or pending; --as fulfilled without --why; --as withdrawn, or closing a restrict or a decided "
      "Ruling, without a typed prompt naming the id. Closing as fulfilled never counts as a beat."),
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
-     "no pending revision; a prompt that is not typed, came from a legacy journal or an obsolete writer, or "
-     "does not name the id and every target the revision adds (for a Ruling, every item it gives the PM, and "
-     "for a new grant or decided Ruling its kind); a carried Ruling that has no items yet. "
-     "A grant that becomes active records the Authority level for its kind as its baseline."),
+     "no pending revision; a pick or accepted suggestion for a Ruling (a requirement takes one); a prompt "
+     "that is not typed, came from a legacy journal or an obsolete writer, or does not name the id and every "
+     "target the revision adds (for a Ruling, every item it gives the PM, and for a new grant or decided "
+     "Ruling its kind); a carried Ruling that has no items yet. A grant that becomes active records the Authority level for its kind as its baseline."),
 )
 
 

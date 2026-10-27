@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import collections
 import datetime
 import json
 import os
@@ -15,7 +16,11 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 programme_permission_rules = load_lib_module("programme_permission_rules")
+programme_behaviours = load_lib_module("programme_behaviours")
+programme_carryover = load_lib_module("programme_carryover")
+programme_journal = load_lib_module("programme_journal")
 programme_decisions = load_lib_module("programme_decisions")
+programme_asks = load_lib_module("programme_asks")
 programme_predicate = load_lib_module("programme_predicate")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
@@ -275,7 +280,8 @@ def _context_decisions(acceptance) -> list:
 
 def _decisions(block, items) -> list:
     out = [{"kind": "handed", "item": i["id"], "question": i["question"], "ask_kind": i["ask_kind"],
-            "ask_id": i["ask_id"]}
+            "ask_id": i["ask_id"], "name": programme_asks.item_name(i["id"], block["items"][i["id"]]),
+            "details": programme_asks.detail_lines(block["items"], i["id"])}
            for i in items if i["effective_state"] == "handed" and i["needs_shawn"]]
     out += [{"kind": "stopped_unwatched", "item": i["id"],
              "question": "the PM stopped while this wait had no watcher"}
@@ -352,6 +358,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
              for w in status["waits"]]
     working = _dict(block.get("working_model"))
     offset = block.get("inbox_offset") or 0
+    # The predicate keeps one reason per item; the model counts each kind once.
+    reason_counts = dict(collections.Counter(r.get("kind") for r in status["reasons"]))
     model = {
         "programme": {
             "run": record.get("run_id"),
@@ -359,7 +367,12 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
             "done": status["done"],
             "may_stop": status["may_stop"],
             "stop_rule": status["stop_rule"],
-            "reasons": [r.get("kind") for r in status["reasons"]],
+            "reasons": list(reason_counts),
+            "reason_counts": reason_counts,
+            "actionable_reasons": [
+                {"kind": r.get("kind"), "target": r.get("item") or r.get("system") or r.get("count"),
+                 "name": r.get("name")}
+                for r in status.get("actionable_reasons") or [] if isinstance(r, dict)],
             "counts": status["items"],
             "unread_claims": max(inbox_size - offset, 0) if isinstance(inbox_size, int) else None,
         },
@@ -376,11 +389,13 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "items": items,
     }
     model["agreement"] = programme_view_agreement.build(block, journal_entries, model["rules_in_force"], protocol, now)
+    model["agreement"]["behaviours"] = model["rules_in_force"].get("behaviours") or []
     model = _clean(model)
     parts = _clean(programme_view_work.build(record, block, journal_entries, now,
-                                             model["rules_in_force"].get("rulings")))
+                                             model["rules_in_force"].get("rulings"),
+                                             model["rules_in_force"].get("behaviours")))
     view = {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
-            "model": model, **parts}
+            "model": model, **parts, "asks": programme_asks.view_asks(block["items"])}
     setup = programme_view_setup.build(block, protocol)
     if setup is not None:
         view["setup"] = _clean(setup)
@@ -440,7 +455,8 @@ def _yes(flag) -> str:
 def _header(p) -> dict:
     stop = f"may stop: {_yes(p['may_stop'])}"
     if p["reasons"]:
-        stop += f" ({', '.join(p['reasons'])})"
+        counts = p.get("reason_counts") or {}
+        stop += " (" + ", ".join(k if counts.get(k, 1) == 1 else f"{k} ×{counts[k]}" for k in p["reasons"]) + ")"
     text = f"Programme {p['run']} · done: {_yes(p['done'])} · {stop}"
     if p["ended"]:
         text += f" · ended: {_dict(p['ended']).get('reason')}"
@@ -467,6 +483,78 @@ def _ruling_text(entry) -> str:
     return f"ruling {entry.get('id')}: {programme_view_agreement.ruling_label(shown)} ({scope})"
 
 
+def _behaviour_row(entry, forced, overriders, deliveries) -> dict:
+    source = _dict(entry.get("source"))
+    checks = entry["when"].get("checks") or []
+    row = {"id": entry["id"], "layer": entry["layer"], "repo_key": entry.get("repo_key"),
+           "state": entry.get("state", programme_behaviours.ACTIVE), "applies_to": entry["applies_to"],
+           "when": entry["when"]["text"], "do": list(entry.get("do") or []), "dont": list(entry.get("dont") or []),
+           "pm_checks": [c["text"] for c in checks if c["by"] == "pm"],
+           "agent_checks": [c["text"] for c in checks if c["by"] == "agent"],
+           "evidence": entry.get("evidence"), "stop": entry.get("stop"),
+           "deliveries": deliveries.get(entry["id"], []),
+           "prompt_id": source.get("prompt_id"),
+           "quote": programme_journal.redact(source["quote"]) if source.get("quote") else None,
+           "in_force": (entry["layer"], entry.get("repo_key"), entry["id"]) in forced}
+    if row["state"] == programme_behaviours.ACTIVE and not row["in_force"]:
+        row["overridden_by"] = sorted(overriders.get(entry["id"], ()))
+    return row
+
+
+def behaviours_view(record, lookup) -> dict:
+    programme = programme_home.normalize_programme(_dict(record.get("programme")))
+    loaded = programme_behaviours.load_store(lookup)
+    remit = [r for r in _dict(programme.get("remit")).get("repos") or [] if isinstance(r, dict) and r.get("path")]
+    keys = programme_carryover.repo_keys(programme)
+    base = programme_behaviours.resolve(record, None, store=loaded)
+    forced = [e for repo in remit or [None]
+              for e in programme_behaviours.resolve(record, None, repo, store=loaded)["in_force"]]
+    rejected = [r for r in base["rejected"] if r.get("layer") != "repo" or r.get("key") in keys]
+    entries = programme_behaviours.shown_programme_entries(programme, loaded)
+    entries += [e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
+    overriders = {}
+    for e in forced:
+        for name in e.get("overrides") or ():
+            overriders.setdefault(name, set()).add(e["id"])
+    seen = {(e["layer"], e.get("repo_key"), e["id"]) for e in forced}
+    deliveries = {}
+    for key, item in sorted(_dict(programme.get("items")).items()):
+        reasons = {}
+        for d in _dict(item).get("behaviour_deliveries") or []:
+            if isinstance(d, dict) and d.get("id"):
+                reasons.setdefault(d["id"], []).append(d.get("reason"))
+        for bid, rs in reasons.items():
+            deliveries.setdefault(bid, []).append({"item": key, "reasons": rs})
+    out = {"behaviours": [_behaviour_row(e, seen, overriders, deliveries) for e in entries]}
+    if rejected:
+        out["rejected_behaviours"] = [{k: r.get(k) for k in ("id", "layer", "key", "reason")} for r in rejected]
+    if base["notices"]:
+        out["behaviour_notices"] = base["notices"]
+    return out
+
+
+def _behaviour_text(b) -> str:
+    layer = f"repo {b.get('repo_key')}" if b.get("layer") == "repo" else b.get("layer")
+    status = [layer, b.get("state")]
+    if b.get("overridden_by"):
+        status.append(f"overridden by {', '.join(b['overridden_by'])}")
+    status.append(f"applies to {b.get('applies_to')}")
+    parts = [f"when {b.get('when')}"] + [f"{label}: {' / '.join(b[key])}" for key, label in
+                                         (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"),
+                                          ("agent_checks", "agent checks")) if b.get(key)]
+    parts += [f"{key}: {b[key]}" for key in ("evidence", "stop") if b.get(key)]
+    parts.append(f"source: Shawn: \"{b['quote']}\"" if b.get("quote") else "source: none recorded")
+    return f"behaviour {b.get('id')} ({', '.join(status)}): " + "; ".join(parts)
+
+
+def behaviour_texts(r) -> list:
+    out = [(_behaviour_text(_dict(b)), "text") for b in r.get("behaviours") or []]
+    rejected = [str(_dict(b).get("id")) for b in r.get("rejected_behaviours") or []]
+    if rejected:
+        out.append((f"rejected behaviours: {len(rejected)} ({', '.join(rejected)})", "warn"))
+    return out + [(f"behaviours store: {n}", "warn") for n in r.get("behaviour_notices") or []]
+
+
 def _rule_text(rule) -> str:
     text = (f"rule {rule.get('id')}: requires "
             f"{', '.join(rule.get('requires') or []) or 'nothing'}{_adopted_on(rule)}")
@@ -485,6 +573,7 @@ def rule_texts(r) -> list:
     out = [("agreement: " + (f"accepted {accepted.get('at')}" if accepted else "not accepted"), "text")]
     out += [(_term_text(key, _dict(term)), "text") for key, term in sorted(_dict(agreement.get("terms")).items())]
     out += [(_ruling_text(_dict(e)), "text") for e in r.get("rulings") or []]
+    out += behaviour_texts(r)
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
     out += [(f"authority {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
             for e in r.get("autonomy") or []]
@@ -578,6 +667,12 @@ def _acceptance_lines(acceptance) -> list:
     return out
 
 
+def _decision_lines(d) -> list:
+    head = _row(f"  {d.get('name') or d.get('item') or d['kind']}"
+                + (f" (ask {d['ask_id']})" if d.get("ask_id") else "") + f": {d['question']}", "warn")
+    return [head] + [_row(f"    {text}") for text in d.get("details") or []]
+
+
 def rows(model, work=None) -> list:
     out = [_header(model["programme"])]
     _section(out, "Remit", [_row(f"  {text}") for text in remit_texts(model.get("remit"))], "none")
@@ -593,10 +688,8 @@ def rows(model, work=None) -> list:
                                              f"({'watched' if w['watched'] else 'unwatched'})",
                                              "text" if w["watched"] else "warn")
                                         for w in model["waiting_on_whom"]], "nobody")
-    _section(out, "Decisions for Shawn", [_row(f"  {d.get('item') or d['kind']}"
-                                               + (f" (ask {d['ask_id']})" if d.get("ask_id") else "")
-                                               + f": {d['question']}", "warn")
-                                          for d in model["decisions_for_shawn"]], "none")
+    _section(out, "Decisions for Shawn", [line for d in model["decisions_for_shawn"] for line in _decision_lines(d)],
+             "none")
     _section(out, "Just did", [_row(f"  {j['at']} {j['kind']}"
                                     + (f" {j['item']}" if j.get("item") else "")
                                     + (f": {j['summary']}" if j.get("summary") else "")
@@ -620,7 +713,11 @@ def render_text(view) -> str:
 
 
 def agreement_rows(model) -> list:
-    return programme_view_agreement.rows(model["agreement"], remit_texts(model.get("remit")))
+    out = programme_view_agreement.rows(model["agreement"], remit_texts(model.get("remit")))
+    if model["agreement"].get("behaviours"):
+        _section(out, "Behaviours", [_row(f"  {_behaviour_text(_dict(b))}") for b in model["agreement"]["behaviours"]],
+                 "none")
+    return out
 
 
 def render_agreement(view) -> str:

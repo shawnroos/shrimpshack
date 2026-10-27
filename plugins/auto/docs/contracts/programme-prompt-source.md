@@ -22,7 +22,8 @@ An older human row cannot authorize a later event that reuses its prompt ID, eve
 
 The source reader supports the transcript shapes observed in Claude Code 2.1.302:
 
-- Plain input requires `promptSource: typed`, `turnOrigin: human`, and `origin.kind: human`.
+- Plain input requires `promptSource` of `typed` or `suggestion_accepted`, `turnOrigin: human`, and `origin.kind: human`. Any other `promptSource` stays `unknown`.
+- `suggestion_accepted` is Shawn pressing Enter on Claude Code's suggested prompt. Its text is model-written, so it resolves to `suggested`, not `typed`. A suggested prompt approves exactly what a pick may approve.
 - Slash commands require human origin, human turn origin, CLI entrypoint, and matching command-name and command-args fields.
 - Slash-command source text reconstructs the original slash command and arguments before comparing their hash.
 - Meta messages, sidechains, compaction summaries, SDK input, and tool-result rows do not supply human authority.
@@ -46,6 +47,10 @@ The transcript check is the second line against a pre-filled answer.
 The source reader supports the picker shapes observed in Claude Code 2.1.304.
 A change to the secrets file can change the redacted map and make an older pick unverifiable.
 A verified pick shows that Shawn chose the answer. Each verb that takes a pick checks what the pick may approve and that it is not cited twice.
+
+A verified pick, or a `suggested` prompt, also approves the `--prompt` verbs on the pick list (`PICK_VERBS` in `lib/programme_approval.py`). Every verb on that list checks that the approval names its target. Any other verb, including `accept-agreement`, `edit-project-term`, `record-ruling`, `close-ruling`, `carry-rulings`, `record-behaviour` and `define-requirement`, needs a typed prompt. A Ruling binds only on a typed prompt: `accept-context` takes a pick or a suggestion for a requirement, and refuses one for a Ruling. The list is default-deny: a new verb refuses picks until it is added.
+
+A pick cited this way must hold exactly one question, and its answer must equal the approval label of the command being run: "Approve " followed by the shell-quoted verb and arguments, without `--prompt` and `--run`. `programme.sh approval-label <verb> <args>` prints it. A trailing " (Recommended)" is ignored. `set-remit` takes its change on stdin, which no label can show, so a pick never approves it; a typed prompt or an accepted suggestion does. An option value that starts with `--` is refused, so a label cannot hide `--run` inside another option. Any other answer approves nothing, so a decline cannot be misread as approval whatever its wording. Earlier free-text checks on the answer leaked three review rounds running ("No", "Skip r1", "Keep item-x" approving drop-item). Naming checks still read only the answer. An accepted suggestion containing a negation word (including "never") approves nothing; type it instead. One pick approves one change: a pick that any earlier row cites, under any prompt id journaled for the same picker answer, is refused. The approval records `origin: picked` or `origin: suggested`.
 
 ## Failure behavior
 

@@ -20,6 +20,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
+programme_naming = load_lib_module("programme_naming")
 programme_context = load_lib_module("programme_context")
 
 SOURCE_OUTAGE_PERIODS = 2
@@ -236,9 +237,16 @@ def _stop_decision(rule: str, until, done: bool, floor: list, now):
     return not floor, floor
 
 
+def _name_reasons(floor, items) -> None:
+    for reason in floor:
+        item = items.get(reason.get("item")) if isinstance(reason.get("item"), str) else None
+        if isinstance(item, dict):
+            reason["name"] = programme_naming.item_name(reason["item"], item)
+
+
 def _corrupt(now) -> dict:
     return {"done": False, "may_stop": False, "stop_rule": None, "ended": False,
-            "reasons": [{"kind": "corrupt_record"}], "waits": [], "unwatched_waits": [],
+            "reasons": [{"kind": "corrupt_record"}], "actionable_reasons": [{"kind": "corrupt_record"}], "waits": [], "unwatched_waits": [],
             "new_items": [], "items": {"total": 0, "finished": 0, "open": 0, "waiting": 0},
             "acceptance": None, "inbox_checked": False, "computed_at": _iso(now)}
 
@@ -254,6 +262,7 @@ def _compute(record: dict, now, inbox_size) -> dict:
     inbox_size = _int(inbox_size)
     cadence = programme_home.cadence_seconds(record)
     scan = _scan(block, now, inbox_size, cadence)
+    _name_reasons(scan["floor"], block["items"])
     stop_term = _dict(_dict(_dict(block.get("agreement")).get("terms")).get("stop_rule"))
     rule = stop_term.get("value") or "nothing_it_can_act_on"
     ended = run_record_core._lazy_load("phase-grammar").current_phase(record) == "done"
@@ -272,6 +281,7 @@ def _compute(record: dict, now, inbox_size) -> dict:
         "stop_rule": rule,
         "ended": ended,
         "reasons": reasons,
+        "actionable_reasons": [] if ended else list(scan["floor"]),
         "waits": scan["waits"],
         "unwatched_waits": [r["item"] for r in scan["floor"] if r["kind"] == "unwatched_wait"],
         "new_items": scan["new_items"],

@@ -132,8 +132,20 @@ check "herdr:w2-p3 ci False" "$(view_q '" ".join(str(w[k]) for w in m["waiting_o
 it "watching explains the unwatched wait"
 has "herdr:w2-p3" "$(view_q 'json.dumps(m["watching"])')"
 
+it "the status model lists the unwatched wait as an actionable reason with its target and name"
+check "unwatched_wait|herdr:w2-p3|True" "$(view_q '"|".join([r["kind"] + "|" + str(r["target"]) + "|" + str(bool(r["name"])) for r in m["programme"]["actionable_reasons"] if r["kind"] == "unwatched_wait"])')"
+
 it "decisions for Shawn lists the handed item with its question"
 check "linear:AI-3|Turn the flag on for everyone?" "$(view_q '"|".join([d["item"] + "|" + d["question"] for d in m["decisions_for_shawn"] if d["kind"] == "handed"])')"
+
+it "the top-level asks list carries an ask handed before structured fields, with its live replies"
+check "linear:AI-3|open|Flag rollout (linear:AI-3)|ship Flag rollout|2026-10-03T01:00:00Z|None" \
+  "$(view_q '"|".join(str(a[k]) if not isinstance(a[k], dict) else a[k]["ship"] for a in v["asks"] for k in ("item", "status", "name", "replies", "at", "fingerprint"))')"
+
+it "the Decisions for Shawn row names the item by name and id and gives the reply"
+DECISION_ROWS="$(view_q '"\n".join(r["text"] for r in v["rows"])')"
+has "  Flag rollout (linear:AI-3): Turn the flag on for everyone?" "$DECISION_ROWS"
+has "    reply: \"ship Flag rollout\" or \"decline Flag rollout\"" "$DECISION_ROWS"
 
 it "just did shows the latest journal write first"
 check "working_now" "$(view_q 'm["just_did"][0]["kind"]')"
@@ -883,6 +895,172 @@ it "the header reports the pause as a stop reason"
 has "safety_pause" "$(acc_q 'm["programme"]["reasons"]')"
 it "status text is still the view rows, line for line"
 check "True" "$(acc_q '"\n".join(r["text"] for r in d["rows"]) == sys.argv[3]' "$ACC_TEXT")"
+
+export CLAUDE_AUTO_BEHAVIOURS_STORE="${WORK}/beh/behaviours.json"
+BEH_ALPHA="${WORK}/repos/alpha"
+mkdir -p "$BEH_ALPHA"
+export BEH_ALPHA
+beh_seed() {
+  run_py "$@" <<'EOF'
+sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT_DIR"], "tests", "fixtures"))
+import hashlib
+from programme_prompts import append_prompt as fixture_prompt
+pb = load_lib_module("programme_behaviours")
+run, spec = args[0], args[1]
+def beh(bid, layer="programme", **kw):
+    entry = {"id": bid, "layer": layer, "applies_to": "both", "state": "active",
+             "when": {"text": "a bug is reported", "checks": [{"text": "the item is a bug", "by": "pm"}]},
+             "do": ["reproduce it first"]}
+    if layer == "repo":
+        entry["repo_key"] = "acme/alpha"
+    entry.update(kw)
+    return entry
+def keep(entries):
+    text = "keep these behaviours"
+    row = fixture_prompt(run, "sess-pm", text)
+    prompt = {"prompt_id": row["prompt_id"], "quote": text,
+              "text_hash": "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()}
+    rec = record(run)
+    pb.store([pb.adopt(e, prompt, rec) for e in entries], prompt, run, "sess-pm")
+def seed_programme(entries, instructions=()):
+    def fn(p):
+        p["remit"]["repos"] = [{"path": os.environ["BEH_ALPHA"], "github": "acme/alpha"}]
+        p["behaviours"] = entries
+        p["instructions"] = list(instructions)
+    mutate(run, fn)
+src = {"prompt_id": "p000001", "quote": "always reproduce bugs"}
+if spec == "three":
+    seed_programme([beh("bprog", source=src, dont=["guess the cause"])],
+                   [{"id": "i1", "quote": "keep PRs small", "applies_to": None, "state": "active",
+                     "at": "2026-10-19T08:00:00Z"}])
+    keep([beh("brepo", "repo", applies_to="workers"), beh("bper", "personal", applies_to="pm")])
+elif spec == "states":
+    seed_programme([beh("bprop", state="proposed", source=src), beh("bret", state="retired"),
+                    beh("bwin", overrides=["bloser"]), beh("bmov", moved_to="personal")])
+    keep([beh("bloser", "personal"), beh("bmov", "personal"), beh("bzeta", "repo", repo_key="acme/zeta")])
+elif spec == "split":
+    def two(p):
+        p["remit"]["repos"] = [{"path": os.environ["BEH_ALPHA"], "github": "acme/alpha"},
+                               {"path": os.environ["BEH_ALPHA"] + "-beta", "github": "acme/beta"}]
+        p["behaviours"] = [beh("bsplit", moved_to="repo", moved_repo_key="acme/alpha")]
+    mutate(run, two)
+    keep([beh("bsplit", "repo")])
+EOF
+}
+beh_lines() { printf '%s\n' "$1" | grep -E '^ *behaviour ' | sed 's/^ *//'; }
+
+export AUTO_ROOT_DIR="$AUTO_ROOT"
+rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+BEH_RUN="$(new_run w31)"
+beh_seed "$BEH_RUN" three >/dev/null
+BEH_RULES="$("$PY" "$PROG" rules --run "$BEH_RUN" 2>&1)"
+BEH_STATUS="$("$PY" "$PROG" status --run "$BEH_RUN" 2>&1)"
+BEH_TERMS="$("$PY" "$PROG" status agreement --run "$BEH_RUN" 2>&1)"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUN" --json 2>&1)"
+beh_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.argv[2]))' "$BEH_JSON" "$1" 2>&1; }
+
+BEH_THREE='behaviour bprog (programme, active, applies to both): when a bug is reported; do: reproduce it first; don'"'"'t: guess the cause; PM checks: the item is a bug; source: Shawn: "always reproduce bugs"
+behaviour brepo (repo acme/alpha, active, applies to workers): when a bug is reported; do: reproduce it first; PM checks: the item is a bug; source: none recorded
+behaviour bper (personal, active, applies to pm): when a bug is reported; do: reproduce it first; PM checks: the item is a bug; source: none recorded'
+it "a programme with one behaviour at each layer renders three lines with the right layer names"
+check "$BEH_THREE" "$(beh_lines "$BEH_STATUS")"
+it "the <auto-rules> block contains the behaviour lines"
+check "$BEH_THREE" "$(beh_lines "${BEH_RULES%%</auto-rules>*}")"
+it "the behaviour lines follow the Rulings and come before the rules"
+check "ruling i1|behaviour bprog|behaviour brepo|behaviour bper|rule" \
+  "$(printf '%s\n' "${BEH_RULES%%</auto-rules>*}" | grep -E '^(ruling|behaviour|rule) ' \
+    | awk '{print ($1 == "rule") ? "rule" : $1 " " $2}' | sed 's/:$//' | uniq | head -5 | paste -sd'|' -)"
+it "the agreement page lists the behaviours"
+has "Behaviours" "$BEH_TERMS"
+check "$BEH_THREE" "$(beh_lines "$BEH_TERMS")"
+it "the contract part of the view JSON has a behaviours key with each behaviour's layer, state and source"
+check "bprog:programme:active:always reproduce bugs brepo:repo:active:None bper:personal:active:None" \
+  "$(beh_q '" ".join("%s:%s:%s:%s" % (b["id"], b["layer"], b["state"], b["quote"]) for b in d["contract"]["behaviours"])')"
+it "the rules in force in the view model carry the same behaviours"
+check "True" "$(beh_q 'd["model"]["rules_in_force"]["behaviours"] == d["contract"]["behaviours"]')"
+it "each behaviour in the contract carries its PM checks, agent checks, evidence, stop and deliveries"
+check "bprog:['the item is a bug']:[]:None:None:[]" \
+  "$(beh_q '" ".join("%s:%s:%s:%s:%s:%s" % (b["id"], b["pm_checks"], b["agent_checks"], b["evidence"], b["stop"], b["deliveries"]) for b in d["contract"]["behaviours"] if b["id"] == "bprog")')"
+it "the view format stays the same"
+check "3" "$(beh_q 'd["view_format"]')"
+
+BEH_RUN2="$(new_run w32)"
+rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+beh_seed "$BEH_RUN2" states >/dev/null
+BEH_STATUS2="$("$PY" "$PROG" status --run "$BEH_RUN2" 2>&1)"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUN2" --json 2>&1)"
+it "a proposed behaviour shows as proposed"
+has 'behaviour bprop (programme, proposed, applies to both)' "$BEH_STATUS2"
+it "a retired behaviour shows as retired"
+has 'behaviour bret (programme, retired, applies to both)' "$BEH_STATUS2"
+it "an active behaviour overridden by a narrower one shows which one overrides it"
+has 'behaviour bloser (personal, active, overridden by bwin, applies to both)' "$BEH_STATUS2"
+it "an overridden behaviour is marked not in force; the overriding one is in force"
+check "bwin:True bloser:False" "$(beh_q '" ".join("%s:%s" % (b["id"], b["in_force"]) for b in d["contract"]["behaviours"] if b["id"] in ("bwin", "bloser"))')"
+it "a moved programme copy shows once, at the layer it moved to"
+check "personal" "$(beh_q '" ".join(b["layer"] for b in d["contract"]["behaviours"] if b["id"] == "bmov")')"
+it "a repo behaviour for a repo outside the remit is not shown"
+lacks "bzeta" "$BEH_STATUS2"
+
+it "a stored behaviour whose adoption fails is reported as rejected, not shown in force"
+"$PY" - "$CLAUDE_AUTO_BEHAVIOURS_STORE" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["personal"][0]["do"] = ["edited by hand"]
+json.dump(doc, open(sys.argv[1], "w"))
+EOF
+BEH_STATUS2="$("$PY" "$PROG" status --run "$BEH_RUN2" 2>&1)"
+has "rejected behaviours: 1 (bloser)" "$BEH_STATUS2"
+lacks "behaviour bloser" "$BEH_STATUS2"
+
+it "an unreadable behaviours store still renders the programme layer and names the problem"
+printf 'not json' > "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+BEH_RULES2="$("$PY" "$PROG" rules --run "$BEH_RUN2" 2>&1)"
+check "0" "$?"
+has "behaviour bprop (programme, proposed" "$BEH_RULES2"
+has "behaviours store:" "$BEH_RULES2"
+
+rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+BEH_NONE="$(new_run w33)"
+it "a record with no behaviours renders the same as before this change"
+check "True True True" "$(run_py "$BEH_NONE" <<'EOF'
+pv = load_lib_module("programme_view")
+prog = load_lib_module("programme")
+rec = record(args[0])
+rules = prog.rules_in_force(rec, {})
+old = {k: v for k, v in rules.items() if k not in ("behaviours", "rejected_behaviours", "behaviour_notices")}
+view = pv.build(rec, [], rules=rules)
+before = pv.build(rec, [], rules=old)
+print(pv.rules_texts(rules) == pv.rules_texts(old), pv.render_text(view) == pv.render_text(before),
+      pv.render_agreement(view) == pv.render_agreement(before))
+EOF
+)"
+it "a record with no behaviours has an empty behaviours list in the contract"
+check "[]" "$("$PY" "$PROG" status --run "$BEH_NONE" --json 2>&1 | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["contract"]["behaviours"])')"
+it "a record with no behaviours shows no Behaviours section on the agreement page"
+lacks "Behaviours" "$("$PY" "$PROG" status agreement --run "$BEH_NONE" 2>&1)"
+
+BEH_RUN3="$(new_run w34)"
+rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+beh_seed "$BEH_RUN3" split >/dev/null
+BEH_JSON3="$("$PY" "$PROG" status --run "$BEH_RUN3" --json 2>&1)"
+it "a copy moved to one repo of a two-repo remit still shows at the programme layer for the other repo"
+check "programme repo" "$("$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(" ".join(sorted(b["layer"] for b in d["contract"]["behaviours"] if b["id"] == "bsplit")))' "$BEH_JSON3" 2>&1)"
+unset CLAUDE_AUTO_BEHAVIOURS_STORE
+REP="$(new_run w13)"
+run_py "$REP" <<'EOF' >/dev/null
+def seed(p):
+    p["items"] = {i: ph.new_item(i, "open, ownerless, no rule", now_iso="2026-10-01T00:00:00Z")
+                  for i in ("herdr:a", "herdr:b", "herdr:c")}
+mutate(args[0], seed)
+EOF
+REP_JSON="$("$PY" "$PROG" status --run "$REP" --json 2>&1)"
+rep_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); m=d["model"]; print(eval(sys.argv[2]))' "$REP_JSON" "$1" 2>&1; }
+it "three items with the same may-stop reasons list each reason once, with its count"
+check "no_rule_proposed ownerless_item open_item|[('no_rule_proposed', 3), ('open_item', 3), ('ownerless_item', 3)]" \
+  "$(rep_q '" ".join(m["programme"]["reasons"]) + "|" + str(sorted(m["programme"]["reason_counts"].items()))')"
+it "the title row names each may-stop reason once, with its count"
+has "may stop: no (no_rule_proposed ×3, ownerless_item ×3, open_item ×3)" "$(rep_q 'd["rows"][0]["text"]')"
 
 echo "programme-view.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

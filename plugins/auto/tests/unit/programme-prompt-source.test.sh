@@ -76,6 +76,7 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
         ('wrong turn origin', {'turnOrigin': 'sdk'}),
         ('missing typed source', {'promptSource': None}),
         ('SDK source', {'promptSource': 'sdk'}),
+        ('unlisted source', {'promptSource': 'queued'}),
         ('tool result', {'message': {'role': 'user', 'content': [{'type': 'tool_result', 'content': 'accept agreement'}]}}),
         ('assistant role', {'message': {'role': 'assistant', 'content': 'accept agreement'}}),
         ('malformed message', {'message': []}),
@@ -83,6 +84,9 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
     ]:
         path.write_text(json.dumps(dict(human, **changes)) + '\n')
         check(name + ' refuses', pj.prompt_origin(row), 'unknown')
+
+    path.write_text(json.dumps(dict(human, promptSource='suggestion_accepted')) + '\n')
+    check('accepted suggestion verifies as suggested', pj.prompt_origin(row), 'suggested')
 
     path.write_text('{not-json}\n')
     check('malformed transcript refuses', pj.prompt_origin(row), 'unknown')

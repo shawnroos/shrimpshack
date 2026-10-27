@@ -110,7 +110,8 @@ The verb then refuses, because it finds no request.
 
 ## 4. Retention
 
-Nothing is deleted automatically.
+Nothing is deleted automatically. The one removal is the programme worktree,
+and only when someone runs `release-resources` after end (see below).
 
 - Retained objects, staging, archives, closing entries and old exports stay
   until a person removes them.
@@ -119,6 +120,38 @@ Nothing is deleted automatically.
 - A preservation receipt says what was captured. It is not permission to delete
   the source. Remove a worker's worktree only after
   `preserve-code --source <worktree> --check` says the receipt still covers it.
+
+### The programme worktree
+
+The programme worktree (`pm_worktree`) is the one thing auto removes, and only
+after programme end. End records it as the closure resource `worktree`.
+`release-resources` removes it with a plain `git worktree remove`. It never
+uses `-f`, and it never runs `git worktree prune`.
+
+Removal is refused when any of these is true:
+
+| Condition | Fix named in the receipt |
+| --- | --- |
+| The worktree has modified or untracked files | Commit or clean them |
+| It holds any ignored file or folder other than `.DS_Store` (an ignored folder can hide a nested repo with uncommitted work) | Delete or move them, or record a disposition |
+| A file marked assume-unchanged or skip-worktree is present (git status hides its edits) | Clear the flag, then commit or clean |
+| It has submodules, which `git worktree remove` cannot remove | Delete it by hand, then record `dispose-action --resource worktree` |
+| Its HEAD holds a commit that no branch or remote reaches | Create a branch at its HEAD |
+| The command's own cwd is inside the worktree | `cd` to the main checkout |
+| Another worktree is registered inside it, even a stale entry | Remove it, or clear git's stale entry if its folder is gone |
+
+A refused worktree stays `pending`, and `check-archive` names it under the
+`resources` check. Fix the cause and run `release-resources` again. To keep
+the worktree, record `dispose-action --resource worktree`. After that, release
+only observes the worktree and never removes it.
+
+- A branch made inside the worktree survives removal, because git keeps every
+  branch.
+- A worktree deleted by hand counts as released. Git keeps a stale entry for it
+  until git prunes it. auto leaves that entry alone.
+- A worktree that held `node_modules` or other caches stays `pending` until
+  those folders are deleted. auto never decides that an ignored folder is safe
+  to lose.
 
 ## 5. Source verification
 

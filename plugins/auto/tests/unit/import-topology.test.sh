@@ -114,6 +114,8 @@
 #                          session_registry [lazy]. programme_record reaches it lazily.
 #   session_registry     → run_record_core, programme_home, driver_session
 #   programme_exec       → programme_sanitize
+#   programme_worktree   → _bootstrap [plain], run_record_core, programme_exec, session_registry
+#                          (callers write its record value through programme_authority)
 #   programme_tracker    → programme_exec, programme_journal, programme_sanitize
 #   programme_tasks      → programme_sanitize
 #   programme_plans      → programme_exec, programme_sanitize, programme_tracker
@@ -161,7 +163,7 @@
 #                          programme_record, programme_permission_rules,
 #                          programme_permission_state, permission_transcript,
 #                          programme_permission_settle (never the reverse)
-#   programme_settings_guard → programme_home, programme_journal, session_registry,
+#   programme_settings_guard → programme_home, session_registry,
 #                          programme_permission_rules
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_authority, programme_protocol, session_registry,
@@ -181,7 +183,8 @@
 #                          (protocol loads and Authority levels reach it through `host`)
 #   programme_carryover  → run_record_core, programme_home, programme_journal, programme_protocol,
 #                          programme_sanitize, programme_context, programme_decisions,
-#                          programme_predicate, session_registry, driver_session
+#                          programme_predicate, session_registry, driver_session;
+#                          programme_behaviours [lazy] (behaviours loads carryover at top)
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
 #                          session_registry, driver_session, programme_sanitize, programme_carryover,
 #                          programme_resume [lazy] (handover flags the new driver's restore),
@@ -202,7 +205,7 @@
 #                          programme_journal [lazy], programme [lazy]
 #   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
 #                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy],
-#                          programme_settings_guard [lazy]
+#                          programme_settings_guard [lazy], programme_store [lazy]
 #   auto-spawn           → driver_session; auto-workspace [lazy]
 #
 # format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`
@@ -311,6 +314,16 @@ if loads_sibling "programme_permission_settle.py" "programme_permission" \
    || loads_sibling "programme_permission_state.py" "programme_permission_settle" \
    || loads_sibling "permission_transcript.py" "programme_permission"; then
   fail "only programme_permission loads programme_permission_settle; a load back closes a cycle"
+else
+  pass
+fi
+
+it "lib/programme_worktree.py exists and loads neither programme nor programme_authority"
+if [ ! -f "${LIB}/programme_worktree.py" ]; then
+  fail "lib/programme_worktree.py missing"
+elif loads_sibling "programme_worktree.py" "programme" \
+   || loads_sibling "programme_worktree.py" "programme_authority"; then
+  fail "programme_worktree returns a record value; programme and the authority path call it, never the reverse"
 else
   pass
 fi

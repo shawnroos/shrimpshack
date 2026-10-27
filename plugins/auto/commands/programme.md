@@ -91,16 +91,16 @@ a dispatched Agent.
        `programme.sh pick-term <key> <value> --pick <id>`.
      - Never put answers into the AskUserQuestion call yourself; a pre-filled
        picker is refused and approves nothing.
-   - Steps with `needs_typed` (Rulings, shared settings, and anything else
-     whose change only a typed reply approves): ask in a picker whether to keep
-     it as is or change it. Keep: `programme.sh setup-keep <key>`. Change: show
-     the step's `reply` as "Type this:" and wait for his typed line; then apply
-     it as in step 6.
+   - Steps with `needs_typed` (Rulings, shared settings and the accept): during
+     setup these take a typed reply. Ask in a picker whether to keep it as is
+     or change it. Keep: `programme.sh setup-keep <key>`. Change: show the
+     step's `reply` as "Type this:" and wait for his typed line; then apply it
+     as in step 6.
    - Rulings: walk each pending Ruling (the carried ones from step 3 and any
      order Shawn gave in chat), with its effect (decided, grant or restrict),
      decision kind and items. A Ruling binds only on a typed reply that names
      its id, and for a grant every item it gives the PM: ask him to type one
-     that does, and apply it as in step 6.
+     that does, and apply it as in step 6. A pick never binds a Ruling.
    - Shared settings are the standing Authority levels and Done standards. Do
      not walk them level by level: they are set once for every programme. Keep
      them unless Shawn wants a change, and point him at
@@ -120,12 +120,14 @@ a dispatched Agent.
 6. When he types a reply, the `<auto-data>` tag in your context names the
    prompt id.
    - Acceptance: `programme.sh accept-agreement --prompt <id>`.
-   - A term change: `programme.sh amend-term <key> <value> --prompt <id>`.
-   - A preferred tool change: `programme.sh edit-project-term <term-id> "<text>"`,
-     or a new one with `propose-agreement --project-term "<area>=<text>"
-     --source "Shawn at startup"`.
      `accept-agreement` refuses a prompt older than the last proposal, pick or
-     preferred-tool edit, so ask for the accept again after any change.
+     project-term edit, so ask for the accept again after any change.
+   - A term change: `programme.sh amend-term <key> <value> --prompt <id>`.
+   - A preferred tool: a programme-layer behaviour, `programme.sh
+     record-behaviour --prompt <id> --when "<the kind of job>" --tool <name>
+     --do "use <name> for <the job>"`. A preferred tool still held as a project
+     term moves with `programme.sh propose-behaviour --from-term <term-id>`,
+     then applies when his typed reply names the drafted behaviour.
    - A Ruling: `programme.sh record-ruling <id> --effect decided|grant|restrict
      --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>]
      --prompt <id>` for a new one, or `programme.sh accept-context <id> --prompt <id>`

@@ -30,7 +30,6 @@ STEPS = (programme_view_setup.RULINGS, programme_view_setup.SHARED, programme_vi
          programme_view_setup.ACCEPT)
 TAKE_ALL = "take all recommendations"
 _RECOMMENDED_SUFFIX = re.compile(r"\s*\(recommended\)$", re.IGNORECASE)
-PICK_KINDS = (programme_terms.PICKED, programme_terms.RECOMMENDED)
 
 
 def _picked(host, run_id, rec, pick_id) -> dict:
@@ -45,20 +44,18 @@ def _picked(host, run_id, rec, pick_id) -> dict:
     if row.get("session_id") != rec.get("driving_session_id"):
         raise host.ProgrammeError(f"pick {pick_id!r} was not answered in the driving session")
     source = row["payload"]["source"]
-    for prior in rows:
-        payload = prior.get("payload") or {}
-        if prior.get("kind") in PICK_KINDS and (payload.get("path"), payload.get("tool_use_id")) == (
-                source["path"], source["tool_use_id"]):
-            raise host.ProgrammeError(f"pick {pick_id!r} was already used (prompt {payload.get('prompt_id')!r}); "
-                                      "one picker answer approves one choice")
+    used = programme_journal.pick_use(rows, source)
+    if used is not None:
+        raise host.ProgrammeError(f"pick {pick_id!r} was already used ({used.get('kind')}); "
+                                  "one picker answer approves one choice")
     return {"prompt_id": pick_id, "answers": source["answers"], "path": source["path"],
             "tool_use_id": source["tool_use_id"]}
 
 
 def _before_acceptance(host, programme) -> None:
     if programme["agreement"].get("accepted"):
-        raise host.ProgrammeError("the agreement is accepted; after acceptance only a typed prompt approves "
-                                  "a change (`amend-term --prompt <id>`)")
+        raise host.ProgrammeError("the agreement is accepted; after acceptance a change goes through its "
+                                  "approval verb (`amend-term <key> <value> --prompt <id>` of a typed prompt or a pick)")
 
 
 def _pickable(host, programme, key) -> dict:

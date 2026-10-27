@@ -108,12 +108,28 @@ def offer(programme, now=None) -> list:
             for rid, ruling in programme_predicate.active_rulings(programme, when)]
 
 
+# programme_behaviours loads this module, so it is loaded here only when the offer is made.
+def behaviour_offer(programme) -> list:
+    behaviours = load_lib_module("programme_behaviours")
+    shown = behaviours.shown_programme_entries(programme, behaviours.load_store())
+    return [{"source": "behaviour", "id": e["id"], "when": e.get("when"), "do": list(e.get("do") or []),
+             "dont": list(e.get("dont") or []), "quote": (e.get("source") or {}).get("quote")}
+            for e in shown if e.get("state", behaviours.ACTIVE) == behaviours.ACTIVE]
+
+
 def offer_lines(entries) -> list:
+    rulings = [e for e in entries if e.get("source", "ruling") == "ruling"]
+    kept = [e for e in entries if e.get("source") == "behaviour"]
     lines = [f"carry-over offer: Ruling {e['id']} ({e['effect']} {e['kind']} on "
-             f"{', '.join(e['items']) or 'nothing'}: {e['scope']})" for e in entries]
-    if lines:
-        lines.append("Ask Shawn which to carry to the next programme on this project, then record his pick "
-                     "with carry-rulings --prompt <id> <ruling-id>...")
+             f"{', '.join(e['items']) or 'nothing'}: {e['scope']})" for e in rulings]
+    lines += [f"carry-over offer: behaviour {e['id']} (when {e['when']}: do {'; '.join(e['do']) or '-'}; "
+              f"don't {'; '.join(e['dont']) or '-'})" for e in kept]
+    if rulings:
+        lines.append("Ask Shawn in this one offer which to carry to the next programme on this project, then "
+                     "record his pick with carry-rulings --prompt <id> <ruling-id>...")
+    if kept:
+        lines.append("For each behaviour he keeps, ask repo or global, then run keep-behaviours <id>... "
+                     "--to repo|personal --prompt <id> before end")
     return lines
 
 
@@ -228,6 +244,7 @@ def _make_offer(host, opts):
     def change(programme, prompt, rec):
         entries = offer(programme)
         programme[OFFER_KEY] = {"at": run_record_core.now_iso(), "offered": [e["id"] for e in entries]}
+        entries += behaviour_offer(programme)
         return {"carryover": entries, "keys": repo_keys(programme), "lines": offer_lines(entries)}
 
     return host._write(opts, change, "carryover_offered", verb="carry-rulings", target=OFFER_KEY)
@@ -241,7 +258,7 @@ def _carry(host, opts, ids):
     programme = programme_home.normalize_programme(rec.get("programme") or {})
     if programme_home.sealed(programme):
         raise host.ProgrammeError("the programme is archived; nothing more is carried over from it")
-    prompt = host._typed_prompt(run_id, rec, opts["prompt"])
+    prompt = host._typed_prompt(run_id, rec, opts["prompt"], "carry-rulings")
     host.require_named(prompt, *ids)
     rows = programme_journal.read(run_id)
     offered_at = _offer_index(rows, ids)
@@ -278,7 +295,8 @@ def _h_carry_rulings(host, argv):
 _SPECS = (
     ("carry-rulings", _h_carry_rulings, "[--prompt <id> <ruling-id>...] [--run <id>]",
      "with no ids: a caller that is not the driving session or an ended programme; it lists every active "
-     "Ruling for carry-over and records the offer-made marker that releases the stop. With ids: no typed "
+     "Ruling and every active programme-layer behaviour in one carry-over offer, and records the offer-made "
+     "marker that releases the stop. With ids: no typed "
      "prompt from the driving session, one that does not name each id or was typed before an offer naming "
      "them, an id that is not an active Ruling, a remit with no repo, an archived programme; it also runs "
      "after end. Stores each Ruling under every remit repo's key for the next programme on that project."),

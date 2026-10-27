@@ -151,7 +151,13 @@ The `verified` checker runs both commands for a deliverable whose `merged` entry
 
 ## 7. Proposed rules
 
-A proposed rule lives in the programme record at `programme.proposed_rules`, never in a layer file. It uses the section 3 format with no `adoption` key. `validate_proposal(rule)` checks it. A proposed rule never changes a match result. `summary(protocol, record)` lists it with status `proposed`.
+A proposed rule lives in the programme record at `programme.proposed_rules`, never in a layer file. Its rule fields use the section 3 format with no `adoption` key. `validate_proposal(rule)` checks those fields and rejects extra keys, including `items`.
+
+`propose-rule '<rule-json>' [--item <id>]...` adds optional programme-local `items` metadata after validating the raw rule. Each target must name an existing item or alias. The verb resolves aliases under the record lock and stores each canonical id once. An unknown target rejects the whole proposal without changing the record or journal. Omitting `--item` keeps the proposal unlinked.
+
+An item link satisfies only the `no_rule_proposed` stop check for that item. A wait still needs a named reporter or live watcher. A proposed rule never changes a match result, deliverables, autonomy, or completion. `summary(protocol, record)` checks the rule fields without `items` and lists it with status `proposed`.
+
+`adopt-rule` removes `items` before rule validation, adoption hashing, and writing personal policy. Item links never become policy fields. Adoption still requires a typed prompt, a verified pick or an accepted suggestion naming the rule, plus explicit widening approval where required.
 
 ## 8. Loader interface
 

@@ -28,6 +28,9 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_home = load_lib_module("programme_home")
 programme_decisions = load_lib_module("programme_decisions")
 
+# Origins whose human source is verified; programme_approval reads this too, so both gates agree.
+HUMAN_ORIGINS = ("typed", "picked", "suggested")
+
 PERSONAL_PATH_ENV = "CLAUDE_AUTO_PERSONAL_PROTOCOL"
 MACHINE_ENV = "CLAUDE_AUTO_MACHINE"
 DEFAULT_PERSONAL_PATH = "~/.claude/shared/auto/protocol.json"
@@ -234,7 +237,7 @@ def _verify_adoption(entry: dict, prompt_lookup, target, *, local_only=False, mi
         raise _Reject("adoption_unverified", "prompt lookup failed")
     if not isinstance(prompt, dict):
         raise _Reject("adoption_unverified", "prompt missing")
-    if prompt.get("origin") != "typed":
+    if prompt.get("origin") not in HUMAN_ORIGINS:
         raise _Reject("adoption_unverified", "prompt not typed")
     if prompt.get("text_hash") != adoption["prompt_hash"]:
         raise _Reject("adoption_unverified", "prompt hash")
@@ -550,6 +553,12 @@ def proposed_rules(record) -> list:
     return rules if isinstance(rules, list) else []
 
 
+def proposal_rule(proposal):
+    if isinstance(proposal, dict):
+        return {k: v for k, v in proposal.items() if k != "items"}
+    return proposal
+
+
 def summary(protocol: dict, record=None) -> list:
     rows = []
     for rid, rule in sorted(protocol["rules"].items()):
@@ -559,7 +568,7 @@ def summary(protocol: dict, record=None) -> list:
         rows.append({"id": entry["id"], "status": "rejected", "layer": entry["layer"],
                      "reason": entry["reason"]})
     for rule in proposed_rules(record):
-        verdict = validate_proposal(rule)
+        verdict = validate_proposal(proposal_rule(rule))
         rows.append({"id": rule.get("id") if isinstance(rule, dict) else None,
                      "status": "proposed", "layer": "record", "reason": verdict["reason"]})
     return rows

@@ -202,11 +202,13 @@ session.
   line, or before the last `remit_set` line that brought in a carried-over Ruling,
   so Shawn accepts the terms he last saw.
 - **Carry-over**: `carry-rulings` with no ids makes the carry-over offer: it
-  lists every active Ruling and records the offer-made marker. While an active
+  lists every active Ruling and every active programme-layer behaviour in one
+  offer, and records the offer-made marker. While an active
   Ruling is missing from that marker the programme may not stop
   (`carryover_unoffered`), whatever its stop rule; making the offer, not Shawn's
-  answer, releases the stop. `end` makes the same offer in its output and its
-  `programme_ended` line. `carry-rulings --prompt <id> <ruling-id>...` stores
+  answer, releases the stop. `end` repeats the Ruling part of the offer in its
+  output and its `programme_ended` line; behaviours are not in it, because
+  `keep-behaviours` refuses an ended programme. `carry-rulings --prompt <id> <ruling-id>...` stores
   Shawn's pick; the typed prompt must name each id and come after an offer that
   listed them, and it still runs after `end`. The carry-over store is one JSON
   file per machine beside the personal protocol (`CLAUDE_AUTO_CARRYOVER_STORE`
@@ -235,8 +237,68 @@ session.
   decided, under the instruction's id. A Ruling already stored under that id wins.
   The gate never reads a kind-less Ruling, `record-ruling` refuses to revise one,
   and `close-ruling` closes one with a typed prompt naming it.
+- **Behaviours**: standing guidance on how the PM and its workers do the work. A
+  behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
+  --when <text>`) with `--do` or `--dont` lines (plus optional `--pm-check`,
+  `--agent-check`, `--applies-to`, skills, tools, agents, formats, communication
+  lines, evidence, stop, examples and why) applies one at once at the programme
+  layer and journals `behaviour_recorded`. Its output lists the drafted checks, the
+  undo command and the behaviours in force whose situation or tools share words
+  with the new one, so the PM can name a conflict to Shawn. `--conflicts-with <id>`
+  sets the new entry to override that behaviour (the narrower layer wins). A do
+  line, skill, tool or agent that names a protected escalation (production deploys,
+  releases, spend over cap, merging around the gate, refused permissions) is
+  refused. `propose-behaviour` stores a proposal with no prompt, because a proposal
+  applies nothing; `--from-term <term-id>` drafts one from a project term's area and
+  value and leaves the term unchanged. It journals `behaviour_proposed`.
+  `record-behaviour --from-proposal <id> --prompt <id>` applies a proposal; the
+  prompt must name the proposal id. `move-behaviour` (`<id> --to programme|repo|personal
+  --prompt <id>`) needs a prompt that names the id and the layer ("programme",
+  "repo", or "personal", "global" or "all projects" for the personal layer) with no
+  negation word anywhere before the layer word. `--to repo` takes the remit's repo
+  key when the remit has one repo, and needs `--repo <key>` naming one when it has
+  several. The verb reads `behaviours.json` before it commits and refuses when the
+  file is unreadable. A move out of the programme marks the programme entry as
+  moved instead of deleting it; the store write and one `rule_adopted` record
+  (entry move, target `behaviour:personal:<id>` or `behaviour:repo:<key>:<id>`) run
+  after the commit, and the programme entry stays in force until the store holds a
+  verified copy. It journals `behaviour_moved`. `retire-behaviour` (`<id> --as
+  retired|undone --prompt <id>`) retires the entry on every layer that holds it; the
+  entry stays visible as retired, and a stored entry is adopted again with the new
+  state. It journals `behaviour_retired`. All three need a typed prompt from the
+  driving session, and a refused one journals `approval_refused`. The store is one
+  JSON file per machine beside the personal protocol
+  (`CLAUDE_AUTO_BEHAVIOURS_STORE` overrides the path).
+  `start-worker` appends a "Behaviours this work follows:" block to the brief
+  copy: one line per worker behaviour in force for the item (id, when, do, don't,
+  evidence, and the checks the worker judges). A behaviour with no checks or an
+  agent check is included; one gated only by PM checks is included when the PM
+  names it with `--behaviour <id>`, having seen those checks hold. A matching
+  behaviour makes the tail non-empty, so the start needs `--handoff <file>`. The
+  item records each brief behaviour in `behaviour_deliveries` with reason brief,
+  and the ids join the launch's recovery request.
+  `remind-behaviour` (`<item> <id> --reason relevant|sent_back`, optional
+  `--trigger claim|merge|block`, default claim) sends one behaviour to the item's
+  worker through the `prompt-item` path (same owner-pane checks, cut to the
+  4000-character cap with the id first) and records the delivery on the item.
+  It compares the behaviour's start (its last recorded event) with the time the
+  item passed the trigger: `sent_back` is refused when the trigger has not
+  passed or the behaviour started at or after it (remind only, R19). Its output
+  reports the timing and `sent_back_count` (this send included), and it journals
+  `behaviour_reminded` instead of `prompt_sent`.
+  `keep-behaviours` (`<id>... --to repo|personal --prompt <id>`, `--repo <key>`
+  for a remit of several repos) stores the programme-layer behaviours Shawn
+  keeps from the one carry-over offer that `carry-rulings` makes. The prompt must name the layer with no negation
+  before it; ids the prompt does not name are left out and listed as
+  not_named. Kept entries are adopted into `behaviours.json`, replacing any
+  entry with the same id, so a second run adds nothing; the programme copy is
+  marked moved. It journals `behaviours_kept` and is refused once the programme
+  has ended.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
-  proposal; `adopt-rule` writes it to the personal protocol layer atomically, with
+  proposal. Repeated `--item <id>` options link it to known programme items;
+  raw rule JSON cannot carry those links. Links cover only the missing-proposal
+  stop check, not an unwatched wait or rule authority. `adopt-rule` removes the
+  links before validation, hashing, and writing the personal protocol layer atomically, with
   an adoption record (machine, run, prompt id, redacted quote, prompt hash, content
   hash). `adopt-autonomy` sets one Authority level for a decision kind (a level
   wider than the plugin default needs `--widening`; a protected kind is refused),
@@ -323,6 +385,27 @@ session.
   `--kind`); decline drops it. Either way it records a Shawn decision linked to
   the ask id, with the ask's decision kind (unknown for an ask handed before
   kinds existed).
+- **Asks**: `hand-item` also takes the ask's structured facts: `--option
+  '<label> | <effect> [| <cost>]'` (up to 6), `--if-nothing`, `--recommend`,
+  `--recommend-why`, `--risk` (up to 10), `--evidence` (up to 12), `--pr-url`,
+  `--pr-title`, `--issue-url`, `--issue-title` and `--readiness <fingerprint>`
+  (the `check-mergeable` fingerprint). Each field has its own cap, at most 500
+  characters, and a value over its cap is refused, never cut. The ask stores a
+  16-hex fingerprint of its facts, `facts_at`, a shown mark, `superseded_answers` and
+  replies (`{ship, decline}`: the exact reply to type, by the item's shortest
+  unique title or session name, else its id; recomputed on every write, so a
+  name that became ambiguous falls back to the id). `update-ask` (args: item,
+  the same fact flags) replaces the given facts and keeps the rest. Facts that
+  hash to the current fingerprint change nothing and write no journal row; new facts move `facts_at`, so a
+  name reply typed before them no longer approves. On an answered ask that was
+  not relayed, new facts void the answer: it moves to `superseded_answers`, the
+  decision gets `voided_at`, the item is handed again and the row is
+  `ask_answer_voided` (else `ask_updated`). An ask already relayed is refused.
+  `ask-shown` (args: item, `--fingerprint`) records which facts were posted in
+  chat and refuses a fingerprint that is not current. `ask-relayed` (args: item)
+  sets `answered.relayed_at` after the PM relays Shawn's answer to the worker,
+  and refuses an ask with no recorded answer or one already relayed. The view's
+  top-level asks list carries every open ask and every answered, unrelayed one.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the Rulings kept under
@@ -497,6 +580,15 @@ session.
   writes nothing. Only an item whose step path changed under the same driving
   session gets a `trajectory_changed` journal row; moving the current step to
   done is not a change, and neither is a first recording.
+- **Merge readiness**: `check-mergeable` (args: a PR as owner/repo#N or URL,
+  optional --pin <item>) reads an open PR's state, draft flag, mergeable and merge
+  state, review decision, base branch, head, required checks and unresolved review
+  threads in one GraphQL read. It prints ready, not_ready with the unmet gates, or
+  unknown, plus a fingerprint of those facts. Only CLEAN with no unmet gate is
+  ready; a gh failure, a merge state GitHub has not computed, or a head with no
+  checks is unknown. Without --pin it writes nothing. With --pin and a ready PR it
+  journals `merge_pinned` with the item, the owner/repo#N ref and the head, which
+  the merged check then compares against the merged head.
 - **Evidence**: `check-deliverable` (args: item, deliverable, optional --ref,
   optional --repo <clone> for the verified and released checks; the path is
   stored and reused by `validate`)
@@ -561,7 +653,7 @@ session.
   `decision:<id>@<rev>` with its scope, reason and limits, and the
   clause "Proceed under this decision. Do not reopen it: if you find new
   evidence that it cannot hold, stop and state that evidence in your pane."
-  `start-worker` with a decision or restriction needs `--handoff <file>` among
+  `start-worker` with a decision, restriction or behaviour block needs `--handoff <file>` among
   the spinoff arguments, appends to a copy under `<programme home>/briefs/` and
   passes the copy; the original is unchanged. `prompt-item` refuses when its
   text plus the appended block exceeds 4000 characters. Unknown ids, bad
@@ -603,7 +695,8 @@ session.
   authorizes nothing.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
-  the driving session, or an orphaned lease. Takeover and handover rewrite every
+  the driving session, or an orphaned lease; on an expired lease it needs none and
+  ends the programme as `expire` does. Takeover and handover rewrite every
   lease of the run and the record's `driving_session_id` together (leases lock,
   then run-record lock), stamp the driver beat, and journal both session ids.
   Takeover prints the rules in force and the waits and watchers to re-arm. `end`
@@ -681,6 +774,13 @@ name them is refused, and the refusal lists the missing words.
 For `edit-project-term` after acceptance, the text must contain the term's area and
 its new text. `accept-agreement` accepts any typed prompt, because the quote is what it records; `accept-agreement`
 also needs the prompt to come after the last proposal or project-term edit.
+The verbs on the pick list also accept a verified pick or an accepted suggestion;
+every other verb needs a typed prompt. Rulings stay typed-only: `record-ruling`,
+`close-ruling` and `carry-rulings` are not on the list, and `accept-context`
+refuses a pick or a suggestion for a Ruling. A pick approves only when its answer is the
+exact label `approval-label <verb> <args>` prints for the command being run
+(programme-prompt-source.md gives the list and the full rule). `approval-label`
+needs no prompt, writes nothing, and refuses a verb a pick cannot approve.
 
 The action hook guards each driver's pane. In a session that is not the driving
 session of a live, orphaned or expired lease, it denies any Bash command whose

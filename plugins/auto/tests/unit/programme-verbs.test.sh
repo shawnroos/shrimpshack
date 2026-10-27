@@ -94,7 +94,7 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement accept-context ack-protocol add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed answer-permission archive assign-item beat carry-rulings check-archive check-deliverable claim clear-blocker clear-proposal close-ruling collect-result context create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire hand-item handover inbox lift-pause log-decision mark-read merge-item note-term pause pick-term preserve-code promote prompt-item propose-agreement propose-permission propose-rule propose-term queue raise-blocker reconcile-leases reconcile-operations record-denial record-issues record-ruling record-tested-build record-trajectories recover release-resources reopen-item request-reread rules set-now set-remit set-source set-waiting settle-permissions setup-keep setup-seen setup-step start start-worker status sweep take-recommendations takeover tracker-synced validate watcher-beat" "$VERBS"
+check "accept-agreement accept-context ack-protocol add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed answer-permission approval-label archive ask-relayed ask-shown assign-item beat carry-rulings check-archive check-deliverable check-mergeable claim clear-blocker clear-proposal close-ruling collect-result context create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire hand-item handover inbox keep-behaviours lift-pause log-decision mark-read merge-item move-behaviour note-term pause pick-term preserve-code promote prompt-item propose-agreement propose-behaviour propose-permission propose-rule propose-term queue raise-blocker reconcile-leases reconcile-operations record-behaviour record-denial record-issues record-ruling record-tested-build record-trajectories recover release-resources remind-behaviour reopen-item request-reread retire-behaviour rules set-now set-remit set-source set-waiting settle-permissions setup-keep setup-seen setup-step start start-worker status sweep take-recommendations takeover tracker-synced update-ask validate watcher-beat" "$VERBS"
 
 
 # _VERBS.update lets a later module silently replace a verb another module registered under the same name.
@@ -311,10 +311,11 @@ it "propose-rule refuses a rule missing a required field"
 prog propose-rule '{"id":"half-rule"}'
 check 1 "$CODE"
 
-it "propose-rule records a valid proposal"
-prog propose-rule "$RULE_JSON"
+it "propose-rule records a valid proposal linked to a known item"
+prog propose-rule "$RULE_JSON" --item linear:AI-753
 check 0 "$CODE"
 check '["docs-verified"]' "$(field '[r["id"] for r in prog["proposed_rules"]]')"
+check '["linear:AI-753"]' "$(field 'prog["proposed_rules"][0]["items"]')"
 
 it "adopt-rule citing a cron prompt is refused and writes no personal file"
 prog adopt-rule docs-verified --prompt "$P_CRON"
@@ -334,17 +335,18 @@ check 0 "$CODE"
 check yes "$([ -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL" ] && echo yes || echo no)"
 
 it "the adopted rule carries a redacted quote, the machine and a content hash"
-GOT="$(run_py "$RUN" "$P_ADOPT" <<'EOF'
-run, pid = args
+GOT="$(run_py "$RUN" "$P_ADOPT" "$RULE_JSON" <<'EOF'
+run, pid = args[:2]
 pp = load_lib_module("programme_protocol")
 with open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]) as fh:
     doc = json.load(fh)
 rule = [r for r in doc["rules"] if r["id"] == "docs-verified"][0]
 a = rule["adoption"]
-print("hunter2" in a["quote"], "[redacted]" in a["quote"], a["machine"], a["hash"] == pp.content_hash(rule), a["prompt_id"] == pid, a["run_id"] == run)
+print("hunter2" in a["quote"], "[redacted]" in a["quote"], a["machine"], a["hash"] == pp.content_hash(rule), a["prompt_id"] == pid, a["run_id"] == run,
+      "items" not in rule, a["hash"] == pp.content_hash(dict(json.loads(args[2]), autonomy=rule["autonomy"])))
 EOF
 )"
-check "False True studio True True True" "$GOT"
+check "False True studio True True True True True" "$GOT"
 
 it "adopt-rule writes the legacy autonomy of a new rule id as propose, not the proposal's level, and no widening mark"
 check '"propose" false' "$(run_py <<'EOF'

@@ -31,8 +31,8 @@ SECRETS_ENV = "CLAUDE_AUTO_SECRETS_FILE"
 DEFAULT_SECRETS_FILE = "~/.secrets"
 REDACTED = "[redacted]"
 STORED_PROMPT_ORIGINS = ("typed", "cron", "unknown")
-# "picked" is only ever resolved from a pick source record, never stored as a label.
-PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked",)
+# "picked" and "suggested" are only ever resolved from a transcript check, never stored as a label.
+PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked", "suggested")
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
@@ -64,6 +64,12 @@ KINDS = (
     "project_term_amended",
     "instruction_recorded",
     "instruction_closed",
+    "behaviour_recorded",
+    "behaviour_proposed",
+    "behaviour_moved",
+    "behaviour_retired",
+    "behaviour_reminded",
+    "behaviours_kept",
     "rule_proposed",
     "rule_adopted",
     "rules_acked",
@@ -79,6 +85,10 @@ KINDS = (
     "item_waiting",
     "item_handed",
     "handed_answered",
+    "ask_updated",
+    "ask_answer_voided",
+    "ask_shown",
+    "ask_relayed",
     "pm_decided",
     "claim",
     "claims_read",
@@ -214,11 +224,11 @@ def journal_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), JOURNAL_NAME)
 
 
-def _locked(path: str, body):
+def _locked(path: str, body, timeout=None):
     folder = os.path.dirname(path)
     os.makedirs(folder, mode=0o700, exist_ok=True)
     os.chmod(folder, 0o700)
-    return run_record_core._flock_run(os.path.join(folder, LOCK_NAME), body)
+    return run_record_core._flock_run(os.path.join(folder, LOCK_NAME), body, timeout)
 
 
 def _write_line(path: str, entry: dict) -> None:
@@ -289,7 +299,8 @@ def claims_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), CLAIMS_NAME)
 
 
-def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None) -> dict:
+def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None,
+               lock_timeout=None) -> dict:
     if isinstance(row, dict) and row.get("kind") == "prompt" and provenance != "derived":
         raise JournalError(f"a {provenance} copy is never journaled as a prompt; it approves nothing")
     if not _promoted(run_id):
@@ -305,14 +316,17 @@ def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived
             return row
 
         try:
-            return _locked(path, body)
+            return _locked(path, body, lock_timeout)
         except _RoutedToAuthority:
             pass
-    return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard)
+    return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard,
+                                   lock_timeout=lock_timeout)
 
 
-def append(run_id: str, kind: str, session_id, payload=None, *, cites=None, now=None) -> dict:
-    return append_row(run_id, entry(kind, session_id, payload, cites=cites, now=now))
+def append(run_id: str, kind: str, session_id, payload=None, *, cites=None, now=None,
+           lock_timeout=None) -> dict:
+    return append_row(run_id, entry(kind, session_id, payload, cites=cites, now=now),
+                      lock_timeout=lock_timeout)
 
 
 def _refuse_after_end(record) -> None:
@@ -380,6 +394,44 @@ def claims_count(run_id: str) -> int:
             return sum(1 for _ in fh)
     except OSError:
         return 0
+
+
+def _same_pick(source, path, tool_use_id) -> bool:
+    return isinstance(source, dict) and (source.get("path"), source.get("tool_use_id")) == (path, tool_use_id)
+
+
+def pick_use(rows, source):
+    """The first row that spent this picker answer, under any prompt id it was journaled as."""
+    path, tool_use_id = source.get("path"), source.get("tool_use_id")
+    ids = {r.get("prompt_id") for r in rows
+           if r.get("kind") == "prompt" and _same_pick((r.get("payload") or {}).get("source"), path, tool_use_id)}
+    for row in rows:
+        if row.get("kind") in ("prompt", "approval_refused"):
+            continue
+        payload = row.get("payload") or {}
+        refs = set(row.get("cites") or []) | {payload.get("prompt_id")}
+        # Setup verbs record the pick's path and tool_use_id on their own payload, not as a cite.
+        if ids & refs or _same_pick(payload, path, tool_use_id):
+            return row
+    return None
+
+
+def pick_answer(rows, row) -> str:
+    source = row["payload"]["source"]
+    if len(source["answers"]) != 1:
+        raise ValueError(f"pick {row['prompt_id']!r} must hold exactly one question to approve a change")
+    used = pick_use(rows, source)
+    if used is not None:
+        raise ValueError(f"pick {row['prompt_id']!r} was already used ({used.get('kind')}); "
+                         "one picker answer approves one change")
+    return next(iter(source["answers"].values()))
+
+
+def named_text(prompt) -> str:
+    # A pick's question is PM-written, so only Shawn's answer can name what it approves.
+    if prompt.get("origin") == "picked":
+        return redact(prompt.get("answer") or "")
+    return redact(prompt["quote"])
 
 
 def find_prompt(run_id: str, prompt_id: str, rows=None):
