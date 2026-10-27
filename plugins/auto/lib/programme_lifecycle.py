@@ -336,6 +336,12 @@ def _in_space(run, sid) -> bool:
                                for _, lease in _run_leases(run))
 
 
+def _stopped(status, presence) -> bool:
+    # One predicate for become-pm and the takeover routes: the step become-pm names must be the route takeover takes.
+    return (status == "live" and presence["state"] == "gone") or \
+        (status == "orphaned" and presence["state"] != "present")
+
+
 def _cited_route(run, sid, prompt_id, status, record, presence, refused):
     """(reason, approval) for a takeover citing --prompt, checked under the leases lock."""
     approval = load_lib_module("programme_approval")
@@ -344,9 +350,7 @@ def _cited_route(run, sid, prompt_id, status, record, presence, refused):
     driver = presence["session_id"]
     if row is not None and rows.index(row) <= _last_driver_change(rows):
         raise refused(f"prompt {prompt_id!r} was given before the current PM took the programme")
-    asked = (status == "live" and presence["state"] == "gone") or \
-        (status == "orphaned" and presence["state"] != "present")
-    if not asked:
+    if not _stopped(status, presence):
         return "replaced", approval.takeover_pick(rows, row, prompt_id, sid, driver, refused)
     reason = "driver_gone" if status == "live" else "orphaned"
     if record is None:
@@ -450,6 +454,98 @@ def _took_over(host, run, sid, moved) -> int:
     sys.stdout.write(host.render_restore(run))
     sys.stdout.write("Re-arm the remit watcher, the cron fallback and every watcher listed above "
                      "from this session; the old session's watchers can no longer beat.\n")
+    return 0
+
+
+_START_STATES = ("free", "ended", "expired")
+
+
+def _drove(run, sid) -> bool:
+    unverified = programme_authority().UNVERIFIED
+    for row in programme_journal.read(run):
+        if row.get("provenance") in unverified:
+            continue
+        payload = row.get("payload") or {}
+        if row.get("kind") == "programme_started" and payload.get("session") == sid:
+            return True
+        if row.get("kind") in CONSUMING_KINDS[:2] and sid in (payload.get("to_session"), payload.get("from_session")):
+            return True
+    return False
+
+
+def _become_refused(host, out, why, fix):
+    host._emit(dict(out, step="refused", why=why, fix=fix))
+    sys.stdout.flush()
+    raise host.ProgrammeError(why, fix=fix)
+
+
+def _become_step(host, out, sid, space):
+    lease = programme_home.read_lease(programme_home.lease_path(*space))
+    if lease is None:
+        return dict(out, step="start", lease_status="free")
+    if lease.get("corrupt"):
+        _become_refused(host, out, f"the lease for {out['space']} is unreadable",
+                        f"move the lease file aside, then run `{_BECOME_PM}` again")
+    run = lease["run"]
+    status, record = _fresh_state(dict(lease, server=space[0], workspace=space[1]))
+    out.update(run=run, lease_status=status)
+    if status in _START_STATES:
+        return dict(out, step="start")
+    if status == "newer":
+        _become_refused(host, out, f"programme {run} was written by a newer auto",
+                        "update the auto plugin in this session, then run `programme.sh become-pm` again")
+    if status not in MOVABLE_STATES or record is None:
+        _become_refused(host, out, f"programme {run}'s run record could not be read (lease {status}), so auto "
+                        "cannot tell whether its PM stopped", f"`programme.sh status --run {run}` names the "
+                        "fault; repair it, then run `programme.sh become-pm` again")
+    driver = _driver(lease, run)
+    out["driver"] = driver
+    if driver == sid:
+        return dict(out, step="already-pm")
+    if _drove(run, sid):
+        return dict(out, step="stand-down")
+    presence = _presence(lease, run)
+    out["presence"] = presence.get("state")
+    if _stopped(status, presence):
+        return dict(out, step="takeover", command="programme.sh takeover --prompt <id of Shawn's ask in this session>")
+    approval = load_lib_module("programme_approval")
+    return dict(out, step="ask-shawn", label=approval.takeover_label(driver),
+                command="programme.sh takeover --prompt <pick id>")
+
+
+_BECOME_LINES = {
+    "start": "next: run /auto:programme to start a programme here; this session becomes its PM.",
+    "already-pm": "next: this session is the PM; run the programme sweep.",
+    "stand-down": ("next: stand down. Another session now drives this programme. Cancel this session's programme "
+                   "cron (CronDelete) and Monitor (TaskStop) wake-ups and stop. Do not message Shawn."),
+    "takeover": ("next: the PM stopped. Run `programme.sh takeover --prompt <id>`, citing the prompt id auto "
+                 "journaled for Shawn's ask in this session."),
+}
+
+
+def _h_become_pm(host, argv):
+    positional, _ = host._parse(_tokens(argv))
+    if positional:
+        raise ValueError("usage: become-pm (it takes no arguments)")
+    sid = _caller(host)
+    out = {"session": sid}
+    driven = programme_home.lease_driven_by(sid)
+    if driven:
+        step = dict(out, step="already-pm", run=driven["run"], driver=sid)
+    else:
+        space = session_registry.space_of_session(sid, os.environ)
+        if not space:
+            _become_refused(host, out, "this session is not in a herdr space, so it cannot be a space's PM",
+                            "run Claude from a pane in the herdr space, then run `programme.sh become-pm` there")
+        out["space"] = programme_home.space_key(*space)
+        step = _become_step(host, out, sid, space)
+    host._emit(step)
+    if step["step"] == "ask-shawn":
+        sys.stdout.write(f"next: ask Shawn in one AskUserQuestion picker. Offer `{step['label']}` as the "
+                         "recommended option and a decline option that keeps the current PM. If he picks the "
+                         "label, run `programme.sh takeover --prompt <pick id>`. If he declines, stop.\n")
+    else:
+        sys.stdout.write(_BECOME_LINES[step["step"]] + "\n")
     return 0
 
 
@@ -785,6 +881,11 @@ _SPECS = (
      "a cited pick there must also be the takeover label; any prompt from before the current PM "
      "took the programme. Journals taken_over with request null, the prompt id, and unrequested "
      "true when no pick replaced a live PM. Refusals are journaled as request_refused."),
+    ("become-pm", _h_become_pm, "",
+     "nothing it can route: a session outside a herdr space, an unreadable lease or run record, and a "
+     "newer programme print step refused with a fix. Reads the space lease, its status, herdr presence "
+     "and this session's driver history, and prints one step as JSON plus a line: start, takeover, "
+     "ask-shawn (with the exact takeover label and command), already-pm or stand-down. Writes nothing."),
     ("handover", _h_handover, "<session-id> [--run <id>]",
      "a caller that is not the driving session; no typed /auto:programme-handover <session-id> in "
      "the driving session. Refusals are journaled as request_refused."),

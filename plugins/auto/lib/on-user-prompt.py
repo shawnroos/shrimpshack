@@ -3,7 +3,9 @@
 
 A request typed in a driving session is journaled into the run it drives, citing
 the prompt. Takeover, handover and end requests from any other session go into
-the home of the lease for that session's herdr space. Always exits 0.
+the home of the lease for that session's herdr space. A prompt in another session
+of a space whose PM stopped (lease orphaned, or driver gone) is journaled with
+driving false, so it can serve only as Shawn's ask for a takeover. Always exits 0.
 """
 
 from __future__ import annotations
@@ -112,6 +114,24 @@ def request_lease(session_id, env, driving_lease=None, replace=None):
     return lease, status
 
 
+def _ask_to_replace(session_id, text, env, source) -> dict | None:
+    # Only a stopped PM's space journals another session's prompts: a live PM's lease never collects them.
+    lease, status = request_lease(session_id, env)
+    if status == "live":
+        presence = load_lib_module("programme_lifecycle")._presence(lease, lease["run"])
+        if presence.get("state") != "gone":
+            return None
+    elif status != "orphaned":
+        return None
+    run = lease["run"]
+    record, hold = programme_home.read_programme(run)
+    if hold is not None:
+        return None
+    origin = classify_origin(text, record)
+    entry = programme_journal.append_prompt(run, session_id, text, origin, source=source, driving=False)
+    return {"run": run, "prompt_id": entry["prompt_id"], "origin": origin, "lease_status": status}
+
+
 def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease, source):
     replace = programme_home.replace_name(text) if verb == "takeover" else None
     lease, status = request_lease(session_id, env, driving_lease, replace)
@@ -162,6 +182,13 @@ def handle(raw: str, env) -> dict | None:
                          f"{received}, the programme leased in this session's space.")
         return _closing_context(session_id, text, closing, notes, source)
     if not entry:
+        asked = None if lost else _ask_to_replace(session_id, text, env, source)
+        if asked:
+            return _context(
+                "auto journaled this prompt as a possible ask from Shawn to replace the stopped PM of the "
+                "programme leased in this session's space. It serves only `programme.sh takeover --prompt "
+                "<prompt_id>`; if Shawn asked this session to be the PM, run `programme.sh become-pm` first.\n"
+                f"{json.dumps(asked, sort_keys=True)}")
         return _context(lost) if lost else None
     payload = {"run": run, "prompt_id": entry["prompt_id"], "origin": origin}
     return _context(

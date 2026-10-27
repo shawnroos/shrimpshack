@@ -8,15 +8,20 @@ Start a programme: this session becomes the PM for the herdr space it runs in.
 Do the steps in order. Run every programme verb in your own Bash tool, never from
 a dispatched Agent.
 
+Whenever Shawn asks this session, in any words, to be the PM, to replace the PM
+or to take over as PM, run `programme.sh become-pm` first and follow the one
+step it prints. Only `start` continues with step 1 below. For `takeover`,
+`ask-shawn` or `stand-down`, follow `/auto:programme-takeover`; for
+`already-pm`, run the sweep; for `refused`, run its `fix:` line. When
+`$ARGUMENTS` names spaces, go straight to step 1: become-pm reads only this
+session's own space.
+
 1. Take the lease first. Run the dispatch line below before anything else:
 
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" start "$ARGUMENTS"`
 
    - Exit 1 naming a run and session means another programme holds this space.
-     Show Shawn that line and stop. The holder moves by
-     `/auto:programme-handover` typed in its session, or by
-     `/auto:programme-takeover` typed here once its pane is closed or its lease
-     is orphaned (or with `--replace <its pane name>` while it still runs).
+     Run `programme.sh become-pm` and follow the step it prints.
    - On success, note the `run` id from the JSON line. The other verbs find the
      programme from this session's lease.
 2. Check for a native goal. If a `/goal` condition is active in this session

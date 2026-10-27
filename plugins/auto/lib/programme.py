@@ -45,7 +45,8 @@ APPROVAL_KINDS = ("rule_adopted",)
 _OPERATION = {"id": None, "verb": None, "argv": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
-               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label")
+               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label",
+               "become-pm")
 
 
 _name_words, _squash, _runs, _affirmed, _NEGATIONS = (

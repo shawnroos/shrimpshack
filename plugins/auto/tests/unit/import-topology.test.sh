@@ -184,7 +184,8 @@
 #   run_record_evidence  → run_record_core, driver_session; programme_home [lazy],
 #                          programme_journal [lazy], programme_sanitize [lazy],
 #                          programme_evidence [lazy]
-#   on-user-prompt       → programme_home, programme_journal, session_registry
+#   on-user-prompt       → programme_home, programme_journal, session_registry;
+#                          programme_lifecycle [lazy] (a stopped PM's herdr presence)
 #   on-pre-compact       → programme_home [lazy], programme_resume [lazy]
 #   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy],
 #                          programme_resume [lazy]

@@ -36,6 +36,8 @@ FIXES = {
     "ask-shown": _ITEM,
     "assign-item": _ITEM,
     "beat": FALLBACK,
+    "become-pm": ("run Claude from a pane in the herdr space the programme leases, "
+                  "then rerun `programme.sh become-pm` there"),
     "check-archive": _ENDED,
     "check-deliverable": _ITEM,
     "check-mergeable": _ITEM,

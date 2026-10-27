@@ -689,9 +689,28 @@ session.
     readable run record; a record that fails to load refuses. The journaled reason is
     orphaned or driver_gone, with `unrequested: true`.
   Both routes journal `taken_over` with `request: null` and cite the prompt.
-  Every refusal on these routes prints `fix: programme.sh become-pm`. A typed ask
-  in a session that does not drive a programme is not journaled today, so in
-  practice the cited ask is a pick.
+  Every refusal on these routes prints `fix: programme.sh become-pm`. The prompt
+  hook journals a prompt (typed or suggested) from a session that drives no
+  programme only when that session's space lease is orphaned, or live with a
+  driver herdr shows gone. The row carries `driving: false`, so it can serve only
+  as the cited ask of a takeover. While the lease is live and its driver is not
+  gone, other sessions' prompts are not journaled.
+  `become-pm` is read-only and needs no driving session. It reads the caller's
+  space lease, its status, herdr presence and whether this session drove the run
+  before, writes nothing, and prints one JSON line with a **step** plus one line
+  naming that step. The steps: **start** (no lease, or a free, ended or expired
+  one); **already-pm** (the caller drives); **stand-down** (the caller drove the run
+  and another session drives it now: cancel this session's programme cron and
+  Monitor wake-ups and stop, with no message to Shawn); **takeover** (the lease is
+  orphaned and herdr does not show the driver present, or live with the driver
+  gone: run `takeover --prompt <id>` citing Shawn's ask in this session);
+  **ask-shawn** (a live PM held by another session, or an orphaned lease whose
+  driver herdr shows present: **label** is the exact
+  `approval-label takeover --replace <driver>` text to offer as the recommended
+  option of one AskUserQuestion picker with a decline option, and **command** is
+  `programme.sh takeover --prompt <pick id>`); **refused** (outside a herdr space,
+  an unreadable lease or run record, or a newer programme), which exits 1 with a
+  `fix:` line. It routes by the same presence rule the takeover routes use.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
   the driving session, or an orphaned lease; on an expired lease it needs none and

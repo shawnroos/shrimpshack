@@ -17,17 +17,26 @@ refused. If herdr cannot
 be read, auto does not count the PM as gone. Pass `--replace` on the dispatch
 line only when Shawn typed it; the typed text, not the argument, is what counts.
 
-Shawn does not have to type the command. When he asks this session to be the
-PM in his own words:
+Shawn does not have to type the command. Whenever he asks this session,
+in any words, to be the PM, to replace the PM or to take over as PM,
+run `programme.sh become-pm` first and follow the one step it prints:
 
-1. If the PM is live, run `programme.sh approval-label takeover --replace <PM session id>`.
-2. Offer its output as the recommended option of one AskUserQuestion picker.
-3. When Shawn picks it, run `programme.sh takeover --prompt <pick id>`.
+- `start`: no programme holds this space; run `/auto:programme`.
+- `already-pm`: this session drives it; run the sweep.
+- `takeover`: the PM stopped (lease orphaned, or herdr shows it gone). Run
+  `programme.sh takeover --prompt <id>`, citing the prompt id auto journaled
+  for Shawn's ask in this session. No picker. The takeover is journaled as
+  unrequested.
+- `ask-shawn`: the PM is live. Offer its `label` as the recommended option of one
+  AskUserQuestion picker, with a decline option that keeps the current PM. When
+  Shawn picks the label, run `programme.sh takeover --prompt <pick id>`. When he
+  declines, stop.
+- `stand-down`: another session now drives the programme this session drove.
+  Cancel this session's programme cron (CronDelete) and Monitor (TaskStop)
+  wake-ups and stop. Do not message Shawn.
+- `refused`: run its `fix:` line.
 
-If the PM is orphaned or herdr shows it gone, ask the same picker. Then run
-`programme.sh takeover --prompt <pick id>`. The pick must come after the PM
-stopped. Today auto journals only picks from a session that is not the PM, so
-cite the pick. This takeover is journaled as unrequested. A refusal prints a `fix:` line; run it.
+A takeover refusal prints a `fix:` line; run it.
 
 Run the dispatch line below:
 
