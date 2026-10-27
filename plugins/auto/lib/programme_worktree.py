@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The programme worktree: one detached git worktree the PM works from for the programme's life."""
+"""The programme worktree: a detached git worktree recorded on a programme, observed and released at its end."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
 programme_exec = load_lib_module("programme_exec")
-session_registry = load_lib_module("session_registry")
 
 WORKTREES_DIR = "worktrees"
 NAME_PREFIX = "programme-"
@@ -23,7 +22,6 @@ NAME_PREFIX = "programme-"
 # worktree that the next call reports rather than adopts.
 CREATE_TIMEOUT = 600.0
 GIT_TIMEOUT = 30.0
-START_SOURCES = ("startup", "resume")
 
 
 def _real(path):
@@ -246,66 +244,3 @@ def recorded(record_or_programme):
     if isinstance(value, dict) and isinstance(value.get("path"), str) and value["path"]:
         return value
     return None
-
-
-def remit_repo(record_or_programme):
-    repos = ((_block(record_or_programme).get("remit") or {}).get("repos")) or []
-    for repo in repos:
-        path = repo.get("path") if isinstance(repo, dict) else None
-        if isinstance(path, str) and path:
-            return path
-    return None
-
-
-def start_dir(session_id):
-    rows = [r for r in session_registry.session_rows(session_id)
-            if r.get("source") in START_SOURCES and isinstance(r.get("cwd"), str)]
-    if not rows:
-        return None
-    return max(rows, key=lambda r: str(r.get("at") or ""))["cwd"]
-
-
-def cd_can_stick(session_id, worktree) -> bool:
-    start = start_dir(session_id)
-    return bool(start) and inside(worktree, start)
-
-
-def move_line(record_or_programme, session_id, cwd) -> str:
-    worktree = recorded(record_or_programme)
-    if not worktree or inside(cwd, worktree["path"]):
-        return ""
-    path = worktree["path"]
-    if cd_can_stick(session_id, path):
-        return f"Run `cd {shlex.quote(path)}` so this PM works from the programme worktree."
-    return (f"Ask Shawn to type `/cd {path}`: this PM works from the programme worktree, "
-            "and a cd run here would not last.")
-
-
-def restore_line(record_or_programme, session_id, cwd=None) -> str:
-    if not session_id:
-        return ""
-    try:
-        line = move_line(record_or_programme, session_id, cwd if cwd is not None else _cwd())
-    except Exception:
-        return ""  # The move line is advice: a registry it cannot read must not cost the PM its rules.
-    return line + "\n" if line else ""
-
-
-def _in_remit(repo, programme) -> bool:
-    paths = [r.get("path") for r in ((programme.get("remit") or {}).get("repos") or [])
-             if isinstance(r, dict)]
-    if any(_real(p) == _real(repo) or inside(p, repo) for p in paths):
-        return True
-    return any(main_checkout(p) == _real(repo) for p in paths)
-
-
-def status_line(record_or_programme) -> str:
-    programme = _block(record_or_programme)
-    worktree = recorded(programme)
-    if not worktree:
-        return ""
-    line = f"Programme worktree: {worktree['path']}"
-    repo = worktree.get("repo")
-    if repo and not _in_remit(repo, programme):
-        line += f" (its repo {repo} is no longer in the remit)"
-    return line + "."

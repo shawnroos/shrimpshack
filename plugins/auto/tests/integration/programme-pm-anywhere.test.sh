@@ -16,9 +16,9 @@ fail() { FAIL=$((FAIL + 1)); printf "  \033[31m✗\033[0m %s\n" "$CURRENT"; [ -n
 check() { if [ "$1" = "$2" ]; then pass; else fail "expected [$1] got [$2]"; fi; }
 has() { case "$2" in *"$1"*) pass ;; *) fail "expected to find [$1] in [$2]" ;; esac; }
 
-echo "programme-move-in.test.sh"
+echo "programme-pm-anywhere.test.sh"
 
-WORK="$(mktemp -d -t auto-pmwt-move.XXXXXX)"
+WORK="$(mktemp -d -t auto-pm-anywhere.XXXXXX)"
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -123,19 +123,15 @@ except ValueError:
     print(raw)'
 }
 
-MOVE="works from the programme worktree"
-moves() { grep -c "$MOVE" <<< "$1"; }
-
 driver_of() {
   run_py "$1" <<'EOF'
 print(programme_records.load(args[0]).get("driving_session_id"))
 EOF
 }
 
+
 REPO="${WORK}/repos/alpha"
 git init -q "$REPO" && git -C "$REPO" commit -q --allow-empty -m init
-SIBLING="${WORK}/sibling"
-git -C "$REPO" worktree add -q --detach "$SIBLING" >/dev/null 2>&1
 
 snapshot "w2:p10|PM|sess-pm|term_p10"
 register sess-pm w2:p10 term_p10 "$REPO"
@@ -148,103 +144,91 @@ import json, re, sys
 ctx = json.loads(sys.stdin.read())["hookSpecificOutput"]["additionalContext"]
 print(json.loads(re.search(r"\{.*\}", ctx).group(0))["prompt_id"])' <<< "$(typed sess-pm 'yes, run it on those terms')")"
 as sess-pm accept-agreement --prompt "$P_ACCEPT"
-WT="${REPO}/worktrees/programme-${RUN}"
 
-it "setup: the accepted programme records its worktree"
-check "${WT}" "$(run_py "$RUN" <<'EOF'
+# A worktree recorded by an earlier version of auto: real on disk, so only the dropped
+# requirement could act on it.
+WT="${REPO}/worktrees/programme-${RUN}"
+git -C "$REPO" worktree add -q --detach "$WT" >/dev/null 2>&1
+run_py "$RUN" "$WT" "$REPO" <<'EOF' >/dev/null
+rec = programme_records.load(args[0])
+rec["programme"]["pm_worktree"] = {"path": args[1], "repo": args[2], "created_at": "2026-10-23T00:00:00Z"}
+programme_records.save(args[0], rec)
+EOF
+
+it "setup: the programme carries a recorded worktree that exists"
+check "${WT} yes" "$(run_py "$RUN" <<'EOF'
 print(((programme_records.load(args[0]).get("programme") or {}).get("pm_worktree") or {}).get("path"))
 EOF
-)"
+) $([ -d "$WT" ] && echo yes)"
 
-it "takeover by a session started in the main checkout prints the cd line"
+stop_hook() {
+  ( cd "$NOREPO" && bash "${HOOKS}/on-stop.sh" <<< "{\"session_id\":\"$1\",\"cwd\":\"$2\"}" 2>/dev/null ) || true
+}
+
+field() {
+  "$PY" -c 'import json,sys; t=sys.stdin.read().strip(); print((json.loads(t) if t else {}).get(sys.argv[1], ""))' "$1"
+}
+
+asks_move() {
+  case "$1" in *'Run `cd'*|*'/cd '*|*"rogramme worktree"*|*cwd_drift*) echo yes ;; *) echo no ;; esac
+}
+
+it "the driving PM stops from outside its recorded worktree with no block and no note"
+OUT="$(stop_hook sess-pm "$REPO")"
+check "" "$(printf '%s' "$OUT" | tr -d '[:space:]')"
+
+it "a PM blocked for another reason gets no cwd_drift reason and no move note"
+run_py "$RUN" <<'EOF' >/dev/null
+ph = load_lib_module("programme_home")
+rec = programme_records.load(args[0])
+item = ph.new_item("linear:AI-7", "linear:AI-7", state="waiting", now_iso="2026-10-23T00:00:00Z")
+item["matched_rule"] = "r1"
+item["owner"] = {"pane": "w2:p1", "terminal_id": None, "session_id": "sess-w"}
+item["waiting_on"] = {"who": "team-x", "watcher": None, "reporter": None}
+rec["programme"]["items"] = {"linear:AI-7": item}
+programme_records.save(args[0], rec)
+EOF
+OUT="$(stop_hook sess-pm "$REPO")"
+REASON="$(printf '%s' "$OUT" | field reason)"
+case "$REASON" in *"linear:AI-7"*) ;; *) fail "expected the unwatched wait to block: $OUT" ;; esac
+check "no no" "$(asks_move "$REASON") $(asks_move "$(printf '%s' "$OUT" | field systemMessage)")"
+run_py "$RUN" <<'EOF' >/dev/null
+rec = programme_records.load(args[0])
+rec["programme"]["items"] = {}
+programme_records.save(args[0], rec)
+EOF
+
+it "status names no programme worktree"
+as sess-pm status --run "$RUN"
+check "0 no" "$CODE $(asks_move "$OUT")"
+
+it "takeover by a session started in the main checkout asks for no move"
 register sess-b w2:p20 term_p20 "$REPO"
 snapshot "w2:p31|scratch|sess-w2|term_p31"
 typed sess-b '/auto:programme-takeover' >/dev/null
 as sess-b takeover
-check "0 sess-b" "$CODE $(driver_of "$RUN")"
-has "Run \`cd ${WT}\` so this PM ${MOVE}." "$OUT"
+check "0 sess-b no" "$CODE $(driver_of "$RUN") $(asks_move "$OUT")"
+has "<auto-rules>" "$OUT"
 
-it "the takeover output carries the move line exactly once"
-check "1" "$(moves "$OUT")"
-
-it "takeover by a session started in a sibling worktree asks Shawn to type /cd"
-register sess-c w2:p40 term_p40 "$SIBLING"
-typed sess-c '/auto:programme-takeover' >/dev/null
-as sess-c takeover
-check "0 sess-c 1" "$CODE $(driver_of "$RUN") $(moves "$OUT")"
-has "Ask Shawn to type \`/cd ${WT}\`" "$OUT"
-case "$OUT" in *"Run \`cd "*) fail "the /cd case also printed a cd line" ;; *) pass ;; esac
-
-it "takeover run from inside the worktree prints no move line"
-register sess-d w2:p50 term_p50 "$REPO"
-typed sess-d '/auto:programme-takeover' >/dev/null
-HERE="${WT}/sub"
-mkdir -p "$HERE"
-as sess-d takeover
-HERE="$NOREPO"
-check "0 sess-d 0" "$CODE $(driver_of "$RUN") $(moves "$OUT")"
-
-it "a handover successor's first refused write prints the rules with the move line"
+it "a handover successor's refused write prints the rules with no move line"
 register sess-n w2:p60 term_p60 "$REPO"
-snapshot "w2:p50|PM|sess-d|term_p50"
-typed sess-d '/auto:programme-handover sess-n' >/dev/null
-as sess-d handover sess-n
+snapshot "w2:p20|PM|sess-b|term_p20"
+typed sess-b '/auto:programme-handover sess-n' >/dev/null
+as sess-b handover sess-n
 check "0 sess-n" "$CODE $(driver_of "$RUN")"
 as sess-n set-now "sweeping" --run "$RUN"
-check "1 1" "$CODE $(moves "$OUT")"
-has "<auto-rules>" "$OUT"
-has "Run \`cd ${WT}\`" "$OUT"
-
-it "the same refused write from inside the worktree prints the rules without it"
-HERE="$WT"
-as sess-n set-now "sweeping" --run "$RUN"
-HERE="$NOREPO"
-check "1 0" "$CODE $(moves "$OUT")"
+check "1 no" "$CODE $(asks_move "$OUT")"
 has "<auto-rules>" "$OUT"
 
-it "a handover successor's programme.sh rules prints the move line"
+it "programme.sh rules prints no move line"
 as sess-n rules --run "$RUN"
-check "0 1" "$CODE $(moves "$OUT")"
-has "Run \`cd ${WT}\`" "$OUT"
+check "0 no" "$CODE $(asks_move "$OUT")"
 
-it "programme.sh rules from inside the worktree omits it"
-HERE="$WT"
-as sess-n rules --run "$RUN"
-HERE="$NOREPO"
-check "0 0" "$CODE $(moves "$OUT")"
-
-it "restored context after compaction names the move line when the cwd is outside the worktree"
+it "restored context after compaction has no move line"
 CTX="$(restored sess-n "$NOREPO")"
 has "programme: ${RUN}" "$CTX"
-check "1" "$(moves "$CTX")"
-has "Run \`cd ${WT}\`" "$CTX"
-
-it "restored context omits the move line when the cwd is inside the worktree"
-CTX="$(restored sess-n "${WT}/sub")"
-has "programme: ${RUN}" "$CTX"
-check "0" "$(moves "$CTX")"
-
-it "a programme with no worktree prints no move line on takeover, refused write or restore"
-run_py "$RUN" <<'EOF' >/dev/null
-rec = programme_records.load(args[0])
-rec["programme"]["remit"]["repos"] = []
-rec["programme"]["pm_worktree"] = None
-programme_records.save(args[0], rec)
-EOF
-register sess-e w2:p70 term_p70 "$REPO"
-snapshot "w2:p31|scratch|sess-w2|term_p31"
-typed sess-e '/auto:programme-takeover' >/dev/null
-as sess-e takeover
-TAKE="$CODE $(moves "$OUT")"
-register sess-f w2:p80 term_p80 "$REPO"
-snapshot "w2:p70|PM|sess-e|term_p70"
-typed sess-e '/auto:programme-handover sess-f' >/dev/null
-as sess-e handover sess-f
-as sess-f set-now "sweeping" --run "$RUN"
-GUARD="$CODE $(moves "$OUT")"
-CTX="$(restored sess-f "$NOREPO")"
-check "0 0 1 0 0 yes" "$TAKE $GUARD $(moves "$CTX") $(case "$CTX" in *"programme: ${RUN}"*) echo yes ;; esac)"
+check "no" "$(asks_move "$CTX")"
 
 echo
-echo "programme-move-in.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "programme-pm-anywhere.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -78,7 +78,6 @@ import glob
 import json
 import os
 import re
-import shlex
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -342,8 +341,6 @@ _REASON_FIXES = {
     "source_unavailable": ("source {t} is down: `programme.sh set-source {t} --unavailable --watcher remit`, "
                            "or `--unsupported` when this machine cannot read it"),
     "safety_pause": "{t} is paused for safety: tell Shawn; only he lifts it",
-    # Hook-only: drift is session state, so it never joins programme_predicate.REASON_KINDS.
-    "cwd_drift": "this PM is outside its programme worktree: `cd {t}`",
 }
 
 
@@ -536,32 +533,6 @@ def _journal_stopped_unwatched(session_id, now) -> None:
             continue
 
 
-def _drift(hold, session_id, cwd):
-    if not isinstance(cwd, str) or not cwd:
-        return hold, None
-    try:
-        record = hold.get("record")
-        programme = (record.get("programme") or {}) if isinstance(record, dict) else {}
-        if programme.get("ended") or not isinstance(programme.get("pm_worktree"), dict):
-            return hold, None
-        programme_worktree = load_lib_module("programme_worktree")
-        worktree = programme_worktree.recorded(record)
-        if not worktree or not os.path.isdir(worktree["path"]):
-            return hold, None
-        path = worktree["path"]
-        if programme_worktree.inside(cwd, path):
-            return hold, None
-        if not programme_worktree.cd_can_stick(session_id, path):
-            return hold, (f"auto: programme {hold['run']}'s PM is working from {cwd}, outside its "
-                          f"programme worktree, and a cd it runs would not last. Type `/cd {path}`.")
-        status = dict(hold["status"], may_stop=False)
-        status["reasons"] = list(status.get("reasons") or []) + [
-            {"kind": "cwd_drift", "item": shlex.quote(path)}]
-        return dict(hold, status=status), None
-    except Exception:
-        return hold, None
-
-
 def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
     """Return the decision dict to print, or None to allow stop silently.
 
@@ -584,13 +555,7 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
         _journal_stopped_unwatched(session_id, now)
         return None
 
-    cwd = _hook_input(stdin_raw).get("cwd")
-    driven, notes = [], []
-    for hold in _driven_programmes(session_id, now):
-        hold, note = _drift(hold, session_id, cwd)
-        driven.append(hold)
-        if note:
-            notes.append(note)
+    driven = _driven_programmes(session_id, now)
     programmes = [hold for hold in driven if not hold["status"].get("may_stop")]
     blocking = _blocking_runs(repo_root, now=now, session_id=session_id)
     nag_dir = _nag_dir(repo_root, programmes)
@@ -599,7 +564,7 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
         _clear_nag(nag_dir, session_id)
         for hold in driven:
             _clear_nag(_nag_dir("", [hold]), session_id)
-        return {"systemMessage": "\n".join(notes)} if notes else None
+        return None
 
     # U2 (finding #9): de-duplicate the ~10x identical nag across turns. The block
     # is ALWAYS preserved (deliberate-stop); only the MESSAGE is collapsed to a
@@ -613,25 +578,19 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
         parts = [_terse_programme_reason_for(hold) for hold in programmes]
         if blocking:
             parts.append(_terse_reason_for(blocking))
-        out = {"decision": "block", "reason": "\n\n".join(parts)}
-        if notes:
-            out["systemMessage"] = "\n".join(notes)
-        return out
+        return {"decision": "block", "reason": "\n\n".join(parts)}
 
     parts = [_programme_reason_for(hold) for hold in programmes]
     if not blocking:
         # A programme hold is expected bookkeeping, not news for Shawn: the reason reaches the PM only.
-        out = {"decision": "block", "reason": "\n\n".join(parts)}
-        if notes:
-            out["systemMessage"] = "\n".join(notes)
-        return out
+        return {"decision": "block", "reason": "\n\n".join(parts)}
     parts.append(_reason_for(blocking))
     message = (
         f"auto held the stop: {len(blocking)} run(s) have unmet loop exit "
         "conditions. If you have background work in flight, the harness "
         "will re-invoke you when a verdict lands — do not poll."
     )
-    return {"decision": "block", "reason": "\n\n".join(parts), "systemMessage": "\n".join([message] + notes)}
+    return {"decision": "block", "reason": "\n\n".join(parts), "systemMessage": message}
 
 
 def _cli(argv) -> int:

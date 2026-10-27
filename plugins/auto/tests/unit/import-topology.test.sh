@@ -112,8 +112,7 @@
 #                          session_registry [lazy]. programme_record reaches it lazily.
 #   session_registry     → run_record_core, programme_home, driver_session
 #   programme_exec       → programme_sanitize
-#   programme_worktree   → _bootstrap [plain], run_record_core, programme_exec, session_registry
-#                          (callers write its record value through programme_authority)
+#   programme_worktree   → _bootstrap [plain], run_record_core, programme_exec
 #   programme_tracker    → programme_exec, programme_journal, programme_sanitize
 #   programme_tasks      → programme_sanitize
 #   programme_plans      → programme_exec, programme_sanitize, programme_tracker

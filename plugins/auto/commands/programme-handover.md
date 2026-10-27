@@ -26,6 +26,4 @@ Run the dispatch line below:
      accepted yet (`programme.sh status --json` has a `setup` part), that
      restored context tells the new session to
      resume `/auto:programme` step 5 at the first step not done before any
-     sweep. Nothing from this session's chat carries over. When the programme
-     has a worktree, also tell Shawn the new session will be told to move into
-     it: it runs the `cd` itself, or asks him to type `/cd <worktree>` there.
+     sweep. Nothing from this session's chat carries over.

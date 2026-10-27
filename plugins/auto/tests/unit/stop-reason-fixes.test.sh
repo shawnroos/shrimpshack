@@ -62,7 +62,7 @@ it "two items with the same reason each get their own line"
 OUT="$(msg '[{"kind":"open_item","item":"linear:A-1"},{"kind":"open_item","item":"linear:A-2"}]')"
 check "2" "$(printf '%s\n' "$OUT" | grep -c '^- .* is open')"
 
-it "every reason kind is hinted or deliberately unhinted, and cwd_drift is the one hook-only kind"
+it "every reason kind is hinted or deliberately unhinted, and no fix names a kind the predicate never reports"
 GOT="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
 import importlib.util, os, sys
 root = sys.argv[1]
@@ -75,11 +75,7 @@ spec.loader.exec_module(mod)
 print(" ".join(sorted(kinds - set(mod._REASON_FIXES))), "|", " ".join(sorted(set(mod._REASON_FIXES) - kinds)))
 PYEOF
 )"
-check "corrupt_context corrupt_record never_stop not_done until_time | cwd_drift" "$GOT"
-
-it "the cwd_drift fix names the cd into the worktree"
-OUT="$(msg '[{"kind":"cwd_drift","item":"/x/worktrees/programme-r"}]')"
-has 'cd /x/worktrees/programme-r' "$OUT"
+check "corrupt_context corrupt_record never_stop not_done until_time | " "$GOT"
 
 it "every programme.sh verb a fix names is a real verb"
 VERBS="$("$PY" - "$AUTO_ROOT" <<'PYEOF'

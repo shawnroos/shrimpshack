@@ -117,10 +117,6 @@ def _resume():
     return load_lib_module("programme_resume")
 
 
-def _worktree():
-    return load_lib_module("programme_worktree")
-
-
 def _run_from_leases(sid):
     if not sid:
         raise ProgrammeError("CLAUDE_CODE_SESSION_ID is unset; pass --run <id>")
@@ -234,9 +230,9 @@ def render_rules(record, revision=None) -> str:
     )
 
 
-def render_restore(run_id, session_id=None, cwd=None) -> str:
+def render_restore(run_id) -> str:
     record, revision = _resume().head(run_id)
-    return render_rules(record, revision) + _worktree().restore_line(record, session_id, cwd)
+    return render_rules(record, revision)
 
 
 def _guard(home, record, *, compact_exempt=False):
@@ -246,7 +242,7 @@ def _guard(home, record, *, compact_exempt=False):
     if (record.get("programme") or {}).get("ended"):
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
-        sys.stdout.write(render_rules(record) + _worktree().restore_line(record, sid))
+        sys.stdout.write(render_rules(record))
         raise ProgrammeError(
             "context was compacted or handed over: read the rules in force and the restored "
             "context above, then run `programme.py rules --ack`"
@@ -428,7 +424,7 @@ def _h_rules(argv):
     _, opts = _parse(argv, values=("run", "context"), flags=("ack",))
     if not opts.get("ack"):
         run_id = _locate(opts)[0]
-        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
+        sys.stdout.write(render_restore(run_id))
         return 0
 
     def ack(programme, prompt, rec):
@@ -446,11 +442,11 @@ def _h_rules(argv):
     except _resume().StaleAck as stale:
         run_id, home, _ = _locate(opts)
         _resume().rebind(home, stale.current)
-        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
+        sys.stdout.write(render_restore(run_id))
         raise ProgrammeError(
             f"stale acknowledgement: the decision context changed since it was restored (now "
             f"{stale.current}); read the block above, then run `programme.sh rules --ack` again") from None
-    sys.stdout.write(render_restore(_locate(opts)[0], driver_session.driving_session_id()))
+    sys.stdout.write(render_restore(_locate(opts)[0]))
     return 0
 
 
@@ -885,9 +881,6 @@ def _h_status(argv):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
-        line = _worktree().status_line(record)
-        if line:
-            sys.stdout.write(line + "\n")
     return 0
 
 

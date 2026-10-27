@@ -65,7 +65,8 @@ Run the dispatch line below:
      the task id; an id the programme does not owe is refused.
   2. Run each `TaskStop <task id>` line it prints, record it the same way, then
      stop any other watcher Monitor this session still runs.
-  3. If this session is inside the programme worktree, leave it first, because
+  3. If the programme recorded a programme worktree (`pm_worktree`, made by an
+     older auto) and this session is inside it, leave it first, because
      release refuses to remove the worktree while the caller is inside it:
      `cd` to its main checkout (the worktree path without
      `/worktrees/programme-<run>`), or have Shawn type `/cd <main checkout>`.
