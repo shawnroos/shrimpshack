@@ -40,11 +40,20 @@ def label(argv) -> str:
     return "Approve " + shlex.join(kept)
 
 
+def approval_fix(verb, verb_argv) -> str:
+    if verb in PICK_VERBS and verb not in _STDIN_VERBS:
+        command = label(verb_argv)[len("Approve "):] if verb_argv else f"{verb} <args>"
+        return (f"run `programme.sh approval-label {command}`, offer its output as one AskUserQuestion "
+                "option, then rerun citing the pick with --prompt <pick id>")
+    return (f"ask Shawn to type the approval for {verb or 'this verb'} in this session, "
+            "then rerun with --prompt <its id>")
+
+
 def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
     answer = programme_journal.pick_answer(rows, row)
     if verb_argv and verb_argv[0] in _STDIN_VERBS:
         raise error(f"{verb_argv[0]} reads its change from stdin, which a pick label cannot show; "
-                    "it needs typed text")
+                    "it needs typed text", fix=approval_fix(verb_argv[0], verb_argv))
     # Reading a decline's intent from free text leaked three review rounds running ("No", "Skip r1",
     # "Keep item-x" for drop-item); only the exact label the tool printed approves.
     if answer.casefold().endswith(_RECOMMENDED):
@@ -52,28 +61,33 @@ def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
     want = label(verb_argv) if verb_argv else None
     if answer != want:
         raise error(f"pick {prompt_id!r} answer {answer!r} is not the approval label for this command; "
-                    f"the answer must be exactly {want!r} (`programme.sh approval-label ...` prints it)")
+                    f"the answer must be exactly {want!r} (`programme.sh approval-label ...` prints it)",
+                    fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv))
     return answer
 
 
 def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) -> dict:
     if not prompt_id:
-        raise error("this approval needs --prompt <id> of a typed prompt or a pick")
+        raise error("this approval needs --prompt <id> of a typed prompt or a pick",
+                    fix=approval_fix(verb, verb_argv))
     rows = programme_journal.read(run_id)
     row = programme_journal.find_prompt(run_id, prompt_id, rows)
     if row is None:
-        raise error(f"no prompt {prompt_id!r} in this programme's journal")
+        raise error(f"no prompt {prompt_id!r} in this programme's journal",
+                    fix=approval_fix(verb, verb_argv))
     payload = row.get("payload") or {}
     if row.get("provenance") in programme_authority.UNVERIFIED:
         raise error(f"prompt {prompt_id!r} was imported from a legacy journal or appended by an "
-                    "obsolete writer; its typed label is unverified, so it approves nothing new")
+                    "obsolete writer; its typed label is unverified, so it approves nothing new",
+                    fix=approval_fix(verb, verb_argv))
     origin = programme_journal.prompt_origin(row)
     if origin in ("picked", "suggested") and verb not in PICK_VERBS:
         raise error(f"{verb or 'this verb'} needs a typed prompt; prompt {prompt_id!r} is "
-                    f"{'a pick' if origin == 'picked' else 'an accepted suggestion'}")
+                    f"{'a pick' if origin == 'picked' else 'an accepted suggestion'}",
+                    fix=approval_fix(verb, verb_argv))
     if origin not in programme_protocol.HUMAN_ORIGINS:
         raise error(f"prompt {prompt_id!r} is not typed or a verified pick "
-                    f"(origin {origin!r}; human source unverified)")
+                    f"(origin {origin!r}; human source unverified)", fix=approval_fix(verb, verb_argv))
     if row.get("session_id") != record.get("driving_session_id"):
         raise error(f"prompt {prompt_id!r} was not typed in the driving session")
     approval = {"prompt_id": prompt_id, "quote": payload.get("text") or "", "origin": origin,
@@ -86,7 +100,7 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
     prose = " ".join(token for token in approval["quote"].split() if "/" not in token)
     if origin == "suggested" and set(programme_naming.name_words(prose)) & set(programme_naming.NEGATIONS):
         raise error(f"prompt {prompt_id!r} is not a plain yes; an accepted suggestion with a negation "
-                    "approves nothing (type it instead)")
+                    "approves nothing (type it instead)", fix=approval_fix(verb, verb_argv))
     return approval
 
 
@@ -94,7 +108,8 @@ def _h_approval_label(host, argv):
     if len(argv) < 2:
         raise ValueError("usage: approval-label <verb> <args...>")
     if argv[1] not in PICK_VERBS or argv[1] in _STDIN_VERBS:
-        raise host.ProgrammeError(f"{argv[1]} needs a typed prompt; a pick cannot approve it")
+        raise host.ProgrammeError(f"{argv[1]} needs a typed prompt; a pick cannot approve it",
+                                  fix=approval_fix(argv[1], argv[1:]))
     print(label(argv[1:]))
     return 0
 

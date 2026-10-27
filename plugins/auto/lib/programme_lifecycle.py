@@ -165,7 +165,7 @@ def _refuse(host, run, verb, sid, exc):
         if os.path.isdir(programme_home.home_path(run)):
             host.refresh_view(run, programme_home.home_path(run))
         _cleanup_lines(exc.ended, run)
-    raise host.ProgrammeError(exc.reason)
+    raise host.ProgrammeError(exc.reason, fix=getattr(exc, "fix", None))
 
 
 def _move(run, new_sid, kind, sid, extra, cites=None) -> dict:

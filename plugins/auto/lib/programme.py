@@ -54,7 +54,9 @@ _name_words, _squash, _runs, _affirmed, _NEGATIONS = (
 
 
 class ProgrammeError(Exception):
-    pass
+    def __init__(self, *args, fix=None):
+        super().__init__(*args)
+        self.fix = fix
 
 
 def text_hash(text) -> str:
@@ -238,15 +240,14 @@ def render_restore(run_id) -> str:
 def _guard(home, record, *, compact_exempt=False):
     sid = driver_session.driving_session_id()
     if not session_registry.caller_drives(record, sid):
-        raise ProgrammeError("only the programme's driving session may run this verb")
+        raise ProgrammeError("only the programme's driving session may run this verb", fix="programme.sh become-pm")
     if (record.get("programme") or {}).get("ended"):
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
         sys.stdout.write(render_rules(record))
         raise ProgrammeError(
             "context was compacted or handed over: read the rules in force and the restored "
-            "context above, then run `programme.py rules --ack`"
-        )
+            "context above, then run `programme.py rules --ack`", fix="programme.sh rules --ack")
     return sid
 
 
@@ -966,7 +967,8 @@ def _cli(argv) -> int:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2
     _OPERATION["verb"], _OPERATION["argv"] = (argv[0] if argv else None), argv
-    return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
+    return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS,
+                             fixes=load_lib_module("programme_fixes").fix_for)
 
 
 programme_lifecycle = load_lib_module("programme_lifecycle")

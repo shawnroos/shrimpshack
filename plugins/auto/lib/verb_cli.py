@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 
 
-def dispatch(argv, verbs, *, prog, errors=()) -> int:
+def dispatch(argv, verbs, *, prog, errors=(), fixes=None) -> int:
     if not argv:
         sys.stderr.write(f"usage: {prog} <subcommand> ...\n")
         return 2
@@ -21,7 +21,15 @@ def dispatch(argv, verbs, *, prog, errors=()) -> int:
         return verb.handler(argv)
     except tuple(errors) as e:
         sys.stderr.write(f"{prog}: {e}\n")
+        _write_fix(getattr(e, "fix", None), argv[0], fixes)
         return 1
     except (IndexError, ValueError) as e:
         sys.stderr.write(f"{prog}: bad arguments: {e}\n")
+        _write_fix(None, argv[0], fixes)
         return 2
+
+
+def _write_fix(fix, verb, fixes) -> None:
+    # The fix line goes after the refusal, never into it: tests and callers match the refusal text as is.
+    if fixes is not None:
+        sys.stderr.write(f"fix: {fix or fixes(verb)}\n")
