@@ -102,13 +102,20 @@ def _space_lease(session_id, env):
     return lease
 
 
-def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease, source):
-    named = programme_home.lease_driven_by(programme_home.replace_name(text)) if verb == "takeover" else None
-    lease = driving_lease or named or _space_lease(session_id, env)
+def request_lease(session_id, env, driving_lease=None, replace=None):
+    lease = driving_lease or programme_home.lease_driven_by(replace) or _space_lease(session_id, env)
     if lease is None:
-        return
+        return None, None
     status = programme_home.lease_status(lease)
     if status not in programme_home.HELD_LEASE_STATES:
+        return None, None
+    return lease, status
+
+
+def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lease, source):
+    replace = programme_home.replace_name(text) if verb == "takeover" else None
+    lease, status = request_lease(session_id, env, driving_lease, replace)
+    if lease is None:
         return
     driving = driving_lease is not None
     programme_journal.append(

@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
             refresh_failures.append((args, result.stderr))
         return result
 
-    def pick(sid, run, answers, tool_use_id=None, answered=True):
+    def pick(sid, run, answers, tool_use_id=None, answered=True, driving=True):
         if tool_use_id is None:
             counter[0] += 1
             tool_use_id = f'toolu_{counter[0]}'
@@ -107,6 +107,9 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                 stream.write(''.join(json.dumps(r) + '\n' for r in rows))
         source = pick_source.capture({'transcript_path': str(path), 'session_id': sid, 'tool_use_id': tool_use_id,
                                       'tool_response': {'answers': answers}})
+        if not driving:
+            payload = {'text': pick_source.summary(answers), 'origin': 'unknown', 'source': source, 'driving': False}
+            return pj.append_row(run, pj.entry('prompt', sid, payload, prompt_id=f'pnd{counter[0]}'))['prompt_id']
         row = pj.append_prompt(run, sid, pick_source.summary(answers), 'unknown', source=source)
         return row['prompt_id']
 
@@ -139,6 +142,14 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('pick-term refuses a pick whose answer names a different value',
           refused(result, 'does not name') and terms(run)['cadence']['value'] == 'on_change'
           and terms(run)['cadence']['set_by'] == 'default', result.stdout + result.stderr)
+
+    early_cadence = pick(a_sid, run, {cadence_q: 'fixed every 15 min'}, driving=False)
+    check('a pick journaled before the session drove verifies as picked', origin(run, early_cadence) == 'picked',
+          origin(run, early_cadence))
+    result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', early_cadence)
+    check('pick-term refuses a pick answered before this session drove the programme',
+          refused(result, 'before this session drove the programme') and terms(run)['cadence']['set_by'] == 'default',
+          result.stdout + result.stderr)
 
     result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', cadence_pick)
     cadence = terms(run)['cadence']
@@ -336,6 +347,11 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           result.stdout + result.stderr)
     result = verb(a_sid, run, 'approval-label', 'record-instruction')
     check('approval-label refuses a verb a pick cannot approve', refused(result, 'needs a typed prompt'),
+          result.stdout + result.stderr)
+    early = pick(a_sid, run, {'Adopt which rule?': printed.stdout.strip()}, driving=False)
+    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', early)
+    check('adopt-rule refuses an exact-label pick answered before this session drove the programme',
+          refused(result, 'before this session drove the programme') and 'pick-rule' in proposed_ids(),
           result.stdout + result.stderr)
     yes = pick(a_sid, run, {'Adopt which rule?': printed.stdout.strip() + ' (Recommended)'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', yes)

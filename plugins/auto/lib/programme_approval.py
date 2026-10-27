@@ -80,6 +80,9 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
         raise error(f"prompt {prompt_id!r} was imported from a legacy journal or appended by an "
                     "obsolete writer; its typed label is unverified, so it approves nothing new",
                     fix=approval_fix(verb, verb_argv))
+    if payload.get("driving") is False:
+        raise error(f"prompt {prompt_id!r} was answered before this session drove the programme; "
+                    "it can serve only a takeover", fix=approval_fix(verb, verb_argv))
     origin = programme_journal.prompt_origin(row)
     if origin in ("picked", "suggested") and verb not in PICK_VERBS:
         raise error(f"{verb or 'this verb'} needs a typed prompt; prompt {prompt_id!r} is "

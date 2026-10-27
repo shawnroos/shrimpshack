@@ -4,7 +4,8 @@
 The advisor-routing gate (KTD-4/5). On an AskUserQuestion tool call, DENY and
 redirect the driving agent to the advisor ONLY when a LIVE self-driven /auto run
 owns this very session — otherwise emit nothing (allow). Separately, it DENIES a
-call that pre-fills ``answers`` from a programme's driving session (KTD2).
+call that pre-fills ``answers`` from a programme's driving session, or from any
+session of a herdr space a programme leases (KTD2).
 
 OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
     a question belongs to a live auto run iff, for SOME run-record under
@@ -77,7 +78,7 @@ def _read_session_id(raw: str):
     return sid if isinstance(sid, str) and sid else None
 
 
-def _prefills_for_programme(stdin_raw: str, session_id) -> bool:
+def _prefills_for_programme(stdin_raw: str, session_id, env) -> bool:
     try:
         data = json.loads(stdin_raw) if stdin_raw else {}
     except ValueError:
@@ -85,14 +86,18 @@ def _prefills_for_programme(stdin_raw: str, session_id) -> bool:
     tool_input = data.get("tool_input") if isinstance(data, dict) else None
     if not session_id or not isinstance(tool_input, dict) or "answers" not in tool_input:
         return False
+    on_user_prompt = load_lib_module("on-user-prompt")
     # A broken or held lease still names this session as the programme's driver.
-    run, _record, _lease, held = load_lib_module("on-user-prompt")._driving_run(session_id)
-    return bool(run or held)
+    run, _record, _lease, held = on_user_prompt._driving_run(session_id)
+    if run or held:
+        return True
+    lease, _status = on_user_prompt.request_lease(session_id, env)
+    return lease is not None
 
 
 _PREFILL_REASON = (
-    "auto: this session drives a programme, so it may not pre-fill a picker. Ask the "
-    "AskUserQuestion again without `answers` and let Shawn pick."
+    "auto: this session drives a programme or sits in a herdr space a programme leases, so it "
+    "may not pre-fill a picker. Ask the AskUserQuestion again without `answers` and let Shawn pick."
 )
 
 
@@ -179,13 +184,13 @@ _REDIRECT_REASON = (
 )
 
 
-def decide(repo_root: str, stdin_raw: str) -> dict | None:
+def decide(repo_root: str, stdin_raw: str, env=None) -> dict | None:
     """Return the deny decision dict to print, or None to allow silently.
 
     Fires the deny ONLY when a live self-driven run owns this session.
     """
     session_id = _read_session_id(stdin_raw)
-    if _prefills_for_programme(stdin_raw, session_id):
+    if _prefills_for_programme(stdin_raw, session_id, env if env is not None else os.environ):
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -227,7 +232,7 @@ def _cli(argv) -> int:
         except Exception:
             stdin_raw = ""
     try:
-        decision = decide(repo_root, stdin_raw)
+        decision = decide(repo_root, stdin_raw, os.environ)
     except Exception:
         decision = None  # any failure => allow (fail-open; rel-001).
     if decision is not None:

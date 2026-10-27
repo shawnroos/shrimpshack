@@ -19,8 +19,9 @@
 # directly. So this hook emits nothing (allow) on any uncertainty.
 #
 # It also DENIES a call whose input pre-fills `answers` when this session drives
-# a programme (KTD2); that check is gated on the programme lease file, since a
-# programme has no <repo>/.claude/auto folder.
+# a programme or sits in a herdr space a programme leases (KTD2); that check is
+# gated on the programme lease files, since a programme has no <repo>/.claude/auto
+# folder.
 #
 # rel-001: presence-gate first; ALWAYS exit 0 at the process level; heavy work
 # exec'd into Python. Mirrors .claude/hooks/on-stop.sh.
@@ -65,16 +66,6 @@ fi
 __cd_stdin_json=""
 if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
-fi
-
-if [ -z "$__cd_repo" ]; then
-  # Anything the shell cannot read exactly (no id, two ids, unusual characters, a \u escape) still goes to Python.
-  __cd_after_sid="${__cd_stdin_json#*\"session_id\"}"
-  if [[ $__cd_stdin_json != *\\u* && $__cd_after_sid != *\"session_id\"* \
-        && $__cd_stdin_json =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]+)\" ]]; then
-    grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_files[@]}"
-    [ $? = 1 ] && exit 0
-  fi
 fi
 
 # Hand off ALL decision logic to Python. `|| true` belt-and-braces so even an

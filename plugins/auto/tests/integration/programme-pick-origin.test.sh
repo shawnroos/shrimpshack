@@ -68,10 +68,10 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
                    'tool_response': {'questions': [{'question': QUESTION}], 'answers': ANSWERS, 'annotations': {}}}
         return hook('on-posttooluse-askuser.sh', payload, env)
 
-    def pre(sid, tool_input):
+    def pre(sid, tool_input, env=None):
         payload = {'session_id': sid, 'cwd': str(plain), 'hook_event_name': 'PreToolUse',
                    'tool_name': 'AskUserQuestion', 'tool_input': tool_input}
-        return hook('on-pretooluse-askuser.sh', payload)
+        return hook('on-pretooluse-askuser.sh', payload, env)
 
     def pick_id(result):
         context = json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
@@ -94,6 +94,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
     row = pj.find_prompt(run, prompt_id)
     check('the pick row is stored unknown with a pick source',
           bool(row) and row['payload']['origin'] == 'unknown' and row['payload']['source']['kind'] == 'pick', row)
+    check('a driving pick row carries no driving key, as before', bool(row) and 'driving' not in row['payload'], row)
     check('the pick is unverified before its result row lands', pj.prompt_origin(row) == 'unknown', row)
     with path.open('a') as stream:
         stream.write(json.dumps(dict(RESULT, sessionId='pick-pm')) + '\n')
@@ -171,6 +172,40 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
         check(f'PostToolUse still journals the driving pick when the stdin carries {label}',
               result.returncode == 0 and len(rows) == 1 and rows[0].get('session_id') == 'pick-pm',
               (result.returncode, result.stdout, rows))
+
+    leases = sorted((work / 'data/programmes/leases').glob('*.json'))
+    check('the fixture programme holds one lease', len(leases) == 1, leases)
+    in_space = dict(os.environ, HERDR_WORKSPACE_ID=leases[0].stem.split('.', 1)[1])
+    newcomer = transcript('newcomer', [PICK])
+    before = len(prompt_rows(run))
+    result = post('newcomer', newcomer, env=in_space)
+    rows = [r for r in prompt_rows(run) if r.get('session_id') == 'newcomer']
+    early = rows[0] if len(rows) == 1 else {}
+    payload = early.get('payload') or {}
+    check('a non-driving pick in the leased space is journaled unknown with driving false and its own source',
+          result.returncode == 0 and len(prompt_rows(run)) == before + 1 and payload.get('origin') == 'unknown'
+          and payload.get('driving') is False and (payload.get('source') or {}).get('path') == str(newcomer)
+          and (payload.get('source') or {}).get('session_id') == 'newcomer', (result.stdout, result.stderr, rows))
+    check('the hook names the non-driving pick as serving only a takeover',
+          'takeover' in result.stdout and bool(rows) and pick_id(result) == early.get('prompt_id'), result.stdout)
+    with newcomer.open('a') as stream:
+        stream.write(json.dumps(dict(RESULT, sessionId='newcomer')) + '\n')
+    check('programme_pick_source.verify reads the non-driving pick as picked',
+          load_lib_module('programme_pick_source').verify(early) == 'picked', early)
+    result = pre('newcomer', dict(asked, answers=ANSWERS), env=in_space)
+    check('PreToolUse denies a pre-filled picker in a non-driving session of a leased space',
+          denied(result), (result.returncode, result.stdout, result.stderr))
+    result = pre('newcomer', asked, env=in_space)
+    check('PreToolUse allows a non-driving picker without answers',
+          result.returncode == 0 and result.stdout == '', result.stdout + result.stderr)
+    elsewhere = dict(os.environ, HERDR_WORKSPACE_ID='no-lease-here')
+    outsider = transcript('outsider', [PICK, RESULT])
+    before = len(prompt_rows(run))
+    result = post('outsider', outsider, env=elsewhere)
+    denial = pre('outsider', dict(asked, answers=ANSWERS), env=elsewhere)
+    check('a session in a space with no lease: nothing journaled and nothing denied',
+          result.stdout == '' and denial.stdout == '' and len(prompt_rows(run)) == before,
+          (result.stdout, denial.stdout, len(prompt_rows(run))))
 
     marker = pathlib.Path(ph.home_path(run)) / load_lib_module('programme_authority').IMPORT_MARKER
     marker.write_text('')

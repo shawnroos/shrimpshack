@@ -44,6 +44,9 @@ def _picked(host, run_id, rec, pick_id) -> dict:
                                   "only a picker answer Shawn gave in this session approves a setup choice")
     if row.get("session_id") != rec.get("driving_session_id"):
         raise host.ProgrammeError(f"pick {pick_id!r} was not answered in the driving session")
+    if row["payload"].get("driving") is False:
+        raise host.ProgrammeError(f"pick {pick_id!r} was answered before this session drove the programme; "
+                                  "it can serve only a takeover")
     source = row["payload"]["source"]
     used = programme_journal.pick_use(rows, source)
     if used is not None:

@@ -30,10 +30,12 @@ The source reader supports the transcript shapes observed in Claude Code 2.1.302
 
 ## Picker answers
 
-A picker (AskUserQuestion) answer in a programme's driving session is a pick, not a typed prompt.
+A picker (AskUserQuestion) answer is a pick, not a typed prompt.
 `UserPromptSubmit` does not fire for it.
 
-1. `PostToolUse` on AskUserQuestion journals a prompt row with origin `unknown` and a source record of kind `pick`.
+The hooks find the programme through the same lease lookup that journals takeover requests (`request_lease` in `lib/on-user-prompt.py`): the lease this session drives, else the lease of this session's herdr space. A session in a space with no lease is not journaled and not denied.
+
+1. `PostToolUse` on AskUserQuestion journals a prompt row with origin `unknown` and a source record of kind `pick`. A row from a session that does not drive the programme also carries `driving: false`. A row without the key is a driving-session row.
 2. The record holds the session, transcript path, tool-use ID, transcript byte offset, prefix hash, a hash of the answers map, and the redacted question-to-answer map.
 3. The row resolves to `picked` only when the transcript check passes. The journal never stores `picked` as a label, and a stored `picked` label is not trusted.
 4. The check needs one plain assistant row (same session, no sidechain or meta) with the `tool_use` for that ID, named AskUserQuestion, whose input has no `answers` key.
@@ -41,12 +43,14 @@ A picker (AskUserQuestion) answer in a programme's driving session is a pick, no
 6. That row's `toolUseResult.answers` must match the captured hash, and its redacted form must match the stored map.
 7. The result row can sit before or after the captured offset. The prefix must be unchanged.
 
-The PreToolUse AskUserQuestion hook denies a driving-session call whose input carries `answers`. It gates on the session's lease file, not on a repo `.claude/auto` folder.
+The PreToolUse AskUserQuestion hook denies a call whose input carries `answers` from the driving session or from any session in a leased herdr space. It gates on the lease files, not on a repo `.claude/auto` folder.
 The transcript check is the second line against a pre-filled answer.
 
 The source reader supports the picker shapes observed in Claude Code 2.1.304.
 A change to the secrets file can change the redacted map and make an older pick unverifiable.
 A verified pick shows that Shawn chose the answer. Each verb that takes a pick checks what the pick may approve and that it is not cited twice.
+
+A `driving: false` pick verifies the same way, but it serves only the takeover. Every other approval gate (`programme_approval.prompt` and `programme_setup._picked`) refuses it, even after its session takes over and becomes the driver. Picks collected before a takeover therefore never become PM approvals after it.
 
 A verified pick, or a `suggested` prompt, also approves the `--prompt` verbs on the pick list (`PICK_VERBS` in `lib/programme_approval.py`). Every verb on that list checks that the approval names its target. Any other verb, including `accept-agreement`, `edit-project-term`, `record-instruction`, `close-instruction`, `record-behaviour`, `record-decision` and `define-requirement`, needs a typed prompt. The list is default-deny: a new verb refuses picks until it is added.
 
