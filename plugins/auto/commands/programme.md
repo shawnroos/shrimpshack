@@ -10,7 +10,7 @@ a dispatched Agent.
 
 Whenever Shawn asks this session, in any words, to be the PM, to replace the PM
 or to take over as PM, run `programme.sh become-pm` first and follow the one
-step it prints. Only `start` continues with step 1 below. For `takeover`,
+step it prints. Only `start` continues with step 1 below. For
 `ask-shawn` or `stand-down`, follow `/auto:programme-takeover`; for
 `already-pm`, run the sweep; for `refused`, run its `fix:` line. When
 `$ARGUMENTS` names spaces, go straight to step 1: become-pm reads only this

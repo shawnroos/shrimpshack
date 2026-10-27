@@ -28,25 +28,29 @@ ended programme, so this comes before it.
 3. Otherwise, show both in one message. Each correction gets one line (its id,
    the kind of choice, who decides it now, and Shawn's quote). Each behaviour
    gets one line (its id, its "when", its do and don't lines, and Shawn's
-   quote). Ask which to keep for the next programme, and for each behaviour
-   whether it goes to the repo (every programme on this repo) or global (every
-   project). Then wait for his typed reply.
-4. When he names corrections to keep, run
-   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-corrections --prompt <id> <correction-id>...`,
-   citing his reply's prompt id. Keep none when he says none.
+   quote). Then ask through AskUserQuestion pickers, never a typed reply: one
+   picker for the corrections to keep, and one for the behaviours, which also
+   asks whether each goes to the repo (every programme on this repo) or global
+   (every project). Each option that keeps something is the exact output of
+   `programme.sh approval-label keep-corrections <correction-id>...` or
+   `programme.sh approval-label keep-behaviours <behaviour-id>... --to repo|personal`;
+   add a "Keep none" option. If Shawn answers with a set no option offered, ask
+   again with a picker whose option is that set's label.
+4. When he picks corrections to keep, run
+   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-corrections --prompt <pick id> <correction-id>...`
+   with the ids the picked label names. Keep none when he picks "Keep none".
    - It refuses with "corrections are not on yet": tell him so in one line and
      go on.
    - It refuses because this session does not drive the programme (an
      orphaned lease): tell him in one line that corrections can be kept only
      from the driving session, and go on.
-5. When he names behaviours to keep, run one `keep-behaviours` call per layer
-   he named, citing his reply's prompt id:
-   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-behaviours <behaviour-id>... --to repo|personal --prompt <id>`.
+5. When he picks behaviours to keep, run one `keep-behaviours` call per picked
+   label, citing that pick's id:
+   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-behaviours <behaviour-id>... --to repo|personal --prompt <pick id>`.
    "Global" or "all projects" is `--to personal`. When the remit holds several
-   repos, add `--repo <key>` for the repo he named. His reply must name each
-   behaviour id and the layer; the verb leaves out ids it does not name and
-   lists them as `not_named`, so tell him which ones were not kept. Keep none
-   when he says none.
+   repos, add `--repo <key>` for the repo he named, in the label too. The verb
+   leaves out ids the label does not name and lists them as `not_named`, so tell
+   him which ones were not kept. Keep none when he picks "Keep none".
    - On a refusal (an unreadable behaviours store, a negated layer, an
      orphaned lease), tell him the reason in one line and go on.
 
@@ -74,8 +78,9 @@ Run the dispatch line below:
      checks watcher processes and worker sessions without stopping anything.
   4. Run `check-archive --run <run>`. Each failed check names its remedy: for
      an unfinished item, `dispose-item <id> --as stopped_unfinished|handed_over
-     --why <text> --run <run>`; for an uncertain action, ask Shawn and cite his
-     typed answer with `dispose-action`. A disposition records how work stopped;
+     --why <text> --run <run>`; for an uncertain action, ask Shawn with an
+     AskUserQuestion picker offering the `approval-label dispose-action ...`
+     output and cite the pick with `dispose-action --prompt <pick id>`. A disposition records how work stopped;
      it never marks a requirement as passed.
   5. When every check passes, run `archive --run <run>`. The archive is sealed
      and read-only. If it refuses, show Shawn the failed check and stop.

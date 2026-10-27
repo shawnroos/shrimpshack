@@ -262,9 +262,9 @@ register sess-b w2:p40 term_p40
 snapshot "w2:p31|scratch|sess-w2|term_p31"
 set_beat "$RUN" 0
 
-it "a live lease whose driver herdr shows gone: become-pm names takeover"
+it "a live lease whose driver herdr shows gone: become-pm names ask-shawn with the exact label"
 as sess-c become-pm
-check "0 takeover gone" "$CODE $(field step) $(field presence)"
+check "0 ask-shawn gone Approve takeover --replace sess-b" "$CODE $(field step) $(field presence) $(field label)"
 
 snapshot "w2:p40|PM|sess-b|term_p40" "w2:p31|scratch|sess-w2|term_p31"
 set_beat "$RUN" 3
@@ -274,44 +274,67 @@ as sess-c become-pm
 check "0 ask-shawn Approve takeover --replace sess-b" "$CODE $(field step) $(field label)"
 
 snapshot "w2:p31|scratch|sess-w2|term_p31"
+register sess-c w2:p45 term_p45
 
-it "an orphaned lease: become-pm names takeover with the cited-ask instruction"
+it "an orphaned lease: become-pm names ask-shawn with the exact label, and writes nothing"
 BEFORE="$(state_hash "$RUN")"
 as sess-c become-pm
-check "0 takeover orphaned" "$CODE $(field step) $(field lease_status)"
-has "takeover --prompt <id of Shawn's ask in this session>" "$OUT"
+check "0 ask-shawn orphaned Approve takeover --replace sess-b" "$CODE $(field step) $(field lease_status) $(field label)"
+check "programme.sh takeover --prompt <pick id>" "$(field command)"
+has "AskUserQuestion picker" "$OUT"
 check "$BEFORE" "$(state_hash "$RUN")"
 
-it "an orphaned lease: Shawn's typed ask in a fresh session is journaled by the hook, driving false"
+it "an orphaned lease: another session's typed prompt is not journaled, so it cannot be cited"
 CTX="$(typed sess-c "take over as PM")"
-A="$("$PY" -c '
-import json, re, sys
-ctx = json.loads(sys.stdin.read())["hookSpecificOutput"]["additionalContext"]
-print(json.loads(re.search(r"\{.*\}", ctx).group(0))["prompt_id"])' <<< "$CTX")"
-has "become-pm" "$CTX"
-ROW="$(last_entry "$RUN" prompt)"
-has "\"prompt_id\": \"$A\"" "$ROW"
-has '"driving": false' "$ROW"
-has '"session_id": "sess-c"' "$ROW"
+check "" "$CTX"
+check "0" "$(prompts_of "$RUN" sess-c)"
 
-it "the takeover route works end to end: takeover --prompt <that id> moves the lease, unrequested"
-as sess-c takeover --prompt "$A"
+it "a refused takeover's fix is the takeover picker, not become-pm"
+as sess-c takeover --prompt p000000
+check "1 sess-b" "$CODE $(driver_of "$RUN")"
+FIX="$(printf '%s\n' "$OUT" | sed -n 's/^fix: //p' | tail -n 1)"
+case "$FIX" in "programme.sh become-pm"*) fail "the fix loops back to become-pm: $FIX" ;; *) pass ;; esac
+it "following that fix prints the label become-pm printed"
+LABEL_CMD="$(printf '%s' "$FIX" | sed -n 's/^run `programme.sh \([^`]*\)`.*/\1/p')"
+read -ra PARTS <<< "$LABEL_CMD"
+as sess-c "${PARTS[@]}"
+check "0 Approve takeover --replace sess-b" "$CODE $OUT"
+
+it "the ask-shawn route works for a stopped PM: a pick of the label, through the real hook, moves the lease"
+P="$(pick sess-c "Approve takeover --replace sess-b (Recommended)")"
+as sess-c become-pm
+CMD="$(field command)"
+CMD="${CMD#programme.sh }"
+read -ra PARTS <<< "${CMD/<pick id>/$P}"
+as sess-c "${PARTS[@]}"
 check "0 sess-c" "$CODE $(driver_of "$RUN")"
 ENTRY="$(last_entry "$RUN" taken_over)"
 has '"reason": "orphaned"' "$ENTRY"
 has '"request": null' "$ENTRY"
-has '"unrequested": true' "$ENTRY"
-has "\"prompt_id\": \"$A\"" "$ENTRY"
+has "\"prompt_id\": \"$P\"" "$ENTRY"
+case "$ENTRY" in *unrequested*) fail "a picked takeover is not unrequested" ;; *) pass ;; esac
 
-it "once this session drives, the same ask cannot serve an approval gate other than takeover"
+it "once this session drives, the same pick cannot serve an approval gate other than takeover"
 as sess-c rules --ack
-as sess-c adopt-rule r1 --prompt "$A"
+as sess-c adopt-rule r1 --prompt "$P"
 check "1" "$CODE"
 has "before this session drove the programme" "$OUT"
 
-it "the PM it replaced is told to stand down"
+snapshot "w2:p45|New PM|sess-c|term_p45" "w2:p31|scratch|sess-w2|term_p31"
+
+it "the PM it replaced is told to stand down while its successor is live"
 as sess-b become-pm
 check "0 stand-down" "$CODE $(field step)"
+it "the stand-down line says how to find the wake-ups to cancel"
+has "CronList" "$OUT"
+has "TaskStop each Monitor task id" "$OUT"
+
+snapshot "w2:p31|scratch|sess-w2|term_p31"
+set_beat "$RUN" 3
+
+it "a former PM whose successor went orphaned gets ask-shawn, not stand-down"
+as sess-b become-pm
+check "0 ask-shawn Approve takeover --replace sess-c" "$CODE $(field step) $(field label)"
 
 it "an unreadable run record: become-pm refuses with step refused and a fix"
 LEASE_FILE="${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json"

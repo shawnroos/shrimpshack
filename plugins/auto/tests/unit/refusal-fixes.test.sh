@@ -94,6 +94,22 @@ print(load_lib_module("programme_fixes").fix_for("no-such-verb"))
 EOF
 )"
 
+it "verbs a driving session runs routinely do not fall back to the bare become-pm"
+check "" "$(run_py <<'EOF'
+fixes = load_lib_module("programme_fixes")
+for verb in ("beat", "start", "reconcile-leases", "reconcile-operations"):
+    if fixes.fix_for(verb) == fixes.FALLBACK:
+        print(verb)
+EOF
+)"
+
+it "approval-label's own fix names approval-label usage, not the typed-approval text"
+check "ok" "$(run_py <<'EOF'
+fix = load_lib_module("programme_fixes").fix_for("approval-label")
+print("ok" if "approval-label <verb>" in fix and not fix.startswith("ask Shawn to type") else fix)
+EOF
+)"
+
 it "a non-driving session running set-waiting refuses at exit 1"
 CLAUDE_CODE_SESSION_ID="sess-stranger" prog set-waiting w2:item --who shawn --run "$RUN"
 check 1 "$CODE"

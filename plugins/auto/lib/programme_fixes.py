@@ -3,6 +3,14 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_lib_module  # noqa: E402
+
 FALLBACK = "programme.sh become-pm"
 
 _WRITE = ("`programme.sh become-pm` if this session does not drive the programme; "
@@ -13,14 +21,16 @@ _READ = "`programme.sh status` names the programme run ids; rerun `programme.sh 
 _PICKED = ("run `programme.sh approval-label {verb} <args>`, offer its output as one AskUserQuestion option, "
            "then rerun citing the pick with --prompt <pick id>")
 _TYPED = "ask Shawn to type the approval for {verb} in this session, then rerun with --prompt <its id>"
-_ACCEPT = ("run `programme.sh approval-label accept-agreement`, offer its output as one AskUserQuestion option, "
-           "then rerun citing the pick with --prompt <pick id> --terms <the digest that label names>")
 _PICK_ID = "ask Shawn with an AskUserQuestion picker, then rerun citing the pick with --pick <pick id>"
+_START = ("`programme.sh become-pm` if a programme already holds this space; else the refusal names what "
+          "start needs, such as a herdr pane or --space <server.workspace>")
+_LABEL = ("rerun `programme.sh approval-label <verb> <args>` with a verb a pick can approve "
+          "(`programme.sh describe` lists them), or `approval-label takeover --replace <driving session id>`")
 _ENDED = ("`programme.sh check-archive --run <id>` names each failed check and its remedy; "
           "`programme.sh status --run <id>` shows the end state")
 
 FIXES = {
-    "accept-agreement": _ACCEPT,
+    "accept-agreement": load_lib_module("programme_approval").ACCEPT_FIX,
     "accept-context": _PICKED,
     "add-item": _ITEM,
     "adopt-autonomy": _PICKED,
@@ -30,12 +40,12 @@ FIXES = {
     "amend-term": _PICKED,
     "answer-handed": _PICKED,
     "answer-permission": _PICKED,
-    "approval-label": _TYPED,
+    "approval-label": _LABEL,
     "archive": _ENDED,
     "ask-relayed": _ITEM,
     "ask-shown": _ITEM,
     "assign-item": _ITEM,
-    "beat": FALLBACK,
+    "beat": _WRITE,
     "become-pm": ("run Claude from a pane in the herdr space the programme leases, "
                   "then rerun `programme.sh become-pm` there"),
     "check-archive": _ENDED,
@@ -83,8 +93,8 @@ FIXES = {
     "propose-term": _WRITE,
     "queue": _WRITE,
     "raise-blocker": _ITEM,
-    "reconcile-leases": FALLBACK,
-    "reconcile-operations": FALLBACK,
+    "reconcile-leases": _WRITE,
+    "reconcile-operations": _WRITE,
     "record-behaviour": _TYPED,
     "record-decision": _TYPED,
     "record-denial": _WRITE,
@@ -108,7 +118,7 @@ FIXES = {
     "setup-keep": _WRITE,
     "setup-seen": _WRITE,
     "setup-step": _WRITE,
-    "start": FALLBACK,
+    "start": _START,
     "start-worker": _ITEM,
     "status": _READ,
     "sweep": _WRITE,

@@ -150,6 +150,7 @@
 #   programme_view_setup → programme_approval (the accept step's terms-bound label)
 #   programme_approval   → programme_view [lazy] (the terms digest hashes the rendered terms); a
 #                          module-top load would cycle through programme_view_setup.
+#   programme_fixes      → programme_approval (the accept-agreement fix); programme loads it lazily.
 #   permission_transcript → programme_sanitize, session_registry
 #   programme_permission_state → run_record_core, programme_record, programme_permission_rules
 #   programme_permission_settle → run_record_core, programme_home, programme_journal,

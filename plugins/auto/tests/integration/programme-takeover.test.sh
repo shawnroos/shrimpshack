@@ -413,6 +413,23 @@ PYEOF
   )
 }
 
+# An accepted Claude Code suggestion from a session that is not the PM, journaled now.
+suggested() {
+  ( cd "$NOREPO" && "$PY" - "$AUTO_ROOT" "$RUN" "$@" <<'PYEOF'
+import json, os, sys
+root, run, sid, text = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, "lib"))
+sys.path.insert(0, os.path.join(root, "tests", "fixtures"))
+import programme_prompts
+from _bootstrap import load_lib_module
+_, source, path, row = programme_prompts.fixture(text, sid, "suggestion_accepted")
+entry = load_lib_module("programme_journal").append_prompt(run, sid, text, "typed", source=source, driving=False)
+path.write_text(json.dumps(row) + "\n")
+print(entry["prompt_id"])
+PYEOF
+  )
+}
+
 D="$(driver_of "$RUN")"
 register "$D" w2:p80 term_p80
 snapshot "w2:p80|PM|${D}|term_p80" "w2:p31|scratch|sess-w2|term_p31"
@@ -423,12 +440,13 @@ it "approval-label takeover --replace prints the exact label the pick route chec
 as sess-p approval-label takeover --replace "$D"
 check "0 $LABEL" "$CODE $OUT"
 
-it "a pick answering the other option is refused, with the become-pm fix"
+it "a pick answering the other option is refused, and its fix offers the takeover picker"
 P="$(pick sess-p "Keep the current PM")"
 as sess-p takeover --prompt "$P"
 check "1 $D" "$CODE $(driver_of "$RUN")"
 has "does not approve this takeover" "$OUT"
-has "fix: programme.sh become-pm" "$OUT"
+has "fix: run \`programme.sh approval-label takeover --replace $D\`" "$OUT"
+has "then rerun \`programme.sh takeover --prompt <pick id>\`" "$OUT"
 
 it "a pre-filled pick of the takeover label is refused"
 P="$(pick sess-p "$LABEL" prefilled)"
@@ -470,10 +488,10 @@ as sess-p takeover --prompt "$P"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "before the current PM took the programme" "$OUT"
 
-it "a pick naming the PM before the last takeover is refused, with the become-pm fix"
+it "a pick naming the PM before the last takeover is refused; its fix asks for a pick naming the PM now"
 as sess-u takeover --prompt "$P2"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "fix: programme.sh become-pm" "$OUT"
+has "fix: run \`programme.sh approval-label takeover --replace sess-t\`" "$OUT"
 
 register sess-t w2:p85 term_p85
 snapshot "w2:p85|PM|sess-t|term_p85" "w2:p31|scratch|sess-w2|term_p31"
@@ -486,21 +504,45 @@ check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "needs a pick" "$OUT"
 
 snapshot "w2:p31|scratch|sess-w2|term_p31"
+LABEL_T="Approve takeover --replace sess-t"
+
+it "a session in the space only by HERDR env, with no registry row, cannot take over a stopped PM"
+P="$(pick sess-n "$LABEL_T")"
+as sess-n takeover --prompt "$P"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "not in the programme's herdr space" "$OUT"
+
+register sess-k w2:p86 term_p86
 
 it "an orphaned lease and no prompt of this session's is refused"
 as sess-k takeover --prompt p000000
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "no prompt 'p000000'" "$OUT"
 
-it "an ask typed before the lease turned orphaned is refused"
-A="$(ask sess-k "be the PM" 2.9)"
+it "an orphaned lease: Shawn's typed ask is refused; a stopped PM still needs the pick"
+A="$(ask sess-k "be the PM" 0)"
 as sess-k takeover --prompt "$A"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "before the PM stopped" "$OUT"
+has "the PM stopped; replacing it still needs a pick of '$LABEL_T'" "$OUT"
+it "the refusal's fix offers the takeover picker, not become-pm"
+has "fix: run \`programme.sh approval-label takeover --replace sess-t\`" "$OUT"
 
-it "an ask typed in another session is refused"
-A="$(ask sess-j "be the PM" 0)"
-as sess-k takeover --prompt "$A"
+it "an orphaned lease: an accepted suggestion is refused"
+S="$(suggested sess-k "yes, take over as PM")"
+as sess-k takeover --prompt "$S"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "needs a pick of '$LABEL_T'" "$OUT"
+
+it "an orphaned lease: a pick of the option that keeps the current PM is refused"
+P="$(pick sess-k "Keep the current PM")"
+as sess-k takeover --prompt "$P"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "does not approve this takeover" "$OUT"
+
+it "an orphaned lease: a pick made in another session is refused"
+register sess-j w2:p87 term_p87
+P="$(pick sess-j "$LABEL_T")"
+as sess-k takeover --prompt "$P"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "was not given in this session" "$OUT"
 
@@ -510,35 +552,58 @@ as_in w9 sess-w9 takeover --prompt "$A" --run "$RUN"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "not in the programme's herdr space" "$OUT"
 
+P="$(pick sess-k "$LABEL_T")"
+
 it "a lease whose status did not come from a readable run record is refused, not read as orphaned"
 LEASE_FILE="${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json"
 cp -f "$LEASE_FILE" "${WORK}/lease.bak"
 "$PY" -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["home"]="/nonexistent/home"; json.dump(d, open(p, "w"))' "$LEASE_FILE"
-A="$(ask sess-k "be the PM" 0)"
-as sess-k takeover --prompt "$A"
+as sess-k takeover --prompt "$P"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "run record could not be read" "$OUT"
 cp -f "${WORK}/lease.bak" "$LEASE_FILE"
 
-it "Shawn's ask typed after the orphaning moves the lease, unrequested"
-as sess-k takeover --prompt "$A"
+it "an orphaned lease: Shawn's pick of the exact label moves the lease, as orphaned"
+as sess-k takeover --prompt "$P"
 check "0 sess-k" "$CODE $(driver_of "$RUN")"
 ENTRY="$(last_entry "$RUN" taken_over)"
 has '"reason": "orphaned"' "$ENTRY"
 has '"request": null' "$ENTRY"
-has '"unrequested": true' "$ENTRY"
-has "\"prompt_id\": \"$A\"" "$ENTRY"
+has '"origin": "picked"' "$ENTRY"
+has "\"prompt_id\": \"$P\"" "$ENTRY"
+case "$ENTRY" in *unrequested*) fail "a picked takeover is not unrequested" ;; *) pass ;; esac
 
-it "a PM herdr shows gone is replaced on Shawn's ask, as driver_gone and unrequested"
 register sess-k w2:p90 term_p90
+register sess-m w2:p91 term_p91
 set_beat "$RUN" 0.05
+LABEL_K="Approve takeover --replace sess-k"
+
+it "a PM herdr shows gone: Shawn's typed ask is refused"
 A="$(ask sess-m "take over as PM" 0)"
 as sess-m takeover --prompt "$A"
+check "1 sess-k" "$CODE $(driver_of "$RUN")"
+has "the PM stopped; replacing it still needs a pick of '$LABEL_K'" "$OUT"
+
+it "a PM herdr shows gone: an accepted suggestion is refused"
+S="$(suggested sess-m "yes, take over as PM")"
+as sess-m takeover --prompt "$S"
+check "1 sess-k" "$CODE $(driver_of "$RUN")"
+has "needs a pick of '$LABEL_K'" "$OUT"
+
+it "a PM herdr shows gone: a pick of the option that keeps the current PM is refused"
+P="$(pick sess-m "Keep the current PM")"
+as sess-m takeover --prompt "$P"
+check "1 sess-k" "$CODE $(driver_of "$RUN")"
+has "does not approve this takeover" "$OUT"
+
+it "a PM herdr shows gone is replaced on Shawn's pick of the exact label, as driver_gone"
+P="$(pick sess-m "$LABEL_K")"
+as sess-m takeover --prompt "$P"
 check "0 sess-m" "$CODE $(driver_of "$RUN")"
 ENTRY="$(last_entry "$RUN" taken_over)"
 has '"reason": "driver_gone"' "$ENTRY"
-has '"unrequested": true' "$ENTRY"
 has '"request": null' "$ENTRY"
+has '"origin": "picked"' "$ENTRY"
 has '"pane_in_snapshot": false' "$ENTRY"
 
 echo

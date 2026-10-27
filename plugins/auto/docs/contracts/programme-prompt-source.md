@@ -17,7 +17,7 @@ Programme approvals require a verified human source, not a journal label alone.
 5. Existing session, target, lease, and request-consumption checks still apply.
 
 The journal captures unmatched prompts as `unknown`. Registered cron prompts remain `cron`.
-A prompt from a session that does not drive the programme is journaled only when that session's space lease is orphaned, or live with a driver herdr shows gone. The row carries `driving: false` and serves only as the cited ask of `takeover --prompt`.
+A prompt typed in a session that does not drive the programme is not journaled, apart from a typed `/auto:programme-takeover`, `-handover` or `-end` request. Typed text and accepted suggestions never approve `takeover --prompt`: that verb takes only a pick of its exact label, whatever state the PM is in.
 A verified human row resolves `unknown` to `typed` at authorization time.
 An older human row cannot authorize a later event that reuses its prompt ID, even when their text matches.
 

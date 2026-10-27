@@ -9,7 +9,6 @@ run-record lock.
 
 from __future__ import annotations
 
-import datetime
 import functools
 import json
 import os
@@ -321,25 +320,26 @@ def _fresh_state(lease) -> tuple:
     return status, (read[0] if read else None)
 
 
-def _ask_since(record, reason):
-    # The driver last proved alive at its beat; an orphaned lease turned orphaned two cadences later.
-    beat = run_record_core.parse_iso((record.get("loop") or {}).get("last_beat_at"))
-    if beat is None or reason == "driver_gone":
-        return beat
-    return beat + datetime.timedelta(seconds=programme_home.ORPHAN_CADENCE_PERIODS
-                                     * programme_home.cadence_seconds(record))
-
-
 def _in_space(run, sid) -> bool:
-    space = session_registry.space_of_session(sid, os.environ)
-    return bool(space) and any((lease.get("server"), lease.get("workspace")) == tuple(space)
-                               for _, lease in _run_leases(run))
+    # Only a registry row counts: HERDR_* env is set by the caller, so any session could claim the space.
+    for _, lease in _run_leases(run):
+        space = (lease.get("server"), lease.get("workspace"))
+        row = session_registry.lookup(sid, *space)
+        if row and (row.get("server"), row.get("workspace")) == space:
+            return True
+    return False
 
 
 def _stopped(status, presence) -> bool:
-    # One predicate for become-pm and the takeover routes: the step become-pm names must be the route takeover takes.
+    # One predicate for become-pm's stand-down and the takeover routes, so the two agree on a stopped PM.
     return (status == "live" and presence["state"] == "gone") or \
         (status == "orphaned" and presence["state"] != "present")
+
+
+def _pick_fix(driver) -> str:
+    return (f"run `programme.sh approval-label takeover --replace {driver}`, offer its output as the recommended "
+            "option of one AskUserQuestion picker beside an option that keeps the current PM, then rerun "
+            "`programme.sh takeover --prompt <pick id>` with the id from the <auto-data> tag after his answer")
 
 
 def _cited_route(run, sid, prompt_id, status, record, presence, refused):
@@ -352,20 +352,14 @@ def _cited_route(run, sid, prompt_id, status, record, presence, refused):
         raise refused(f"prompt {prompt_id!r} was given before the current PM took the programme")
     if not _stopped(status, presence):
         return "replaced", approval.takeover_pick(rows, row, prompt_id, sid, driver, refused)
-    reason = "driver_gone" if status == "live" else "orphaned"
     if record is None:
-        raise refused("the programme's run record could not be read, so auto cannot tell when its PM "
+        raise refused("the programme's run record could not be read, so auto cannot tell whether its PM "
                       "stopped; nothing is taken over")
     if not _in_space(run, sid):
         raise refused("this session is not in the programme's herdr space; only a session there can "
                       "take over a PM that stopped")
-    found = approval.cited_ask(rows, row, prompt_id, sid, driver, refused)
-    since = _ask_since(record, reason)
-    when = run_record_core.parse_iso(row.get("at"))
-    if since is None or when is None or when <= since:
-        raise refused(f"prompt {prompt_id!r} was given before the PM stopped, so it is not Shawn's ask "
-                      "to replace it")
-    return reason, found
+    found = approval.takeover_pick(rows, row, prompt_id, sid, driver, refused, stopped=True)
+    return ("driver_gone" if status == "live" else "orphaned"), found
 
 
 def _prompt_takeover(host, lease, run, sid, prompt_id) -> dict:
@@ -375,19 +369,18 @@ def _prompt_takeover(host, lease, run, sid, prompt_id) -> dict:
 
     def body():
         status, record = _fresh_state(lease)
-
-        def refused(reason):
-            return _Refused(reason, status, fix=_BECOME_PM)
-
         _check_movable(lease, run, sid, status)
         if presence is None or presence["session_id"] != _driver(lease, run):
-            raise refused("the PM changed while auto was checking it; run the takeover again")
+            raise _Refused("the PM changed while auto was checking it; run the takeover again", status,
+                           fix=_BECOME_PM)
+
+        def refused(reason):
+            return _Refused(reason, status, fix=_pick_fix(presence["session_id"]))
+
         reason, approval = _cited_route(run, sid, prompt_id, status, record, presence, refused)
         extra = {"reason": reason, "approval": approval, "request": None}
         if reason != "orphaned":
             extra["evidence"] = presence
-        if reason != "replaced":
-            extra["unrequested"] = True
         return _move(run, sid, "taken_over", sid, lambda moved, rec: dict(_rearm_list(rec), **extra),
                      cites=[prompt_id])
 
@@ -502,12 +495,11 @@ def _become_step(host, out, sid, space):
     out["driver"] = driver
     if driver == sid:
         return dict(out, step="already-pm")
-    if _drove(run, sid):
-        return dict(out, step="stand-down")
     presence = _presence(lease, run)
     out["presence"] = presence.get("state")
-    if _stopped(status, presence):
-        return dict(out, step="takeover", command="programme.sh takeover --prompt <id of Shawn's ask in this session>")
+    # A former PM stands down only for a live successor; once that one stops, Shawn may want this session back.
+    if _drove(run, sid) and not _stopped(status, presence):
+        return dict(out, step="stand-down")
     approval = load_lib_module("programme_approval")
     return dict(out, step="ask-shawn", label=approval.takeover_label(driver),
                 command="programme.sh takeover --prompt <pick id>")
@@ -516,10 +508,9 @@ def _become_step(host, out, sid, space):
 _BECOME_LINES = {
     "start": "next: run /auto:programme to start a programme here; this session becomes its PM.",
     "already-pm": "next: this session is the PM; run the programme sweep.",
-    "stand-down": ("next: stand down. Another session now drives this programme. Cancel this session's programme "
-                   "cron (CronDelete) and Monitor (TaskStop) wake-ups and stop. Do not message Shawn."),
-    "takeover": ("next: the PM stopped. Run `programme.sh takeover --prompt <id>`, citing the prompt id auto "
-                 "journaled for Shawn's ask in this session."),
+    "stand-down": ("next: stand down. Another session now drives this programme. Cancel this session's wake-ups: "
+                   "CronList shows its programme cron, so CronDelete that id; TaskStop each Monitor task id this "
+                   "session started. Then stop. Do not message Shawn."),
 }
 
 
@@ -543,7 +534,8 @@ def _h_become_pm(host, argv):
     if step["step"] == "ask-shawn":
         sys.stdout.write(f"next: ask Shawn in one AskUserQuestion picker. Offer `{step['label']}` as the "
                          "recommended option and a decline option that keeps the current PM. If he picks the "
-                         "label, run `programme.sh takeover --prompt <pick id>`. If he declines, stop.\n")
+                         "label, run `programme.sh takeover --prompt <pick id>`, with the id from the <auto-data> tag "
+                         "after his answer. If he declines, stop.\n")
     else:
         sys.stdout.write(_BECOME_LINES[step["step"]] + "\n")
     return 0
@@ -873,19 +865,18 @@ _SPECS = (
      "not live or orphaned; a driver herdr still shows (or cannot rule out) unless the typed request "
      "says --replace with its pane name, pane id or session id, and a heartbeat-orphaned lease "
      "needs no proof when the request was typed while it was orphaned. With --prompt and no typed "
-     "request: a driver herdr shows or cannot rule out needs this session's unused pick of exactly "
-     "`approval-label takeover --replace <driver session id>`; an orphaned lease herdr does not show "
-     "present, or a driver herdr shows gone, needs a verified prompt from Shawn in this session, "
-     "journaled after the lease turned orphaned (last beat plus two cadences) or after the gone "
-     "driver's last beat, from a session in the lease's herdr space, with a readable run record; "
-     "a cited pick there must also be the takeover label; any prompt from before the current PM "
-     "took the programme. Journals taken_over with request null, the prompt id, and unrequested "
-     "true when no pick replaced a live PM. Refusals are journaled as request_refused."),
+     "request: anything but this session's unused verified pick of exactly "
+     "`approval-label takeover --replace <driver session id>` (a typed or suggested prompt never "
+     "counts); for an orphaned lease herdr does not show present, or a driver herdr shows gone, also "
+     "a session with no session-registry row in the lease's herdr space, or an unreadable run record; "
+     "any prompt from before the current PM took the programme. Journals taken_over with request null "
+     "and the prompt id. Refusals are journaled as request_refused."),
     ("become-pm", _h_become_pm, "",
      "nothing it can route: a session outside a herdr space, an unreadable lease or run record, and a "
      "newer programme print step refused with a fix. Reads the space lease, its status, herdr presence "
-     "and this session's driver history, and prints one step as JSON plus a line: start, takeover, "
-     "ask-shawn (with the exact takeover label and command), already-pm or stand-down. Writes nothing."),
+     "and this session's driver history, and prints one step as JSON plus a line: start, ask-shawn (with "
+     "the exact takeover label and command, for a live or a stopped PM), already-pm, or stand-down (a "
+     "session that drove the programme, while its successor has not stopped). Writes nothing."),
     ("handover", _h_handover, "<session-id> [--run <id>]",
      "a caller that is not the driving session; no typed /auto:programme-handover <session-id> in "
      "the driving session. Refusals are journaled as request_refused."),

@@ -15,7 +15,7 @@ execution: code
 - **Objective:** when Shawn asks a Claude session to be the PM of a herdr space, that session becomes the PM and keeps the programme moving. Shawn's only part is his request and his picker answers. He never types commands, session ids or `/cd` lines, and he never answers the same question every hour. The one exception is the one-time unstick of today's Peek PM, described under Operational Notes.
 - **Means:**
   - The PM works from wherever its session runs (KTD1).
-  - A session Shawn asked takes over by an exact-label pick, or with no pick when the old PM is orphaned (KTD2, KTD3).
+  - A session Shawn asked takes over by an exact-label pick, whether the old PM is live, orphaned or gone (KTD2, KTD3).
   - A replaced PM stands down (KTD7).
   - The agreement is accepted by a terms-bound pick (KTD4).
   - Every refusal and stop block carries a runnable fix (KTD5), and a stop block is shown once (KTD6).
@@ -36,7 +36,7 @@ execution: code
 Auto stops refusing a PM for things the PM cannot change, and starts telling it what to do next. Any session Shawn asks can start a programme or take one over:
 
 - **Live PM:** Shawn confirms the takeover with a pick.
-- **Orphaned PM:** the takeover needs no pick.
+- **Orphaned or gone PM:** Shawn confirms with the same pick. Typed or suggested text never approves a takeover.
 
 A replaced PM stops instead of asking Shawn to hand the programme back. The PM folder requirement from #128 "give each programme one fixed PM working directory" is removed. A stop block shows its fix once, then lets the PM stop until something changes.
 
@@ -70,7 +70,7 @@ Shawn's words: "agents cannot use the tool, they have no idea what to do, how it
   - live PM: a pick, then `takeover`;
   - this session was replaced: stand down.
 - R4. A live PM is replaced only after Shawn picks the exact approval label naming the current driver's session id, in the session taking over. The pick is single-use and verified from that session's transcript.
-- R5. An orphaned or gone PM is replaced with no pick. The new session must cite a verified human prompt (typed, suggested or picked) from itself, given after the lease went orphaned or the driver went gone. That cited prompt is Shawn's ask. The new session must also be in the lease's herdr space, and herdr must not report the old driver as present. The journal records the takeover as unrequested, so the programme view shows it.
+- R5. An orphaned or gone PM is replaced only on Shawn's pick. The new session must cite its own verified, unused pick whose answer is exactly `Approve takeover --replace <old PM sid>`, the same label as for a live PM. A typed prompt or an accepted suggestion never counts. The new session must also have a session-registry row in the lease's herdr space (HERDR_* env alone does not count), and herdr must not report the old driver as present. The journal records reason `orphaned` or `driver_gone` with `request: null` and the pick cited.
 - R6. The typed takeover and handover paths keep working unchanged.
 - R7. Shawn accepts the agreement with a pick whose label names a digest of the terms he is shown. A pick older than the last term change still refuses.
 - R12. A session whose lease moved to another session stops its own wake-ups and sweeps, and does not ask Shawn anything about it.
@@ -86,7 +86,8 @@ Shawn's words: "agents cannot use the tool, they have no idea what to do, how it
 
 - **The PM works where its session is.** (session-settled: user-directed — chosen over keeping the fixed programme folder with better advice: a harness-isolated session can never move there.) Governs R1, R2.
 - **An agent can start a takeover, and Shawn confirms with a pick.** (session-settled: user-directed — chosen over typed-only takeover requests. Shawn: "I dont mind if takeover requires me to accept via ask user tool. But it needs to work".) Governs R3, R4, R6, R12.
-- **A silent PM is replaced with no pick.** (session-settled: user-approved — chosen over also waiting for a pick: the orphan rule already proves two missed cadences.) Governs R5.
+- **A silent PM is replaced only on Shawn's exact-label pick, the same one as for a live PM.** (session-settled: user-directed, 2026-10-27 — chosen over matching takeover words in a typed prompt, and over no pick: a typed prompt in a worker could hand that worker the PM role.) Governs R5.
+  - This reverses the earlier decision of the same day that a silent PM is replaced with no pick, on any verified prompt from the new session.
 - **The agreement is accepted by a pick.** (session-settled: user-directed — chosen over a typed accept.) Governs R7.
   - This reverses a user-approved decision of 2026-10-20 and part of #131 "approve a programme change by exact pick or accepted suggestion". Both held that "the moment the PM gains authority is always something Shawn typed".
   - The replacement protection is a terms-bound label, a single-use pick, and the accept-order check.
@@ -103,9 +104,9 @@ Shawn's words: "agents cannot use the tool, they have no idea what to do, how it
   - **Then:** the session runs `become-pm` and asks one picker whose recommended option is `Approve takeover --replace aaaa…`. After Shawn picks it, `takeover --prompt <pick id>` moves the lease.
 - AE3. Covers R4. Given the same pick, when the session cites it a second time, or after a different session became PM, then takeover refuses.
 - AE4. Covers R5. Given a PM that missed two cadences and that herdr does not show as present:
-  - a session where Shawn typed "be the PM" afterwards runs `takeover --prompt <that prompt>`, and the lease moves with reason `orphaned`, `request: null` and `unrequested: true`;
-  - a session with no human prompt since the orphaning refuses;
-  - a session outside the space refuses.
+  - the session runs `become-pm`, gets `ask-shawn` with `Approve takeover --replace <old sid>`, and after Shawn picks it, `takeover --prompt <pick id>` moves the lease with reason `orphaned` and `request: null`;
+  - a typed "be the PM", an accepted suggestion, or a pick of "Keep the current PM" refuses;
+  - a session outside the space, or in it only by HERDR_* env with no registry row, refuses.
 - AE5. Covers R7. Given the agreement as `status` shows it, with terms digest `3f9a2c1d`:
   - Shawn picks `Approve accept-agreement --terms 3f9a2c1d` after the last term change, and the agreement is accepted;
   - a pick naming an older digest refuses;
@@ -119,7 +120,7 @@ Shawn's words: "agents cannot use the tool, they have no idea what to do, how it
 
 - Claude Code's own worktree lock is out of scope. It refused the PM's git, sed and herdr commands, and only Claude Code can change it.
 - `set-remit`, `edit-project-term`, `record-instruction`, `close-instruction` and shared settings stay typed-only.
-- Accepted suggestions do not approve a takeover from a live PM, or the agreement. Those take a pick or typed text only. An accepted suggestion does count as Shawn's ask for the orphan route (R5).
+- Accepted suggestions and typed prompts do not approve `takeover --prompt`, from a live or a stopped PM; it takes a pick only (R4, R5). Accepted suggestions do not approve the agreement.
 
 #### Deferred to Follow-Up Work
 
@@ -144,13 +145,15 @@ Shawn's words: "agents cannot use the tool, they have no idea what to do, how it
   - `programme_pick_source.verify` is reused unchanged.
   - Every approval gate other than `takeover` refuses a row with `driving: false`. That covers `programme_approval.prompt` and `programme_setup._picked`. Picks collected before a takeover therefore never become PM approvals after it.
   - Governs R4, R5.
-- KTD3. **Takeover gets a pick route and a cited-ask route, both checked under the leases lock.**
+- KTD3. **Takeover gets a pick route and a stopped route, both checked under the leases lock, both on the same exact-label pick.**
   - **Pick route** (live driver): `takeover --prompt <id>`. The pick must be verified `picked`, from this session and single-use through `pick_use`. Its answer must equal `programme_approval.label(["takeover", "--replace", <driver sid>])`, and the named sid must still be the driver under the lock. `approval-label` prints this label for `takeover`. `takeover` stays out of `PICK_VERBS`, because its check is its own.
-  - **Cited-ask route** (orphaned or gone): `takeover --prompt <id>`. The id must name a verified human prompt (`typed`, `suggested` or `picked`) from this session, journaled after the lease turned orphaned or the driver went gone. The caller must be in the lease's herdr space, and `_presence` must not be `present`. The status must come from a readable run record. A record that fails to load reads as orphaned today, and that does not count.
-  - Both routes journal `taken_over` with `request: null`. The cited-ask route also sets `unrequested: true` and the cited prompt id, on both the orphaned and the gone reason.
+  - **Stopped route** (orphaned or gone): `takeover --prompt <id>`. The id must name the same verified, single-use pick of the same label as the pick route. A typed prompt or an accepted suggestion refuses (user-directed reversal, 2026-10-27; see Key Decisions). The caller must have a session-registry row whose server and workspace match the lease; HERDR_* env alone refuses. `_presence` must not be `present`. The status must come from a readable run record. A record that fails to load reads as orphaned today, and that does not count.
+  - Both routes journal `taken_over` with `request: null`, the approval `{origin: picked, answer}` and the cited pick id.
+  - Every refusal on these routes carries a fix that offers the takeover picker (`approval-label takeover --replace <driver>`, then `takeover --prompt <pick id>`), so an agent never loops through `become-pm`. Only the "PM changed while checking" race keeps `become-pm`.
+  - The prompt hook does not journal other sessions' prompts as possible asks.
   - The checks live in `lib/programme_approval.py`. `programme.py` is at 989 of its 1000 lines.
   - The typed-request branches are unchanged.
-  - Sub-agents and worker sessions get no special denylist. The cited prompt must come from Shawn in the calling session, and that is the binding.
+  - Sub-agents and worker sessions get no special denylist. The cited pick must come from Shawn in the calling session, and that is the binding.
   - (session-settled: user-directed — chosen over typed-only takeover.) Governs R4, R5, R6.
 - KTD4. **`accept-agreement` joins `PICK_VERBS` with `--terms <digest>`, required when the cited prompt is a pick.**
   - The digest is a short hash of the agreement terms exactly as `status` and the setup view render them. `approval-label accept-agreement` computes it.
@@ -165,6 +168,7 @@ Shawn's words: "agents cannot use the tool, they have no idea what to do, how it
     - the driving-session guard and takeover's no-request refusal: `become-pm`;
     - "not typed" and "needs a typed prompt": `approval-label` plus a picker;
     - the compact flag: `rules --ack`.
+  - Verbs a driving session runs routinely (`beat`, `start`, `reconcile-*`) do not fall back to the bare `become-pm`: their table entry names `become-pm` only for a session that does not drive, else `status` and `describe`, so a non-ownership refusal does not loop through `already-pm` and the sweep.
   - Governs R8.
 - KTD6. **A stop block is shown once per session, programme and reason set, then allowed.**
   - The signature is the stop-rule kind plus `actionable_reasons`, not `reasons`. Under `never_stop`, `only_when_done` and `until_time`, `reasons` holds one fixed entry and would hide new items.
@@ -176,8 +180,8 @@ Shawn's words: "agents cannot use the tool, they have no idea what to do, how it
   - (session-settled: user-approved — chosen over repeating a shortened block every turn.) Governs R9, R10.
 - KTD7. **`become-pm` is a read-only routing verb, and it covers standing down.**
   - It reads the space lease, its status, herdr presence, and whether this session drove the run before. It prints exactly one next step as JSON plus a line.
-  - For a live PM, the step carries the takeover label. For a replaced session, the step is `stand-down`: cancel this session's programme wake-ups and stop, with no message to Shawn.
-  - It cannot see sub-agents. KTD3's cited-ask binding covers that case.
+  - For a live or a stopped PM, the step is `ask-shawn` and carries the takeover label. For a replaced session whose successor has not stopped, the step is `stand-down`: find the programme cron with CronList and delete it, stop each Monitor task it started, and stop, with no message to Shawn. A former PM whose successor stopped gets `ask-shawn` like any other session.
+  - It cannot see sub-agents. KTD3's pick binding covers that case.
   - It lives in `lib/programme_lifecycle.py`.
   - Governs R3, R12.
 
@@ -283,9 +287,9 @@ stateDiagram-v2
   - A driving session's picks behave exactly as before. The existing pick-origin cases stay green.
 - **Verification:** `programme_pick_source.verify` returns `picked` for a non-driving row built from the fixture transcript.
 
-### U3. Takeover by pick and by cited ask, with no typing
+### U3. Takeover by pick, with no typing
 
-- **Goal:** `takeover` moves the lease after a verified exact-label pick from a live PM, or after Shawn's verified ask when the PM is orphaned or gone.
+- **Goal:** `takeover` moves the lease after a verified exact-label pick, whether the PM is live, orphaned or gone.
 - **Requirements:** R4, R5, R6. Implements KTD3.
 - **Dependencies:** U2.
 - **Files:**
@@ -298,7 +302,7 @@ stateDiagram-v2
 - **Approach:**
   1. Add `--prompt` to `takeover`.
   2. Inside the locked `body()`, after `_fresh_status`, pick the route by lease status. Apply the KTD3 check for that route.
-  3. Write `request: null` and `unrequested: true` into the journal.
+  3. Write `request: null` and the picked approval into the journal.
   4. Keep every typed-request branch as it is.
 - **Execution note:** keep the existing default-deny cases green before adding new branches. They are the regression net for R6.
 - **Patterns to follow:** `programme_approval._picked_answer` for label matching. `_since_driver_changed` for the rule that a pick against an earlier PM cannot displace a later one.
@@ -310,15 +314,16 @@ stateDiagram-v2
     - an answer that is any other option;
     - a pre-filled pick;
     - a pick from another session.
-  - Covers AE4. An orphaned lease, with herdr not showing the driver, and a typed "be the PM" in the calling session after the orphaning: moves, with `request: null`, `unrequested: true` and the prompt cited.
-  - Covers AE4. Cited-ask failures, each refused:
-    - an orphaned lease and no human prompt since the orphaning;
-    - a prompt from before the orphaning;
-    - a prompt from another session.
-  - Covers AE4. An orphaned lease with the caller outside the space (`--run` from another workspace): refuses.
+  - Covers AE4. An orphaned lease, with herdr not showing the driver, and a pick of the exact label in the calling session: moves, with reason `orphaned`, `request: null` and the pick cited.
+  - Covers AE4. Stopped-route failures, each refused, with a fix that offers the picker:
+    - no prompt of this session's;
+    - a typed prompt, and an accepted suggestion, on the orphaned and the gone reason;
+    - a pick of "Keep the current PM";
+    - a pick from another session.
+  - Covers AE4. An orphaned lease with the caller outside the space (`--run` from another workspace), or in it only by HERDR_* env with no registry row: refuses.
   - Beats missed while herdr shows the driver present: the session is sent down the pick route.
   - A run record that fails to load: refuses, and does not read as orphaned.
-  - A driver that herdr shows as gone, plus a cited ask: moves with reason `driver_gone` and `unrequested: true`.
+  - A driver that herdr shows as gone, plus a pick of the exact label: moves with reason `driver_gone`.
   - `approval-label takeover --replace <sid>` prints the exact label the pick route checks.
   - The existing typed `--replace`, background-event, peer-message and agent-added `--replace` cases keep their current outcomes.
 - **Verification:** the takeover integration suite passes, including the new cases, and existing typed takeovers work unchanged.
@@ -338,7 +343,6 @@ stateDiagram-v2
   1. Read the lease, its status, herdr presence and the journal's driver history.
   2. Print one of these steps:
      - `start`;
-     - `takeover`, with the cited-ask instruction;
      - `ask-shawn`, with the exact label and the follow-up command;
      - `already-pm`;
      - `stand-down`;
@@ -346,10 +350,11 @@ stateDiagram-v2
   3. Rewrite the command docs so the agent begins with `become-pm` whenever Shawn asks it, in any words, to be the PM or to replace it.
 - **Test scenarios:**
   - No lease in the space: prints `start`.
-  - An orphaned lease and a plain session: prints `takeover`, naming the cited-ask requirement.
+  - An orphaned lease, or a driver herdr shows gone, and a plain session: prints `ask-shawn` with the label.
+  - A former PM whose successor stopped: prints `ask-shawn`, not `stand-down`.
   - A live lease held by another session: prints `ask-shawn`, with the label `Approve takeover --replace <sid>` and the command `takeover --prompt <pick id>`.
   - The caller already drives: prints `already-pm`.
-  - Covers AE7. The caller drove the run before and another session drives it now: prints `stand-down`.
+  - Covers AE7. The caller drove the run before and another, live session drives it now: prints `stand-down`.
   - Not in a herdr space: prints `refused`, with the fix to run from a herdr pane.
   - The verb writes nothing: the journal and run record are byte-identical before and after.
 - **Verification:** each route's printed command, when run, succeeds in the matching integration fixture.
@@ -458,7 +463,7 @@ Run long suites through `~/.claude/tools/honest-run/run.sh` with `--expect "TOTA
 - Every unit's verification holds, and both suites pass apart from the known failures named above.
 - Each acceptance example has a passing test.
 - `CONCEPTS.md` and the contracts describe:
-  - the pick and cited-ask takeover routes;
+  - the pick and stopped takeover routes;
   - standing down;
   - the terms-bound accept;
   - the quiet stop.

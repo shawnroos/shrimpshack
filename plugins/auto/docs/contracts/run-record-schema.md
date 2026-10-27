@@ -759,9 +759,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `reason: orphaned|driver_gone|replaced` and, for the last two, `evidence {state, session_id,
   herdr_reachable, registry_pane, pane_in_snapshot, session_reported, pane_id, pane_label,
   tab_label, why}` plus `replace_name` on a typed replace (absent on a pick-route replace). A takeover by `--prompt` has `request: null`,
-  `prompt_id` (also in `cites`) and `approval {origin, answer?}`; it has `unrequested: true` when
-  the reason is `orphaned` or `driver_gone`, because Shawn's ask moved the lease and no pick
-  replaced a live PM. `approval.answer` is the picked label when the cited prompt is a pick;
+  `prompt_id` (also in `cites`) and `approval {origin, answer}`; `origin` is always `picked` and
+  `answer` is the picked takeover label, on every reason;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
   monitor_task_ids, process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
   A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.

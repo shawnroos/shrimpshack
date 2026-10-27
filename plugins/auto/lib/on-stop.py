@@ -641,7 +641,6 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
     blocking = _blocking_runs(repo_root, now=now, session_id=session_id)
     if blocking:
         return _task_block(repo_root, blocking, fresh, session_id)
-    # reset so a future task block re-emits full guidance.
     _clear_nag(_nag_dir(repo_root), session_id)
     if fresh:
         # A programme hold is expected bookkeeping, not news for Shawn: the reason reaches the PM only.
@@ -651,9 +650,7 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
 
 
 def _task_block(repo_root, blocking, fresh, session_id) -> dict:
-    # U2 (finding #9): a task-run block is ALWAYS kept (deliberate-stop); only its
-    # MESSAGE collapses to a terse reminder once the driver has seen the full
-    # guidance for this exact blocking state.
+    # The block is always kept; only its text collapses to the terse form.
     nag_dir = _nag_dir(repo_root)
     sig = _nag_signature(blocking)
     repeat = sig == _load_last_nag(nag_dir, session_id)

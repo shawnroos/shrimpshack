@@ -37,15 +37,6 @@ if [[ $__cd_stdin_json != *\\u* && $__cd_after_sid != *\"session_id\"* \
   grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_files[@]}"
   [ $? = 1 ] && __cd_named=0
 fi
-# A session in a leased herdr space goes to Python too: if that space's PM stopped, its prompt
-# may be Shawn's ask to take over.
-__cd_ws="${HERDR_WORKSPACE_ID:-}"
-[ -n "$__cd_ws" ] || { [[ ${HERDR_PANE_ID:-} == *:* ]] && __cd_ws="${HERDR_PANE_ID%%:*}"; }
-if [ "$__cd_named" = 0 ] && [[ $__cd_ws =~ ^[A-Za-z0-9_-]+$ ]]; then
-  for __cd_f in "${__cd_leases}"/*."${__cd_ws}".json; do
-    [ -e "$__cd_f" ] && __cd_named=1
-  done
-fi
 # Takeover, handover and end requests are journaled from any session.
 [ "$__cd_named" = 1 ] || [[ $__cd_stdin_json == *auto:programme-* ]] || exit 0
 

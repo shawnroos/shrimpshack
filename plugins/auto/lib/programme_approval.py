@@ -58,20 +58,25 @@ def _block(record) -> dict:
     return programme_home.normalize_programme(record.get("programme") or {})
 
 
-def accept_label(block) -> str:
-    return label([ACCEPT_VERB, "--terms", terms_digest(block)])
+def accept_label(block, digest=None) -> str:
+    return label([ACCEPT_VERB, "--terms", terms_digest(block) if digest is None else digest])
 
 
-def accept_fix(block) -> str:
-    return (f"offer `{accept_label(block)}` as one AskUserQuestion option (`programme.sh approval-label "
+def accept_fix(block, digest=None) -> str:
+    if digest is None:
+        digest = terms_digest(block)
+    return (f"offer `{accept_label(block, digest)}` as one AskUserQuestion option (`programme.sh approval-label "
             f"{ACCEPT_VERB}` prints it), then rerun citing the pick with --prompt <pick id> "
-            f"--terms {terms_digest(block)}")
+            f"--terms {digest}")
 
 
 def check_terms(block, digest, error) -> None:
-    if digest is not None and digest != terms_digest(block):
+    if digest is None:
+        return
+    current = terms_digest(block)
+    if digest != current:
         raise error(f"--terms {digest} does not match the agreement terms now shown (digest "
-                    f"{terms_digest(block)}); Shawn accepts the terms he last saw", fix=accept_fix(block))
+                    f"{current}); Shawn accepts the terms he last saw", fix=accept_fix(block, current))
 
 
 def approval_fix(verb, verb_argv) -> str:
@@ -85,6 +90,10 @@ def approval_fix(verb, verb_argv) -> str:
             "then rerun with --prompt <its id>")
 
 
+def _strip_recommended(answer) -> str:
+    return answer[:-len(_RECOMMENDED)] if answer.casefold().endswith(_RECOMMENDED) else answer
+
+
 def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
     answer = programme_journal.pick_answer(rows, row)
     if verb_argv and verb_argv[0] in _STDIN_VERBS:
@@ -92,8 +101,7 @@ def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
                     "it needs typed text", fix=approval_fix(verb_argv[0], verb_argv))
     # Reading a decline's intent from free text leaked three review rounds running ("No", "Skip r1",
     # "Keep item-x" for drop-item); only the exact label the tool printed approves.
-    if answer.casefold().endswith(_RECOMMENDED):
-        answer = answer[:-len(_RECOMMENDED)]
+    answer = _strip_recommended(answer)
     want = label(verb_argv) if verb_argv else None
     if answer != want:
         raise error(f"pick {prompt_id!r} answer {answer!r} is not the approval label for this command; "
@@ -206,8 +214,7 @@ def _takeover_answer(rows, row, prompt_id, driver, error) -> str:
         answer = programme_journal.pick_answer(rows, row)
     except ValueError as exc:
         raise error(str(exc)) from None
-    if answer.casefold().endswith(_RECOMMENDED):
-        answer = answer[:-len(_RECOMMENDED)]
+    answer = _strip_recommended(answer)
     want = takeover_label(driver)
     if answer != want:
         raise error(f"pick {prompt_id!r} answer {answer!r} does not approve this takeover; "
@@ -215,16 +222,9 @@ def _takeover_answer(rows, row, prompt_id, driver, error) -> str:
     return answer
 
 
-def takeover_pick(rows, row, prompt_id, sid, driver, error) -> dict:
+def takeover_pick(rows, row, prompt_id, sid, driver, error, stopped=False) -> dict:
+    # Typed or suggested text never approves a takeover: an instruction to a worker would hand it the PM role.
     if _from_shawn(row, prompt_id, sid, error) != "picked":
-        raise error(f"the PM is live, so replacing it needs a pick of {takeover_label(driver)!r}; "
-                    f"prompt {prompt_id!r} is not a pick")
+        why = "the PM stopped; replacing it still" if stopped else "the PM is live, so replacing it"
+        raise error(f"{why} needs a pick of {takeover_label(driver)!r}; prompt {prompt_id!r} is not a pick")
     return {"origin": "picked", "answer": _takeover_answer(rows, row, prompt_id, driver, error)}
-
-
-def cited_ask(rows, row, prompt_id, sid, driver, error) -> dict:
-    origin = _from_shawn(row, prompt_id, sid, error)
-    # A pick's question is PM-written, so a pick is Shawn's ask only when its answer names the takeover.
-    if origin == "picked":
-        return {"origin": origin, "answer": _takeover_answer(rows, row, prompt_id, driver, error)}
-    return {"origin": origin}

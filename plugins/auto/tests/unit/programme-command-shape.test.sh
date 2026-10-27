@@ -82,7 +82,7 @@ if has "Run \`programme.sh become-pm\` and follow the step it prints" \
 
 it "the takeover command names every become-pm step"
 missing=""
-for step in start already-pm takeover ask-shawn stand-down refused; do
+for step in start already-pm ask-shawn stand-down refused; do
   grep -qF -- "- \`${step}\`" "$TAKEOVER" || missing="${missing} ${step}"
 done
 if [ -z "$missing" ]; then pass; else fail "missing:${missing}"; fi

@@ -970,7 +970,7 @@ def _cli(argv) -> int:
         return 2
     _OPERATION["verb"], _OPERATION["argv"] = (argv[0] if argv else None), argv
     return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS,
-                             fixes=load_lib_module("programme_fixes").fix_for)
+                             fixes=lambda verb: load_lib_module("programme_fixes").fix_for(verb))
 
 
 programme_lifecycle = load_lib_module("programme_lifecycle")

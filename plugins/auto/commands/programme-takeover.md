@@ -4,47 +4,42 @@ argument-hint: "[--replace <PM session id>]"
 allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop, AskUserQuestion
 ---
 
-Shawn typed this in the session that should become the PM. The prompt hook has
-already journaled the request. A takeover works at once when herdr shows the
-old PM is gone: the pane that ran it is closed, or now runs another session or
-terminal. It also works when the lease is orphaned (the PM stopped beating for
-two cadence periods) and the request was typed while it was. Otherwise it needs
-Shawn to name the PM he is replacing: `/auto:programme-takeover --replace <PM
-session id>` (a pane name also works inside the PM's own herdr workspace). The
-session id works from any workspace or machine, because herdr pane and tab ids
-differ per workspace and per machine. The old PM's next programme write is then
-refused. If herdr cannot
-be read, auto does not count the PM as gone. Pass `--replace` on the dispatch
-line only when Shawn typed it; the typed text, not the argument, is what counts.
-
-Shawn does not have to type the command. Whenever he asks this session,
-in any words, to be the PM, to replace the PM or to take over as PM,
-run `programme.sh become-pm` first and follow the one step it prints:
+Whenever Shawn asks this session, in any words, to be the PM, to replace the PM
+or to take over as PM, run `programme.sh become-pm` first and follow the one
+step it prints:
 
 - `start`: no programme holds this space; run `/auto:programme`.
 - `already-pm`: this session drives it; run the sweep.
-- `takeover`: the PM stopped (lease orphaned, or herdr shows it gone). Run
-  `programme.sh takeover --prompt <id>`, citing the prompt id auto journaled
-  for Shawn's ask in this session. No picker. The takeover is journaled as
-  unrequested.
-- `ask-shawn`: the PM is live. Offer its `label` as the recommended option of one
-  AskUserQuestion picker, with a decline option that keeps the current PM. When
-  Shawn picks the label, run `programme.sh takeover --prompt <pick id>`. When he
-  declines, stop.
-- `stand-down`: another session now drives the programme this session drove.
-  Cancel this session's programme cron (CronDelete) and Monitor (TaskStop)
-  wake-ups and stop. Do not message Shawn.
+- `ask-shawn`: another session holds the programme, live or stopped. Offer its
+  `label` as the recommended option of one AskUserQuestion picker, with a
+  decline option that keeps the current PM. When Shawn picks the label, run
+  `programme.sh takeover --prompt <pick id>`; the pick id is in the
+  `<auto-data>` tag the hook adds after his answer. When he declines, stop.
+  Nothing else Shawn types or accepts approves a takeover; only that pick does.
+- `stand-down`: another session now drives the programme this session drove,
+  and it has not stopped. CronList shows this session's programme cron; delete
+  it with CronDelete. Stop each Monitor task this session started with
+  TaskStop. Then stop. Do not message Shawn.
 - `refused`: run its `fix:` line.
 
-A takeover refusal prints a `fix:` line; run it.
+If `takeover --prompt` refuses, run its `fix:` line: it names the
+`approval-label` command whose output to offer in a new picker, then the
+takeover to rerun with that pick id.
 
-Run the dispatch line below:
+Run the dispatch line below only when Shawn typed `/auto:programme-takeover`
+himself. The prompt hook journaled that typed request; the typed text, not the
+argument, is what counts, so pass `--replace` only when Shawn typed it.
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" takeover "$ARGUMENTS"`
 
-- Exit 1: show Shawn the refusal line as it is and stop. When the old PM is still
-  running, the line names its pane and gives the exact text to type to replace
-  it. The refusal is journaled.
+A typed takeover works at once when herdr shows the old PM is gone (its pane is
+closed, or now runs another session or terminal), when the lease is orphaned
+and the request was typed while it was, or when the typed request names the PM
+with `--replace <PM session id>` (a pane name also works inside the PM's own
+herdr workspace). If herdr cannot be read, auto does not count the PM as gone.
+
+- Exit 1: run the refusal's `fix:` line and follow the step it prints. The
+  refusal is journaled.
 - Success: the first line says which PM it took over from and why. The lease and the driving session now name this session. Read the
   rules in force and the restored context it printed (`<auto-context>`: the
   decisions with their reasons and limits, requirements, binding pauses and

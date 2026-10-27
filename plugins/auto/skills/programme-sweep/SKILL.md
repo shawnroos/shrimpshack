@@ -33,12 +33,14 @@ from this session's lease.
   block; read the new block it prints and ack again. An ack accepts nothing.
 - Fix it before asking. Every refusal prints a `fix:` line: run every fix that
   needs no approval yourself. Ask Shawn only through AskUserQuestion pickers,
-  and only for approvals.
+  and only for approvals. Ask for typed text only for a typed-only verb, whose
+  `fix:` line says to ask Shawn to type it.
 - A refusal whose fix is `programme.sh become-pm` means this session may no
   longer drive the programme. Run `P become-pm`. If it prints `stand-down`,
-  another session now drives: cancel this session's programme cron
-  (CronDelete) and Monitor (TaskStop) wake-ups and stop, with no message to
-  Shawn. Otherwise follow the step it prints.
+  another session now drives: find this session's programme cron with
+  CronList and delete it (CronDelete), stop each Monitor task this session
+  started (TaskStop), and stop, with no message to Shawn. Otherwise follow the
+  step it prints.
 - Never use `/goal`. The programme's stop rule is the only stop rule.
 - Only a checker writes evidence. A worker's "done" is a claim, never evidence.
 - An approval (accept, amend, instruction, adopt a rule, an autonomy level or a

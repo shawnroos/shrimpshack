@@ -193,6 +193,27 @@ EOF
 U3="$(stop_as "$NOREPO" sess-until)"
 if [ "$(verdict "$U3")" = block ] && printf '%s' "$U3" | grep -q 'unread_claim'; then pass; else fail "got: $U3"; fi
 
+F_RUN="$(make_prog w5 sess-forget nothing)"
+set_state() {
+  prog "$F_RUN" "$1" <<'EOF' >/dev/null
+rec = load(args[0])
+rec["programme"]["agreement"]["terms"]["stop_rule"]["value"] = "only_when_done"
+rec["programme"]["items"]["linear:AI-1"]["state"] = args[1]
+save(args[0], rec)
+EOF
+}
+
+it "a block that clears and later returns with the same reasons is shown again in full"
+set_state waiting
+F1="$(stop_as "$NOREPO" sess-forget)"
+F2="$(verdict "$(stop_as "$NOREPO" sess-forget)")"
+set_state dropped
+F3="$(verdict "$(stop_as "$NOREPO" sess-forget)")"
+set_state waiting
+F4="$(stop_as "$NOREPO" sess-forget)"
+if [ "$(verdict "$F1") $F2 $F3 $(verdict "$F4")" = "block allow allow block" ] && [ "$F1" = "$F4" ]; then pass
+else fail "got: $(verdict "$F1") $F2 $F3 $(verdict "$F4"); first [$F1] last [$F4]"; fi
+
 S_RUN="$(make_prog w4 sess-store nothing)"
 
 it "an unwritable stop store lets the stop through"
