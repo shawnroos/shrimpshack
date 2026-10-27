@@ -210,7 +210,9 @@ session.
   output and its `programme_ended` line; behaviours are not in it, because
   `keep-behaviours` refuses an ended programme. `carry-rulings --prompt <id> <ruling-id>...` stores
   Shawn's pick; the typed prompt must name each id and come after an offer that
-  listed them, and it still runs after `end`. The carry-over store is one JSON
+  listed them, at the revision each Ruling still has (the offer records each
+  Ruling's revision, and a Ruling changed since needs a fresh offer); the prompt
+  must not have approved any other Ruling change, and it still runs after `end`. The carry-over store is one JSON
   file per machine beside the personal protocol (`CLAUDE_AUTO_CARRYOVER_STORE`
   overrides the path), with each Ruling under each remit repo's key (its GitHub
   owner/name, or its path when it has none), an adoption block like the personal
@@ -350,9 +352,18 @@ session.
   `--replies-to <ask-or-decision-id>` records a casual correction: the anchor
   gives the item and kind, the typed prompt must come after the anchor, and the
   Ruling applies at once with a one-line notice. A Ruling past its end date
-  reads as expired. `close-ruling` closes one: as fulfilled it needs `--why`;
+  reads as expired, and `start-worker --decision` refuses to cite it. `close-ruling` closes one: as fulfilled it needs `--why`;
   as withdrawn, or closing a restrict or decided Ruling, needs a typed prompt
-  naming it.
+  naming it. Every prompt that approves a Ruling change (a `record-ruling`
+  that binds, `accept-context` on a Ruling, `close-ruling` with a prompt,
+  `carry-rulings`) is typed after the proposal, used once, and names what it
+  approves: the journal must hold it after the latest change to that Ruling
+  (for a new Ruling, no typed prompt that nothing has cited may follow it), and
+  no earlier Ruling approval may cite it. Naming is checked as well, never
+  instead. `accept-context` refuses a pending wider grant recorded before its
+  dropped limits and end date were kept for naming; re-record it. Accepting a
+  narrowing grant revision keeps the prior baseline, so an open Ruling
+  conflict stays open.
 - **Safety pauses and denials**: `pause` (`--risk safety|data_loss`) holds named
   items or the whole programme, notifies Shawn, holds the stop, and makes
   `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed
@@ -772,7 +783,7 @@ gives the full rule). The text must contain: for `amend-term`, the term key and 
 the rule id; for `adopt-autonomy`, the decision kind and the level; for `adopt-check`,
 the repo and the check key (for example `verified.lookup`); for `answer-handed`,
 `drop-item` and `reopen-item`, the item id or its key (for example `AI-753`).
-For `record-ruling` and a `close-ruling` that needs a prompt, the Ruling id; for `accept-context`, the Ruling or requirement id, every item a Ruling gives the PM and, for a grant revision, each limit it drops and its new end date; for `carry-rulings`, each Ruling id. With `--widening` on `adopt-autonomy`, the text must also contain "widen", "widening" or "widened". A prompt that does not
+For `record-ruling` and a `close-ruling` that needs a prompt, the Ruling id; for `accept-context`, the Ruling or requirement id, every item a Ruling gives the PM and, for a grant revision, each limit it drops and its new end date; for `carry-rulings`, each Ruling id. A Ruling approval prompt must also be typed after the proposal and used once (see Rulings above). With `--widening` on `adopt-autonomy`, the text must also contain "widen", "widening" or "widened". A prompt that does not
 name them is refused, and the refusal lists the missing words.
 For `edit-project-term` after acceptance, the text must contain the term's area and
 its new text. `accept-agreement` accepts any typed prompt, because the quote is what it records; `accept-agreement`

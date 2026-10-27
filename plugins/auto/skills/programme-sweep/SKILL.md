@@ -137,7 +137,7 @@ not "nothing changed". You apply every programme write yourself.
    | Undo a behaviour you just recorded | `P retire-behaviour <behaviour-id> --as undone --prompt <id>` |
    | Settle a conflict you named: the new behaviour wins | Nothing to run: you recorded it with `--conflicts-with` |
    | Settle a conflict you named: the older behaviour wins | `P retire-behaviour <new-id> --as undone --prompt <id>` |
-   | He re-records an old reservation the rules block lists | `P record-ruling <new-id> --effect restrict --kind <decision-kind> --scope <text> --prompt <id>`, under a new id (the old entry cannot be revised), then `P close-ruling <old-id> --as withdrawn --prompt <id>`; his reply names both ids |
+   | He re-records an old reservation the rules block lists | `P record-ruling <new-id> --effect restrict --kind <decision-kind> --scope <text> --prompt <id>`, under a new id (the old entry cannot be revised); then ask him to confirm the withdrawal and run `P close-ruling <old-id> --as withdrawn --prompt <id>` citing that new reply, because one prompt approves one Ruling change |
    | He picks Rulings to carry to the next programme | `P carry-rulings --prompt <id> <ruling-id>...`, after the offer (step 17) |
    | Accept a pending decision or requirement | `P accept-context <decision-or-requirement-id> --prompt <id>` |
    | Lift a safety pause | `P lift-pause <pause-id> --prompt <id>` |
@@ -204,6 +204,13 @@ not "nothing changed". You apply every programme write yourself.
    needs the word "widen" in his message too. When his message does not name the
    target, do not run the verb: ask him to confirm in words that name it, for
    example "adopt eval_waiver at act_and_tell, widen it", and cite that reply.
+   A prompt that approves a Ruling change (`record-ruling` that binds,
+   `accept-context` on a Ruling, `close-ruling` with a prompt, `carry-rulings`)
+   must also be typed after the proposal and used once: after the latest change
+   to that Ruling (for a new Ruling, his newest message that no verb has cited
+   yet), and never one that already approved another Ruling change. An old
+   message that happens to name the right words is refused; ask him again and
+   cite the new reply.
    When his words point to one open ask but do not name it ("I've given the
    skill agent the go-ahead"), record nothing and relay nothing. Reply with the
    exact text to type, which `P status --json` shows as the ask's reply, for
@@ -516,7 +523,9 @@ not "nothing changed". You apply every programme write yourself.
     releases the stop. Its `carry-over offer:` lines list those Rulings and the
     programme-layer behaviours together, as one offer; ask Shawn which to keep
     for the next programme on this project. Record his typed pick with
-    `P carry-rulings --prompt <id> <ruling-id>...` and
+    `P carry-rulings --prompt <id> <ruling-id>...`, every id he picks in that one
+    call (the prompt approves one Ruling change, and a Ruling changed after the
+    offer needs a fresh offer), and
     `P keep-behaviours <behaviour-id>... --to repo|personal --prompt <id>`;
     carried Rulings arrive in the next programme pending, with no items.
     When none is left, or only a stop-rule reason (`never_stop`, `not_done`,

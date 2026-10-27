@@ -387,6 +387,41 @@ has "kmach00" "$OUT"
 it "a store entry whose content no longer matches its hash is dropped with a notice naming it"
 has "khash00" "$OUT"
 
+# ── a stale offer ─────────────────────────────────────────────────────────
+RUN_F="$(new_programme w8)"
+PHI="${WORK}/repos/phi"
+mkdir -p "$PHI"
+remit "$RUN_F" "{\"spaces\":[\"w8\"],\"repos\":[{\"path\":\"${PHI}\"}]}"
+prog add-item herdr:f --title "f" --kind fix_only --run "$RUN_F"
+P_F1="$(prompt "$RUN_F" 'f1: tool choice for herdr:f is yours, no paid tools')"
+prog record-ruling f1 --kind tool_choice --effect grant --scope "PM picks tools" --applies-to herdr:f \
+  --limit "no paid tools" --prompt "$P_F1" --run "$RUN_F"
+prog carry-rulings --run "$RUN_F"
+it "the offer records the revision of each Ruling it lists"
+check '[["f1", 1]]' "$(run_py "$RUN_F" <<'EOF'
+row = [r for r in pj.read(args[0]) if r["kind"] == "carryover_offered"][-1]
+print(json.dumps([[e["id"], e.get("rev")] for e in row["payload"]["carryover"] if e.get("source") == "ruling"]))
+EOF
+)"
+prog record-ruling f1 --kind tool_choice --effect grant --scope "PM picks tools" --applies-to herdr:f --run "$RUN_F"
+P_F2="$(prompt "$RUN_F" 'accept f1, drop the no paid tools limit')"
+prog accept-context f1 --prompt "$P_F2" --run "$RUN_F"
+it "carry-rulings refuses a Ruling that changed after the offer Shawn answered"
+P_FC="$(prompt "$RUN_F" 'carry f1 to the next programme')"
+prog carry-rulings f1 --prompt "$P_FC" --run "$RUN_F"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "changed after the offer" "$OUT"
+it "after a fresh offer, a prompt typed after it carries the new revision"
+prog carry-rulings --run "$RUN_F"
+P_FC2="$(prompt "$RUN_F" 'carry f1 to the next programme')"
+prog carry-rulings f1 --prompt "$P_FC2" --run "$RUN_F"
+check "0" "$CODE"
+it "a prompt that already carried a Ruling cannot approve another Ruling change"
+prog record-ruling f2 --kind technical_approach --effect restrict --scope "x" --applies-to herdr:f \
+  --prompt "$P_FC2" --run "$RUN_F"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "already approved" "$OUT"
+
 it "no verb crashed with a traceback"
 check "" "$CRASHES"
 

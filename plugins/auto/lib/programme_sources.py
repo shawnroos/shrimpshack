@@ -604,6 +604,12 @@ def _brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(),
     if unknown:
         raise host.ProgrammeError(f"unknown decision id {', '.join(unknown)}: not in the decision log and no "
                                   "accepted decision record")
+    now = run_record_core.parse_iso(run_record_core.now_iso())
+    ended = [d for d in decision_ids if d not in logged and programme_context.is_ruling(records.get(d))
+             and programme_context.ruling_state(records.get(d), now) == "expired"]
+    if ended:
+        raise host.ProgrammeError(f"Ruling {', '.join(ended)} is past its end date and settles nothing now; drop "
+                                  "it from --decision or ask Shawn for a new Ruling")
     active = host.active_rulings(programme, run_record_core.now_iso()) if rulings else []
     carried = {r["id"]: r for r in active
                if r["id"] not in found and (key in r["applies_to"] or "programme" in r["applies_to"])}

@@ -519,6 +519,114 @@ P_P="$(prompt 'r-prog: optimisation depth is yours across the programme')"
 prog record-ruling r-prog --kind optimisation_depth --effect grant --scope "depth" --prompt "$P_P" --run "$RUN"
 check "pm grant" "$(gate herdr:b optimisation_depth act)"
 
+it "dropping the end date is accepted by a prompt that calls it open-ended"
+P_OE1="$(prompt 'r-oe: optimisation depth on herdr:d until new year')"
+prog record-ruling r-oe --kind optimisation_depth --effect grant --scope "depth" --applies-to herdr:d \
+  --until 2099-01-01T00:00:00Z --prompt "$P_OE1" --run "$RUN"
+prog record-ruling r-oe --kind optimisation_depth --effect grant --scope "depth" --applies-to herdr:d --run "$RUN"
+P_OE2="$(prompt 'accept r-oe, it is open-ended now')"
+prog accept-context r-oe --prompt "$P_OE2" --run "$RUN"
+check "0 2" "$CODE $(in_force_rev r-oe)"
+
+it "grant_conflicted is false for a restrict and for a grant with no kind"
+check "False False" "$(run_py "$RUN" <<'EOF'
+host = load_lib_module("programme")
+programme = ph.normalize_programme(programme_records.load(args[0])["programme"])
+rulings = load_lib_module("programme_rulings")
+print(rulings.grant_conflicted(host, programme, {"effect": "restrict", "kind": "tool_choice", "baseline": "act"}, "herdr:a"),
+      rulings.grant_conflicted(host, programme, {"effect": "grant", "kind": None, "baseline": "act"}, "herdr:a"))
+EOF
+)"
+
+# ── a Ruling approval prompt is typed after the proposal and used once ────
+P_A1="$(prompt 'r-lim2: file issue on herdr:d is yours, no major versions')"
+prog record-ruling r-lim2 --kind file_issue --effect grant --scope "bumps" --applies-to herdr:d \
+  --limit "no major versions" --prompt "$P_A1" --run "$RUN"
+P_PRE="$(prompt 'accept r-lim2, drop the no major versions limit')"
+prog record-ruling r-lim2 --kind file_issue --effect grant --scope "bumps" --applies-to herdr:d --run "$RUN"
+it "the prompt that imposed a limit cannot approve that limit's removal"
+prog accept-context r-lim2 --prompt "$P_A1" --run "$RUN"
+check "nonzero 1" "$([ "$CODE" -ne 0 ] && echo nonzero) $(in_force_rev r-lim2)"
+has "typed before" "$OUT"
+
+it "a prompt typed before the pending revision cannot accept it, even naming what it needs"
+prog accept-context r-lim2 --prompt "$P_PRE" --run "$RUN"
+check "nonzero 1" "$([ "$CODE" -ne 0 ] && echo nonzero) $(in_force_rev r-lim2)"
+has "typed before" "$OUT"
+
+it "a fresh prompt typed after the pending revision, naming the dropped limit, accepts it"
+P_A2="$(prompt 'accept r-lim2, drop the no major versions limit')"
+prog accept-context r-lim2 --prompt "$P_A2" --run "$RUN"
+check "0 2" "$CODE $(in_force_rev r-lim2)"
+
+it "a prompt that approved one Ruling cannot approve a second through record-ruling"
+P_RU="$(prompt 'r-ua and r-ub: worker coordination on herdr:b is yours')"
+prog record-ruling r-ua --kind worker_coordination --effect grant --scope "b" --applies-to herdr:b \
+  --prompt "$P_RU" --run "$RUN"
+K1="$CODE"
+prog record-ruling r-ub --kind worker_coordination --effect grant --scope "b" --applies-to herdr:b \
+  --prompt "$P_RU" --run "$RUN"
+check "0 nonzero null" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero) $(state_of r-ub)"
+has "already approved" "$OUT"
+
+it "a prompt that accepted one Ruling cannot accept a second"
+prog record-ruling r-pa --kind technical_approach --effect restrict --scope "a" --applies-to herdr:b --run "$RUN"
+prog record-ruling r-pb --kind technical_approach --effect restrict --scope "b" --applies-to herdr:b --run "$RUN"
+P_PAB="$(prompt 'accept r-pa and r-pb')"
+prog accept-context r-pa --prompt "$P_PAB" --run "$RUN"
+K1="$CODE"
+prog accept-context r-pb --prompt "$P_PAB" --run "$RUN"
+check "0 nonzero pending" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero) $(ruling_state r-pb)"
+has "already approved" "$OUT"
+
+it "a new Ruling does not bind on a prompt Shawn has typed past"
+P_STALE="$(prompt 'r-fst: I pick the technical approach on herdr:b')"
+P_LATER="$(prompt 'what is the status of herdr:a')"
+prog record-ruling r-fst --kind technical_approach --effect restrict --scope "Shawn picks" --applies-to herdr:b \
+  --prompt "$P_STALE" --run "$RUN"
+check "nonzero null" "$([ "$CODE" -ne 0 ] && echo nonzero) $(state_of r-fst)"
+has "typed before" "$OUT"
+
+it "close-ruling refuses a withdrawal typed before the Ruling's latest change"
+P_WOLD="$(prompt 'withdraw r-ua')"
+P_NL="$(prompt 'r-ua: add the limit no new workers')"
+prog record-ruling r-ua --kind worker_coordination --effect grant --scope "b" --applies-to herdr:b \
+  --limit "no new workers" --prompt "$P_NL" --run "$RUN"
+prog close-ruling r-ua --as withdrawn --prompt "$P_WOLD" --run "$RUN"
+check "nonzero active" "$([ "$CODE" -ne 0 ] && echo nonzero) $(ruling_state r-ua)"
+has "typed before" "$OUT"
+P_WNEW="$(prompt 'withdraw r-ua')"
+prog close-ruling r-ua --as withdrawn --prompt "$P_WNEW" --run "$RUN"
+check "0 closed" "$CODE $(ruling_state r-ua)"
+
+it "accepting a narrowing grant revision keeps the old baseline, so the Ruling conflict stays"
+P_GN="$(prompt 'g-nar: tool choice on herdr:a and herdr:b is yours')"
+prog record-ruling g-nar --kind tool_choice --effect grant --scope "tools" --applies-to herdr:a \
+  --applies-to herdr:b --prompt "$P_GN" --run "$RUN"
+printf '{"autonomy": {"tool_choice": {"level": "propose"}}}' > "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+prog record-ruling g-nar --kind tool_choice --effect grant --scope "tools" --applies-to herdr:a --run "$RUN"
+P_GNA="$(prompt 'accept g-nar')"
+prog accept-context g-nar --prompt "$P_GNA" --run "$RUN"
+check "0 act conflict" "$CODE $(pyget "$(ctx)" "d['decisions']['g-nar']['in_force']['baseline']") $(gate herdr:a tool_choice propose | cut -d' ' -f2)"
+rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+
+it "accept-context refuses a pending wider grant stored without its words and asks to re-record it"
+run_py "$RUN" <<'EOF' >/dev/null
+rec = programme_records.load(args[0])
+revs = rec["programme"]["context"]["decisions"].setdefault("r-oldw", [])
+base = {"scope": "bumps", "reason": None, "applies_to": ["herdr:d"], "requirements": [], "kind": "file_issue",
+        "effect": "grant", "until": None}
+pc._append(revs, dict(base, limits=["no majors"]), {"prompt_id": "p-old", "quote": "x", "origin": "typed"}, accept=True, delta=None)
+revs[-1].update(quote="x", baseline="act")
+pc._append(revs, dict(base, limits=[]), None, accept=False,
+           delta={"added": [], "removed": [], "removed_limits": ["no majors"], "until": None, "names": [], "wider": True})
+revs[-1].update(quote=None, baseline=None)
+programme_records.save(args[0], rec)
+EOF
+P_OW="$(prompt 'accept r-oldw, drop no majors')"
+prog accept-context r-oldw --prompt "$P_OW" --run "$RUN"
+check "nonzero 1" "$([ "$CODE" -ne 0 ] && echo nonzero) $(in_force_rev r-oldw)"
+has "re-record" "$OUT"
 
 it "programme_context still loads no protocol or journal module"
 if grep -nE 'load_lib_module\("(programme_protocol|programme_journal|programme_record|programme)"\)' \

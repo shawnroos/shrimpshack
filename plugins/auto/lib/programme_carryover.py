@@ -103,8 +103,9 @@ def _write(update) -> None:
 
 def offer(programme, now=None) -> list:
     when = run_record_core.parse_iso(now or run_record_core.now_iso())
-    return [{"source": "ruling", "id": rid, "kind": ruling["kind"], "effect": ruling.get("effect"),
-             "scope": ruling.get("scope"), "items": list(ruling.get("applies_to") or [])}
+    return [{"source": "ruling", "id": rid, "rev": ruling.get("rev"), "kind": ruling["kind"],
+             "effect": ruling.get("effect"), "scope": ruling.get("scope"),
+             "items": list(ruling.get("applies_to") or [])}
             for rid, ruling in programme_predicate.active_rulings(programme, when)]
 
 
@@ -261,10 +262,14 @@ def _carry(host, opts, ids):
     prompt = host._typed_prompt(run_id, rec, opts["prompt"], "carry-rulings")
     host.require_named(prompt, *ids)
     rows = programme_journal.read(run_id)
-    if _offer_index(rows, ids, host.programme_rulings.prompt_index(rows, prompt["prompt_id"])) is None:
+    index = _offer_index(rows, ids, host.programme_rulings.prompt_index(rows, prompt["prompt_id"]))
+    if index is None:
         raise host.ProgrammeError(f"prompt {prompt['prompt_id']!r} was not typed after an offer naming "
                                   f"{', '.join(ids)}: run carry-rulings with no ids, show Shawn the offer, then "
                                   "cite the prompt he types")
+    host.programme_rulings.check_prompt_unused(rows, prompt["prompt_id"])
+    offered = {e.get("id"): e.get("rev") for e in rows[index]["payload"]["carryover"]
+               if isinstance(e, dict) and e.get("source", "ruling") == "ruling"}
     keys = repo_keys(programme)
     if not keys:
         raise host.ProgrammeError("the remit names no repo, so there is no project to carry a Ruling to")
@@ -272,6 +277,11 @@ def _carry(host, opts, ids):
     missing = [rid for rid in ids if rid not in active]
     if missing:
         raise host.ProgrammeError(f"no active Ruling {', '.join(missing)} in this programme")
+    # An offer without revisions predates this check, so it cannot show which version Shawn picked.
+    stale = [rid for rid in ids if offered.get(rid) is None or offered[rid] != active[rid].get("rev")]
+    if stale:
+        raise host.ProgrammeError(f"Ruling {', '.join(stale)} changed after the offer Shawn answered: run "
+                                  "carry-rulings with no ids for a fresh offer, then cite the prompt he types after it")
     adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
     store(adopted, prompt, run_id, sid, "carryover")
     payload = {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path()}
@@ -297,7 +307,9 @@ _SPECS = (
      "Ruling and every active programme-layer behaviour in one carry-over offer, and records the offer-made "
      "marker that releases the stop. With ids: no typed "
      "prompt from the driving session, one that does not name each id or was typed before an offer naming "
-     "them, an id that is not an active Ruling, a remit with no repo, an archived programme; it also runs "
+     "them, a prompt that already approved a Ruling change, a Ruling whose revision changed after that offer "
+     "(or an offer that did not record it), an id that is not an active Ruling, a remit with no repo, an "
+     "archived programme; it also runs "
      "after end. Stores each Ruling under every remit repo's key for the next programme on that project."),
 )
 

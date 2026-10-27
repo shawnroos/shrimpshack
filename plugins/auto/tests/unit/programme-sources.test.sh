@@ -754,6 +754,37 @@ COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')
 check "0 1" "$CODE $(printf '%s\n' "$COPY" | grep -c 'ruling:r-narrow')"
 has "conflicted: wait for Shawn" "$COPY"
 lacks "stop and state that evidence" "$COPY"
+
+run_py "$RUN" <<'EOF' >/dev/null
+def body(rec):
+    decisions = rec["programme"]["context"]["decisions"]
+    decisions["r-keep"] = [{"rev": 1, "state": "accepted", "kind": "merge_around_gate", "effect": "restrict",
+                            "legacy": None, "applies_to": ["linear:AI-792"], "until": None, "scope": "never merge around CI",
+                            "reason": "Shawn said so", "quote": "never merge around CI", "limits": [], "requirements": []}]
+    decisions["r-gone"] = [{"rev": 1, "state": "accepted", "kind": "dependency_bump", "effect": "grant", "legacy": None,
+                            "applies_to": ["linear:AI-792"], "until": "2000-01-01T00:00:00Z", "scope": "bump deps until 2000",
+                            "reason": "Shawn said so", "quote": "bump deps", "limits": [], "requirements": [],
+                            "baseline": "act"}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 -- --name mixed --handoff "$BRIEF"
+it "a brief with one settled and one conflicted Ruling lists each under its own heading"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+SETTLED="$(printf '%s\n' "$COPY" | sed -n '/^Settled decisions this work carries:/,/^Rulings Authority now holds narrower/p')"
+CONFLICTED="$(printf '%s\n' "$COPY" | sed -n '/^Rulings Authority now holds narrower/,$p')"
+check "0 1 0 0 1" "$CODE $(printf '%s\n' "$SETTLED" | grep -c 'ruling:r-keep') $(printf '%s\n' "$SETTLED" | grep -c 'ruling:r-narrow') $(printf '%s\n' "$CONFLICTED" | grep -c 'ruling:r-keep') $(printf '%s\n' "$CONFLICTED" | grep -c 'ruling:r-narrow')"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision r-gone -- --name expired --handoff "$BRIEF"
+it "start-worker refuses a --decision naming a Ruling past its end date, so it never reaches the brief as settled"
+check "nonzero " "$([ "$CODE" -ne 0 ] && echo nonzero) $(grep -c '^spinoff ' "$CALLS" | sed 's/^0$//')"
+has "r-gone" "$OUT"
+run_py "$RUN" <<'EOF' >/dev/null
+def body(rec):
+    for rid in ("r-keep", "r-gone"):
+        del rec["programme"]["context"]["decisions"][rid]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
 rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
 
 prog add-item linear:AI-793 --title "No handoff"
