@@ -26,9 +26,9 @@ hasnt() { ! grep -qiF -- "$1" "$CMD"; }
 
 echo "programme-resume-command.test.sh"
 
-it "a takeover is left for Shawn to type, by session id"
-if has '/auto:programme-takeover --replace <that session id>' && has 'never run it yourself'; then
-  pass; else fail "the takeover step does not hand the typed request to Shawn"; fi
+it "a lease held by another session routes through become-pm"
+if has 'run `P become-pm` and follow its one' && hasnt '--replace <that session id>'; then
+  pass; else fail "the resume step does not route a held lease through become-pm"; fi
 
 it "a refused prompt-item is reported, never sent another way"
 if hasnt 'herdr agent prompt' && has 'send it another way'; then

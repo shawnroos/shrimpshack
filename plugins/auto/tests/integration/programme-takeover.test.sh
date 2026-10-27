@@ -511,6 +511,7 @@ P="$(pick sess-n "$LABEL_T")"
 as sess-n takeover --prompt "$P"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "not in the programme's herdr space" "$OUT"
+has "fix: run Claude from a pane in the herdr space" "$OUT"
 
 register sess-k w2:p86 term_p86
 

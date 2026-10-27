@@ -353,11 +353,15 @@ def _cited_route(run, sid, prompt_id, status, record, presence, refused):
     if not _stopped(status, presence):
         return "replaced", approval.takeover_pick(rows, row, prompt_id, sid, driver, refused)
     if record is None:
-        raise refused("the programme's run record could not be read, so auto cannot tell whether its PM "
-                      "stopped; nothing is taken over")
+        raise _Refused("the programme's run record could not be read, so auto cannot tell whether its PM "
+                       "stopped; nothing is taken over", status,
+                       fix=f"`programme.sh status --run {run}` names the fault; repair it, then run "
+                           "`programme.sh become-pm` again")
     if not _in_space(run, sid):
-        raise refused("this session is not in the programme's herdr space; only a session there can "
-                      "take over a PM that stopped")
+        raise _Refused("this session is not in the programme's herdr space; only a session there can "
+                       "take over a PM that stopped", status,
+                       fix="run Claude from a pane in the herdr space the programme leases, then run "
+                           "`programme.sh become-pm` there")
     found = approval.takeover_pick(rows, row, prompt_id, sid, driver, refused, stopped=True)
     return ("driver_gone" if status == "live" else "orphaned"), found
 
