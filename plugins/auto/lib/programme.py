@@ -477,14 +477,15 @@ def _h_propose_agreement(argv):
 
 
 def _h_accept_agreement(argv):
-    _, opts = _parse(argv, values=("run", "prompt"))
+    _, opts = _parse(argv, values=("run", "prompt", "terms"))
     if not opts.get("prompt"):
-        raise ValueError("accept-agreement needs --prompt <id> of a typed prompt")
+        raise ValueError("accept-agreement needs --prompt <id> of a typed prompt or a terms-bound pick")
 
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
             raise ProgrammeError("the agreement is already accepted")
         programme_terms.check_accept_order(rec["run_id"], prompt["prompt_id"])
+        programme_approval.check_terms(programme, opts.get("terms"), ProgrammeError)
         programme["agreement"]["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
                                               "quote": prompt["quote"]}
         version = programme_terms.stamp(programme)
@@ -740,9 +741,9 @@ _VERBS = {
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,
-        "--prompt <id> [--run <id>]",
-        rejects="no --prompt; a prompt that is unknown, not typed, not from the driving session, or "
-        "older than the last proposal or project-term edit.",
+        "--prompt <id> [--terms <digest>] [--run <id>]",
+        rejects="no --prompt; an accepted suggestion; a prompt not from the driving session or older than the last "
+        "term change or pick; a pick without --terms; a --terms digest that does not match the terms shown.",
     ),
     "amend-term": _Verb(
         _h_amend_term,

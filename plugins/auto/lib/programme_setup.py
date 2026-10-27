@@ -207,7 +207,8 @@ def _step_name(host, programme, name, *, keep=False) -> str:
     if name not in known:
         raise host.ProgrammeError(f"unknown setup step {name!r}; steps: {known}")
     if keep and name == programme_view_setup.ACCEPT:
-        raise host.ProgrammeError("the accept step is never kept: Shawn types the accept")
+        raise host.ProgrammeError("the accept step is never kept: Shawn accepts by typing it or by "
+                                  "picking the label `programme.sh approval-label accept-agreement` prints")
     return name
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import os
 import shlex
 import sys
@@ -14,13 +15,20 @@ programme_journal = load_lib_module("programme_journal")
 programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
 programme_naming = load_lib_module("programme_naming")
+programme_home = load_lib_module("programme_home")
 
 # Default-deny: a pick or an accepted suggestion approves only these verbs, each of which checks that the
 # approval names its target. Verbs that record the prompt's words as content stay typed-only.
 PICK_VERBS = frozenset((
     "adopt-rule", "adopt-autonomy", "adopt-check", "set-remit", "amend-term", "keep-corrections",
     "move-behaviour", "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context",
-    "lift-pause", "answer-permission", "dispose-action"))
+    "lift-pause", "answer-permission", "dispose-action", "accept-agreement"))
+ACCEPT_VERB = "accept-agreement"
+# The accept is the moment the PM gains authority: a pick must name the terms digest Shawn saw, and an
+# accepted suggestion shows him no terms at all, so it never approves the accept.
+_NO_SUGGESTION_VERBS = frozenset((ACCEPT_VERB,))
+ACCEPT_FIX = (f"run `programme.sh approval-label {ACCEPT_VERB}`, offer its output as one AskUserQuestion option, "
+              "then rerun citing the pick with --prompt <pick id> --terms <the digest that label names>")
 # set-remit reads its change from stdin, which no label can show, so only typed text or a suggestion
 # approves it.
 _STDIN_VERBS = frozenset(("set-remit",))
@@ -40,7 +48,35 @@ def label(argv) -> str:
     return "Approve " + shlex.join(kept)
 
 
+def terms_digest(block) -> str:
+    # Loaded here: programme_view loads programme_view_setup, which loads this module at import.
+    lines = load_lib_module("programme_view").agreement_lines(block)
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:8]
+
+
+def _block(record) -> dict:
+    return programme_home.normalize_programme(record.get("programme") or {})
+
+
+def accept_label(block) -> str:
+    return label([ACCEPT_VERB, "--terms", terms_digest(block)])
+
+
+def accept_fix(block) -> str:
+    return (f"offer `{accept_label(block)}` as one AskUserQuestion option (`programme.sh approval-label "
+            f"{ACCEPT_VERB}` prints it), then rerun citing the pick with --prompt <pick id> "
+            f"--terms {terms_digest(block)}")
+
+
+def check_terms(block, digest, error) -> None:
+    if digest is not None and digest != terms_digest(block):
+        raise error(f"--terms {digest} does not match the agreement terms now shown (digest "
+                    f"{terms_digest(block)}); Shawn accepts the terms he last saw", fix=accept_fix(block))
+
+
 def approval_fix(verb, verb_argv) -> str:
+    if verb == ACCEPT_VERB:
+        return ACCEPT_FIX
     if verb in PICK_VERBS and verb not in _STDIN_VERBS:
         command = label(verb_argv)[len("Approve "):] if verb_argv else f"{verb} <args>"
         return (f"run `programme.sh approval-label {command}`, offer its output as one AskUserQuestion "
@@ -88,6 +124,12 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
         raise error(f"{verb or 'this verb'} needs a typed prompt; prompt {prompt_id!r} is "
                     f"{'a pick' if origin == 'picked' else 'an accepted suggestion'}",
                     fix=approval_fix(verb, verb_argv))
+    if origin == "suggested" and verb in _NO_SUGGESTION_VERBS:
+        raise error(f"{verb} needs a typed prompt or a pick of its terms-bound label; prompt {prompt_id!r} "
+                    "is an accepted suggestion, which shows Shawn no terms", fix=accept_fix(_block(record)))
+    if origin == "picked" and verb == ACCEPT_VERB and "--terms" not in (verb_argv or []):
+        raise error(f"prompt {prompt_id!r} is a pick, so {ACCEPT_VERB} needs --terms <digest> naming the "
+                    "terms Shawn picked", fix=accept_fix(_block(record)))
     if origin not in programme_protocol.HUMAN_ORIGINS:
         raise error(f"prompt {prompt_id!r} is not typed or a verified pick "
                     f"(origin {origin!r}; human source unverified)", fix=approval_fix(verb, verb_argv))
@@ -113,6 +155,10 @@ def _h_approval_label(host, argv):
     if argv[1] not in PICK_VERBS or argv[1] in _STDIN_VERBS:
         raise host.ProgrammeError(f"{argv[1]} needs a typed prompt; a pick cannot approve it",
                                   fix=approval_fix(argv[1], argv[1:]))
+    if argv[1] == ACCEPT_VERB and "--terms" not in argv:
+        _, opts = host._parse(argv[1:], values=("run",))
+        print(accept_label(_block(host._locate(opts)[2])))
+        return 0
     print(label(argv[1:]))
     return 0
 

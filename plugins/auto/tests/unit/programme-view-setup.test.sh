@@ -69,8 +69,10 @@ check("per-programme term steps need no typed reply", all(not step(p, k)["needs_
       for k in terms if k != "autonomy"))
 check("autonomy defers to the shared protocol, so changing it needs a typed reply", step(p, "autonomy")["needs_typed"],
       step(p, "autonomy"))
-check("accept always needs the typed line", step(p, "accept")["needs_typed"] and step(p, "accept")["reply"] == "accept the agreement",
-      step(p, "accept"))
+check("the accept is offered as a pick of its terms-bound label",
+      not step(p, "accept")["needs_typed"] and step(p, "accept")["reply"] is None
+      and step(p, "accept")["label"] == "Approve accept-agreement --terms " + step(p, "accept")["terms_digest"]
+      and len(step(p, "accept")["terms_digest"]) == 8, step(p, "accept"))
 
 b = fresh()
 b["agreement"]["terms"]["remit"]["set_by"] = "shawn"

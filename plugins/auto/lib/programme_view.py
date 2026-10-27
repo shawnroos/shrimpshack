@@ -628,6 +628,13 @@ def _permission_text(p) -> str:
             f"{p.get('settings_file')}, items {', '.join(p.get('items') or []) or 'none'}")
 
 
+def agreement_lines(block) -> list:
+    agreement = _dict(block.get("agreement"))
+    lines = [_term_text(key, _dict(term)) for key, term in sorted(_dict(agreement.get("terms")).items())]
+    lines += [_project_term_text(_dict(t)) for t in programme_home.project_terms(block)]
+    return [programme_sanitize.clean(text, cap=0) for text in lines]
+
+
 def rule_texts(r) -> list:
     agreement = _dict(r.get("agreement"))
     accepted = _dict(agreement.get("accepted"))

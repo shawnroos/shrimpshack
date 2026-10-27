@@ -13,12 +13,14 @@ _READ = "`programme.sh status` names the programme run ids; rerun `programme.sh 
 _PICKED = ("run `programme.sh approval-label {verb} <args>`, offer its output as one AskUserQuestion option, "
            "then rerun citing the pick with --prompt <pick id>")
 _TYPED = "ask Shawn to type the approval for {verb} in this session, then rerun with --prompt <its id>"
+_ACCEPT = ("run `programme.sh approval-label accept-agreement`, offer its output as one AskUserQuestion option, "
+           "then rerun citing the pick with --prompt <pick id> --terms <the digest that label names>")
 _PICK_ID = "ask Shawn with an AskUserQuestion picker, then rerun citing the pick with --pick <pick id>"
 _ENDED = ("`programme.sh check-archive --run <id>` names each failed check and its remedy; "
           "`programme.sh status --run <id>` shows the end state")
 
 FIXES = {
-    "accept-agreement": _TYPED,
+    "accept-agreement": _ACCEPT,
     "accept-context": _PICKED,
     "add-item": _ITEM,
     "adopt-autonomy": _PICKED,

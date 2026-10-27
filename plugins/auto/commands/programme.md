@@ -85,8 +85,8 @@ a dispatched Agent.
        `programme.sh pick-term <key> <value> --pick <id>`.
      - Never put answers into the AskUserQuestion call yourself; a pre-filled
        picker is refused and approves nothing.
-   - Steps with `needs_typed` (rulings and reserved areas, shared settings and
-     the accept): during setup these take a typed reply. Ask in a picker
+   - Steps with `needs_typed` (rulings and reserved areas, shared settings):
+     during setup these take a typed reply. Ask in a picker
      whether to keep it as is or change it. Keep: `programme.sh setup-keep
      <key>`. Change: show the step's `reply` as "Type this:" and wait for his
      typed line; then apply it as in step 6.
@@ -98,19 +98,28 @@ a dispatched Agent.
      refused when its answer names a source the value leaves out.
    - Items to adopt: ask which of the step's items to adopt (multiSelect), then
      adopt them as in step 7.
-   - Last step: show "Type this: accept the agreement" and wait for his typed
-     line. The accept is never a pick.
+   - Last step: the accept, offered as a pick. Run
+     `programme.sh approval-label accept-agreement`; it prints
+     `Approve accept-agreement --terms <digest>`, where the digest names the
+     terms `status` shows now.
+     Offer that exact text as one AskUserQuestion option. On that pick, run
+     `programme.sh accept-agreement --prompt <pick id> --terms <digest>`.
+     Shawn can also type "accept the agreement"; a typed accept needs no
+     `--terms`.
    - On a re-run, a handover or a takeover before acceptance, start at the first
      step that is not done; never start over.
 6. When he types a reply, the `<auto-data>` tag in your context names the
    prompt id.
-   - Acceptance: `programme.sh accept-agreement --prompt <id>`.
+   - Acceptance: `programme.sh accept-agreement --prompt <id>`, plus
+     `--terms <digest>` when the prompt is a pick.
    - A term change: `programme.sh amend-term <key> <value> --prompt <id>`.
    - A project term change: `programme.sh edit-project-term <term-id> "<text>"
      [--reserved|--unreserved]`, or a new one with `propose-agreement
      --project-term "<area>=<text>" --source "Shawn at startup"`.
-     `accept-agreement` refuses a prompt older than the last proposal, pick or
-     project-term edit, so ask for the accept again after any change.
+     `accept-agreement` refuses a prompt older than the last proposal, pick,
+     term amend or project-term edit, and a `--terms` digest that no longer
+     matches the terms, so ask for the accept again after any change. It
+     refuses an accepted suggestion.
    - Turning sources off or on by a typed reply: `programme.sh amend-term
      tools_of_record <list> --prompt <id>`, where the list holds the sources
      that stay on, comma separated (`tracker,tasks`), or `none`. His reply must
