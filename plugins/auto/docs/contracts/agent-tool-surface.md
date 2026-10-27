@@ -671,7 +671,27 @@ session.
   registry pane, a headless driver, another herdr server, or an open pane that
   reports no session is not proof. A refusal on a live driver names its pane and
   tab and gives the `--replace` line to type. `--replace` on the verb itself
-  authorizes nothing.
+  authorizes nothing. The no-request refusal prints `fix: programme.sh become-pm`.
+  `takeover --prompt <id>` needs no typed request. auto picks the route under the
+  leases lock, from the fresh lease status and the herdr presence:
+  - **Pick route** (a live driver, or an orphaned lease whose driver herdr shows
+    present): the prompt is a verified pick from this session, unused, journaled
+    after the last start, takeover or handover, with one question. Its answer,
+    less a trailing ` (Recommended)`, is exactly
+    `programme.sh approval-label takeover --replace <driver session id>`. The
+    named session must still be the driver. The journaled reason is replaced.
+  - **Cited-ask route** (an orphaned lease that herdr does not show present, or a
+    live lease whose driver herdr shows gone): the prompt is a verified typed
+    prompt, accepted suggestion or pick from this session. It was journaled after
+    the lease turned orphaned (last beat plus two cadences) or, for a gone
+    driver, after its last beat. A pick here must also be the takeover label.
+    The caller is in a herdr space the run leases. The status comes from a
+    readable run record; a record that fails to load refuses. The journaled reason is
+    orphaned or driver_gone, with `unrequested: true`.
+  Both routes journal `taken_over` with `request: null` and cite the prompt.
+  Every refusal on these routes prints `fix: programme.sh become-pm`. A typed ask
+  in a session that does not drive a programme is not journaled today, so in
+  practice the cited ask is a pick.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
   the driving session, or an orphaned lease; on an expired lease it needs none and

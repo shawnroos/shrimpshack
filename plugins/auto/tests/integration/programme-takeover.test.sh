@@ -357,6 +357,190 @@ check "0 sess-w5" "$CODE $(driver_of "$RUN")"
 it "the cross-workspace request was journaled under the PM's programme"
 has "--replace $CUR" "$(last_entry "$RUN" takeover_request)"
 
+# A picker answered in a session that is not the PM, journaled by the real PostToolUse hook.
+# A fourth argument pre-fills the answer in the tool input.
+pick() {
+  ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$WORK" "$@" <<'PYEOF'
+import json, os, pathlib, re, subprocess, sys, uuid
+root, work, sid, answer = sys.argv[1:5]
+rows = [json.loads(line) for line in (pathlib.Path(root) / "tests/fixtures/askuser_transcript.jsonl").read_text().splitlines()]
+asked, result = rows[0], rows[1]
+question = "Who should drive the programme?"
+tool_use_id = "toolu_" + uuid.uuid4().hex[:12]
+tool_input = {"questions": [{"question": question, "header": "PM", "multiSelect": False,
+                             "options": [{"label": answer, "description": "Move the lease here."},
+                                         {"label": "Keep the current PM", "description": "Change nothing."}]}]}
+if len(sys.argv) > 5:
+    tool_input["answers"] = {question: answer}
+asked["sessionId"] = sid
+asked["message"]["content"][0].update(id=tool_use_id, input=tool_input)
+response = {"questions": [{"question": question}], "answers": {question: answer}, "annotations": {}}
+result.update(sessionId=sid, toolUseResult=response)
+result["message"]["content"][0]["tool_use_id"] = tool_use_id
+path = pathlib.Path(work) / "picks" / uuid.uuid4().hex / (sid + ".jsonl")
+path.parent.mkdir(parents=True)
+path.write_text(json.dumps(asked) + "\n")
+payload = {"session_id": sid, "transcript_path": str(path), "cwd": os.getcwd(), "hook_event_name": "PostToolUse",
+           "tool_name": "AskUserQuestion", "tool_use_id": tool_use_id, "tool_input": tool_input,
+           "tool_response": response}
+out = subprocess.run(["bash", os.path.join(root, ".claude/hooks/on-posttooluse-askuser.sh")],
+                     input=json.dumps(payload), text=True, capture_output=True)
+with path.open("a") as stream:
+    stream.write(json.dumps(result) + "\n")
+context = json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"] if out.stdout else ""
+found = re.search(r"(\{.*\})\n</auto-data>", context)
+print(json.loads(found.group(1))["prompt_id"] if found else "none")
+PYEOF
+  )
+}
+
+# A typed prompt from a session that is not the PM, journaled hours_ago with a verifiable transcript.
+ask() {
+  ( cd "$NOREPO" && "$PY" - "$AUTO_ROOT" "$RUN" "$@" <<'PYEOF'
+import datetime, json, os, sys
+root, run, sid, text, hours = sys.argv[1:]
+sys.path.insert(0, os.path.join(root, "lib"))
+sys.path.insert(0, os.path.join(root, "tests", "fixtures"))
+import programme_prompts
+from _bootstrap import load_lib_module
+_, source, path, row = programme_prompts.fixture(text, sid)
+now = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=float(hours))
+entry = load_lib_module("programme_journal").append_prompt(run, sid, text, "typed", now=now, source=source,
+                                                            driving=False)
+path.write_text(json.dumps(row) + "\n")
+print(entry["prompt_id"])
+PYEOF
+  )
+}
+
+D="$(driver_of "$RUN")"
+register "$D" w2:p80 term_p80
+snapshot "w2:p80|PM|${D}|term_p80" "w2:p31|scratch|sess-w2|term_p31"
+set_beat "$RUN" 0
+LABEL="Approve takeover --replace $D"
+
+it "approval-label takeover --replace prints the exact label the pick route checks"
+as sess-p approval-label takeover --replace "$D"
+check "0 $LABEL" "$CODE $OUT"
+
+it "a pick answering the other option is refused, with the become-pm fix"
+P="$(pick sess-p "Keep the current PM")"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+has "does not approve this takeover" "$OUT"
+has "fix: programme.sh become-pm" "$OUT"
+
+it "a pre-filled pick of the takeover label is refused"
+P="$(pick sess-p "$LABEL" prefilled)"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+has "is not a verified" "$OUT"
+
+it "a pick made in another session is refused"
+P="$(pick sess-q "$LABEL")"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+has "was not given in this session" "$OUT"
+
+it "a typed ask cannot replace a PM herdr shows live; it needs the pick"
+A="$(ask sess-p "be the PM" 0)"
+as sess-p takeover --prompt "$A"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+has "needs a pick of '$LABEL'" "$OUT"
+
+it "a pick of the exact label, marked recommended, replaces the live PM"
+P="$(pick sess-p "$LABEL (Recommended)")"
+as sess-p takeover --prompt "$P"
+check "0 sess-p" "$CODE $(driver_of "$RUN")"
+ENTRY="$(last_entry "$RUN" taken_over)"
+has '"reason": "replaced"' "$ENTRY"
+has '"request": null' "$ENTRY"
+has "\"prompt_id\": \"$P\"" "$ENTRY"
+has "\"from_session\": \"$D\"" "$ENTRY"
+case "$ENTRY" in *unrequested*) fail "a picked replace is not unrequested" ;; *) pass ;; esac
+
+it "the same pick cited again, after another session became PM, is refused"
+register sess-p w2:p81 term_p81
+snapshot "w2:p81|New PM|sess-p|term_p81" "w2:p31|scratch|sess-w2|term_p31"
+P2="$(pick sess-u "Approve takeover --replace sess-p")"
+typed sess-t '/auto:programme-takeover --replace sess-p' >/dev/null
+as sess-t takeover --replace sess-p
+check "0 sess-t" "$CODE $(driver_of "$RUN")"
+as sess-p takeover --prompt "$P"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "before the current PM took the programme" "$OUT"
+
+it "a pick naming the PM before the last takeover is refused, with the become-pm fix"
+as sess-u takeover --prompt "$P2"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "fix: programme.sh become-pm" "$OUT"
+
+register sess-t w2:p85 term_p85
+snapshot "w2:p85|PM|sess-t|term_p85" "w2:p31|scratch|sess-w2|term_p31"
+set_beat "$RUN" 3
+
+it "an orphaned lease whose PM herdr still shows needs the pick route"
+A="$(ask sess-k "be the PM" 0)"
+as sess-k takeover --prompt "$A"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "needs a pick" "$OUT"
+
+snapshot "w2:p31|scratch|sess-w2|term_p31"
+
+it "an orphaned lease and no prompt of this session's is refused"
+as sess-k takeover --prompt p000000
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "no prompt 'p000000'" "$OUT"
+
+it "an ask typed before the lease turned orphaned is refused"
+A="$(ask sess-k "be the PM" 2.9)"
+as sess-k takeover --prompt "$A"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "before the PM stopped" "$OUT"
+
+it "an ask typed in another session is refused"
+A="$(ask sess-j "be the PM" 0)"
+as sess-k takeover --prompt "$A"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "was not given in this session" "$OUT"
+
+it "an ask from a session outside the lease's space is refused"
+A="$(ask sess-w9 "be the PM" 0)"
+as_in w9 sess-w9 takeover --prompt "$A" --run "$RUN"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "not in the programme's herdr space" "$OUT"
+
+it "a lease whose status did not come from a readable run record is refused, not read as orphaned"
+LEASE_FILE="${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json"
+cp -f "$LEASE_FILE" "${WORK}/lease.bak"
+"$PY" -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["home"]="/nonexistent/home"; json.dump(d, open(p, "w"))' "$LEASE_FILE"
+A="$(ask sess-k "be the PM" 0)"
+as sess-k takeover --prompt "$A"
+check "1 sess-t" "$CODE $(driver_of "$RUN")"
+has "run record could not be read" "$OUT"
+cp -f "${WORK}/lease.bak" "$LEASE_FILE"
+
+it "Shawn's ask typed after the orphaning moves the lease, unrequested"
+as sess-k takeover --prompt "$A"
+check "0 sess-k" "$CODE $(driver_of "$RUN")"
+ENTRY="$(last_entry "$RUN" taken_over)"
+has '"reason": "orphaned"' "$ENTRY"
+has '"request": null' "$ENTRY"
+has '"unrequested": true' "$ENTRY"
+has "\"prompt_id\": \"$A\"" "$ENTRY"
+
+it "a PM herdr shows gone is replaced on Shawn's ask, as driver_gone and unrequested"
+register sess-k w2:p90 term_p90
+set_beat "$RUN" 0.05
+A="$(ask sess-m "take over as PM" 0)"
+as sess-m takeover --prompt "$A"
+check "0 sess-m" "$CODE $(driver_of "$RUN")"
+ENTRY="$(last_entry "$RUN" taken_over)"
+has '"reason": "driver_gone"' "$ENTRY"
+has '"unrequested": true' "$ENTRY"
+has '"request": null' "$ENTRY"
+has '"pane_in_snapshot": false' "$ENTRY"
+
 echo
 echo "programme-takeover.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

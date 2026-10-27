@@ -17,6 +17,18 @@ refused. If herdr cannot
 be read, auto does not count the PM as gone. Pass `--replace` on the dispatch
 line only when Shawn typed it; the typed text, not the argument, is what counts.
 
+Shawn does not have to type the command. When he asks this session to be the
+PM in his own words:
+
+1. If the PM is live, run `programme.sh approval-label takeover --replace <PM session id>`.
+2. Offer its output as the recommended option of one AskUserQuestion picker.
+3. When Shawn picks it, run `programme.sh takeover --prompt <pick id>`.
+
+If the PM is orphaned or herdr shows it gone, ask the same picker. Then run
+`programme.sh takeover --prompt <pick id>`. The pick must come after the PM
+stopped. Today auto journals only picks from a session that is not the PM, so
+cite the pick. This takeover is journaled as unrequested. A refusal prints a `fix:` line; run it.
+
 Run the dispatch line below:
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" takeover "$ARGUMENTS"`

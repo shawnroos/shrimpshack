@@ -152,6 +152,8 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
 def _h_approval_label(host, argv):
     if len(argv) < 2:
         raise ValueError("usage: approval-label <verb> <args...>")
+    if argv[1] == "takeover":
+        return _takeover_label_cli(argv)
     if argv[1] not in PICK_VERBS or argv[1] in _STDIN_VERBS:
         raise host.ProgrammeError(f"{argv[1]} needs a typed prompt; a pick cannot approve it",
                                   fix=approval_fix(argv[1], argv[1:]))
@@ -166,10 +168,63 @@ def _h_approval_label(host, argv):
 _SPECS = (
     ("approval-label", _h_approval_label, "<verb> <args...>",
      "a verb a pick cannot approve. Prints the exact picker option that approves that command; needs no "
-     "prompt and writes nothing."),
+     "prompt and writes nothing. For takeover it takes only --replace <driving session id>."),
 )
 
 
 def build_verbs(host) -> dict:
     return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
             for name, handler, args, rejects in _SPECS}
+
+
+def takeover_label(driver) -> str:
+    return label(["takeover", "--replace", driver])
+
+
+def _takeover_label_cli(argv) -> int:
+    # takeover stays out of PICK_VERBS: its pick is checked by takeover itself, against the driver under the lock.
+    if len(argv) != 4 or argv[2] != "--replace" or not argv[3] or argv[3].startswith("--"):
+        raise ValueError("usage: approval-label takeover --replace <driving session id>")
+    print(takeover_label(argv[3]))
+    return 0
+
+
+def _from_shawn(row, prompt_id, sid, error) -> str:
+    if row is None:
+        raise error(f"no prompt {prompt_id!r} in this programme's journal")
+    if row.get("session_id") != sid:
+        raise error(f"prompt {prompt_id!r} was not given in this session")
+    origin = programme_journal.prompt_origin(row)
+    if origin not in programme_protocol.HUMAN_ORIGINS:
+        raise error(f"prompt {prompt_id!r} is not a verified typed prompt, accepted suggestion or pick "
+                    f"(origin {origin!r})")
+    return origin
+
+
+def _takeover_answer(rows, row, prompt_id, driver, error) -> str:
+    try:
+        answer = programme_journal.pick_answer(rows, row)
+    except ValueError as exc:
+        raise error(str(exc)) from None
+    if answer.casefold().endswith(_RECOMMENDED):
+        answer = answer[:-len(_RECOMMENDED)]
+    want = takeover_label(driver)
+    if answer != want:
+        raise error(f"pick {prompt_id!r} answer {answer!r} does not approve this takeover; "
+                    f"the answer must be exactly {want!r}")
+    return answer
+
+
+def takeover_pick(rows, row, prompt_id, sid, driver, error) -> dict:
+    if _from_shawn(row, prompt_id, sid, error) != "picked":
+        raise error(f"the PM is live, so replacing it needs a pick of {takeover_label(driver)!r}; "
+                    f"prompt {prompt_id!r} is not a pick")
+    return {"origin": "picked", "answer": _takeover_answer(rows, row, prompt_id, driver, error)}
+
+
+def cited_ask(rows, row, prompt_id, sid, driver, error) -> dict:
+    origin = _from_shawn(row, prompt_id, sid, error)
+    # A pick's question is PM-written, so a pick is Shawn's ask only when its answer names the takeover.
+    if origin == "picked":
+        return {"origin": origin, "answer": _takeover_answer(rows, row, prompt_id, driver, error)}
+    return {"origin": origin}
