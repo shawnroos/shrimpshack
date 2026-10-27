@@ -332,7 +332,16 @@ def ruling_delta(current, content):
         names, longer = delta["added"], content["effect"] == "grant" and delta["until"] == "extended"
     delta["names"] = names
     delta["wider"] = bool(names or delta["removed_limits"] or longer)
+    delta["words"] = _grant_words(delta, content) if content["effect"] == "grant" else []
     return delta
+
+
+# The squashed ISO stamp splits at its colons into fragments no prompt reproduces, so the date stands for it.
+def _grant_words(delta, content) -> list:
+    words = list(delta["removed_limits"])
+    if delta["until"] == "extended":
+        words.append(content["until"][:10] if content.get("until") else ["no end date", "open-ended"])
+    return words
 
 
 def ruling_state(revisions, now) -> str:

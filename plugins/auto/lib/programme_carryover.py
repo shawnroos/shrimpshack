@@ -230,8 +230,8 @@ def prefill(host, programme) -> tuple:
     return added, notices
 
 
-def _offer_index(rows, ids):
-    for index in range(len(rows) - 1, -1, -1):
+def _offer_index(rows, ids, before):
+    for index in range(before - 1, -1, -1):
         row = rows[index]
         payload = row.get("payload") or {}
         offered = {e.get("id") for e in payload.get("carryover") or [] if isinstance(e, dict)}
@@ -261,8 +261,7 @@ def _carry(host, opts, ids):
     prompt = host._typed_prompt(run_id, rec, opts["prompt"], "carry-rulings")
     host.require_named(prompt, *ids)
     rows = programme_journal.read(run_id)
-    offered_at = _offer_index(rows, ids)
-    if offered_at is None or offered_at > host.programme_rulings.prompt_index(rows, prompt["prompt_id"]):
+    if _offer_index(rows, ids, host.programme_rulings.prompt_index(rows, prompt["prompt_id"])) is None:
         raise host.ProgrammeError(f"prompt {prompt['prompt_id']!r} was not typed after an offer naming "
                                   f"{', '.join(ids)}: run carry-rulings with no ids, show Shawn the offer, then "
                                   "cite the prompt he types")

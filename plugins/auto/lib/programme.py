@@ -173,7 +173,7 @@ def active_rulings(programme, now=None) -> list:
         if not targets:
             continue
         out.append(dict({k: current.get(k) for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
-                                                     "until", "at", "limits")},
+                                                     "until", "at", "limits", "baseline")},
                         id=rid, applies_to=targets, prompt_id=(current.get("source") or {}).get("prompt_id")))
     return out
 
@@ -214,7 +214,7 @@ def rules_in_force(record, journals=None, protocol=None, changes=True, *, behavi
         "autonomy": autonomy,
         "rejected_rules": [{"id": r["id"], "layer": r["layer"], "reason": r["reason"]}
                            for r in protocol["rejected"]],
-        "rulings": active_rulings(programme),
+        "rulings": active_rulings(programme, run_record_core.now_iso()),
         "permission_proposals": programme_permission.in_force(programme),
     }
     legacy = programme_rulings.legacy_restricts(programme)

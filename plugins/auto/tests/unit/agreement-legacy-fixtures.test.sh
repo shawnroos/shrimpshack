@@ -261,6 +261,26 @@ PYEOF
 it "the release check reads the fixture's legacy waiver instruction as a waiver for its item"
 check "[\"$WAIVER\"]" "$(release_waivers)"
 
+it "an old instruction whose waive wording sits only in its why still counts as a waiver, as before Rulings"
+check '["i-why"]' "$("$PY" - "$AUTO_ROOT" "$RUN" <<'PYEOF' 2>&1
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
+from _bootstrap import load_lib_module
+import programme_records
+prog = load_lib_module("programme")
+ph = load_lib_module("programme_home")
+pe = load_lib_module("programme_evidence")
+raw = programme_records.load(sys.argv[2])["programme"]
+raw.setdefault("instructions", []).append(
+    {"id": "i-why", "applies_to": "herdr:browser-e2e", "at": "2026-10-22T07:41:35Z", "closed": None,
+     "prompt_id": None, "quote": "skip the full eval for the browser fix", "state": "active", "until": None,
+     "why": "Shawn waived the eval for this hotfix"})
+programme = ph.normalize_programme(raw)
+print(json.dumps([r["id"] for r in pe._context(prog, programme, "herdr:browser-e2e", "released", None)["waivers"]]))
+PYEOF
+)"
+
 P_WITHDRAW="$("$PY" - "$AUTO_ROOT" "$RUN" "$WAIVER" <<'PYEOF' 2>&1
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))

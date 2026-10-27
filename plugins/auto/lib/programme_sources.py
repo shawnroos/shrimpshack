@@ -605,13 +605,23 @@ def _brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(),
         raise host.ProgrammeError(f"unknown decision id {', '.join(unknown)}: not in the decision log and no "
                                   "accepted decision record")
     active = host.active_rulings(programme, run_record_core.now_iso()) if rulings else []
-    carried = [_ruling_line(r) for r in active
-               if r["id"] not in found and (key in r["applies_to"] or "programme" in r["applies_to"])]
+    carried = {r["id"]: r for r in active
+               if r["id"] not in found and (key in r["applies_to"] or "programme" in r["applies_to"])}
+    cited = {d: programme_context.in_force(records.get(d)) for d in decision_ids
+             if d not in logged and programme_context.is_ruling(records.get(d))}
+    conflicted = [rid for rid, r in {**cited, **carried}.items()
+                  if host.programme_rulings.grant_conflicted(host, programme, r, key)]
     lines = []
-    if decision_ids or carried:
+    settled = [found[d] for d in decision_ids if d not in conflicted]
+    settled += [_ruling_line(r) for rid, r in carried.items() if rid not in conflicted]
+    if settled:
         lines.append("Settled decisions this work carries:")
-        lines += [found[d] for d in decision_ids] + carried
+        lines += settled
         lines.append(REOPEN_CLAUSE)
+    if conflicted:
+        lines.append("Rulings Authority now holds narrower than when Shawn gave them (do not act on these):")
+        lines += [f"{found[rid] if rid in found else _ruling_line(carried[rid])}; conflicted: wait for Shawn"
+                  for rid in conflicted]
     if restrictions:
         lines.append("Restrictions on this work:")
         lines += [f"- {r['text']} (source: {r['source']})" for r in restrictions]

@@ -99,6 +99,14 @@ def authority_level(host, programme, kind, targets):
     return level_of(protocol_for(host, programme, targets), kind)
 
 
+# Must match the conflict test in programme_decisions.who_decides, or a worker acts where the PM may not.
+def grant_conflicted(host, programme, ruling, item) -> bool:
+    if ruling.get("effect") != "grant" or ruling.get("kind") is None:
+        return False
+    level = authority_level(host, programme, ruling["kind"], [item])
+    return programme_decisions.narrower_than_baseline(level, ruling.get("baseline"))
+
+
 def legacy_restricts(programme) -> list:
     out = []
     for rid, _, current in pc.current_revisions(pc.block(programme)["decisions"]):
@@ -142,14 +150,16 @@ def _named(target):
 def _names_needed(content, delta, new) -> list:
     if new and content.get("effect") in NAMED_WHEN_NEW:
         return [content["kind"]] + [_named(t) for t in content.get("applies_to") or []]
-    return [_named(t) for t in pc._dict(delta).get("names", pc._dict(delta).get("added")) or []]
+    delta = pc._dict(delta)
+    return [_named(t) for t in delta.get("names", delta.get("added")) or []] + list(delta.get("words") or [])
 
 
 # A carried Ruling arrives with no items, so every item it is given is new here and must be named by
 # Shawn's prompt, whatever its effect; accept-context reads the same names.
 def _carried_delta(content) -> dict:
     items = list(content["applies_to"])
-    return {"added": items, "removed": [], "removed_limits": [], "until": None, "names": items, "wider": False}
+    return {"added": items, "removed": [], "removed_limits": [], "until": None, "names": items, "words": [],
+            "wider": False}
 
 
 def _record(host, programme, cid, content, prompt, *, correction=None) -> dict:
@@ -325,8 +335,8 @@ _SPECS = (
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
      "no pending revision; a pick or accepted suggestion for a Ruling (a requirement takes one); a prompt "
      "that is not typed, came from a legacy journal or an obsolete writer, or does not name the id and every "
-     "target the revision adds (for a Ruling, every item it gives the PM, and for a new grant or decided "
-     "Ruling its kind); a carried Ruling that has no items yet. A grant that becomes active records the Authority level for its kind as its baseline."),
+     "target the revision adds (for a Ruling, every item it gives the PM; for a grant revision, each limit it "
+     "drops and its new end date as YYYY-MM-DD or 'no end date'; for a new grant or decided Ruling its kind); a carried Ruling that has no items yet. A grant that becomes active records the Authority level for its kind as its baseline."),
 )
 
 

@@ -291,6 +291,12 @@ print(counts.get("instruction:i0a1b2c"), counts.get("ruling:i0a1b2c"))
 EOF
 )"
 
+edit 'rec["programme"]["context"]["decisions"]["r-past"] = [{"rev": 1, "state": "accepted", "at": "2026-10-20T00:00:00Z", "kind": "merge_strategy", "effect": "grant", "applies_to": ["linear:AI-1"], "until": "2000-01-01T00:00:00Z", "scope": "x", "reason": None, "quote": "x", "limits": [], "requirements": []}]'
+record_traj '[{"item": "linear:AI-1", "done": [], "current": {"title": "Split the PR", "clause": "ruling:r-small-prs"},
+  "planned": [{"title": "Expired", "clause": "ruling:r-past"}], "finish": "PR"}]'
+it "a Ruling past its end date is an unknown clause"
+check '[null, "unknown_clause"]' "$(field '[prog["items"]["linear:AI-1"]["trajectory"]["planned"][0].get(k) for k in ("clause", "note")]')"
+
 echo ""
 echo "programme-trajectory.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

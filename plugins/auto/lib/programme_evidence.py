@@ -640,9 +640,10 @@ def _repo_arg(value):
 def _waives(ruling) -> bool:
     if ruling["kind"] == "eval_waiver":
         return ruling["effect"] == "decided"
-    # Only instructions recorded before Rulings had kinds keep the old text match.
+    # Only instructions recorded before Rulings had kinds keep the old text match, over the quote and the
+    # PM's why (now the reason) as before, so a release that passed then still passes.
     return ruling["kind"] is None and ruling["legacy"] == "instruction" \
-        and bool(_WAIVER.search(ruling.get("quote") or ""))
+        and bool(_WAIVER.search(f"{ruling.get('quote') or ''} {ruling.get('reason') or ''}"))
 
 
 def _context(host, programme, key, deliverable, repo, cache=None) -> dict:

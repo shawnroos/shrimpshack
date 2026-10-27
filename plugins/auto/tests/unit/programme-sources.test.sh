@@ -725,6 +725,37 @@ COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')
 check "0 1" "$CODE $(printf '%s\n' "$COPY" | grep -c 'ruling:r-hold')"
 lacks "(decision record)" "$COPY"
 
+run_py "$RUN" <<'EOF' >/dev/null
+def body(rec):
+    decisions = rec["programme"]["context"]["decisions"]
+    for rid in [r for r in decisions if r.startswith("r-") or r == "i0legacy"]:
+        del decisions[rid]
+    decisions["r-narrow"] = [{"rev": 1, "state": "accepted", "kind": "tool_choice", "effect": "grant", "legacy": None,
+                              "applies_to": ["linear:AI-792"], "until": None, "scope": "PM picks tools",
+                              "reason": "Shawn said so", "quote": "tools are yours", "limits": [], "requirements": [],
+                              "baseline": "act"}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+mkdir -p "$(dirname "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+printf '{"autonomy": {"tool_choice": {"level": "propose"}}}' > "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 -- --name narrowed --handoff "$BRIEF"
+it "a grant whose kind Authority now holds narrower than its baseline reaches the brief as conflicted, not settled"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+check 0 "$CODE"
+has "ruling:r-narrow" "$COPY"
+has "conflicted: wait for Shawn" "$COPY"
+lacks "Settled decisions this work carries:" "$COPY"
+lacks "stop and state that evidence" "$COPY"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision r-narrow -- --name narrowed2 --handoff "$BRIEF"
+it "the same grant cited with --decision is conflicted too"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+check "0 1" "$CODE $(printf '%s\n' "$COPY" | grep -c 'ruling:r-narrow')"
+has "conflicted: wait for Shawn" "$COPY"
+lacks "stop and state that evidence" "$COPY"
+rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+
 prog add-item linear:AI-793 --title "No handoff"
 : > "$CALLS"
 FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-793 -- --name plain --target tab

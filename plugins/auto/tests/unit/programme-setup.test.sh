@@ -245,6 +245,11 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                   pick(a_sid, run, {'accept-context?': 'Approve accept-context r8'}))
     check('accept-context refuses a pick of its exact label for a Ruling',
           refused(result, "accepting Ruling 'r8' needs a typed prompt"), result.stdout + result.stderr)
+    suggested = typed_prompt(run, a_sid, 'accept r8, tool choice is mine',
+                             prompt_source='suggestion_accepted')['prompt_id']
+    result = verb(a_sid, run, 'accept-context', 'r8', '--prompt', suggested)
+    check('accept-context refuses an accepted suggestion for a Ruling, even one naming it',
+          refused(result, "is an accepted suggestion"), result.stdout + result.stderr)
     gate_pick = pick(a_sid, run, {'Cadence: on change?': 'on change'})
 
     lifecycle = load_lib_module('programme_lifecycle')

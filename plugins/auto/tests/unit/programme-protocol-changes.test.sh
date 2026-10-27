@@ -202,6 +202,8 @@ it "Covers AE6. once Authority holds the kind narrower than the grant's baseline
 OUT="$(rules_block)"
 has "Ruling conflict: g1 grants tool_choice on herdr:a, but Authority now holds tool_choice at propose (act when granted)" "$OUT"
 has "Ruling conflict: g2" "$OUT"
+it "the conflict line asks Shawn for what clears it: a close or a widened revision, not any new revision"
+has "ask Shawn to close g1 or accept a widened revision of it; a narrowing revision keeps the old level" "$OUT"
 it "Covers AE6. the gate applies the narrower level: the PM may not decide tool_choice on herdr:a alone"
 prog log-decision --kind tool_choice --item herdr:a --why "pick a tool" --run "$RUN"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"

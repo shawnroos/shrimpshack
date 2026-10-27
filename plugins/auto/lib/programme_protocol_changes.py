@@ -168,7 +168,8 @@ def lines(report_) -> list:
     for row in report_["conflicts"]:
         out.append(f"Ruling conflict: {row['ruling']} grants {row['kind']} on {', '.join(row['items'])}, but "
                    f"Authority now holds {row['kind']} at {row['level']} ({row['baseline']} when granted); the "
-                   f"narrower applies: ask Shawn to accept a new revision of {row['ruling']} or close it")
+                   f"narrower applies: ask Shawn to close {row['ruling']} or accept a widened revision of it; a "
+                   "narrowing revision keeps the old level")
     return out
 
 

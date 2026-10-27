@@ -241,6 +241,8 @@ print(all(proto.approval_key(f"carryover:{k}:{e['id']}", e["adoption"]["hash"])
 EOF
 )"
 
+prog carry-rulings --run "$RUN_A"
+P_PRE_END="$(prompt "$RUN_A" 'carry r1 over')"
 it "end lists the active Rulings for carry-over"
 end_programme "$RUN_A"
 check 0 "$CODE"
@@ -253,6 +255,11 @@ row = [r for r in pj.read(args[0]) if r["kind"] == "programme_ended"][-1]
 print(json.dumps([e["id"] for e in row["payload"]["carryover"]]))
 EOF
 )"
+it "after end, a prompt typed after the earlier offer and before the end offer still stores the pick"
+prog carry-rulings r1 --prompt "$P_PRE_END" --run "$RUN_A"
+check "0 2" "$CODE $("$PY" -c '
+import json, sys
+print(len(json.load(open(sys.argv[1]))["keys"]["shawn/alpha"]))' "$STORE")"
 it "after end, carry-rulings with a prompt typed after the end offer still stores the pick"
 P_KEEP_R1="$(prompt "$RUN_A" 'carry r1 as well')"
 prog carry-rulings r1 --prompt "$P_KEEP_R1" --run "$RUN_A"

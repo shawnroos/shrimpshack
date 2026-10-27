@@ -435,9 +435,10 @@ not "nothing changed". You apply every programme write yourself.
       or Done standards changed since this programme last acknowledged them, or
       it never has. The new setting already applies. Once Shawn has been told
       which change this programme now reads, run `P ack-protocol`. A
-      `Ruling conflict:` line stays until Shawn accepts a new revision of that
-      Ruling or closes it; `ack-protocol` never clears it, and until then the
-      narrower Authority level applies.
+      `Ruling conflict:` line stays until Shawn closes that Ruling or accepts a
+      widened revision of it (a narrowing revision keeps the old level);
+      `ack-protocol` never clears it, and until then the narrower Authority
+      level applies.
     - A `legacy restrict` line is an old reservation with no decision kind. It
       binds nothing at the gate; ask Shawn to record it again as a Ruling with a
       kind (the step 3 row).

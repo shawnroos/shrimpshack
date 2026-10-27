@@ -286,6 +286,48 @@ prog record-ruling r-until --kind optimisation_depth --effect grant --scope "dep
   --until 2100-01-01T00:00:00Z --prompt "$P10" --run "$RUN"
 check "pending_acceptance" "$(pyget "$OUT" 'd["state"]')"
 
+it "accept-context refuses a later end date accepted by a prompt naming only the id"
+P_U1="$(prompt 'accept r-until')"
+prog accept-context r-until --prompt "$P_U1" --run "$RUN"
+check "nonzero 1" "$([ "$CODE" -ne 0 ] && echo nonzero) $(in_force_rev r-until)"
+has "2100-01-01" "$OUT"
+
+it "accept-context with a prompt naming the new end date makes the later end date bind"
+P_U2="$(prompt 'accept r-until, it runs until 2100-01-01')"
+prog accept-context r-until --prompt "$P_U2" --run "$RUN"
+check "0 2" "$CODE $(in_force_rev r-until)"
+
+it "dropping the end date altogether needs a prompt that says it has no end date"
+P_U3="$(prompt 'r-until: drop the end')"
+prog record-ruling r-until --kind optimisation_depth --effect grant --scope "depth" --applies-to herdr:d \
+  --prompt "$P_U3" --run "$RUN"
+P_U4="$(prompt 'accept r-until')"
+prog accept-context r-until --prompt "$P_U4" --run "$RUN"
+K1="$CODE"
+P_U5="$(prompt 'accept r-until with no end date')"
+prog accept-context r-until --prompt "$P_U5" --run "$RUN"
+check "nonzero 0 3" "$([ "$K1" -ne 0 ] && echo nonzero) $CODE $(in_force_rev r-until)"
+
+it "dropping a limit from a grant is a widening and waits"
+P_L1="$(prompt 'r-lim: file issue on herdr:d is yours, no major versions')"
+prog record-ruling r-lim --kind file_issue --effect grant --scope "bumps" --applies-to herdr:d \
+  --limit "no major versions" --prompt "$P_L1" --run "$RUN"
+P_L2="$(prompt 'r-lim: majors too')"
+prog record-ruling r-lim --kind file_issue --effect grant --scope "bumps" --applies-to herdr:d \
+  --prompt "$P_L2" --run "$RUN"
+check "pending_acceptance 1" "$(pyget "$OUT" 'd["state"]') $(in_force_rev r-lim)"
+
+it "accept-context refuses a dropped limit accepted by a prompt naming only the id"
+P_L3="$(prompt 'accept r-lim')"
+prog accept-context r-lim --prompt "$P_L3" --run "$RUN"
+check "nonzero 1" "$([ "$CODE" -ne 0 ] && echo nonzero) $(in_force_rev r-lim)"
+has "no major versions" "$OUT"
+
+it "accept-context with a prompt naming the dropped limit makes the wider grant bind"
+P_L4="$(prompt 'accept r-lim, drop the no major versions limit')"
+prog accept-context r-lim --prompt "$P_L4" --run "$RUN"
+check "0 2" "$CODE $(in_force_rev r-lim)"
+
 it "a revision may not change a Ruling's kind or effect"
 P11="$(prompt 'r-tools: make it a restrict')"
 prog record-ruling r-tools --kind tool_choice --effect restrict --scope "PM picks tools" \
@@ -358,10 +400,18 @@ check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
 
 # ── expiry ────────────────────────────────────────────────────────────────
 it "a Ruling whose end date has passed reads as expired and leaves the gate"
-P_OLD="$(prompt 'r-old: acceptance on herdr:d')"
-prog record-ruling r-old --kind acceptance --effect grant --scope "old" --applies-to herdr:d \
+P_OLD="$(prompt 'r-old: acceptance on herdr:a')"
+prog record-ruling r-old --kind acceptance --effect grant --scope "old" --applies-to herdr:a \
   --until 2000-01-01T00:00:00Z --prompt "$P_OLD" --run "$RUN"
-check "expired " "$(ruling_state r-old) $(rulings_for herdr:d acceptance)"
+check "expired " "$(ruling_state r-old) $(rulings_for herdr:a acceptance)"
+
+it "an accepted Ruling past its end date is absent from the rules in force"
+check "[]" "$(run_py "$RUN" <<'EOF'
+programme_mod = load_lib_module("programme")
+print(json.dumps([r["id"] for r in programme_mod.rules_in_force(programme_records.load(args[0]))["rulings"]
+                  if r["id"] == "r-old"]))
+EOF
+)"
 
 # ── baseline ──────────────────────────────────────────────────────────────
 it "a grant that becomes active records the Authority level in force for its kind"
@@ -404,6 +454,35 @@ check "0 closed" "$CODE $(ruling_state r-later)"
 it "closing a restrict needs a typed prompt even as fulfilled: it hands the kind back to the PM"
 prog close-ruling r-order --as fulfilled --why "done" --run "$RUN"
 check "nonzero active" "$([ "$CODE" -ne 0 ] && echo nonzero) $(ruling_state r-order)"
+
+# ── record-ruling refusals that write nothing ─────────────────────────────
+run_py "$RUN" <<'EOF' >/dev/null
+rec = programme_records.load(args[0])
+decisions = rec["programme"]["context"]["decisions"]
+decisions["t-legacy"] = [{"rev": 1, "state": "accepted", "kind": None, "effect": "restrict", "legacy": "project_term",
+                          "scope": "Shawn writes prices", "applies_to": ["programme"], "limits": [], "requirements": []}]
+decisions["d-plain"] = [{"rev": 1, "state": "accepted", "scope": "crop only", "reason": None, "limits": [],
+                         "applies_to": ["herdr:a"], "requirements": []}]
+programme_records.save(args[0], rec)
+EOF
+refused_unchanged() {
+  local before; before="$(ctx_hash)"
+  local p; p="$(prompt "$1: $2 tool choice on herdr:a")"
+  prog record-ruling "$1" --kind tool_choice --effect "$2" --scope "x" --applies-to herdr:a --prompt "$p" --run "$RUN"
+  RESULT="$([ "$CODE" -ne 0 ] && echo nonzero) $([ "$(ctx_hash)" = "$before" ] && echo unchanged)"
+}
+it "record-ruling refuses to revise a closed Ruling and writes nothing"
+refused_unchanged r-eval grant
+check "nonzero unchanged" "$RESULT"
+has "Ruling 'r-eval' is closed; record a new Ruling instead" "$OUT"
+it "record-ruling refuses to revise an old project term and writes nothing"
+refused_unchanged t-legacy restrict
+check "nonzero unchanged" "$RESULT"
+has "'t-legacy' is an old project term with no decision kind" "$OUT"
+it "record-ruling refuses to revise a decision record without a kind and writes nothing"
+refused_unchanged d-plain grant
+check "nonzero unchanged" "$RESULT"
+has "'d-plain' is a decision record without a kind" "$OUT"
 
 # ── decided Rulings ───────────────────────────────────────────────────────
 P_DEC="$(prompt 'r-call: server-side crop on herdr:a, my call on the technical approach')"

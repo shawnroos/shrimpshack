@@ -158,7 +158,8 @@ same gate in this order, and the first match wins:
 4. **Grant.** An active grant Ruling for the kind and the item gives it to you.
    If a `Ruling conflict:` line names that grant, Authority now holds the kind
    narrower than when Shawn granted it, and the narrower level applies until he
-   accepts a new revision or closes the Ruling.
+   closes the Ruling or accepts a widened revision of it. A narrowing revision
+   keeps the old level, so it does not clear the conflict.
 5. **Authority.** Otherwise the Authority level for the kind decides: the
    item's repo, or for the programme or an item with no repo, the narrowest
    level across the remit repos. `act` and `act_and_tell` are yours

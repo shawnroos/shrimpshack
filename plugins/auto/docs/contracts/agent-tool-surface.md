@@ -230,8 +230,9 @@ session.
   programme write; the PM tells Shawn, then runs `ack-protocol`. Before the first
   `ack-protocol` it asks for one. The same block lists each active grant Ruling
   whose kind Authority now holds narrower than the level recorded when the grant
-  became active; the narrower level applies until Shawn accepts a new revision of
-  it or it is closed, and `ack-protocol` never clears that line.
+  became active; the narrower level applies until it is closed or Shawn accepts a
+  widened revision of it (a narrowing revision keeps the old level), and
+  `ack-protocol` never clears that line.
 - **Old instructions**: a programme record written before Rulings keeps its
   instructions, and each reads as a kind-less legacy Ruling with the effect
   decided, under the instruction's id. A Ruling already stored under that id wins.
@@ -340,7 +341,9 @@ session.
   without one it waits for `accept-context`. A revision that gives the PM more
   power (a grant that adds items, drops a limit or ends later; a restrict that
   loses items, drops a limit or ends sooner) waits for an `accept-context`
-  prompt naming each item it adds, while the prior revision stays in force. A
+  prompt naming each item it adds (for a grant, also each limit it drops and its
+  new end date as YYYY-MM-DD, or "no end date"), while the prior revision stays
+  in force. A
   grant records the Authority level for its kind when it becomes active, and a
   narrowing revision keeps it. A grant or decided Ruling of a protected kind is
   refused. Changing a decided Ruling needs a typed prompt naming it.
@@ -769,7 +772,7 @@ gives the full rule). The text must contain: for `amend-term`, the term key and 
 the rule id; for `adopt-autonomy`, the decision kind and the level; for `adopt-check`,
 the repo and the check key (for example `verified.lookup`); for `answer-handed`,
 `drop-item` and `reopen-item`, the item id or its key (for example `AI-753`).
-For `record-ruling` and a `close-ruling` that needs a prompt, the Ruling id; for `accept-context`, the Ruling or requirement id and every item a Ruling gives the PM; for `carry-rulings`, each Ruling id. With `--widening` on `adopt-autonomy`, the text must also contain "widen", "widening" or "widened". A prompt that does not
+For `record-ruling` and a `close-ruling` that needs a prompt, the Ruling id; for `accept-context`, the Ruling or requirement id, every item a Ruling gives the PM and, for a grant revision, each limit it drops and its new end date; for `carry-rulings`, each Ruling id. With `--widening` on `adopt-autonomy`, the text must also contain "widen", "widening" or "widened". A prompt that does not
 name them is refused, and the refusal lists the missing words.
 For `edit-project-term` after acceptance, the text must contain the term's area and
 its new text. `accept-agreement` accepts any typed prompt, because the quote is what it records; `accept-agreement`
