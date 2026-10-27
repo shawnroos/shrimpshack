@@ -103,7 +103,9 @@ status_json() { "$PY" "$PROG" status --run "$RUN" --json 2>&1; }
 req_state() { pyget "$(status_json)" "{r['id']: r['state'] for r in d['model']['acceptance']['requirements']}['$1']"; }
 req_checks() { pyget "$(status_json)" "[c['result'] for r in d['model']['acceptance']['requirements'] if r['id'] == '$1' for c in r['checks']]"; }
 
+# Each call asks whether the programme holds, so the shown-once memory is cleared first.
 stop_decide() {
+  rm -f "${HOME_DIR}"/.stop-shown-*
   "$PY" - "$AUTO_ROOT" <<'EOF' 2>&1
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("on_stop", os.path.join(sys.argv[1], "lib", "on-stop.py"))

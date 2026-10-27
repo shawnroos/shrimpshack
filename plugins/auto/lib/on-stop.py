@@ -313,12 +313,21 @@ def _reason_for(blocking) -> str:
     )
 
 
+def _programme_reasons(status) -> list:
+    # Under never_stop, only_when_done and until_time, `reasons` is one fixed entry; the
+    # actionable reasons are what changes, so both are shown and both feed the signature.
+    out = []
+    for reason in list(status.get("reasons") or []) + list(status.get("actionable_reasons") or []):
+        if isinstance(reason, dict) and reason not in out:
+            out.append(reason)
+    return out
+
+
 def _programme_reason_texts(status) -> list:
     out = []
-    for reason in status.get("reasons") or []:
-        if not isinstance(reason, dict):
-            continue
-        target = reason.get("name") or reason.get("item") or reason.get("system") or reason.get("count")
+    for reason in _programme_reasons(status):
+        target = (reason.get("name") or reason.get("item") or reason.get("system")
+                  or reason.get("count") or reason.get("until"))
         text = str(reason.get("kind"))
         out.append(f"{text} {target}" if target not in (None, "") else text)
     return sorted(out)
@@ -341,19 +350,38 @@ _REASON_FIXES = {
     "source_unavailable": ("source {t} is down: `programme.sh set-source {t} --unavailable --watcher remit`, "
                            "or `--unsupported` when this machine cannot read it"),
     "safety_pause": "{t} is paused for safety: tell Shawn; only he lifts it",
+    "corrupt_record": ("a programme record cannot be read: `programme.sh validate` names the fault, then "
+                       "`programme.sh recover --rebuild-projections`; if it stays, ask Shawn through an "
+                       "AskUserQuestion picker"),
+    "corrupt_context": ("the programme context cannot be read: `programme.sh context` shows it, then "
+                        "`programme.sh recover --rebuild-projections`; if it stays, ask Shawn through an "
+                        "AskUserQuestion picker"),
+    "never_stop": ("the stop rule is never_stop: run `programme.sh sweep` and act on what it finds; only "
+                   "Shawn changes the rule, so ask him through an AskUserQuestion picker, then "
+                   "`programme.sh pick-term stop_rule <value> --pick <id>`"),
+    "not_done": ("the stop rule is only_when_done and items are unfinished: `programme.sh status` "
+                 "lists them; work the next one"),
+    "until_time": ("the stop rule holds until {t}: run `programme.sh sweep` and act on what it finds; to "
+                   "stop sooner, ask Shawn through an AskUserQuestion picker, then "
+                   "`programme.sh pick-term stop_rule <value> --pick <id>`"),
+    "authority_unsupported": ("a newer auto wrote this programme's store: ask Shawn through an "
+                              "AskUserQuestion picker to update auto on this machine"),
+    "authority_corrupt": ("this programme's store is corrupt: `programme.sh recover` reports what it can "
+                          "rebuild; ask Shawn through an AskUserQuestion picker before you treat the "
+                          "programme as finished or free"),
+    "authority_unavailable": ("this programme's store cannot be opened now: retry `programme.sh status`; "
+                              "if it stays down, ask Shawn through an AskUserQuestion picker"),
 }
 
 
 def _programme_fixes(status) -> tuple[list, bool]:
     fixes, unhinted = [], False
-    for reason in status.get("reasons") or []:
-        if not isinstance(reason, dict):
-            continue
+    for reason in _programme_reasons(status):
         fix = _REASON_FIXES.get(reason.get("kind"))
         if fix is None:
             unhinted = True
             continue
-        line = fix.format(t=reason.get("item") or reason.get("system") or "")
+        line = fix.format(t=reason.get("item") or reason.get("system") or reason.get("until") or "")
         if line not in fixes:
             fixes.append(line)
     return fixes, unhinted
@@ -369,7 +397,7 @@ def _fixes_text(status) -> str:
     return text
 
 
-def _nag_signature(blocking, programmes=()) -> str:
+def _nag_signature(blocking) -> str:
     """A deterministic signature of the blocking set (U2 / finding #9).
 
     Two turn-ends have the "same" block iff the same runs are blocking with the
@@ -385,18 +413,11 @@ def _nag_signature(blocking, programmes=()) -> str:
         )
         for rid, p in blocking
     )
-    if not programmes:
-        return json.dumps(items, sort_keys=True)
-    held = sorted((hold["run"], _programme_reason_texts(hold["status"])) for hold in programmes)
-    return json.dumps({"task": items, "programme": held}, sort_keys=True)
+    return json.dumps(items, sort_keys=True)
 
 
-def _nag_dir(repo_root: str, programmes=()) -> str | None:
-    if repo_root:
-        return os.path.join(repo_root, ".claude", "auto")
-    for hold in programmes:
-        return os.path.join(hold["home"], ".claude", "auto")
-    return None
+def _nag_dir(repo_root: str) -> str | None:
+    return os.path.join(repo_root, ".claude", "auto") if repo_root else None
 
 
 def _nag_state_path(nag_dir: str, session_id=None) -> str:
@@ -443,6 +464,74 @@ def _terse_reason_for(blocking) -> str:
         "(the harness re-invokes on a verdict), or `/auto-resume abort <run>` "
         "to stop early."
     )
+
+
+def _programme_signature(hold) -> str:
+    # The rules note rides in the signature so a new compaction or handover note is shown once.
+    status = hold["status"]
+    return json.dumps([status.get("stop_rule"), _programme_reason_texts(status), _rules_suffix(hold)])
+
+
+def _shown_path(hold, session_id) -> str:
+    return load_lib_module("programme_home").stop_shown_path(hold["run"], session_id)
+
+
+def _last_shown(hold, session_id):
+    try:
+        with open(_shown_path(hold, session_id)) as fh:
+            return json.load(fh).get("sig")
+    except Exception:
+        return None
+
+
+def _remember_shown(hold, session_id, sig) -> bool:
+    try:
+        with open(_shown_path(hold, session_id), "w") as fh:
+            json.dump({"sig": sig}, fh)
+        return True
+    except Exception:
+        return False
+
+
+def _forget_shown(hold, session_id) -> None:
+    try:
+        os.remove(_shown_path(hold, session_id))
+    except Exception:
+        pass
+
+
+def _split_programmes(driven, session_id) -> tuple[list, list]:
+    """(fresh, quiet): holds whose block this session has not seen, and holds it has.
+
+    A hold whose signature cannot be stored is in neither list, so the stop goes
+    through: blocking without a memory would repeat the same block every turn.
+    """
+    fresh, quiet = [], []
+    for hold in driven:
+        if hold["status"].get("may_stop"):
+            _forget_shown(hold, session_id)
+            continue
+        sig = _programme_signature(hold)
+        if sig == _last_shown(hold, session_id):
+            quiet.append(hold)
+        elif _remember_shown(hold, session_id, sig):
+            fresh.append(hold)
+    return fresh, quiet
+
+
+def _journal_quiet(holds, session_id) -> None:
+    try:
+        programme_journal = load_lib_module("programme_journal")
+    except Exception:
+        return
+    for hold in holds:
+        status = hold["status"]
+        try:
+            programme_journal.append(hold["run"], "stop_quiet", session_id,
+                                     {"stop_rule": status.get("stop_rule"),
+                                      "reasons": _programme_reason_texts(status)})
+        except Exception:
+            continue
 
 
 def _held_status(hold) -> dict:
@@ -492,7 +581,8 @@ def _programme_reason_for(hold) -> str:
     if status.get("hold"):
         return (f"auto: programme {hold['run']} may not stop: its authority is "
                 f"{status['hold']['outcome']} ({status['hold']['detail']}), so auto cannot tell what it "
-                "still owes. Report this to Shawn; do not treat the programme as finished or free.")
+                "still owes. Report this to Shawn; do not treat the programme as finished or free."
+                + _fixes_text(status))
     text = (
         f"auto: programme {hold['run']} may not stop yet — "
         + "; ".join(_programme_reason_texts(status)) + "."
@@ -504,14 +594,6 @@ def _programme_reason_for(hold) -> str:
             "the stop through and journals them as stopped unwatched, for Shawn."
         )
     return text + _fixes_text(status) + _rules_suffix(hold)
-
-
-def _terse_programme_reason_for(hold) -> str:
-    return (
-        f"auto: programme {hold['run']} still may not stop (unchanged): "
-        + "; ".join(_programme_reason_texts(hold["status"]))
-        + "." + _fixes_text(hold["status"]) + _rules_suffix(hold)
-    )
 
 
 def _journal_stopped_unwatched(session_id, now) -> None:
@@ -555,34 +637,30 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
         _journal_stopped_unwatched(session_id, now)
         return None
 
-    driven = _driven_programmes(session_id, now)
-    programmes = [hold for hold in driven if not hold["status"].get("may_stop")]
+    fresh, quiet = _split_programmes(_driven_programmes(session_id, now), session_id)
     blocking = _blocking_runs(repo_root, now=now, session_id=session_id)
-    nag_dir = _nag_dir(repo_root, programmes)
-    if not blocking and not programmes:
-        # reset so a future block re-emits full guidance.
-        _clear_nag(nag_dir, session_id)
-        for hold in driven:
-            _clear_nag(_nag_dir("", [hold]), session_id)
-        return None
+    if blocking:
+        return _task_block(repo_root, blocking, fresh, session_id)
+    # reset so a future task block re-emits full guidance.
+    _clear_nag(_nag_dir(repo_root), session_id)
+    if fresh:
+        # A programme hold is expected bookkeeping, not news for Shawn: the reason reaches the PM only.
+        return {"decision": "block", "reason": "\n\n".join(_programme_reason_for(h) for h in fresh)}
+    _journal_quiet(quiet, session_id)
+    return None
 
-    # U2 (finding #9): de-duplicate the ~10x identical nag across turns. The block
-    # is ALWAYS preserved (deliberate-stop); only the MESSAGE is collapsed to a
-    # terse reminder once the driver has already seen the full guidance for this
-    # exact blocking state. A changed/cleared state re-emits the full guidance.
-    sig = _nag_signature(blocking, programmes)
+
+def _task_block(repo_root, blocking, fresh, session_id) -> dict:
+    # U2 (finding #9): a task-run block is ALWAYS kept (deliberate-stop); only its
+    # MESSAGE collapses to a terse reminder once the driver has seen the full
+    # guidance for this exact blocking state.
+    nag_dir = _nag_dir(repo_root)
+    sig = _nag_signature(blocking)
     repeat = sig == _load_last_nag(nag_dir, session_id)
     _store_nag(nag_dir, sig, session_id)
-
+    parts = [_programme_reason_for(hold) for hold in fresh]
     if repeat:
-        parts = [_terse_programme_reason_for(hold) for hold in programmes]
-        if blocking:
-            parts.append(_terse_reason_for(blocking))
-        return {"decision": "block", "reason": "\n\n".join(parts)}
-
-    parts = [_programme_reason_for(hold) for hold in programmes]
-    if not blocking:
-        # A programme hold is expected bookkeeping, not news for Shawn: the reason reaches the PM only.
+        parts.append(_terse_reason_for(blocking))
         return {"decision": "block", "reason": "\n\n".join(parts)}
     parts.append(_reason_for(blocking))
     message = (

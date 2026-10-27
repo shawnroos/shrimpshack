@@ -80,6 +80,7 @@ KINDS = (
     "rules_loaded",
     "reread_requested",
     "stopped_unwatched",
+    "stop_quiet",
     "item_added",
     "item_updated",
     "item_aliased",

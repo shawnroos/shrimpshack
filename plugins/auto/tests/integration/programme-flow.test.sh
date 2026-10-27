@@ -553,8 +553,10 @@ it "cross-session: only the PM's prompt is journaled and answered"
 has "auto-data" "$(typed sess-e 'carry on')"
 check "$((BEFORE + 1))" "$(kinds "$RUN3" | wc -w | tr -d ' ')"
 
-it "cross-session: the fork and the child stop freely, the PM is held"
-check "allow allow block" "$(verdict "$(stop_hook sess-fork)") $(verdict "$(stop_hook sess-child)") $(verdict "$(stop_hook sess-e)")"
+it "cross-session: the fork and the child stop freely, the PM's unchanged hold is let through once shown"
+check "allow allow allow" "$(verdict "$(stop_hook sess-fork)") $(verdict "$(stop_hook sess-child)") $(verdict "$(stop_hook sess-e)")"
+it "cross-session: the PM's quiet stop is journaled as stop_quiet"
+has '"sess-e"' "$(last_entry "$RUN3" stop_quiet)"
 
 it "cross-session: re-fires of the fork and child journal nothing"
 N_UNW="$(kinds "$RUN3" | tr ' ' '\n' | grep -c stopped_unwatched)"
