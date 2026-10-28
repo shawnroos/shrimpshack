@@ -491,68 +491,32 @@ race() {
   wait "$p2"; C2=$?
   OUT2="$(cat "${WORK}/race2.out")"
 }
-RUN_L="$(run_py <<'EOF'
-load_lib_module("programme_authority").home_for = lambda *a: None
-print(ph.create_programme(["w11"], "sess-pm")["run"])
-EOF
-)"
 RUN_Q="$(new_programme w12)"
-for R in "$RUN_Q" "$RUN_L"; do
-  [ "$R" = "$RUN_Q" ] && { LABEL=promoted; SPACE=w12; } || { LABEL=legacy; SPACE=w11; }
-  REPO_R="${WORK}/repos/race-${LABEL}"
-  mkdir -p "$REPO_R"
-  remit "$R" "{\"spaces\":[\"${SPACE}\"],\"repos\":[{\"path\":\"${REPO_R}\"}]}"
-  prog add-item herdr:q --title "q" --kind fix_only --run "$R"
-  P_Q1="$(prompt "$R" 'q1: I pick the technical approach on herdr:q')"
-  prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --applies-to herdr:q \
-    --prompt "$P_Q1" --run "$R"
-  prog carry-rulings --run "$R"
-  it "$LABEL: a carry racing a record-ruling on the same prompt is refused once the record-ruling journals"
-  P_QR="$(prompt "$R" 'carry q1, and q2: I pick the work sequencing on herdr:q')"
-  race "$(home_of "$R")" record-ruling q2 --kind work_sequencing --effect restrict --scope "q2" \
-    --applies-to herdr:q --prompt "$P_QR" --run "$R" -- "$PY" "$PROG" carry-rulings q1 --prompt "$P_QR" --run "$R"
-  check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
-  has "already approved" "$OUT2"
-done
+R="$RUN_Q"
+REPO_R="${WORK}/repos/race-promoted"
+mkdir -p "$REPO_R"
+remit "$R" "{\"spaces\":[\"w12\"],\"repos\":[{\"path\":\"${REPO_R}\"}]}"
+prog add-item herdr:q --title "q" --kind fix_only --run "$R"
+P_Q1="$(prompt "$R" 'q1: I pick the technical approach on herdr:q')"
+prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --applies-to herdr:q \
+  --prompt "$P_Q1" --run "$R"
+prog carry-rulings --run "$R"
+it "a carry racing a record-ruling on the same prompt is refused once the record-ruling journals"
+P_QR="$(prompt "$R" 'carry q1, and q2: I pick the work sequencing on herdr:q')"
+race "$(home_of "$R")" record-ruling q2 --kind work_sequencing --effect restrict --scope "q2" \
+  --applies-to herdr:q --prompt "$P_QR" --run "$R" -- "$PY" "$PROG" carry-rulings q1 --prompt "$P_QR" --run "$R"
+check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+has "already approved" "$OUT2"
 
-for R in "$RUN_Q" "$RUN_L"; do
-  [ "$R" = "$RUN_Q" ] && LABEL=promoted || LABEL=legacy
-  it "$LABEL: a carry racing a change to the Ruling re-reads its revision and refuses the stale offer"
-  prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --run "$R"
-  prog carry-rulings --run "$R"
-  P_QC="$(prompt "$R" 'carry q1 to the next programme')"
-  P_QA="$(prompt "$R" 'accept q1 for herdr:q')"
-  race "$(home_of "$R")" accept-context q1 --prompt "$P_QA" --run "$R" -- \
-    "$PY" "$PROG" carry-rulings q1 --prompt "$P_QC" --run "$R"
-  check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
-  has "changed after the offer" "$OUT2"
-done
-
-it "legacy: a carry whose prompt a typed prompt overtook during the bounded wait is refused, store unchanged"
-prog carry-rulings --run "$RUN_L"
-P_QF="$(prompt "$RUN_L" 'carry q1 to the next programme')"
-rm -f "${WORK}/race1.out" "${WORK}/race2.out"
-CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" carry-rulings q1 --prompt "$P_QF" --run "$RUN_L" \
-  > "${WORK}/race1.out" 2>&1 &
-P1=$!
-PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
-prompt "$RUN_L" "how is herdr:q going" > "${WORK}/race2.out" 2>&1
-C2=$?
-HELD="released"; kill -0 "$P1" 2>/dev/null && HELD="held"
-touch "$(home_of "$RUN_L")/.test-resume-write"
-wait "$P1"; C1=$?
-check "paused 0 held nonzero 0 0" "$PAUSED $C2 $HELD $([ "$C1" -ne 0 ] && echo nonzero) $("$PY" -c '
-import json, sys
-try:
-    doc = json.load(open(sys.argv[1]))
-except OSError:
-    doc = {"keys": {}}
-print(len([e for e in doc["keys"].get(sys.argv[2], []) if e["ruling"] == "q1"]))' "$STORE" "${WORK}/repos/race-legacy") $(run_py "$RUN_L" <<'EOF'
-print(sum(1 for r in pj.read(args[0]) if r["kind"] == "rulings_carried"))
-EOF
-)"
-has "newest typed prompt" "$(cat "${WORK}/race1.out")"
-lacks "Traceback" "$(cat "${WORK}/race1.out")"
+it "a carry racing a change to the Ruling re-reads its revision and refuses the stale offer"
+prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --run "$R"
+prog carry-rulings --run "$R"
+P_QC="$(prompt "$R" 'carry q1 to the next programme')"
+P_QA="$(prompt "$R" 'accept q1 for herdr:q')"
+race "$(home_of "$R")" accept-context q1 --prompt "$P_QA" --run "$R" -- \
+  "$PY" "$PROG" carry-rulings q1 --prompt "$P_QC" --run "$R"
+check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+has "changed after the offer" "$OUT2"
 
 it "a rulings_carried row approves each stored entry; a foreign row or one citing another prompt first approves nothing"
 check "True" "$(run_py <<'EOF'
@@ -585,47 +549,32 @@ def write_then_die(*a, **k):
 authority.write = write_then_die
 sys.exit(programme._cli(sys.argv[1:]))
 '
-for R in "$RUN_Q" "$RUN_L"; do
-  [ "$R" = "$RUN_Q" ] && { LABEL=promoted; SPACE=w12; NEXT=w13; } || { LABEL=legacy; SPACE=w11; NEXT=w14; }
-  REPO_K="${WORK}/repos/crash-${LABEL}"
-  mkdir -p "$REPO_K"
-  remit "$R" "{\"spaces\":[\"${SPACE}\"],\"repos\":[{\"path\":\"${REPO_K}\"}]}"
-  prog carry-rulings --run "$R"
-  P_K="$(prompt "$R" 'carry q2 to the next programme')"
-  OUT="$(AUTO_ROOT="$AUTO_ROOT" "$PY" -c "$CRASH_PY" carry-rulings q2 --prompt "$P_K" --run "$R" 2>&1)"
-  CODE=$?
-  it "$LABEL: a carry killed straight after its locked write leaves its entry in the store"
-  check "9 1" "$CODE $("$PY" -c '
+REPO_K="${WORK}/repos/crash-promoted"
+mkdir -p "$REPO_K"
+remit "$R" "{\"spaces\":[\"w12\"],\"repos\":[{\"path\":\"${REPO_K}\"}]}"
+prog carry-rulings --run "$R"
+P_K="$(prompt "$R" 'carry q2 to the next programme')"
+OUT="$(AUTO_ROOT="$AUTO_ROOT" "$PY" -c "$CRASH_PY" carry-rulings q2 --prompt "$P_K" --run "$R" 2>&1)"
+CODE=$?
+it "a carry killed straight after its locked write leaves its entry in the store"
+check "9 1" "$CODE $("$PY" -c '
 import json, sys
 print(len([e for e in json.load(open(sys.argv[1]))["keys"].get(sys.argv[2], []) if e["ruling"] == "q2"]))' "$STORE" "$REPO_K")"
-  it "$LABEL: the next programme's pre-fill verifies that entry from the rulings_carried row alone"
-  RUN_K="$(new_programme "$NEXT")"
-  prog propose-agreement --run "$RUN_K" --project-term "naming=kebab case files" --source "repo README"
-  remit "$RUN_K" "{\"spaces\":[\"${NEXT}\"],\"repos\":[{\"path\":\"${REPO_K}\"}]}"
-  check "0 q2" "$CODE $(field "$RUN_K" '" ".join(r for r, v in (prog.get("context") or {}).get("decisions", {}).items() if v[-1].get("carried"))' | tr -d '"')"
-  lacks "dropped carried-over entry" "$OUT"
-done
+it "the next programme's pre-fill verifies that entry from the rulings_carried row alone"
+RUN_K="$(new_programme w13)"
+prog propose-agreement --run "$RUN_K" --project-term "naming=kebab case files" --source "repo README"
+remit "$RUN_K" "{\"spaces\":[\"w13\"],\"repos\":[{\"path\":\"${REPO_K}\"}]}"
+check "0 q2" "$CODE $(field "$RUN_K" '" ".join(r for r, v in (prog.get("context") or {}).get("decisions", {}).items() if v[-1].get("carried"))' | tr -d '"')"
+lacks "dropped carried-over entry" "$OUT"
 
 # ── the store is a cache of the rulings_carried rows ─────────────────────
-# DIE_AT=put kills the carry after its row and record land, before the store write; DIE_AT=row (legacy only)
-# kills it just after the row lands, before the record write.
+# DIE_AT=put kills the carry after its row and record commit, before the store write.
 DIE_PY='
 import os, sys
 sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
 from _bootstrap import load_lib_module
 programme = load_lib_module("programme")
-carry = load_lib_module("programme_carryover")
-if os.environ["DIE_AT"] == "put":
-    carry._put = lambda adopted: os._exit(9)
-else:
-    pj = programme.programme_journal
-    append_row = pj.append_row
-    def dying(run_id, row, *a, **k):
-        out = append_row(run_id, row, *a, **k)
-        if row.get("kind") == "rulings_carried":
-            os._exit(9)
-        return out
-    pj.append_row = dying
+load_lib_module("programme_carryover")._put = lambda adopted: os._exit(9)
 sys.exit(programme._cli(sys.argv[1:]))
 '
 stored_under() {
@@ -677,8 +626,6 @@ heal_case() {
   check "0 1" "$CODE $(stored_under "$repo" q2)"
 }
 heal_case "$RUN_Q" promoted put w12 w15
-heal_case "$RUN_L" legacy put w11 w16
-heal_case "$RUN_L" legacy row w11 w17
 heal_case "$RUN_Q" promoted-replay put w12 w18 --op carry-heal-1
 
 it "a refill never overwrites a later carry of the same Ruling"
@@ -707,6 +654,249 @@ RUN_FG="$(new_programme w19)"
 prog propose-agreement --run "$RUN_FG" --project-term "naming=kebab case files" --source "repo README"
 remit "$RUN_FG" "{\"spaces\":[\"w19\"],\"repos\":[{\"path\":\"${REPO_FORGE}\"}]}"
 check "0 0 []" "$CODE $(stored_under "$REPO_FORGE" q2) $(carried_rulings "$RUN_FG")"
+
+# ── a carry or pre-fill on a legacy home moves it to programme.db first ───
+new_legacy() {
+  run_py "$1" <<'EOF'
+load_lib_module("programme_authority").home_for = lambda *a: None
+print(ph.create_programme([args[0]], "sess-pm")["run"])
+EOF
+}
+is_promoted() {
+  run_py "$1" <<'EOF'
+print(load_lib_module("programme_authority").promoted(ph.home_path(args[0]), args[0]))
+EOF
+}
+# copy_into <legacy run> <source run> <ruling id>: the source's remit repos and that Ruling, written into the
+# legacy record, as a home written by an earlier build of this branch could hold them.
+copy_into() {
+  run_py "$1" "$2" "$3" <<'EOF' >/dev/null
+src = record(args[1])["programme"]
+def change(rec):
+    rec["programme"].setdefault("remit", {})["repos"] = src["remit"]["repos"]
+    rec["programme"].setdefault("context", {}).setdefault("decisions", {})[args[2]] = src["context"]["decisions"][args[2]]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], change)
+EOF
+}
+stored_field() {
+  "$PY" -c '
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+except OSError:
+    doc = {"keys": {}}
+print(" ".join(str(e.get(sys.argv[4])) for e in doc["keys"].get(sys.argv[2], []) if e["ruling"] == sys.argv[3]))' \
+    "$STORE" "$1" "$2" "$3"
+}
+LREPO="${WORK}/repos/legacy-carry"
+mkdir -p "$LREPO"
+RUN_S="$(new_programme w20)"
+remit "$RUN_S" "{\"spaces\":[\"w20\"],\"repos\":[{\"path\":\"${LREPO}\"}]}"
+prog add-item herdr:l --title "l" --kind fix_only --run "$RUN_S"
+P_L1="$(prompt "$RUN_S" 'l1: I pick the technical approach on herdr:l')"
+prog record-ruling l1 --kind technical_approach --effect restrict --scope "l1" --applies-to herdr:l \
+  --prompt "$P_L1" --run "$RUN_S"
+RUN_LC="$(new_legacy w21)"
+prog add-item herdr:l --title "l" --kind fix_only --run "$RUN_LC"
+copy_into "$RUN_LC" "$RUN_S" l1
+end_programme "$RUN_LC"
+it "legacy: end is no Ruling change and keeps the JSON files"
+check "0 False" "$CODE $(is_promoted "$RUN_LC")"
+it "legacy, ended: carry-rulings moves the home, then refuses a prompt typed before the move"
+prog carry-rulings l1 --prompt "$(prompt "$RUN_LC" 'carry l1 to the next programme')" --run "$RUN_LC"
+check "nonzero True" "$([ "$CODE" -ne 0 ] && echo nonzero) $(is_promoted "$RUN_LC")"
+has "imported from a legacy journal" "$OUT"
+it "legacy, ended: a prompt typed after the move stores the pick from the moved home"
+prog carry-rulings l1 --prompt "$(prompt "$RUN_LC" 'carry l1 to the next programme')" --run "$RUN_LC"
+check "0 $RUN_LC" "$CODE $(stored_field "$LREPO" l1 run_id)"
+
+RUN_LN="$(new_legacy w22)"
+RUN_QN="$(new_programme w23)"
+for R in "$RUN_LN" "$RUN_QN"; do
+  prog propose-agreement --run "$R" --project-term "naming=kebab case files" --source "repo README"
+done
+it "legacy, unaccepted: set-remit moves the home first, then brings the carried Ruling in as a promoted run does"
+remit "$RUN_LN" "{\"spaces\":[\"w22\"],\"repos\":[{\"path\":\"${LREPO}\"}]}"
+K1="$CODE $(is_promoted "$RUN_LN")"
+remit "$RUN_QN" "{\"spaces\":[\"w23\"],\"repos\":[{\"path\":\"${LREPO}\"}]}"
+check "0 True 0" "$K1 $CODE"
+has '"l1", "technical_approach", "restrict", "pending_acceptance"' "$(carried_rulings "$RUN_LN")"
+check "$(carried_rulings "$RUN_QN")" "$(carried_rulings "$RUN_LN")"
+
+RUN_LA="$(new_legacy w24)"
+run_py "$RUN_LA" <<'EOF' >/dev/null
+core._with_locked_run_record(ph.home_path(args[0]), args[0], lambda rec: rec["programme"]["agreement"].update(
+    accepted={"at": core.now_iso(), "prompt_id": "p-accepted"}))
+EOF
+it "legacy, accepted: set-remit cannot carry a Ruling in, so it keeps the JSON files"
+remit "$RUN_LA" "$(field "$RUN_LA" 'prog["remit"]')" --prompt "$(prompt "$RUN_LA" 'keep the remit as it is')"
+check "0 False" "$CODE $(is_promoted "$RUN_LA")"
+
+# The wrapper spies on the legacy write path; PROMOTE_MODE=lie makes promotion report success without
+# moving anything, so the legacy write's own refusal is what stops the change.
+SPY_PY='
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
+from _bootstrap import load_lib_module
+programme = load_lib_module("programme")
+auth = programme.programme_authority
+if os.environ.get("PROMOTE_MODE") == "lie":
+    load_lib_module("programme_import").promote = lambda run_id: {"status": "promoted"}
+legacy_write = auth._legacy_write
+def spied(*a, **k):
+    open(os.environ["SPY"], "a").write("entered\n")
+    return legacy_write(*a, **k)
+auth._legacy_write = spied
+sys.exit(programme._cli(sys.argv[1:]))
+'
+spy_prog() {
+  local mode="$1" input="$2"
+  shift 2
+  rm -f "${WORK}/spy"
+  OUT="$(printf '%s' "$input" | AUTO_ROOT="$AUTO_ROOT" PROMOTE_MODE="$mode" SPY="${WORK}/spy" "$PY" -c "$SPY_PY" "$@" 2>&1)"
+  CODE=$?
+  case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
+  ENTERED="$([ -e "${WORK}/spy" ] && echo entered || echo skipped)"
+}
+# home_hash <run> [store]: the legacy record and journal bytes (and the carry-over store's), and whether a
+# programme.db or an import marker exists.
+home_hash() {
+  run_py "$1" "${2:-}" <<'EOF'
+import hashlib
+home = ph.home_path(args[0])
+paths = [core.run_record_path(home, args[0]), os.path.join(home, "journal.jsonl")]
+paths += [load_lib_module("programme_carryover").store_path()] if args[1] else []
+def digest(path):
+    try:
+        return hashlib.sha256(open(path, "rb").read()).hexdigest()[:12]
+    except FileNotFoundError:
+        return "absent"
+print(" ".join(digest(p) for p in paths), os.path.exists(os.path.join(home, "programme.db")),
+      os.path.exists(os.path.join(home, ".import-in-progress")))
+EOF
+}
+CS="zq-carry-secret-5582"
+printf 'CARRY_TOKEN=%s\n' "$CS" >> "$CLAUDE_AUTO_SECRETS_FILE"
+hold_secret() {
+  run_py "$1" "$CS" <<'EOF' >/dev/null
+core._with_locked_run_record(ph.home_path(args[0]), args[0], lambda rec: rec["programme"]["working_model"].update(
+    doing="deploy using " + args[1]))
+EOF
+}
+RUN_LF="$(new_legacy w25)"
+prog add-item herdr:l --title "l" --kind fix_only --run "$RUN_LF"
+copy_into "$RUN_LF" "$RUN_S" l1
+end_programme "$RUN_LF"
+P_LF="$(prompt "$RUN_LF" 'carry l1 to the next programme')"
+hold_secret "$RUN_LF"
+H_LF="$(home_hash "$RUN_LF" store)"
+it "legacy, promotion declined: carry-rulings refuses, never takes the legacy write path, home and store byte-identical"
+spy_prog none "" carry-rulings l1 --prompt "$P_LF" --run "$RUN_LF"
+check "nonzero skipped False False" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(echo "$H_LF" | awk '{print $4, $5}')"
+check "$H_LF" "$(home_hash "$RUN_LF" store)"
+has "Moving it to programme.db failed: privacy admission is" "$OUT"
+it "legacy, promotion reporting success without moving: the legacy write refuses the rulings_carried row, store unchanged"
+spy_prog lie "" carry-rulings l1 --prompt "$P_LF" --run "$RUN_LF"
+check "nonzero entered $H_LF" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$RUN_LF" store)"
+has "never take a rulings_carried row" "$OUT"
+
+RUN_LG="$(new_legacy w33)"
+prog propose-agreement --run "$RUN_LG" --project-term "naming=kebab case files" --source "repo README"
+hold_secret "$RUN_LG"
+H_LG="$(home_hash "$RUN_LG")"
+REMIT_LG="{\"spaces\":[\"w33\"],\"repos\":[{\"path\":\"${LREPO}\"}]}"
+it "legacy, promotion declined: set-remit on an unaccepted agreement refuses before anything is written"
+spy_prog none "$REMIT_LG" set-remit --run "$RUN_LG"
+check "nonzero skipped $H_LG" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$RUN_LG")"
+has "set-remit can change a Ruling" "$OUT"
+it "legacy, promotion reporting success without moving: the legacy write refuses a remit_set row that carried a Ruling in"
+spy_prog lie "$REMIT_LG" set-remit --run "$RUN_LG"
+check "nonzero entered $H_LG" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$RUN_LG")"
+has "never take a remit_set row" "$OUT"
+
+# ── what pre-fill refills from the rulings_carried rows ───────────────────
+# die_carry <run> <ruling>: a fresh offer and prompt, then a carry killed before its store write. It sets no
+# remit, since a set-remit would refill the store first.
+die_carry() {
+  local run="$1" rid="$2"
+  prog carry-rulings --run "$run"
+  OUT="$(AUTO_ROOT="$AUTO_ROOT" DIE_AT=put "$PY" -c "$DIE_PY" carry-rulings "$rid" \
+    --prompt "$(prompt "$run" "carry ${rid} to the next programme")" --run "$run" 2>&1)"
+  CODE=$?
+}
+next_programme() {
+  local space="$1" repo="$2" run
+  run="$(new_programme "$space")"
+  prog propose-agreement --run "$run" --project-term "naming=kebab case files" --source "repo README"
+  remit "$run" "{\"spaces\":[\"${space}\"],\"repos\":[{\"path\":\"${repo}\"}]}"
+}
+
+REPO_V1="${WORK}/repos/refill-v1"; REPO_V2="${WORK}/repos/refill-v2"
+mkdir -p "$REPO_V1" "$REPO_V2"
+remit "$RUN_Q" "{\"spaces\":[\"w12\"],\"repos\":[{\"path\":\"${REPO_V1}\"},{\"path\":\"${REPO_V2}\"}]}"
+die_carry "$RUN_Q" q2
+it "a carry to two repos killed before its store write stores neither"
+check "9  " "$CODE $(stored_field "$REPO_V1" q2 id) $(stored_field "$REPO_V2" q2 id)"
+it "a refill writes only the carried rows for the next programme's own remit repos"
+next_programme w34 "$REPO_V1"
+check "0 1 0" "$CODE $(stored_under "$REPO_V1" q2) $(stored_under "$REPO_V2" q2)"
+
+REPO_W="${WORK}/repos/refill-older"
+mkdir -p "$REPO_W"
+remit "$RUN_Q" "{\"spaces\":[\"w12\"],\"repos\":[{\"path\":\"${REPO_W}\"}]}"
+prog carry-rulings --run "$RUN_Q"
+prog carry-rulings q2 --prompt "$(prompt "$RUN_Q" 'carry q2 to the next programme')" --run "$RUN_Q"
+OLD_ID="$(stored_field "$REPO_W" q2 id)"
+sleep 1
+die_carry "$RUN_Q" q2
+NEW_ID="$(run_py "$RUN_Q" <<'EOF'
+row = [r for r in pj.read(args[0]) if r["kind"] == "rulings_carried"][-1]
+print(row["payload"]["adopted"][0]["id"])
+EOF
+)"
+it "a refill replaces an older stored entry for the same Ruling with the newer carried one"
+K1="$CODE $([ -n "$OLD_ID" ] && [ "$OLD_ID" != "$NEW_ID" ] && echo distinct) $(stored_field "$REPO_W" q2 id)"
+next_programme w35 "$REPO_W"
+check "9 distinct $OLD_ID 0 $NEW_ID" "$K1 $CODE $(stored_field "$REPO_W" q2 id)"
+
+REPO_N="${WORK}/repos/refill-newest"
+mkdir -p "$REPO_N"
+RUN_N1="$(new_programme w36)"
+RUN_N2="$(new_programme w37)"
+FIRST="$(printf '%s\n%s\n' "$RUN_N1" "$RUN_N2" | LC_ALL=C sort | head -1)"
+SECOND="$(printf '%s\n%s\n' "$RUN_N1" "$RUN_N2" | LC_ALL=C sort | tail -1)"
+for R in "$SECOND" "$FIRST"; do
+  remit "$R" "{\"spaces\":[\"$([ "$R" = "$RUN_N1" ] && echo w36 || echo w37)\"],\"repos\":[{\"path\":\"${REPO_N}\"}]}"
+  prog add-item herdr:n --title "n" --kind fix_only --run "$R"
+  prog record-ruling n1 --kind technical_approach --effect restrict --scope "n1 from $R" --applies-to herdr:n \
+    --prompt "$(prompt "$R" 'n1: I pick the technical approach on herdr:n')" --run "$R"
+done
+# The run the refill scans second carries first, so the scan meets the newer carry before the older one.
+die_carry "$SECOND" n1
+K1="$CODE"
+sleep 1
+die_carry "$FIRST" n1
+K1="$K1 $CODE"
+it "across programmes, a refill keeps the newest carry of a Ruling whichever run it scans first"
+next_programme w38 "$REPO_N"
+check "9 9 0 1 $FIRST" "$K1 $CODE $(stored_under "$REPO_N" n1) $(stored_field "$REPO_N" n1 run_id)"
+
+REPO_U="${WORK}/repos/refill-unreadable"
+mkdir -p "$REPO_U"
+remit "$RUN_Q" "{\"spaces\":[\"w12\"],\"repos\":[{\"path\":\"${REPO_U}\"}]}"
+die_carry "$RUN_Q" q2
+RUN_BAD="$(new_programme w39)"
+BAD_DB="$(run_py "$RUN_BAD" <<'EOF'
+print(os.path.join(ph.home_path(args[0]), "programme.db"))
+EOF
+)"
+command cp "$BAD_DB" "${WORK}/bad.db.bak"
+printf 'not a database' > "$BAD_DB"
+it "a programme journal that cannot be read gives a notice, not a failure, and readable homes still refill"
+next_programme w40 "$REPO_U"
+check "0 1" "$CODE $(stored_under "$REPO_U" q2)"
+has "carry-over rows of ${RUN_BAD} unreadable" "$OUT"
+command cp "${WORK}/bad.db.bak" "$BAD_DB"
 
 it "no verb crashed with a traceback"
 check "" "$CRASHES"

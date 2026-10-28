@@ -640,21 +640,9 @@ run, text = args
 print(fixture_prompt(run, "sess-pm", text, "typed")["prompt_id"])
 EOF
 }
-# A legacy home: a JSON record and journal with no programme.db, as an older auto left it.
-RUN_L="$(run_py <<'EOF'
-load_lib_module("programme_authority").home_for = lambda *a: None
-print(ph.create_programme(["w7"], "sess-pm")["run"])
-EOF
-)"
-prog add-item herdr:b --title "herdr:b" --kind fix_only --run "$RUN_L"
-it "the legacy fixture has no programme.db"
-check "False" "$(run_py "$RUN_L" <<'EOF'
-print(load_lib_module("programme_authority").promoted(ph.home_path(args[0]), args[0]))
-EOF
-)"
 wait_for() { local i; for i in $(seq 1 200); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.05; done; return 1; }
 # race <home> <first verb args> -- <second command>: the first writer pauses after its checks, before its
-# approval row reaches the journal; the second command runs during that pause.
+# approval row is committed; the second command runs during that pause.
 race() {
   local home="$1" first=()
   shift
@@ -674,132 +662,253 @@ race() {
   wait "$p2"; C2=$?
   OUT2="$(cat "${WORK}/race2.out")"
 }
-for R in "$RUN" "$RUN_L"; do
-  [ "$R" = "$RUN" ] && LABEL=promoted || LABEL=legacy
-  it "$LABEL: two writers racing on one typed prompt: the second is refused once the first journals its approval"
-  P_RACE="$(prompt_in "$R" 'r-ra and r-rb: I pick the worker coordination on herdr:b')"
-  race "$(home_of "$R")" record-ruling r-ra --kind worker_coordination --effect restrict --scope "a" \
-    --applies-to herdr:b --prompt "$P_RACE" --run "$R" -- "$PY" "$PROG" record-ruling r-rb --kind worker_coordination \
-    --effect restrict --scope "b" --applies-to herdr:b --prompt "$P_RACE" --run "$R"
-  check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
-  has "already approved" "$OUT2"
+it "two writers racing on one typed prompt: the second is refused once the first journals its approval"
+P_RACE="$(prompt_in "$RUN" 'r-ra and r-rb: I pick the worker coordination on herdr:b')"
+race "$(home_of "$RUN")" record-ruling r-ra --kind worker_coordination --effect restrict --scope "a" \
+  --applies-to herdr:b --prompt "$P_RACE" --run "$RUN" -- "$PY" "$PROG" record-ruling r-rb --kind worker_coordination \
+  --effect restrict --scope "b" --applies-to herdr:b --prompt "$P_RACE" --run "$RUN"
+check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+has "already approved" "$OUT2"
 
-  it "$LABEL: a prompt typed while a Ruling change is checked waits, and lands after the change's approval row"
-  P_PV1="$(prompt_in "$R" 'r-pv: I pick the tool choice on herdr:b')"
-  prog record-ruling r-pv --kind tool_choice --effect restrict --scope "pv" --applies-to herdr:b \
-    --prompt "$P_PV1" --run "$R"
-  P_PVW="$(prompt_in "$R" 'withdraw r-pv')"
-  race "$(home_of "$R")" close-ruling r-pv --as withdrawn --prompt "$P_PVW" --run "$R" -- \
-    prompt_in "$R" "no, keep r-pv"
-  P_PVK="$(printf '%s' "$OUT2" | tail -1)"
-  check "paused blocked 0 0" "$PAUSED $BLOCKED $C1 $C2"
-  check "True" "$(run_py "$R" "$P_PVK" <<'EOF'
+it "a prompt typed while a Ruling change is checked waits, and lands after the change's approval row"
+P_PV1="$(prompt_in "$RUN" 'r-pv: I pick the tool choice on herdr:b')"
+prog record-ruling r-pv --kind tool_choice --effect restrict --scope "pv" --applies-to herdr:b \
+  --prompt "$P_PV1" --run "$RUN"
+P_PVW="$(prompt_in "$RUN" 'withdraw r-pv')"
+race "$(home_of "$RUN")" close-ruling r-pv --as withdrawn --prompt "$P_PVW" --run "$RUN" -- \
+  prompt_in "$RUN" "no, keep r-pv"
+P_PVK="$(printf '%s' "$OUT2" | tail -1)"
+check "paused blocked 0 0" "$PAUSED $BLOCKED $C1 $C2"
+check "True" "$(run_py "$RUN" "$P_PVK" <<'EOF'
 rows = pj.read(args[0])
 closed = next(i for i, r in enumerate(rows) if r["kind"] == "ruling_closed" and r["payload"].get("ruling_id") == "r-pv")
 typed = next((i for i, r in enumerate(rows) if r.get("prompt_id") == args[1]), None)
 print(typed is not None and closed < typed)
 EOF
 )"
-done
 
-# fallback_race <verb args>: the legacy writer pauses after its checks, holding the run lock; a typed prompt
-# waits out the bounded run-lock wait and is journaled without it; then the writer resumes.
-fallback_race() {
-  rm -f "${WORK}/race1.out" "${WORK}/race2.out"
-  CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" "$@" > "${WORK}/race1.out" 2>&1 &
-  local p1=$!
-  PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
-  prompt_in "$RUN_L" "how is herdr:b going" > "${WORK}/race2.out" 2>&1
-  C2=$?
-  HELD="released"; kill -0 "$p1" 2>/dev/null && HELD="held"
-  P_LATE="$(tail -1 "${WORK}/race2.out")"
-  touch "$(home_of "$RUN_L")/.test-resume-write"
-  wait "$p1"; C1=$?
-  OUT1="$(cat "${WORK}/race1.out")"
-  case "$OUT1" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
-}
-legacy_state() { pyget "$("$PY" "$PROG" context --run "$RUN_L" 2>&1)" "((d['decisions'].get('$1') or {}).get('state'))"; }
-legacy_rows() {
-  run_py "$RUN_L" "$1" <<'EOF'
-print(sum(1 for r in pj.read(args[0]) if r["kind"] == args[1]))
-EOF
-}
-
-it "legacy: a prompt that waits out the bounded run-lock wait is still journaled"
-P_PT1="$(prompt_in "$RUN_L" 'r-pt: I pick the tool choice on herdr:b')"
-prog record-ruling r-pt --kind tool_choice --effect restrict --scope "pt" --applies-to herdr:b \
-  --prompt "$P_PT1" --run "$RUN_L"
-P_PTW="$(prompt_in "$RUN_L" 'withdraw r-pt')"
-N_CLOSED="$(legacy_rows ruling_closed)"
-fallback_race close-ruling r-pt --as withdrawn --prompt "$P_PTW" --run "$RUN_L"
-check "paused 0 held True" "$PAUSED $C2 $HELD $(run_py "$RUN_L" "$P_LATE" <<'EOF'
-print(pj.find_prompt(args[0], args[1]) is not None)
+# ── a Ruling change on a legacy home moves it to programme.db first ───────
+# new_run <space> [legacy]: a programme with item herdr:b; legacy keeps a JSON record and journal with no
+# programme.db, as an older auto left it.
+new_run() {
+  local run
+  run="$(run_py "$1" "${2:-}" <<'EOF'
+if args[1] == "legacy":
+    load_lib_module("programme_authority").home_for = lambda *a: None
+print(ph.create_programme([args[0]], "sess-pm")["run"])
 EOF
 )"
-it "legacy: a close-ruling whose prompt a later typed prompt overtook during the wait is refused, Ruling unchanged"
-check "nonzero active $N_CLOSED" "$([ "$C1" -ne 0 ] && echo nonzero) $(legacy_state r-pt) $(legacy_rows ruling_closed)"
-has "newest typed prompt" "$OUT1"
+  "$PY" "$PROG" add-item herdr:b --title "herdr:b" --kind fix_only --run "$run" >/dev/null 2>&1
+  printf '%s' "$run"
+}
+is_promoted() {
+  run_py "$1" <<'EOF'
+print(load_lib_module("programme_authority").promoted(ph.home_path(args[0]), args[0]))
+EOF
+}
+# ruling_doc <run> <id> and row_doc <run> <kind>: a Ruling's revisions and the newest row of a kind, without
+# the times and prompt ids that differ between two runs.
+STRIP_PY='
+def strip(node):
+    if isinstance(node, dict):
+        return {k: strip(v) for k, v in node.items() if k not in ("at", "prompt_id", "session_id", "cites")}
+    return [strip(v) for v in node] if isinstance(node, list) else node
+'
+ruling_doc() {
+  run_py "$1" "$2" "$STRIP_PY" <<'EOF'
+exec(args[2])
+decisions = ((programme_records.load(args[0])["programme"].get("context") or {}).get("decisions") or {})
+print(json.dumps(strip(decisions.get(args[1])), sort_keys=True))
+EOF
+}
+row_doc() {
+  run_py "$1" "$2" "$STRIP_PY" <<'EOF'
+exec(args[2])
+rows = [r for r in pj.read(args[0]) if r["kind"] == args[1]]
+print(json.dumps(strip(rows[-1]) if rows else None, sort_keys=True))
+EOF
+}
+# inject <legacy run> <source run> <id>: copy a Ruling from a promoted run into a legacy record, as a home
+# written by an earlier build of this branch could hold one.
+inject() {
+  run_py "$1" "$2" "$3" <<'EOF'
+src = programme_records.load(args[1])["programme"]["context"]["decisions"][args[2]]
+programme_records.edit(args[0], "prog.setdefault('context', {}).setdefault('decisions', {})[cid] = src",
+                       {"src": src, "cid": args[2]})
+EOF
+}
 
-it "legacy: a record-ruling overtaken the same way is refused and records nothing"
-P_PF="$(prompt_in "$RUN_L" 'r-pf: I pick the work sequencing on herdr:b')"
-N_REC="$(legacy_rows ruling_recorded)"
-fallback_race record-ruling r-pf --kind work_sequencing --effect restrict --scope "pf" --applies-to herdr:b \
-  --prompt "$P_PF" --run "$RUN_L"
-check "paused nonzero null $N_REC" "$PAUSED $([ "$C1" -ne 0 ] && echo nonzero) $(legacy_state r-pf) $(legacy_rows ruling_recorded)"
-has "newest typed prompt" "$OUT1"
+L1="$(new_run w31 legacy)"; Q1="$(new_run w32)"
+it "the legacy fixture has no programme.db; the promoted one has"
+check "False True" "$(is_promoted "$L1") $(is_promoted "$Q1")"
 
-it "legacy: an accept-context overtaken the same way is refused and the revision stays pending"
-prog record-ruling r-pa --kind work_sequencing --effect restrict --scope "pa" --applies-to herdr:b --run "$RUN_L"
-P_PA="$(prompt_in "$RUN_L" 'accept r-pa')"
-N_ACC="$(legacy_rows context_accepted)"
-fallback_race accept-context r-pa --prompt "$P_PA" --run "$RUN_L"
-check "paused nonzero pending $N_ACC" "$PAUSED $([ "$C1" -ne 0 ] && echo nonzero) $(legacy_state r-pa) $(legacy_rows context_accepted)"
-has "newest typed prompt" "$OUT1"
+it "legacy: a record-ruling with no prompt moves the home to programme.db, then records the proposal there"
+prog record-ruling r-up --kind tool_choice --effect restrict --scope "up" --applies-to herdr:b --run "$L1"
+K1="$CODE"
+prog record-ruling r-up --kind tool_choice --effect restrict --scope "up" --applies-to herdr:b --run "$Q1"
+check "0 0 True" "$K1 $CODE $(is_promoted "$L1")"
+has '"state": "pending_acceptance"' "$(ruling_doc "$L1" r-up)"
+it "legacy: the moved home holds the same pending Ruling and row as a promoted run"
+check "$(ruling_doc "$Q1" r-up) $(row_doc "$Q1" ruling_recorded)" "$(ruling_doc "$L1" r-up) $(row_doc "$L1" ruling_recorded)"
+it "legacy: the move sets the old files aside and reads the old journal into programme.db"
+check "True True" "$(run_py "$L1" <<'EOF'
+names = os.listdir(ph.home_path(args[0]))
+print(any(n.startswith("journal.jsonl.imported-") for n in names), any(r["kind"] == "item_added" for r in pj.read(args[0])))
+EOF
+)"
 
-it "legacy: a busy journal lock inside the run lock fails the append; it is not retried without the run lock"
-check "busy no-fallback" "$(run_py "$RUN_L" <<'EOF'
-import contextlib, fcntl, io
-run = args[0]
-held = open(os.path.join(ph.home_path(run), pj.LOCK_NAME), "a+")
-fcntl.flock(held.fileno(), fcntl.LOCK_EX)
-err = io.StringIO()
-with contextlib.redirect_stderr(err):
+L2="$(new_run w33 legacy)"; Q2="$(new_run w34)"
+it "legacy: a record-ruling citing a prompt typed before the move moves the home, then refuses that prompt"
+P_L2="$(prompt_in "$L2" 'r-up2: I pick the tool choice on herdr:b')"
+prog record-ruling r-up2 --kind tool_choice --effect restrict --scope "up2" --applies-to herdr:b --prompt "$P_L2" \
+  --run "$L2"
+check "nonzero True null" "$([ "$CODE" -ne 0 ] && echo nonzero) $(is_promoted "$L2") $(ruling_doc "$L2" r-up2)"
+has "imported from a legacy journal" "$OUT"
+it "legacy: the same record-ruling with a prompt typed after the move matches a promoted run"
+P_L2B="$(prompt_in "$L2" 'r-up2: I pick the tool choice on herdr:b')"
+prog record-ruling r-up2 --kind tool_choice --effect restrict --scope "up2" --applies-to herdr:b --prompt "$P_L2B" \
+  --run "$L2"
+K1="$CODE"
+P_Q2="$(prompt_in "$Q2" 'r-up2: I pick the tool choice on herdr:b')"
+prog record-ruling r-up2 --kind tool_choice --effect restrict --scope "up2" --applies-to herdr:b --prompt "$P_Q2" \
+  --run "$Q2"
+check "0 0" "$K1 $CODE"
+has '"state": "accepted"' "$(ruling_doc "$L2" r-up2)"
+check "$(ruling_doc "$Q2" r-up2) $(row_doc "$Q2" ruling_recorded)" "$(ruling_doc "$L2" r-up2) $(row_doc "$L2" ruling_recorded)"
+
+P_QG="$(prompt_in "$Q1" 'r-gr: tool choice on herdr:b is yours')"
+prog record-ruling r-gr --kind tool_choice --effect grant --scope "gr" --applies-to herdr:b --prompt "$P_QG" --run "$Q1"
+L3="$(new_run w35 legacy)"; L4="$(new_run w36 legacy)"; Q3="$(new_run w37)"
+inject "$L3" "$Q1" r-up
+inject "$Q3" "$Q1" r-up
+inject "$L4" "$Q1" r-gr
+it "legacy: accept-context of a Ruling moves the home, and a prompt typed after the move accepts it as a promoted run does"
+prog accept-context r-up --prompt "$(prompt_in "$L3" 'accept r-up')" --run "$L3"
+K1="$CODE $(is_promoted "$L3")"
+prog accept-context r-up --prompt "$(prompt_in "$L3" 'accept r-up')" --run "$L3"
+K2="$CODE"
+prog accept-context r-up --prompt "$(prompt_in "$Q3" 'accept r-up')" --run "$Q3"
+check "1 True 0 0" "$K1 $K2 $CODE"
+has '"state": "accepted"' "$(ruling_doc "$L3" r-up)"
+check "$(ruling_doc "$Q3" r-up) $(row_doc "$Q3" context_accepted)" "$(ruling_doc "$L3" r-up) $(row_doc "$L3" context_accepted)"
+it "legacy: a prompt-less close-ruling of a grant moves the home and closes it there as a promoted run does"
+prog close-ruling r-gr --as fulfilled --why "done" --run "$L4"
+K1="$CODE $(is_promoted "$L4")"
+prog close-ruling r-gr --as fulfilled --why "done" --run "$Q1"
+check "0 True 0" "$K1 $CODE"
+has '"state": "closed"' "$(ruling_doc "$L4" r-gr)"
+check "$(ruling_doc "$Q1" r-gr) $(row_doc "$Q1" ruling_closed)" "$(ruling_doc "$L4" r-gr) $(row_doc "$L4" ruling_closed)"
+
+L5="$(new_run w38 legacy)"
+prog hand-item herdr:b --question "Which crop library?" --kind tool_choice --run "$L5"
+ASK5="$(pyget "$OUT" 'd["ask"]')"
+it "legacy: a --replies-to correction moves the home; a reply typed after the move applies at once"
+prog record-ruling r-cr5 --replies-to "$ASK5" --effect grant --scope "crop lib" \
+  --prompt "$(prompt_in "$L5" 'that one did not need me')" --run "$L5"
+K1="$CODE $(is_promoted "$L5")"
+prog record-ruling r-cr5 --replies-to "$ASK5" --effect grant --scope "crop lib" \
+  --prompt "$(prompt_in "$L5" 'that one did not need me')" --run "$L5"
+check "1 True 0 herdr:b" "$K1 $CODE $(pyget "$OUT" 'd["reopened"]')"
+
+L6="$(new_run w39 legacy)"
+prog define-requirement q6 --text "b merged" --check herdr:b=merged --run "$L6"
+it "legacy: accept-context of a requirement is not a Ruling change and keeps the JSON files"
+prog accept-context q6 --prompt "$(prompt_in "$L6" 'requirement q6: herdr:b is merged')" --run "$L6"
+check "0 False accepted" "$CODE $(is_promoted "$L6") $(pyget "$OUT" 'd["state"]')"
+
+# ── a legacy home that cannot be moved refuses every Ruling change ────────
+# The wrapper spies on the legacy write path; PROMOTE_MODE=raise makes promotion raise, lie makes it report
+# success without moving anything, so the legacy write's own refusal is what stops the change.
+SPY_PY='
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
+from _bootstrap import load_lib_module
+programme = load_lib_module("programme")
+auth = programme.programme_authority
+imp = load_lib_module("programme_import")
+mode = os.environ.get("PROMOTE_MODE")
+def failing(run_id):
+    raise OSError("disk unavailable")
+if mode == "raise":
+    imp.promote = failing
+elif mode == "lie":
+    imp.promote = lambda run_id: {"status": "promoted"}
+legacy_write = auth._legacy_write
+def spied(*a, **k):
+    open(os.environ["SPY"], "a").write("entered\n")
+    return legacy_write(*a, **k)
+auth._legacy_write = spied
+sys.exit(programme._cli(sys.argv[1:]))
+'
+spy_prog() {
+  local mode="$1"
+  shift
+  rm -f "${WORK}/spy"
+  OUT="$(AUTO_ROOT="$AUTO_ROOT" PROMOTE_MODE="$mode" SPY="${WORK}/spy" "$PY" -c "$SPY_PY" "$@" 2>&1)"
+  CODE=$?
+  case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
+  ENTERED="$([ -e "${WORK}/spy" ] && echo entered || echo skipped)"
+}
+# home_hash <run>: the legacy record, journal and claims bytes, the carry-over store, and whether a
+# programme.db or an import marker exists.
+home_hash() {
+  run_py "$1" <<'EOF'
+import hashlib
+home = ph.home_path(args[0])
+paths = [core.run_record_path(home, args[0]), os.path.join(home, "journal.jsonl"), os.path.join(home, "claims.jsonl"),
+         load_lib_module("programme_carryover").store_path()]
+def digest(path):
     try:
-        pj.append_row(run, pj.entry("prompt", "sess-pm", {"text": "x", "origin": "typed"}, prompt_id="pjbusy1"),
-                      serialize=True, lock_timeout=0.1)
-        out = "appended"
-    except core.LockBusy:
-        out = "busy"
-print(out, "fallback" if "journaled without it" in err.getvalue() else "no-fallback")
+        return hashlib.sha256(open(path, "rb").read()).hexdigest()[:12]
+    except FileNotFoundError:
+        return "absent"
+print(" ".join(digest(p) for p in paths), os.path.exists(os.path.join(home, "programme.db")),
+      os.path.exists(os.path.join(home, ".import-in-progress")))
 EOF
-)"
-
-it "the prompt hook shares one lock budget across the ended programmes it journals into"
-check "fast 3" "$(run_py <<'EOF'
-import fcntl, time
-auth = load_lib_module("programme_authority")
-auth.home_for = lambda *a: None
-oup = load_lib_module("on-user-prompt")
-runs = [ph.create_programme([f"w2{i}"], "sess-pm")["run"] for i in range(3)]
-held = []
-for run in runs:
-    home = ph.home_path(run)
-    core._with_locked_run_record(home, run, lambda r: r["programme"].update(
-        ended={"at": "2026-01-01T00:00:00Z", "reason": "done"}, closure={"ended_by": "sess-close"}))
-    ph.write_closing(run, ["sess-close"])
-    fh = open(core.lock_path(home, run), "a+")
-    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-    held.append(fh)
-import contextlib, io
-start = time.monotonic()
-with contextlib.redirect_stderr(io.StringIO()):
-    oup.handle(json.dumps({"session_id": "sess-close", "prompt": "keep the build logs"}), {})
-took = time.monotonic() - start
-found = sum(1 for run in runs if any(r.get("kind") == "prompt" and r["payload"]["text"] == "keep the build logs"
-                                     for r in pj.read(run)))
-print("fast" if took < oup.LOCK_BUDGET + 0.5 else f"slow {took:.1f}s", found)
+}
+LS="zq-ruling-secret-4471"
+printf 'RULING_TOKEN=%s\n' "$LS" >> "$CLAUDE_AUTO_SECRETS_FILE"
+L7="$(new_run w40 legacy)"
+inject "$L7" "$Q1" r-up
+P_QG2="$(prompt_in "$Q1" 'r-gs: tool choice on herdr:b is yours')"
+prog record-ruling r-gs --kind tool_choice --effect grant --scope "gs" --applies-to herdr:b --prompt "$P_QG2" --run "$Q1"
+inject "$L7" "$Q1" r-gs
+prog hand-item herdr:b --question "Which crop library?" --kind tool_choice --run "$L7"
+ASK7="$(pyget "$OUT" 'd["ask"]')"
+P_L7="$(prompt_in "$L7" 'r-l7 and r-up and r-gs: I pick the tool choice on herdr:b')"
+run_py "$L7" "$LS" <<'EOF' >/dev/null
+programme_records.edit(args[0], "prog['working_model']['doing'] = 'deploy using ' + secret", {"secret": args[1]})
 EOF
-)"
+H7="$(home_hash "$L7")"
+it "a legacy home holding a secrets-file value is hashed before the refusals"
+check "hashed False False" "$([ "${H7%% *}" != absent ] && echo hashed) $(echo "$H7" | awk '{print $5, $6}')"
+for verb in "record-ruling r-l7 --kind tool_choice --effect restrict --scope l7 --applies-to herdr:b" \
+            "record-ruling r-l7 --kind tool_choice --effect restrict --scope l7 --applies-to herdr:b --prompt $P_L7" \
+            "record-ruling r-l7c --replies-to $ASK7 --effect grant --scope crop --prompt $P_L7" \
+            "close-ruling r-gs --as fulfilled --why done" "accept-context r-up --prompt $P_L7"; do
+  # shellcheck disable=SC2086
+  set -- $verb
+  it "legacy, promotion declined: $1 refuses, never takes the legacy write path, and leaves the home byte-identical"
+  spy_prog none "$@" --run "$L7"
+  check "nonzero skipped $H7" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$L7")"
+  has "Moving it to programme.db failed: privacy admission is" "$OUT"
+done
+it "legacy, promotion raising: record-ruling refuses with the cause, no traceback, home byte-identical"
+spy_prog raise record-ruling r-l7 --kind tool_choice --effect restrict --scope l7 --applies-to herdr:b --run "$L7"
+check "nonzero skipped $H7" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$L7")"
+has "failed: disk unavailable. Nothing was changed" "$OUT"
+# A pending proposal on a legacy home is the change round 8 found a crash could cut from its row.
+for verb in "record-ruling r-l7 --kind tool_choice --effect restrict --scope l7 --applies-to herdr:b|ruling_recorded" \
+            "close-ruling r-gs --as fulfilled --why done|ruling_closed" \
+            "accept-context r-up --prompt $P_L7|context_accepted"; do
+  kind="${verb##*|}"
+  # shellcheck disable=SC2086
+  set -- ${verb%|*}
+  it "legacy, promotion reporting success without moving: the legacy write refuses the $kind row before the record"
+  spy_prog lie "$@" --run "$L7"
+  check "nonzero entered $H7" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$L7")"
+  has "never take a $kind row" "$OUT"
+done
 
 # ── which journal rows approve, and which change a Ruling ─────────────────
 it "a prompt that closed one Ruling cannot close a second"
@@ -885,8 +994,7 @@ def attempt(prompt_id):
                                            {"ruling_id": "r-direct", "state": "accepted", "rev": 1},
                                            cites=[prompt_id])
     try:
-        auth.write(home, run, lambda rec: None, compose, approval=rulings.is_approval,
-                   recheck=rulings.recheck_approval)
+        auth.write(home, run, lambda rec: None, compose, recheck=rulings.recheck_approval)
         return "committed", True
     except rulings.RulingError as exc:
         return ("newest" if "newest typed prompt" in str(exc) else "already" if "already approved" in str(exc)
@@ -901,7 +1009,7 @@ print(first[0], middle[0], again[0], first[1] and again[1])
 EOF
 )"
 
-# ── a legacy write killed around its journal append, then promotion ───────
+# ── a legacy write killed around its journal append, then the move ────────
 # DIE_KIND names the row; DIE_WHEN=before kills just before it is appended, after just after it lands.
 DIE_PY='
 import os, sys
@@ -958,60 +1066,81 @@ prog_dying blocker_raised before raise-blocker bz --requirement qx --check herdr
   --evidence trace:t-x2 --unblock "herdr:y lands" --run "$RUN_X"
 check '9 1 "open"' "$CODE $(x_rows blocker_raised) $(x_field '(prog["context"]["blockers"].get("bz") or {}).get("state")')"
 
-P_XR="$(prompt_in "$RUN_X" 'rx: I pick the technical approach on herdr:x')"
-it "legacy: a record-ruling killed after its approval row and before its record write leaves the Ruling out of force"
-prog_dying ruling_recorded after record-ruling rx --kind technical_approach --effect restrict --scope "rx" \
-  --applies-to herdr:x --prompt "$P_XR" --run "$RUN_X"
-check "9 1 null" "$CODE $(x_rows ruling_recorded) $(x_state rx)"
-it "legacy: the orphan approval row still spends its prompt"
-prog record-ruling rx --kind technical_approach --effect restrict --scope "rx" --applies-to herdr:x \
-  --prompt "$P_XR" --run "$RUN_X"
-check "nonzero null" "$([ "$CODE" -ne 0 ] && echo nonzero) $(x_state rx)"
-P_XY="$(prompt_in "$RUN_X" 'ry: I pick the work sequencing on herdr:x')"
-prog record-ruling ry --kind work_sequencing --effect restrict --scope "ry" --applies-to herdr:x \
-  --prompt "$P_XY" --run "$RUN_X"
-P_XYW="$(prompt_in "$RUN_X" 'withdraw ry')"
-it "legacy: a close-ruling killed after its approval row leaves the Ruling in force"
-prog_dying ruling_closed after close-ruling ry --as withdrawn --prompt "$P_XYW" --run "$RUN_X"
-check "9 1 active" "$CODE $(x_rows ruling_closed) $(x_state ry)"
-prog record-ruling rz --kind tool_choice --effect restrict --scope "rz" --applies-to herdr:x --run "$RUN_X"
-P_XZ="$(prompt_in "$RUN_X" 'accept rz')"
-it "legacy: an accept-context killed after its approval row leaves the revision pending"
-prog_dying context_accepted after accept-context rz --prompt "$P_XZ" --run "$RUN_X"
-check "9 1 pending" "$CODE $(x_rows context_accepted) $(x_state rz)"
-it "legacy: no orphan approval reaches the gate"
-check "" "$(run_py "$RUN_X" <<'EOF'
-programme = ph.normalize_programme(programme_records.load(args[0])["programme"])
-print(" ".join(r["id"] for kind in ("technical_approach", "tool_choice")
-               for r in pc.rulings_for(programme, "herdr:x", kind, core.now_iso())))
-EOF
-)"
-
-P_XG="$(prompt_in "$RUN_X" 'rg: worker coordination on herdr:y is yours')"
-prog record-ruling rg --kind worker_coordination --effect grant --scope "rg" --applies-to herdr:y \
-  --prompt "$P_XG" --run "$RUN_X"
-it "legacy: a prompt-less close-ruling killed just after its row lands has closed the grant in the record already"
-prog_dying ruling_closed after close-ruling rg --as fulfilled --why "done" --run "$RUN_X"
-check "9 2 closed" "$CODE $(x_rows ruling_closed) $(x_state rg)"
-
-it "promotion imports the legacy home"
-prog promote --run "$RUN_X"
-check "0 promoted" "$CODE $(pyget "$OUT" 'd["status"]')"
+it "legacy: the first Ruling verb moves the home; the import lists the record-only blocker and nothing for the blocker written whole"
+prog record-ruling rp --kind technical_approach --effect restrict --scope "rp" --applies-to herdr:x --run "$RUN_X"
 x_gaps() {
   run_py "$RUN_X" <<'EOF'
 auth = load_lib_module("programme_authority")
 event = next(e for e in auth.snapshot(args[0])["events"] if e["kind"] == auth.IMPORT_KIND)
 gaps = event["payload"]["gaps"]
-print(json.dumps(sorted([g["kind"], g.get("blocker") or g.get("ruling") or g.get("prompt_id") or g.get("item") or ""]
-                        for g in gaps if g.get("blocker") or g.get("ruling")), sort_keys=True))
+print(json.dumps(sorted([g["kind"], g.get("blocker") or ""] for g in gaps if g.get("blocker")), sort_keys=True))
 EOF
 }
-it "promotion lists the record-only blocker and each orphan approval, and nothing for the blocker written whole"
-check '[["journal_only_update", "rx"], ["journal_only_update", "ry"], ["journal_only_update", "rz"], ["record_only_update", "bz"]]' "$(x_gaps)"
-it "after promotion no orphan approval is in force: rx absent, ry still active, rz still pending"
-check "null active pending" "$(x_state rx) $(x_state ry) $(x_state rz)"
-it "after promotion both blockers are open in the authority"
+check '0 [["record_only_update", "bz"]]' "$CODE $(x_gaps)"
+it "after the move both blockers are open in the authority"
 check '["open", "open"]' "$(x_field '[prog["context"]["blockers"][b]["state"] for b in ("bx", "bz")]')"
+
+# ── a promoted Ruling write killed around its commit ──────────────────────
+# The record change and its row are one commit, so a crash leaves both or neither.
+DIE_COMMIT_PY='
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
+from _bootstrap import load_lib_module
+programme = load_lib_module("programme")
+auth = programme.programme_authority
+commit = auth.commit
+def dying(store, run_id, operation_id, base, state, event, *a, **k):
+    hit = ((event.get("payload") or {}).get("row") or {}).get("kind") == os.environ["DIE_KIND"]
+    if hit and os.environ["DIE_WHEN"] == "before":
+        os._exit(9)
+    out = commit(store, run_id, operation_id, base, state, event, *a, **k)
+    if hit:
+        os._exit(9)
+    return out
+auth.commit = dying
+sys.exit(programme._cli(sys.argv[1:]))
+'
+commit_dying() {
+  local kind="$1" when="$2"
+  shift 2
+  OUT="$(AUTO_ROOT="$AUTO_ROOT" DIE_KIND="$kind" DIE_WHEN="$when" "$PY" -c "$DIE_COMMIT_PY" "$@" 2>&1)"
+  CODE=$?
+}
+x_ruling_rows() {
+  run_py "$RUN_X" "$1" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if (r.get("payload") or {}).get("ruling_id") == args[1]
+          or (r.get("payload") or {}).get("decision_id") == args[1]))
+EOF
+}
+P_XO="$(prompt_in "$RUN_X" 'accept rq')"
+it "a proposal killed before its commit leaves no revision and no row"
+commit_dying ruling_recorded before record-ruling rq --kind work_sequencing --effect restrict --scope "rq" \
+  --applies-to herdr:x --run "$RUN_X"
+check "9 0 null" "$CODE $(x_ruling_rows rq) $(x_state rq)"
+it "a proposal killed after its commit has its revision and its row, so a prompt typed before it cannot accept it"
+commit_dying ruling_recorded after record-ruling rq --kind work_sequencing --effect restrict --scope "rq" \
+  --applies-to herdr:x --run "$RUN_X"
+K1="$CODE $(x_ruling_rows rq) $(x_state rq)"
+prog accept-context rq --prompt "$P_XO" --run "$RUN_X"
+check "9 1 pending nonzero pending" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero) $(x_state rq)"
+has "typed before the latest change" "$OUT"
+
+P_XR="$(prompt_in "$RUN_X" 'rx: I pick the technical approach on herdr:x')"
+it "a record-ruling killed before its commit leaves the Ruling out of force and its prompt unused"
+commit_dying ruling_recorded before record-ruling rx --kind technical_approach --effect restrict --scope "rx" \
+  --applies-to herdr:x --prompt "$P_XR" --run "$RUN_X"
+K1="$CODE $(x_ruling_rows rx) $(x_state rx)"
+prog record-ruling rx --kind technical_approach --effect restrict --scope "rx" --applies-to herdr:x \
+  --prompt "$P_XR" --run "$RUN_X"
+check "9 0 null 0 active" "$K1 $CODE $(x_state rx)"
+P_XRW="$(prompt_in "$RUN_X" 'withdraw rx')"
+it "a close-ruling killed before its commit leaves the Ruling in force"
+commit_dying ruling_closed before close-ruling rx --as withdrawn --prompt "$P_XRW" --run "$RUN_X"
+check "9 1 active" "$CODE $(x_ruling_rows rx) $(x_state rx)"
+P_XA="$(prompt_in "$RUN_X" 'accept rq')"
+it "an accept-context killed before its commit leaves the revision pending"
+commit_dying context_accepted before accept-context rq --prompt "$P_XA" --run "$RUN_X"
+check "9 1 pending" "$CODE $(x_ruling_rows rq) $(x_state rq)"
 
 it "programme_context still loads no protocol or journal module"
 if grep -nE 'load_lib_module\("(programme_protocol|programme_journal|programme_record|programme)"\)' \

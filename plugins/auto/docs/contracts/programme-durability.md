@@ -208,6 +208,14 @@ A programme made before this version keeps its JSON files until
 
 Imported prompts carry `provenance: legacy_import` and approve nothing new.
 
+A Ruling change runs this import itself: `record-ruling`, `close-ruling`,
+`accept-context` on a Ruling, `carry-rulings` with ids, and `set-remit` before
+the agreement is accepted promote a JSON home first, and refuse with the
+import's reason, changing nothing, when it declines or fails. The JSON files
+never take a Ruling change. A prompt typed before the move approves nothing, so
+the first Ruling approval after it needs a newly typed prompt. Promoting a
+programme before Shawn types an approval avoids that extra prompt.
+
 ## 8. Target Mac capability
 
 Recorded on 2026-10-19 from a real `programme.db` that `create_programme`

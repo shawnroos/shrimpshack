@@ -111,9 +111,12 @@ def _approval_of(row):
     return None
 
 
-# A prompt-less close (a grant fulfilled) only narrows the PM, so it is written like any unapproved row.
-def is_approval(row) -> bool:
-    return _approval_of(row) is not None and bool(row.get("cites"))
+# A proposal and a prompt-less close change a Ruling too, and a remit that carried Rulings in adds pending ones.
+def changes_ruling(row) -> bool:
+    kind, payload = row.get("kind"), row.get("payload") or {}
+    if kind in CHANGE_ROWS:
+        return payload.get(CHANGE_ROWS[kind]) is not None
+    return kind == "rulings_carried" or (kind == "remit_set" and bool(payload.get("carried_over")))
 
 
 def check_prompt_unused(rows, prompt_id) -> None:
@@ -315,7 +318,7 @@ def _h_record_ruling(host, argv):
         return _record(host, programme, rec, cid, content, prompt)
 
     return host._write(opts, change, "ruling_recorded", prompt_id=opts.get("prompt"), needs_prompt=bool(replies),
-                       verb="record-ruling", target=cid)
+                       verb="record-ruling", target=cid, ruling=True)
 
 
 def _h_close_ruling(host, argv):
@@ -351,7 +354,7 @@ def _h_close_ruling(host, argv):
 
     withdrawn = ending == "withdrawn"
     return host._write(opts, change, "ruling_closed", prompt_id=opts.get("prompt"), needs_prompt=withdrawn,
-                       beat=withdrawn, verb="close-ruling", target=cid)
+                       beat=withdrawn, verb="close-ruling", target=cid, ruling=True)
 
 
 def _h_accept_context(host, argv):
@@ -390,8 +393,14 @@ def _h_accept_context(host, argv):
         return {pc.ID_FIELDS[kind]: cid, "rev": revision["rev"], "state": "accepted",
                 "supersedes": revision["supersedes"], "baseline": revision.get("baseline")}
 
-    return host._write(opts, change, "context_accepted", prompt_id=opts.get("prompt"), needs_prompt=True)
+    # Moving the home would turn its prompts into imported ones, and a requirement may still take a legacy pick.
+    requirement = cid in pc._guarded(record, pc.block, host._locate(opts)[2].get("programme") or {})["requirements"]
+    return host._write(opts, change, "context_accepted", prompt_id=opts.get("prompt"), needs_prompt=True,
+                       ruling=not requirement)
 
+
+MOVE_FIRST = ("On a home still on its old JSON files it first moves the home to programme.db, and refuses, "
+              "changing nothing, when that move cannot run; a prompt typed before the move approves nothing.")
 
 _SPECS = (
     ("record-ruling", _h_record_ruling,
@@ -407,12 +416,13 @@ _SPECS = (
      "waits for accept-context. A widening (a grant that adds items, drops a limit or ends later; a restrict "
      "that loses items, drops a limit or ends sooner) waits too, while the prior revision stays in force. "
      "With --replies-to the anchor gives the item and kind, the prompt must come after the anchor and approve "
-     "no other Ruling change, and the Ruling applies at once with a notice."),
+     "no other Ruling change, and the Ruling applies at once with a notice. " + MOVE_FIRST),
     ("close-ruling", _h_close_ruling,
      "<id> --as fulfilled|withdrawn [--why <text>] [--prompt <id>] [--origin pm|ui] [--run <id>]",
      "no Ruling in force or pending; --as fulfilled without --why; --as withdrawn, or closing a restrict or a decided "
      "Ruling, without a typed prompt naming the id; a prompt typed before the Ruling's latest change or before "
-     "a typed prompt nothing has cited yet, or that already approved a Ruling change. Closing as fulfilled never counts as a beat."),
+     "a typed prompt nothing has cited yet, or that already approved a Ruling change. Closing as fulfilled never counts as a beat. "
+     + MOVE_FIRST),
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
      "no pending revision; a pick or accepted suggestion for a Ruling (a requirement takes one); a prompt "
      "that is not typed, came from a legacy journal or an obsolete writer, or does not name the id and every "
@@ -421,7 +431,8 @@ _SPECS = (
      "for a Ruling, a prompt typed before the pending revision was recorded or before a typed prompt nothing "
      "has cited yet, or that already approved a Ruling change; a pending wider grant recorded before its dropped limits and end date were kept (re-record it); "
      "a carried Ruling that has no items yet. A grant that becomes active records the Authority level for its "
-     "kind as its baseline; accepting a narrowing keeps the prior baseline."),
+     "kind as its baseline; accepting a narrowing keeps the prior baseline. For a Ruling, not a requirement: "
+     + MOVE_FIRST),
 )
 
 

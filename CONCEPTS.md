@@ -189,6 +189,7 @@ It needs its own accepted agreement and does not reopen the archive.
 The one-way move of a Programme's home from plain files to its durable store.
 After promotion the store is the only source of truth and the files are exports rebuilt from it.
 A writer that chose the plain-file path before promotion must check again under the lock before it writes.
+A Ruling change never takes the plain-file path: it promotes the home first, and refuses, changing nothing, when promotion cannot run.
 
 ### Foreign write
 A change found in a promoted Programme's exports that the store did not make.

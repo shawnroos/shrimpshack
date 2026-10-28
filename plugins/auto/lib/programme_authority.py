@@ -241,26 +241,24 @@ def _replayed(store, run_id, operation_id) -> dict:
     return {"result": None, "row": row, "replayed": True, "revision": hits[0]["revision"] if hits else None}
 
 
-# An approval row lands before the record and the store write it approves, all under the run lock: a writer
-# that checked the journal under the lock must not race a second writer into the gap, and a refused or
-# crashed approval leaves at worst a used prompt, never a change applied without its row. ``recheck`` sees
-# the journal under the journal lock, so a prompt journaled after a timed-out run-lock wait is not missed.
-# Every other row follows its record, so a crash leaves at worst a record change with no row, never a row
-# the record lacks.
-def _legacy_write(home, run_id, change, compose, approval, recheck, then) -> dict:
-    seen = {"row": None, "first": False}
+# A legacy home has no transaction, so a crash between its record and journal writes can leave a Ruling
+# change its approval checks never see. A row ``legacy_refuses`` matches is refused before the record is
+# written; callers move the home to programme.db first. Every other row follows its record under the run
+# lock, so a crash leaves at worst a record change with no row.
+def _legacy_write(home, run_id, change, compose, legacy_refuses, then) -> dict:
+    seen = {"row": None}
 
     def staged(record):
         result = change(record)
         seen["row"] = compose(result, record) if compose else None
-        _approval_pause(home)
-        seen["first"] = seen["row"] is not None and approval is not None and approval(seen["row"])
-        if seen["first"]:
-            _journal().append_row(run_id, seen["row"], check=recheck)
+        if seen["row"] is not None and legacy_refuses is not None and legacy_refuses(seen["row"]):
+            raise AuthorityError(f"programme {run_id} still keeps its old JSON files, which never take a "
+                                 f"{seen['row']['kind']} row; nothing was changed. Run `programme.py promote "
+                                 f"--run {run_id}`, then retry", "legacy_ruling")
         return result
 
     def after(result, _):
-        if seen["row"] is not None and not seen["first"]:
+        if seen["row"] is not None:
             _journal().append_row(run_id, seen["row"])
         if then is not None:
             then(result)
@@ -270,10 +268,10 @@ def _legacy_write(home, run_id, change, compose, approval, recheck, then) -> dic
 
 
 def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
-          payload_refs=(), base_revision=None, seal=None, approval=None, recheck=None, then=None) -> dict:
+          payload_refs=(), base_revision=None, seal=None, recheck=None, legacy_refuses=None, then=None) -> dict:
     if not promoted(home, run_id):
         try:
-            return _legacy_write(home, run_id, change, compose, approval, recheck, then)
+            return _legacy_write(home, run_id, change, compose, legacy_refuses, then)
         except run_record_core.RoutedToAuthority:
             pass
 

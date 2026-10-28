@@ -129,6 +129,14 @@ session.
   auto, recorded as `foreign_write_absorbed` at the next write. A programme made
   by an auto that predates the database stays on its JSON files until `promote`
   imports it (`--run <id>`); a prompt imported that way approves nothing new.
+  The JSON files never take a Ruling change, because a crash between their
+  record and journal writes could hide the change from its approval checks. So
+  `record-ruling`, `close-ruling`, `accept-context` on a Ruling, `carry-rulings`
+  with ids, and `set-remit` before acceptance first run the same import on such a
+  home. If it cannot run (a held or locked home, a secrets-file value, inputs that
+  change while it runs, or any other failure), the verb refuses, says why, and
+  changes nothing. A prompt typed before the move approves nothing, so Shawn types
+  it again. `accept-context` on a requirement keeps the JSON files.
   `reconcile-leases` rewrites a run's leases from its committed remit and driving
   session. Every write verb except `claim` and the verbs below takes `--op <id>`:
   a retry with the same id replays the committed result instead of writing

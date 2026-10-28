@@ -324,6 +324,7 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
 # which pre-fill refills, so a carry cut off after its row still arrives and a refused carry stores nothing.
 def _carry(host, opts, ids):
     run_id, home, _ = host._locate(opts)
+    host.upgrade_legacy(run_id, home, "carry-rulings")
     sid = driver_session.driving_session_id()
     seen = {}
 
@@ -346,8 +347,8 @@ def _carry(host, opts, ids):
                                        cites=[seen["prompt"]["prompt_id"]])
 
     out = host.programme_authority.write(home, run_id, mutate, compose, operation_id=host._OPERATION["id"],
-                                         approval=host.programme_rulings.is_approval,
                                          recheck=host.programme_rulings.recheck_approval,
+                                         legacy_refuses=host.programme_rulings.changes_ruling,
                                          then=lambda _: _put(seen["adopted"]))
     if out["replayed"]:
         payload = {k: v for k, v in ((out["row"] or {}).get("payload") or {}).items() if k != "adopted"}
@@ -376,7 +377,9 @@ _SPECS = (
      "them, a prompt that already approved a Ruling change, a Ruling whose revision changed after that offer "
      "(or an offer that did not record it), an id that is not an active Ruling, a remit with no repo, an "
      "archived programme; it also runs "
-     "after end. Stores each Ruling under every remit repo's key for the next programme on that project."),
+     "after end. Stores each Ruling under every remit repo's key for the next programme on that project. With ids, "
+     "on a home still on its old JSON files it first moves the home to programme.db, and refuses, changing "
+     "nothing, when that move cannot run; a prompt typed before the move approves nothing."),
 )
 
 

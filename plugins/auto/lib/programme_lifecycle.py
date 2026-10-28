@@ -667,8 +667,11 @@ def _h_set_remit(host, argv):
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
     # git worktree add is slow: it runs on the remit-to-be before the leases lock, recorded under it.
-    run, _, record = host._locate(opts)
+    run, home, record = host._locate(opts)
     current = programme_home.normalize_programme(record.get("programme") or {})
+    # Pre-fill can carry Rulings in, and promotion takes the leases lock this verb holds below.
+    if not current["agreement"].get("accepted"):
+        host.upgrade_legacy(run, home, "set-remit")
     try:
         drives = session_registry.caller_drives(record, driver_session.driving_session_id())
         made = _make_worktree(run, dict(current, remit=parse_remit(doc, current["remit"]))) if drives else None
@@ -732,7 +735,9 @@ _SPECS = (
      "name that is not owner/name; a team key that is not an issue prefix; a list over its cap; no "
      "space; a space another programme holds. Once the agreement is accepted it needs a typed "
      "--prompt that names each space, repo, team, project or initiative added or removed. A "
-     "part left out keeps its value. Adding a space takes its lease; removing one releases it."),
+     "part left out keeps its value. Adding a space takes its lease; removing one releases it. Before "
+     "acceptance it can carry Rulings in, so on a home still on its old JSON files it first moves the home to "
+     "programme.db, and refuses, changing nothing, when that move cannot run."),
     ("beat", _h_beat, "[--run <id>]",
      "a caller that is not the driving session. Stamps the driver beat that keeps the lease live; "
      "exempt from the compact flag; not journaled."),

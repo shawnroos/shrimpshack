@@ -299,9 +299,25 @@ def _widen_word(opts) -> tuple:
     return (("widen", "widening", "widened"),) if opts.get("widening") else ()
 
 
+def upgrade_legacy(run_id, home, verb) -> None:
+    if programme_authority.promoted(home, run_id):
+        return
+    try:
+        report = load_lib_module("programme_import").promote(run_id)
+    except Exception as exc:
+        report = {"status": "failed", "reason": str(exc) or type(exc).__name__}
+    if report["status"] not in ("promoted", "already_promoted"):
+        raise ProgrammeError(
+            f"{verb} can change a Ruling, and programme {run_id} still keeps its old JSON files, which cannot "
+            f"record a Ruling change safely. Moving it to programme.db failed: {report.get('reason')}. Nothing "
+            f"was changed. Fix that, run `programme.py promote --run {run_id}`, then run {verb} again")
+
+
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True, names_change=True):
+           journal=True, after=None, verb=None, target=None, beat=True, names_change=True, ruling=False):
     run_id, home, _ = _locate(opts)
+    if ruling:
+        upgrade_legacy(run_id, home, _OPERATION["verb"] or verb or kind)
     seen = {}
 
     def mutate(rec):
@@ -330,8 +346,8 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
 
     try:
         out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"],
-                                        approval=programme_rulings.is_approval,
-                                        recheck=programme_rulings.recheck_approval)
+                                        recheck=programme_rulings.recheck_approval,
+                                        legacy_refuses=programme_rulings.changes_ruling)
     except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
             programme_behaviours.BehaviourError) as exc:
         if (needs_prompt or prompt_id) and "sid" in seen:
