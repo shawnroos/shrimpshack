@@ -116,7 +116,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    that same command with `--prompt <pick id>`. One pick approves one change,
    and only the command its label names. Picks work for rules,
    terms, keeping corrections, items, moving and keeping behaviours, context,
-   pauses, permissions and disposals. Accepting the agreement, rulings,
+   pauses, permissions, swaps and disposals. Accepting the agreement, rulings,
    instructions, decisions, requirements, corrections and new or retired
    behaviours still need a line he types; an accepted grey suggestion does not
    count for those either. A remit change takes a typed line or an accepted
@@ -148,6 +148,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    | Reopen a dropped item | `P reopen-item <item> --prompt <id>` |
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
+   | Swap a running item out for a newcomer | `P swap-item <out> <in> --prompt <pick id>` (the pick's answer is the `P approval-label swap-item <out> <in>` text), then send the returned `stop_prompt` with `P prompt-item <out>` |
    | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
    | He corrects who decides a kind of choice ("that didn't need me") | `P correct-term --prompt <id> --replies-to <ask-or-decision-id> --to pm\|worker\|shawn --reading "<your reading>"`, then see below |
    | He corrects a preferred tool, in passing | `P record-behaviour --prompt <id> --when "<the kind of job>" --tool <name> --do "use <name> for <the job>"`, then see "Behaviours" below |
@@ -363,6 +364,19 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
    3. `P queue --remove <entry-id>`.
 11. **Drive workers.**
+   - Check the budget before you start a worker. Run `P focus-recheck` first
+     each sweep, so room that freed up is seen before you choose what to start;
+     it releases held items that now fit, oldest hold first. Read the Focus row
+     in `P status` for points and agents in use against the limits. If
+     `start-worker` holds an item, do not retry it blindly. When the newcomer
+     outranks a running item, ask the swap pick in one AskUserQuestion picker
+     with two options: the exact text `P approval-label swap-item <out> <in>`
+     prints, and "Queue <in>". On the swap, run
+     `P swap-item <out> <in> --prompt <pick id>`, then send the returned
+     `stop_prompt` to the parked worker with `P prompt-item <out> "<stop_prompt>"`
+     and start `<in>` once the room is there. On "Queue <in>", or when the
+     newcomer does not outrank anything, leave it queued. `--despite focus`
+     starts a held item anyway; use it only when Shawn said to.
    - Before you start or prompt a worker on new work, find what it waits for
      with section 3 of [references/sequencing.md](references/sequencing.md),
      and re-check the requirements with sections 1, 3 and 10 of
@@ -476,6 +490,10 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
     [references/judgment.md](references/judgment.md)). Then run
     `P queue --action <name> --item <item>` or `--remove <entry-id>` so the
     queue matches your next actions.
+    Run `P focus-note --agents <n>` with the number of subagents you are
+    running now, and keep your subagent fan-out within the agent limit in the
+    Focus row. The limit is advice for subagents; code enforces it only for
+    worker panes.
     Then record every open or waiting item's trajectory in one call:
     `P record-trajectories` with a JSON list on stdin, one entry per item:
     `{item, done, current, planned, finish, location}`. Each step is
