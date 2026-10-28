@@ -737,7 +737,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
 `term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviours_kept`, `rule_proposed`,
-`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`, `focus_overridden`,
+`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`, `item_swapped`, `focus_noted`, `focus_overridden`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,

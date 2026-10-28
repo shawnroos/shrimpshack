@@ -84,6 +84,8 @@ KINDS = (
     "item_added",
     "item_updated",
     "item_held",
+    "item_swapped",
+    "focus_noted",
     "focus_overridden",
     "item_aliased",
     "item_merged",

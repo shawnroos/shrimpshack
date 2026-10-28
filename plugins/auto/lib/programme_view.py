@@ -27,6 +27,7 @@ programme_tasks = load_lib_module("programme_tasks")
 programme_terms = load_lib_module("programme_terms")
 programme_view_work = load_lib_module("programme_view_work")
 programme_view_setup = load_lib_module("programme_view_setup")
+programme_focus = load_lib_module("programme_focus")
 session_registry = load_lib_module("session_registry")
 
 VIEW_FORMAT = 3
@@ -398,7 +399,7 @@ def _terms(block, journal_entries) -> dict:
     }
 
 
-def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, protocol=None) -> dict:
+def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, protocol=None, focus=None) -> dict:
     now = now or datetime.datetime.now(datetime.timezone.utc)
     block = programme_home.normalize_programme(_dict(record.get("programme")))
     status = programme_predicate.compute(record, now, inbox_size)
@@ -432,6 +433,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "remit": {key: _dict(block["remit"]).get(key) for key in ("spaces", "repos", "tracker")},
         "doing_now": working.get("doing"),
         "queue": [_dict(e) for e in working.get("queue") or []],
+        "focus": focus or programme_focus.usage(block, None),
+        "waiting_for_slot": programme_focus.waiting(block),
         "watching": _watching(block, status, now, programme_home.cadence_seconds(record)),
         "waiting_on_whom": waits,
         "decisions_for_shawn": _decisions(block, items) + _context_decisions(status["acceptance"]),
@@ -751,6 +754,10 @@ def rows(model, work=None) -> list:
     _section(out, "Queue", [_row(f"  {e.get('action')} {e.get('item') or ''}".rstrip()
                                  + (f": {e['why']}" if e.get("why") else ""))
                             for e in model["queue"]], "empty")
+    _section(out, "Focus", [_row(text, style) for text, style in programme_focus.focus_lines(model["focus"])], "")
+    if model["waiting_for_slot"]:
+        _section(out, "Waiting for a slot",
+                 [_row(text, style) for text, style in programme_focus.waiting_lines(model["waiting_for_slot"])], "")
     _section(out, "Watching", [_watching_row(w) for w in model["watching"]], "nothing")
     _section(out, "Who waits on whom", [_row(f"  {w['item'] or w['system']} waits on {w['who']} "
                                              f"({'watched' if w['watched'] else 'unwatched'})",

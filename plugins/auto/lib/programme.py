@@ -826,7 +826,8 @@ def build_view(run_id, home, record, *, journal=None, inbox_size=None) -> dict:
         inbox_size = programme_record.claims_count(home)
     protocol = _protocol({run_id: journal})
     return programme_view.build(record, journal, inbox_size=inbox_size, protocol=protocol,
-                                rules=rules_in_force(record, {run_id: journal}, protocol))
+                                rules=rules_in_force(record, {run_id: journal}, protocol),
+                                focus=programme_focus.live_usage(sys.modules[__name__], record))
 
 
 def _refresh_promoted(run_id, home) -> None:

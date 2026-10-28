@@ -581,6 +581,229 @@ print(json.dumps([str(held["may_stop"]), str(live["may_stop"])]))
 EOF2
 )"
 
+# ---- U4: visible queue and usage ----
+statusj() { "$PY" "$PROG" status --json --run "$RUN" 2>&1; }
+vq() { statusj | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(eval(sys.argv[1])))' "$1"; }
+
+drop 91
+limit limited --points 10 --agents 3
+mk 41 s3 p51
+mk 42 s5 p52
+snapshot p51:agent p52:agent
+it "the Focus row shows points and agents in play against the limits"
+prog status --run "$RUN"
+has "Focus" "$OUT"
+has "points 8 of 10" "$OUT"
+has "agents 2 of 3" "$OUT"
+
+it "the json view carries the same usage"
+check '[8, 10, 2, 3]' "$(vq '[d["model"]["focus"]["points"]["used"], d["model"]["focus"]["points"]["limit"], d["model"]["focus"]["agents"]["used"], d["model"]["focus"]["agents"]["limit"]]')"
+
+it "focus-note --agents records the subagent number and the view shows it"
+prog focus-note --agents 4 --run "$RUN"
+check 0 "$CODE"
+prog status --run "$RUN"
+has "subagents 4" "$OUT"
+check '4' "$(vq 'd["model"]["focus"]["subagents"]')"
+
+it "focus-note refuses a missing or non-numeric count"
+prog focus-note --agents many --run "$RUN"
+check 1 "$CODE"
+prog focus-note --run "$RUN"
+check 1 "$CODE"
+
+it "an item that is held does not count toward points in play"
+check '[5, ["mem:g41"]]' "$(run_py "$RUN" <<'EOF2'
+focus = load_lib_module("programme_focus")
+prog = record(args[0])["programme"]
+prog["items"]["mem:g41"].update(held="x", held_at="2026-10-28T00:00:01Z")
+u = focus.usage(prog, [{"pane_id": "w2:p51"}, {"pane_id": "w2:p52"}])
+w = focus.waiting(prog)
+print(json.dumps([u["points"]["used"], [e["item"] for e in w if e["item"] == "mem:g41"]]))
+EOF2
+)"
+
+mk 43 s5
+mk 44 s3
+mk 45 s3
+snapshot p51:agent p52:agent
+start 45
+check 1 "$CODE"
+sleep 1.1
+start 44
+check 1 "$CODE"
+it "held items list in the order they were held, not by id, with size and reason"
+prog status --run "$RUN"
+has "Waiting for a slot" "$OUT"
+check '["mem:g45", "mem:g44"]' "$(vq '[w["item"] for w in d["model"]["waiting_for_slot"]]')"
+check '["s3", "s3"]' "$(vq '[w["size"] for w in d["model"]["waiting_for_slot"]]')"
+POS45="$(printf '%s\n' "$OUT" | grep -n 'mem:g45  size' | head -1 | cut -d: -f1)"
+POS44="$(printf '%s\n' "$OUT" | grep -n 'mem:g44  size' | head -1 | cut -d: -f1)"
+check true "$([ -n "$POS45" ] && [ -n "$POS44" ] && [ "$POS45" -lt "$POS44" ] && echo true || echo false)"
+has "over points: 8 of 10 in play" "$OUT"
+
+it "herdr down shows the agent and point counts as unavailable, not zero"
+FAKE_HERDR_DOWN=1 prog status --run "$RUN"
+has "agents unavailable" "$OUT"
+has "points unavailable" "$OUT"
+check 'null' "$(FAKE_HERDR_DOWN=1 statusj | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["model"]["focus"]["agents"]["used"]))')"
+
+it "with no limit set the row says no limit and there is no waiting list"
+limit unlimited
+prog status --run "$RUN"
+has "points no limit" "$OUT"
+has "agents no limit" "$OUT"
+case "$OUT" in *"Waiting for a slot"*) fail "waiting list shown with no limit" ;; *) pass ;; esac
+: > "$CALLS"
+prog status --run "$RUN"
+check 0 "$(grep -c 'api snapshot' "$CALLS")"
+
+# ---- U5: swap pick ----
+PICKS="${WORK}/transcripts"
+mkdir -p "$PICKS"
+pickit() {
+  run_py "$RUN" "$1" "$PICKS" <<'EOF2'
+import copy, pathlib, uuid
+ps = load_lib_module("programme_pick_source")
+fx = [json.loads(l) for l in open(os.path.join(sys.argv[1], "tests/fixtures/askuser_transcript.jsonl"))]
+ASK, ANSWER = fx[0], fx[1]
+run, answer, folder = args
+sid, tid, q = "sess-pm", "toolu_" + uuid.uuid4().hex[:10], "Swap or queue?"
+answers = {q: answer}
+path = pathlib.Path(folder) / (sid + ".jsonl")
+ask = copy.deepcopy(ASK); ask.update(uuid="a-" + tid, sessionId=sid)
+ask["message"]["content"][0].update(id=tid, input={"questions": [
+    {"question": q, "header": "Setup", "multiSelect": False,
+     "options": [{"label": answer, "description": ""}, {"label": "other", "description": ""}]}]})
+res = copy.deepcopy(ANSWER)
+res.update(uuid="u-" + tid, sessionId=sid, sourceToolAssistantUUID="a-" + tid,
+           toolUseResult={"questions": [{"question": q}], "answers": answers, "annotations": {}})
+res["message"]["content"][0].update(tool_use_id=tid)
+with path.open("a") as stream:
+    stream.write(json.dumps(ask) + "\n" + json.dumps(res) + "\n")
+source = ps.capture({"transcript_path": str(path), "session_id": sid, "tool_use_id": tid,
+                     "tool_response": {"answers": answers}})
+print(pj.append_prompt(run, sid, ps.summary(answers), "unknown", source=source)["prompt_id"])
+EOF2
+}
+swap_label() { "$PY" "$PROG" approval-label swap-item "${NS}$1" "${NS}$2"; }
+
+limit limited --points 6 --agents none
+mk 101 s5 p61
+mk 102 s1 p62
+mk 103 s5
+snapshot p61:agent p62:agent
+
+it "approval-label prints the exact swap label and nothing else"
+check "Approve swap-item ${NS}101 ${NS}103" "$(swap_label 101 103)"
+
+it "approval-label refuses a verb a pick cannot approve (default-deny)"
+prog approval-label focus-note --agents 3
+check 1 "$CODE"
+
+it "a typed 'yes swap them' approves nothing"
+PT="$(prompt typed "yes swap them: ${NS}101 for ${NS}103")"
+prog swap-item "${NS}101" "${NS}103" --prompt "$PT" --run "$RUN"
+check 1 "$CODE"
+check "null" "$(gitem 101 held)"
+
+it "typing the exact label still approves nothing"
+PT2="$(prompt typed "$(swap_label 101 103)")"
+prog swap-item "${NS}101" "${NS}103" --prompt "$PT2" --run "$RUN"
+check 1 "$CODE"
+check "null" "$(gitem 101 held)"
+
+it "the decline option approves nothing and leaves both items unchanged"
+PD="$(pickit "Queue ${NS}103")"
+prog swap-item "${NS}101" "${NS}103" --prompt "$PD" --run "$RUN"
+check 1 "$CODE"
+check "null" "$(gitem 101 held)"
+check "null" "$(gitem 103 held)"
+
+it "a pick of another swap's label does not approve this one"
+PO="$(pickit "$(swap_label 102 103)")"
+prog swap-item "${NS}101" "${NS}103" --prompt "$PO" --run "$RUN"
+check 1 "$CODE"
+check "null" "$(gitem 101 held)"
+
+it "swapping out a 1-point item for a 5-point item is refused and names the missing points"
+PS="$(pickit "$(swap_label 102 103)")"
+prog swap-item "${NS}102" "${NS}103" --prompt "$PS" --run "$RUN"
+check 1 "$CODE"
+has "needs 4 more point" "$OUT"
+check "null" "$(gitem 102 held)"
+
+it "swapping an item that is not in play is refused"
+mk 104 s5
+PN="$(pickit "$(swap_label 104 103)")"
+prog swap-item "${NS}104" "${NS}103" --prompt "$PN" --run "$RUN"
+check 1 "$CODE"
+has "not in play" "$OUT"
+check "null" "$(gitem 104 held)"
+
+it "swap-item refuses when herdr is unreadable"
+PU="$(pickit "$(swap_label 101 103)")"
+FAKE_HERDR_DOWN=1 prog swap-item "${NS}101" "${NS}103" --prompt "$PU" --run "$RUN"
+check 1 "$CODE"
+check "null" "$(gitem 101 held)"
+
+it "an exact-label pick parks the item: held with a reason, held_at set, old pane recorded"
+PX="$(pickit "$(swap_label 101 103)")"
+prog swap-item "${NS}101" "${NS}103" --prompt "$PX" --run "$RUN"
+check 0 "$CODE"
+has "stop_prompt" "$OUT"
+check '"w2:p61"' "$(gitem 101 parked_pane)"
+check 'true' "$(field "bool(prog['items']['${NS}101']['held'] and prog['items']['${NS}101']['held_at'])")"
+has "${NS}103" "$(gitem 101 held)"
+
+it "the same pick cannot approve a second swap"
+prog swap-item "${NS}101" "${NS}103" --prompt "$PX" --run "$RUN"
+check true "$([ "$CODE" -ne 0 ] && echo true || echo false)"
+has "already used" "$OUT"
+
+it "the swap is recorded as a work_sequencing decision naming both items"
+check '["work_sequencing", "mem:g101", "mem:g103"]' "$(field "[ (d['kind'], d['out'], d['in']) for d in prog['decisions'] if d.get('kind') == 'work_sequencing' ][-1]")"
+check 1 "$(grep -c '"item_swapped"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
+
+it "the parked item shows in the waiting list with its reason"
+prog status --run "$RUN"
+has "${NS}101  size s5" "$OUT"
+
+it "the newcomer then starts through the normal gate, freed points counted"
+S2="$(spins)"
+start 103
+check 0 "$CODE"
+check "$((S2 + 1))" "$(spins)"
+
+it "a parked item cannot resume while its old pane still holds a live worker"
+drop 103
+snapshot p61:agent p62:agent
+S3="$(spins)"
+start 101
+check 1 "$CODE"
+has "p61" "$OUT"
+has "wait for the worker to stop" "$OUT"
+has "close the pane" "$OUT"
+check "$S3" "$(spins)"
+
+it "--despite focus does not bypass the old-worker check"
+start 101 --despite focus
+check 1 "$CODE"
+check "$S3" "$(spins)"
+
+it "focus-recheck leaves a parked item held while its old pane is live"
+prog focus-recheck --run "$RUN"
+check 0 "$CODE"
+case "$(gitem 101 held)" in null) fail "recheck cleared a parked item with a live old worker" ;; *) pass ;; esac
+
+it "after the old pane is gone the resume starts exactly one worker"
+snapshot p62:agent
+start 101
+check 0 "$CODE"
+check "$((S3 + 1))" "$(spins)"
+check "null" "$(gitem 101 held)"
+check "null" "$(gitem 101 parked_pane)"
+
 echo ""
 echo "programme-focus.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
