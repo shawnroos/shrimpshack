@@ -28,7 +28,7 @@ Only these commands. Use the run id and home folder you were given.
 1. `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --json --run <run>`
 2. `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" inbox --run <run>`
 3. `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" rules --run <run>`. Never add `--ack`.
-4. `grep -n '"kind": *"working_now"' <home>/journal.jsonl | tail -n 1`. The number before the first colon is the last sweep's line, `L`. Then `tail -n +<L+1> <home>/journal.jsonl | head -n 300` for the rows since. With no `working_now` row, use `tail -n 100 <home>/journal.jsonl` and say so in the digest.
+4. `grep -n '"kind": *"working_now"' <home>/journal.jsonl | tail -n 1`. The number before the first colon is the last sweep's line, `L`. Then `tail -n +<L+1> <home>/journal.jsonl | head -n 301` for the rows since; 301 rows means more than 300 and the digest says `changed`. With no `working_now` row, use `tail -n 100 <home>/journal.jsonl` and say so in the digest.
 5. For each open item that `status` shows with a pull request (at most 8): `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" check-mergeable <pr> --run <run>`. Never add `--pin`.
 6. One write: the whole digest, including its last line, in a single `cat > <home>/sweep-digest.md <<'EOF'` command. A hook refuses other write forms from you (`echo`, `printf`, `mkdir`), so do not try them.
 
@@ -45,6 +45,7 @@ generated: <ISO time now>
 compared-with: journal line <L> (working_now at <its ts>) | none: no working_now row
 verdict: unchanged | changed | unknown
 
+## Actionable reasons          (source: status --json, model.programme.actionable_reasons)
 ## Open decisions for Shawn   (source: status --json, model.decisions_for_shawn)
 ## Unread claims               (source: inbox)
 - claim <index> | item <id> | <deliverable> | <ref> | <one line>
@@ -62,10 +63,11 @@ Every item names its source, so the PM can check any line. `generated` is the ti
 
 `verdict: unchanged` only when all of these hold:
 
+- `actionable_reasons` is empty, or holds only stop-rule reasons (`never_stop`, `not_done`, `until_time`);
 - the inbox has no unread claim;
 - `decisions_for_shawn` is empty or every entry also appears unchanged in the journal before line `L`;
 - no PR you checked is mergeable, closed or merged;
-- the journal since line `L` holds only these kinds: `stop_quiet`, `prompts_pruned`, `working_now`;
+- the journal since line `L` holds at most 300 rows, all of kind `stop_quiet`, `prompts_pruned` or `working_now`;
 - no `reread_requested` row is newer than the last `rules_acked` or `rules_loaded` row.
 
 Any other case is `changed`. When you cannot tell, write `changed`.
