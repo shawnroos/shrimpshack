@@ -117,9 +117,17 @@ directly. The pinned auto agents get no Write tool, and
 `plugins/auto/tests/smoke/agents.test.sh` checks that each agent file declares an
 explicit tool list.
 
-The sweep packager is the one agent that writes, and it writes through Bash. The hook
-therefore also polices redirects: in a command that names programme code, a viewer may
-redirect only to `/dev/null`, or `cat > <home>/sweep-digest.md`. `rg --pre` and
-`--output` flags are denied, quoted heredoc bodies are data and are not tokenised, and
-shell expansion (`$(...)`, backticks, `${...}` other than `${CLAUDE_PLUGIN_ROOT}`) is
-denied because the shell runs it before the verb the hook inspects.
+The sweep packager is the one agent that writes, and it writes with the Write tool, not
+through Bash. The hook checks `Write`, `Edit`, `MultiEdit` and `NotebookEdit` by path: inside
+a programme home only `<home>/sweep-digest.md` is allowed, with symlinks and `..` resolved
+first. From Bash, a command naming programme code may not redirect output except to
+`/dev/null`, a newline starts a new command, `--pre`, `--output` and `-O` are denied, and
+shell expansion (`$(...)`, backticks, `<(...)`, `${...}` other than `${CLAUDE_PLUGIN_ROOT}`)
+and environment prefixes are denied.
+
+The first design let the packager write its digest with `cat > <home>/sweep-digest.md <<'EOF'`
+and stripped heredoc bodies before tokenising. Two review rounds found a way around it each
+time: a heredoc opener inside quoted text hid the next line, a newline never split commands,
+`f>path` skipped a token-anchored redirect check. A write that has to pass through shell
+parsing is a list of forms to enumerate. Give the agent a tool whose target the hook reads as
+a path, and the shell never sees the digest at all.
