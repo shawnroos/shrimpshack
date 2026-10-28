@@ -734,14 +734,14 @@ session.
 - **Wake watcher** (`lib/programme-watch.sh`, not a verb): remit mode
   `programme-watch.sh [--run <id>] [--tracker] [--max-polls <n>]` beats the remit
   watcher each interval and prints a line only for a change the PM must act on
-  (remit-changed, claim, wait-due, tracker-changed, plans-changed for an added
+  (remit-changed for a pane opened or closed, claim, wait-due, tracker-changed, plans-changed for an added
   plan, or source-available), naming the source. Non-urgent lines
   (remit-changed, tracker-changed, plans-changed) are held and printed as one
   line up to 2 minutes after the first one. Claim, wait-due, source and exit
   lines print at once, after anything held. Every exit, including a SIGTERM or
   SIGHUP from the Monitor, prints the held lines first. Tasks (a remit session's
   task list) and plans (plan files in a remit repo) are local reads, polled for
-  outages and new plans: a task-count move or an edited plan prints nothing,
+  outages and new plans: a task-count move, an edited plan or a worker turning busy or idle prints nothing,
   and the next sweep reads it. --tracker polls the
   tracker providers that need no token. A source the tools_of_record term turns off is
   never polled. It prints "source-unavailable <name> <reason>" once and keeps

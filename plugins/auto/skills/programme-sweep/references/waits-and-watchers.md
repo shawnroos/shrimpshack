@@ -25,11 +25,12 @@ for a change the PM must act on, and keeps polling. It runs until its Monitor
 expires or is killed. Non-urgent lines (`remit-changed`, `tracker-changed`,
 `plans-changed`) arrive merged into one line, up to 2 minutes after the first
 change. The other lines print at once, after anything held. A worker's task
-counts moving or a plan being edited prints nothing; the next sweep reads them.
+counts moving, a plan being edited or a worker turning busy or idle prints
+nothing; the next sweep reads them.
 
 | Line | Do |
 |---|---|
-| `remit-changed ...` | sweep: new or changed panes |
+| `remit-changed +<pane>` / `-<pane>` | sweep: a pane opened or closed |
 | `claim <n> new` | sweep: read the inbox |
 | `wait-due <item>` | check that item's wait |
 | `tracker-changed ...` | sweep: issue states moved |
