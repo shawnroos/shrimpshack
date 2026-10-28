@@ -102,24 +102,32 @@ watcher prints its held lines as it stops), handle them as a normal wake after
 re-arming. Changes made
 between the expiry and the re-arm are not reported; the next sweep reads them.
 
-1. **Beat, expire and package.** Send one message with three calls: `P beat`;
-   one Bash call that chains steps 2, 4, 5 and 9's `prune`, `P validate`,
-   `P sweep --record-sources`, `P propose-permission` and `P settle-permissions`
-   with `;`, ending `2>&1 | tail -c 6000`; and `auto:programme-sweep-packager`
-   with this programme's `run` and `home`. If `P beat` refuses because the
-   programme ended, stop. `P expire` ends a programme whose agreement was never
-   accepted; if it prints `"ended": true`, tell Shawn in one line and stop.
-   Read the digest, not the sources behind it: every item names its source. It
-   is usable only when the agent returned `ok`, the file ends `DIGEST-DONE` and
-   `generated` is after this sweep started. Otherwise it is unknown: run
-   `P status --json | head -c 6000`, `P inbox | head -c 6000` and `P rules`
-   (never cut the rules) yourself, and say so in one line. If the digest shows a re-read
-   requested, run `P rules --ack` and read the rules it prints.
-   **Quiet sweep.** When the verdict is `unchanged`, the chained call printed
-   no refusal, no `fix:` line, no adopt or alias proposal, no new permission
-   proposal, `"refuted": []` from `P validate`, and its output was under the cap, end the turn: steps 2 to 17 are
-   done. That is two PM turns. On a changed digest, take steps 2, 4, 5 and 9's
-   chained verbs as run, and read their output from that call.
+1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
+   Bash call that chains steps 2, 4, 5 and 9's `prune`, `P validate`,
+   `P sweep --record-sources`, `P propose-permission` and `P settle-permissions`,
+   then `P sweep-inputs --save`, with `;`, ending `2>&1 | tail -c 6000`. If
+   `P beat` refuses because the programme ended, stop. `P expire` ends a
+   programme whose agreement was never accepted; if it prints `"ended": true`,
+   tell Shawn in one line and stop. The last JSON in that output is the verdict
+   of `sweep-inputs`: `unchanged` or `changed`, with the reasons.
+   **Quiet sweep.** End the turn, steps 2 to 17 done, only when all of these
+   hold: the wake carried no watcher line (a watcher line is step 6 work);
+   `sweep-inputs` said `unchanged`, which already covers actionable reasons,
+   unread claims, open asks, items that moved (so a due tracker write, step 15),
+   merge readiness, a worker whose pane is not working (step 11) and both
+   wake-ups armed (step 16); and the chained call printed no refusal, no `fix:`
+   line, no adopt or alias proposal, no new permission proposal, and
+   `"refuted": []` from `P validate`. That is two PM turns.
+   **Changed sweep.** Dispatch `auto:programme-sweep-packager` with `home`. It has
+   no shell: it digests `<home>/sweep-inputs.json` into `<home>/sweep-digest.md`
+   and returns the path. Read the digest, not the sources behind it: every line
+   names its source. It is usable only when the agent returned `ok`, the file
+   ends `DIGEST-DONE` and its `generated` matches the verdict's. Otherwise it is
+   unknown: run `P status --json | head -c 6000`, `P inbox | head -c 6000` and
+   `P rules` (never cut the rules) yourself, and say so in one line. If the
+   digest shows a re-read requested, run `P rules --ack` and read the rules it
+   prints. Take steps 2, 4, 5 and 9's chained verbs as run, and read their output
+   from that call.
 2. **Prune prompts.** `"${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}" "${CLAUDE_PLUGIN_ROOT}/lib/programme_journal.py" prune --run <run>`.
    The run id is the `run` field of `P status --json`.
 3. **Apply Shawn's answers.** For each message Shawn typed since the last
@@ -499,8 +507,9 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
       CronCreate it again at the cadence term with the exact text
       `Run the programme sweep: load the auto:programme-sweep skill and follow it.`
       and run `P watcher-beat cron --task-id <id> --kind cron --prompt "<that exact text>"`.
-17. **Check, then stop.** Read `programme.actionable_reasons` from the digest,
-    or from `P status --json` when the digest was unknown. Clear each one (read the claim, run the
+17. **Check, then stop.** Run `P sweep-inputs --reasons`, a fresh read taken after
+    your actions, and read `actionable_reasons` (`programme.actionable_reasons` in
+    `P status --json`). Clear each one (read the claim, run the
     queued action, watch the wait, propose the rule), then read them again.
     When none is left, or only a stop-rule reason (`never_stop`, `not_done`,
     `until_time`) remains, end the turn. Do not tell Shawn about these checks.

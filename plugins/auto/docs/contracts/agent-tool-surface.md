@@ -559,6 +559,15 @@ session.
   writes nothing. Only an item whose step path changed under the same driving
   session gets a `trajectory_changed` journal row; moving the current step to
   done is not a change, and neither is a first recording.
+- **Sweep inputs**: `sweep-inputs` (args: optional --save, optional --reasons) is the
+  read side of a sweep as data. It gathers the actionable reasons, open decisions and
+  asks, unread claims, items that moved since the last working_now row, merge readiness
+  for open PR deliverables (eight at most), worker-owned items whose pane is not working,
+  the journal rows since the last sweep, and whether the remit watcher and the cron are
+  armed. It computes a verdict from the store: unchanged only when nothing needs the PM,
+  and a PR it cannot read counts as changed. --save writes sweep-inputs.json in the
+  programme home and prints the verdict; --reasons prints only the actionable reasons.
+  It changes no programme state and journals nothing.
 - **Merge readiness**: `check-mergeable` (args: a PR as owner/repo#N or URL,
   optional --pin <item>) reads an open PR's state, draft flag, mergeable and merge
   state, review decision, base branch, head, required checks and unresolved review

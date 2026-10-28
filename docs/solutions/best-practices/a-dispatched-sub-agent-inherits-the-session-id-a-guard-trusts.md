@@ -117,34 +117,25 @@ directly. The pinned auto agents get no Write tool, and
 `plugins/auto/tests/smoke/agents.test.sh` checks that each agent file declares an
 explicit tool list.
 
-The sweep packager is the one agent that writes, and it writes with the Write tool, not
-through Bash. The hook checks `Write`, `Edit`, `MultiEdit` and `NotebookEdit` by path: inside
-a programme home only `<home>/sweep-digest.md` is allowed, with symlinks and `..` resolved
-first. From Bash, a command naming programme code may not redirect output except to
-`/dev/null`, a newline starts a new command, `--pre`, `--output` and `-O` are denied, and
-shell expansion (`$(...)`, backticks, `<(...)`, `${...}` other than `${CLAUDE_PLUGIN_ROOT}`)
-and environment prefixes are denied.
+The sweep packager is the one agent that writes, and it has no shell at all: its tools are
+`Read` and `Write`. The PM runs the read-only verb `programme.sh sweep-inputs --save`, which
+gathers everything a sweep reads and computes the quiet-or-changed verdict from the store, and
+the packager digests that saved file into `<home>/sweep-digest.md`. The hook checks `Write`,
+`Edit`, `MultiEdit` and `NotebookEdit` by path: inside a programme home only
+`<home>/sweep-digest.md` is allowed, with symlinks, `..` and letter case resolved first.
 
-The first design let the packager write its digest with `cat > <home>/sweep-digest.md <<'EOF'`
-and stripped heredoc bodies before tokenising. Two review rounds found a way around it each
-time: a heredoc opener inside quoted text hid the next line, a newline never split commands,
-`f>path` skipped a token-anchored redirect check. A write that has to pass through shell
-parsing is a list of forms to enumerate. Give the agent a tool whose target the hook reads as
-a path, and the shell never sees the digest at all.
+For every other sub-agent the Bash side of the hook is a best-effort filter. From Bash, a
+command naming programme code may not redirect output except to `/dev/null`, a newline starts a
+new command, `--pre`, `--output` and `-O` are denied, and shell expansion (`$(...)`, backticks,
+`<(...)`, `${...}` other than `${CLAUDE_PLUGIN_ROOT}`) and environment prefixes are denied.
 
-## Known limits (open)
-
-The Bash side of the hook is a best-effort filter, not a sandbox. It judges one command at a
-time and engages only when a token contains the substring `programme`. An adversarial review
-(2026-10-28) showed these still pass, and they predate the packager:
-
-- A pipe into a shell or interpreter whose own segment names no programme code, such as
-  `cat <home>/sweep-digest.md | sh` or `... | xargs rm`. A sub-agent that can write the digest
-  can therefore run the digest.
-- `gh api` method spellings the check does not read (`-XPUT`, `--method=PUT`), `git push`,
-  `gh issue close` and `gh alias set` followed by the alias.
-
-Closing this needs a different shape, not another regex: either a per-agent tool allowlist so the
-packager has no Bash at all (reads would go through a read-only verb that returns the digest
-inputs), or an allowlist of whole commands. Until then, treat a sub-agent that reads untrusted
-programme text as able to run any command.
+How it got here: the first design let the packager write its digest with
+`cat > <home>/sweep-digest.md <<'EOF'` and stripped heredoc bodies before tokenising. Review
+rounds found a way around it each time: a heredoc opener inside quoted text hid the next line, a
+newline never split commands, `f>path` skipped a token-anchored redirect check. A third round
+then showed a per-command filter cannot be closed with another pattern: a pipe into a shell
+whose own segment names no programme code still passes, as do `gh api -XPUT`, `git push`,
+`gh issue close` and `gh alias set`. The decision (da92533) was to stop widening the filter and
+take Bash away from the one agent that read untrusted programme text and could write. Any other
+sub-agent that holds Bash and reads untrusted text can still run any command; give it the same
+treatment (a saved input file and no shell) before it handles programme data.

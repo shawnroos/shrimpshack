@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
+
+echo "programme-sweep-inputs.test.sh"
+"$PY" - "$AUTO_ROOT" <<'EOF'
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+root = sys.argv[1]
+passed = failed = 0
+
+
+def check(name, actual, expected):
+    global passed, failed
+    if actual == expected:
+        passed += 1
+        print('  PASS ' + name)
+    else:
+        failed += 1
+        print('  FAIL {}: expected {!r}, got {!r}'.format(name, expected, actual))
+
+
+lib = os.path.join(root, 'lib')
+with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
+    env = dict(os.environ, CLAUDE_AUTO_DATA_DIR=work + '/data', CLAUDE_AUTO_PERSONAL_PROTOCOL=work + '/p/protocol.json',
+               CLAUDE_AUTO_MACHINE='studio', CLAUDE_AUTO_TEST_HARNESS='1', CLAUDE_CODE_SESSION_ID='sess-pm')
+    for key in list(env):
+        if key.startswith('HERDR_') or key == 'CLAUDE_AUTO_REPO':
+            del env[key]
+    run = subprocess.run(['/usr/bin/python3', '-c',
+                          'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; '
+                          'print(load_lib_module("programme_home").create_programme(["w2"], "sess-pm")["run"])', lib],
+                         capture_output=True, text=True, env=env).stdout.strip()
+    home = os.path.join(work, 'data', 'programmes', run)
+
+    def verb(*args):
+        out = subprocess.run(['bash', os.path.join(lib, 'programme.sh'), *args, '--run', run],
+                             capture_output=True, text=True, env=env)
+        return out.returncode, out.stdout
+
+    def inputs(*flags):
+        code, out = verb('sweep-inputs', *flags)
+        return code, (json.loads(out) if out.strip().startswith('{') else {})
+
+    def journal_lines():
+        return sum(1 for _ in open(os.path.join(home, 'journal.jsonl')))
+
+    code, fresh = inputs()
+    check('a fresh programme reads changed: no sweep has completed', (code, fresh['verdict'], 'no_prior_sweep' in fresh['why']),
+          (0, 'changed', True))
+    check('a fresh programme reports both wake-ups as not armed',
+          sorted(w for w in fresh['why'] if w.startswith('watcher_missing')), ['watcher_missing:cron', 'watcher_missing:remit'])
+    check('the inputs never name a source it did not read: last_sweep is null before the first working_now',
+          fresh['last_sweep'], None)
+
+    verb('watcher-beat', 'remit', '--task-id', 't1', '--kind', 'monitor')
+    verb('watcher-beat', 'cron', '--task-id', 'c1', '--kind', 'cron', '--prompt', 'sweep')
+    verb('set-now', 'idle')
+    code, quiet = inputs()
+    check('with both wake-ups armed and a completed sweep, a quiet programme reads unchanged',
+          (quiet['verdict'], quiet['why']), ('unchanged', []))
+    check('last_sweep names the working_now row it compares against', quiet['last_sweep']['line'] > 0, True)
+
+    for step in (['validate'], ['propose-permission'], ['settle-permissions']):
+        verb(*step)
+    subprocess.run(['/usr/bin/python3', os.path.join(lib, 'programme_journal.py'), 'prune', '--run', run],
+                   capture_output=True, text=True, env=env)
+    code, after_chain = inputs()
+    check('the bookkeeping verbs a quiet sweep chains do not make the next sweep read changed',
+          (after_chain['verdict'], after_chain['why']), ('unchanged', []))
+
+    before = journal_lines()
+    code, saved = inputs('--save')
+    check('--save prints the verdict and where it saved the inputs', (code, saved['verdict'], os.path.basename(saved['inputs'])),
+          (0, 'unchanged', 'sweep-inputs.json'))
+    check('--save writes the file in the programme home', os.path.exists(os.path.join(home, 'sweep-inputs.json')), True)
+    check('the saved file holds the full inputs, not the summary', 'journal_since' in json.load(open(saved['inputs'])), True)
+    check('reading and saving the inputs journals nothing', journal_lines(), before)
+
+    code, reasons = inputs('--reasons')
+    check('--reasons prints only the actionable reasons', sorted(reasons), ['actionable_reasons', 'ok', 'run'])
+
+    verb('add-item', 'test:one', '--title', 'A new piece of work')
+    code, moved = inputs()
+    check('a new item reads changed', moved['verdict'], 'changed')
+    check('the change names the item and the journal rows it caused',
+          ('items_changed' in moved['why'], 'journal_rows' in moved['why'], 'actionable_reasons' in moved['why']),
+          (True, True, True))
+    check('the moved item is listed by id', [m['item'] for m in moved['items_changed']][:1], ['test:one'])
+
+    verb('set-now', 'working on test:one')
+    code, again = inputs()
+    check('a new working_now row resets the comparison point for journal rows and item history',
+          ('journal_rows' in again['why'], 'items_changed' in again['why']), (False, False))
+
+    junk = subprocess.run(['bash', os.path.join(lib, 'programme.sh'), 'sweep-inputs', 'extra', '--run', run],
+                          capture_output=True, text=True, env=env)
+    check('a stray positional argument is refused', junk.returncode != 0, True)
+
+    # In-process cases that need a fake GitHub or herdr.
+    os.environ.update({k: v for k, v in env.items() if k.startswith('CLAUDE_')})
+    sys.path.insert(0, lib)
+    from _bootstrap import load_lib_module
+    host = load_lib_module('programme')
+    psi = load_lib_module('programme_sweep_inputs')
+    sources = load_lib_module('programme_sources')
+    run_id, home_dir, record = host._locate({'run': run})
+    programme = record['programme']
+
+    def build_with(refs, readiness):
+        keep = psi._open_prs, psi._readiness
+        psi._open_prs = lambda _p: refs
+        psi._readiness = lambda _p, _r: readiness[:psi.PR_CAP] if len(readiness) > psi.PR_CAP else readiness
+        try:
+            return psi.build(host, run_id, home_dir, record)
+        finally:
+            psi._open_prs, psi._readiness = keep
+
+    def pr(result, ends=False):
+        return {'item': 'test:one', 'deliverable': 'merged', 'pr': 'o/r#1', 'result': result, 'ends': ends, 'note': ''}
+
+    codes = lambda built: sorted(w for w in built['why'] if w.startswith('pr_'))
+    check('a PR that is ready to merge is a change', codes(build_with([('k', 'd', 'o/r#1')], [pr('ready')])), ['pr_ready'])
+    check('a PR that is merged or closed is a change',
+          codes(build_with([('k', 'd', 'o/r#1')], [pr('not_ready', ends=True)])), ['pr_closed_or_merged'])
+    check('a PR the verb cannot read is a change, never unchanged',
+          codes(build_with([('k', 'd', 'o/r#1')], [pr('unknown')])), ['pr_unknown'])
+    check('a PR that is open and not ready is not a change',
+          codes(build_with([('k', 'd', 'o/r#1')], [pr('not_ready')])), [])
+    nine = [('k', 'd', 'o/r#%d' % n) for n in range(9)]
+    over = build_with(nine, [pr('not_ready')] * 9)
+    check('a ninth open PR is a change: the verb checks eight', ('pr_over_cap' in over['why'], len(over['prs_unchecked'])), (True, 1))
+
+    calls = []
+    keep_read = sources.read_herdr
+    sources.read_herdr = lambda: calls.append(1) or (None, 'down')
+    check('no herdr read when no item waits on a worker', (psi._stalled(programme), calls), ([], []))
+
+    def waiting_programme(pane):
+        item = {'state': 'waiting', 'waiting_on': {'who': 'worker', 'reporter': 'worker'}, 'owner': {'pane': pane}, 'history': []}
+        return {'items': {'w:1': item}, 'remit': {}}
+
+    check('a worker item with herdr unreadable is stalled as unknown',
+          psi._stalled(waiting_programme('w2:p1')), [{'item': 'w:1', 'pane': 'w2:p1', 'agent_status': 'unknown'}])
+    sources.read_herdr = lambda: ({}, None)
+    keep_views, keep_remit = sources.pane_views, sources.remit
+    sources.remit = lambda _p: {}
+    for status, expected in (('working', []), ('idle', [{'item': 'w:1', 'pane': 'w2:p1', 'agent_status': 'idle'}])):
+        sources.pane_views = lambda _s, _scope, status=status: [{'pane_id': 'w2:p1', 'agent_status': status}]
+        check('a worker pane that is ' + status + (' is not stalled' if status == 'working' else ' is stalled'),
+              psi._stalled(waiting_programme('w2:p1')), expected)
+    sources.pane_views = lambda _s, _scope: []
+    check('a worker pane herdr no longer lists is stalled as unknown',
+          psi._stalled(waiting_programme('w2:p1')), [{'item': 'w:1', 'pane': 'w2:p1', 'agent_status': 'unknown'}])
+    sources.read_herdr, sources.pane_views, sources.remit = keep_read, keep_views, keep_remit
+
+    for kind, payload, quiet in (('stop_quiet', {}, True), ('prompts_pruned', {}, True), ('working_now', {}, True),
+                                 ('validate_pass', {'refuted': []}, True), ('validate_pass', {'refuted': [{'item': 'x'}]}, False),
+                                 ('permission_proposed', {'proposals': []}, True),
+                                 ('permission_proposed', {'proposals': [{'id': 'perm-1'}]}, False),
+                                 ('effects_recorded', {'notify': {}}, True), ('effects_recorded', {'notify': {'a': 1}}, False),
+                                 ('source_changed', {}, False), ('prompt', {}, False)):
+        check('journal row %s %s is %s' % (kind, json.dumps(payload), 'quiet' if quiet else 'a change'),
+              psi._quiet_row({'kind': kind, 'payload': payload}), quiet)
+
+print('programme-sweep-inputs.test.sh: {} passed, {} failed'.format(passed, failed))
+sys.exit(1 if failed else 0)
+EOF
