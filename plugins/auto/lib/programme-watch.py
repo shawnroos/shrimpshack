@@ -429,17 +429,18 @@ class Held:
         self.window, self.lines, self.since = window, [], None
 
     def take(self, changes) -> None:
+        held = [line for line in changes if line.split(" ", 1)[0] in HELD_KINDS]
         urgent = [line for line in changes if line.split(" ", 1)[0] not in HELD_KINDS]
-        for line in changes:
-            if line not in urgent and line not in self.lines:
-                self.lines.append(line)
+        self.lines += [line for line in held if line not in self.lines]
         if self.lines and self.since is None:
             self.since = time.monotonic()
+        # Urgent lines join self.lines before the flush, so a stop signal arriving in between still prints them.
+        self.lines += urgent
         if urgent or (self.lines and time.monotonic() - self.since >= self.window):
-            self.flush(urgent)
+            self.flush()
 
-    def flush(self, urgent=()) -> None:
-        out = self.lines + list(urgent)
+    def flush(self) -> None:
+        out = self.lines
         # Cleared before printing, so a stop signal landing mid-print cannot print the lines twice.
         self.lines, self.since = [], None
         if out:
@@ -450,7 +451,7 @@ def _flush_on_stop(held):
     def handler(signum, frame):
         held.flush()
         sys.exit(128 + signum)
-    for signum in (signal.SIGTERM, signal.SIGHUP):
+    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(signum, handler)
 
 

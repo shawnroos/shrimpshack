@@ -748,7 +748,9 @@ session.
   polling. Changes made while no watcher runs, between a Monitor expiry and
   the re-arm, are not reported: the re-armed watcher starts from a fresh
   baseline, and the PM's next sweep reads them. On an expiry the PM re-arms
-  the watcher and records the Monitor, and does nothing else. Item mode `programme-watch.sh [--run <id>] --item <id> -- <argv>`
+  the watcher and records the Monitor, and does nothing else unless the stream
+  printed change lines before it ended (held lines are printed when the watcher
+  is stopped), which it handles as a normal wake. Item mode `programme-watch.sh [--run <id>] --item <id> -- <argv>`
   beats that item's watcher while the command runs, then prints
   "item-exited <id> exit=N". Exit codes: 0 change or quiet exit, 1 runtime error
   or 3 refused beats, 2 usage, 128 plus the signal number when stopped. Settings:

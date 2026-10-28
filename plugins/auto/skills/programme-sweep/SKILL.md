@@ -92,8 +92,11 @@ not "nothing changed". You apply every programme write yourself.
 
 **An expiry wake is a re-arm, not a sweep.** When the remit watcher's Monitor
 stream ended with no `remit-watcher-exit` line, run the arm command in step 16
-and `P watcher-beat remit --task-id <Monitor task id> --kind monitor`, then
-stop. Run no other step and no status read, and send no message. Changes made
+and `P watcher-beat remit --task-id <Monitor task id> --kind monitor`. If the
+stream printed no other line since your last wake, stop there: run no other
+step and no status read, and send no message. If it printed change lines (the
+watcher prints its held lines as it stops), handle them as a normal wake after
+re-arming. Changes made
 between the expiry and the re-arm are not reported; the next sweep reads them.
 
 1. **Beat and expire.** `P beat`. If it refuses because the programme ended,

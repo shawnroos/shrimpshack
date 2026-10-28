@@ -54,9 +54,11 @@ cron, `--kind monitor` for a Monitor. `/auto:programme-end` prints
 `CronDelete <id>` for cron watchers and `TaskStop <id>` for Monitor watchers.
 
 Every Monitor expires after at most 30 minutes. When the remit watcher's
-stream ends with no `remit-watcher-exit` line, that is an expiry: re-arm only.
+stream ends with no `remit-watcher-exit` line, that is an expiry: re-arm first.
 Run the arm command and `watcher-beat remit --task-id <Monitor task id> --kind
-monitor`, then stop. Run no sweep and no status read, and send no message.
+monitor`. When the stream printed no other line since the last wake, stop
+there: no sweep, no status read, no message. When it printed change lines
+(the watcher prints its held lines as it stops), handle them as a normal wake.
 Changes made between the expiry and the re-arm are not reported: the re-armed
 watcher starts from a fresh baseline, and the next sweep reads them. Re-arm
 after a `remit-watcher-exit crashed` line too, never because a sweep ran, and
