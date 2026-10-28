@@ -37,9 +37,15 @@ echo "backend CLI drift check ($(basename "$SPINOFF")):"
 #   "$HERDR" pane run "$pane" ...
 #   "$CMUX" new-surface --type terminal ...
 # Captures the subcommand words (up to two) plus any long flags on that line.
-extract_calls() {                     # $1 = binary var name (HERDR|CMUX)
-  grep -oE "\"\\\$$1\" [a-z][a-z-]*( [a-z][a-z-]*)?" "$SPINOFF" \
-    | sed -E "s/\"\\\$$1\" //" | sort -u
+# The call head: herdr and cmux are invoked as "$HERDR" / "$CMUX"; rex goes through the
+# rexc wrapper (it must carry --autostart=false), so its sites read `rexc <verb>`.
+call_head() {                         # $1 = binary var name (HERDR|CMUX|REX)
+  if [ "$1" = REX ]; then printf '%s' 'rexc'; else printf '%s' "\"\\\$$1\""; fi
+}
+extract_calls() {                     # $1 = binary var name (HERDR|CMUX|REX)
+  local head; head="$(call_head "$1")"
+  grep -oE "$head [a-z][a-z-]*( [a-z][a-z-]*)?" "$SPINOFF" \
+    | sed -E "s/^$head //" | sort -u
 }
 # Flags belonging to the BACKEND call only.
 #
@@ -61,7 +67,10 @@ extract_calls() {                     # $1 = binary var name (HERDR|CMUX)
 #  3. drop quoted strings containing a space — these are INNER commands, e.g.
 #     `pane run "$view" "bat --paging=always …"`. Those flags belong to bat.
 extract_flags() {                     # $1 = binary var, $2 = subcommand (space-separated)
-  grep -E "\"\\\$$1\" $2( |\$)" "$SPINOFF" \
+  # Calls wrap with a trailing backslash; join them first or every flag on a
+  # continuation line goes unchecked.
+  awk '{ if (sub(/\\$/, "")) printf "%s ", $0; else print }' "$SPINOFF" \
+    | grep -E "$(call_head "$1") $2( |\$)" \
     | sed -E 's/"\$\(/ /g; s/\)"/ /g' \
     | sed -E 's/"\$[A-Za-z_][A-Za-z0-9_]*"/ /g' \
     | sed -E 's/"[^"]*[[:space:]][^"]*"/ /g' \
@@ -117,7 +126,7 @@ check_backend() {                     # $1 = label, $2 = binary var, $3 = binary
     fi
 
     sub_help="$("$bin" "$group" --help 2>&1)"
-    if ! printf '%s\n' "$sub_help" | grep -qE "(^|[[:space:]])${verb}([[:space:]]|$)"; then
+    if ! printf '%s\n' "$sub_help" | grep -qE "(^|[[:space:]])${verb}([[:space:],]|$)"; then
       bad "$label: '$group $verb' — '$verb' is not a subcommand of '$group'"
       continue
     fi
@@ -159,8 +168,12 @@ HERDR_BIN="${HERDR_BIN:-$(command -v herdr 2>/dev/null)}"
 CMUX_BIN="${CMUX_BIN:-$(command -v cmux 2>/dev/null)}"
 [ -n "$CMUX_BIN" ] || { [ -x /Applications/cmux.app/Contents/Resources/bin/cmux ] && CMUX_BIN=/Applications/cmux.app/Contents/Resources/bin/cmux; }
 
+REX_BIN="${REX_BIN:-$(command -v rex 2>/dev/null)}"
+[ -n "$REX_BIN" ] || { [ -x "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex" ] && REX_BIN="/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"; }
+
 check_backend herdr HERDR "${HERDR_BIN:-}"
 check_backend cmux  CMUX  "${CMUX_BIN:-}"
+check_backend rex   REX   "${REX_BIN:-}"
 
 echo
 echo "  $PASS passed, $FAIL failed, $SKIP skipped"

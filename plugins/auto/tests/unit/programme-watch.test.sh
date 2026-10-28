@@ -178,20 +178,13 @@ alive() { if kill -0 "$1" 2>/dev/null; then echo yes; else echo no; fi; }
 stop_watch() { kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
 
 reset_state
-it "a herdr snapshot whose sequence moves from 41 to 42 prints remit-changed and keeps polling"
-start_watch seq
+it "a worker turning busy or idle (its herdr sequence moving) prints nothing and keeps polling"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=0 start_watch seq --max-polls 6
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 snap 42 5 1
-wait_for "${WORK}/seq.out" "remit-changed" || true
-has "remit-changed" "$(cat "${WORK}/seq.out")"
-sleep 0.7
-check yes "$(alive "$WPID")"
-it "the seq wake is exactly one line on stdout"
-check 1 "$(lines "${WORK}/seq.out")"
-it "the seq wake names the old and new sequence"
-has "41->42" "$(cat "${WORK}/seq.out")"
-stop_watch "$WPID"
+wait_exit "$WPID"
+check 0 "$(count "${WORK}/seq.out" "remit-changed")"
 
 reset_state
 it "a pane added to the remit prints remit-changed naming the pane"
@@ -531,11 +524,11 @@ check 0 "$(lines "${WORK}/plansoff.out")"
 edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tracker", "tasks", "plans"]'
 unset SNAP_CWD
 
-HELD="remit-changed w2:p2 41->42"
+HELD="remit-changed +w2:p3"
 held_change() {
   wait_for "$BEATS" "watcher-beat remit" || true
   sleep 0.4
-  snap 42 5 1
+  snap 41 5 1 "w2:p1,w2:p2,w2:p3"
   sleep 0.7
 }
 
@@ -545,9 +538,9 @@ CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=1.5 start_watch burst
 held_change
 check 0 "$(lines "${WORK}/burst.out")"
 it "two non-urgent changes in successive polls print as one line holding both"
-snap 42 5 1 "w2:p1,w2:p2,w2:p3"
+snap 41 5 1 "w2:p1,w2:p2,w2:p3,w2:p4"
 wait_for "${WORK}/burst.out" "remit-changed" 30 || true
-check "${HELD}; remit-changed +w2:p3" "$(cat "${WORK}/burst.out")"
+check "${HELD}; remit-changed +w2:p4" "$(cat "${WORK}/burst.out")"
 stop_watch "$WPID"
 
 reset_state

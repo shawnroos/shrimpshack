@@ -179,6 +179,33 @@ _herdr_probe() {
 _cmux_probe()  { [ -n "${CMUX:-}" ] && [ -x "$CMUX" ]; }
 _ghostty_probe() { [ -n "${GHOSTTY_APP:-}" ] && [ -n "${OSASCRIPT:-}" ]; }
 
+# --autostart=false: a spinoff must never be what starts a REX server. cli-drift.test.sh
+# reads the `rexc` call sites, so call rex through this and nothing else.
+rexc() { "$REX" --autostart=false "$@"; }
+REX_BUNDLE_BIN="/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+REX_PROBE_OUT=""; REX_PROBE_ERR=""
+# The rex_version test is there because another tool called `rex` can sit on PATH.
+_rex_probe() {
+  [ -n "${REX:-}" ] || return 1
+  local _err _rc=0
+  _err="$(mktemp 2>/dev/null)" || _err="${TMPDIR:-/tmp}/spinoff-rex-probe.$$"
+  REX_PROBE_OUT="$(rexc whoami --json 2>"$_err")" || _rc=$?
+  REX_PROBE_ERR="$(cat "$_err" 2>/dev/null || true)"; rm -f "$_err"
+  [ "$_rc" -eq 0 ] || return 1
+  case "$REX_PROBE_OUT" in *'"rex_version"'*) return 0 ;; *) return 1 ;; esac
+}
+_rex_probe_said_something() { [ -n "${REX_PROBE_OUT:-}" ] || [ -n "${REX_PROBE_ERR:-}" ]; }
+_rex_probe_evidence() {
+  local pad="$1" _l
+  if [ -n "${REX_PROBE_OUT:-}" ]; then
+    while IFS= read -r _l; do printf '%s%s\n' "$pad" "$_l" >&2; done <<<"$REX_PROBE_OUT"
+  fi
+  if [ -n "${REX_PROBE_ERR:-}" ]; then
+    while IFS= read -r _l; do printf '%s%s\n' "$pad" "$_l" >&2; done <<<"$REX_PROBE_ERR"
+  fi
+  return 0
+}
+
 # The exit-5 evidence, split into a predicate and a printer because the two report
 # sites need the presence answer BEFORE they print — one leads with a header, the
 # other with a sentence — and each words the empty case for its own register.
@@ -295,6 +322,8 @@ resolve_launcher() {
            echo "  ⚠ --launcher cmux requested but the cmux CLI isn't available — falling back to auto-detection" >&2 ;;
     ghostty) if _ghostty_probe; then LAUNCHER=ghostty; return; fi
            echo "  ⚠ --launcher ghostty requested but Ghostty.app / osascript isn't available — falling back to auto-detection" >&2 ;;
+    rex)   if _rex_probe; then LAUNCHER=rex; return; fi
+           echo "  ⚠ --launcher rex requested but rex did not answer \`rex whoami --json\` — falling back to auto-detection" >&2 ;;
   esac
   # Record, don't act (KTD-8). This runs BEFORE the detection below so the record is
   # taken from the announcements as they stand, and is read only after $LAUNCHER has
@@ -317,12 +346,15 @@ resolve_launcher() {
     herdr) _record_loud herdr "${HERDR:-}" '--launcher herdr' HERDR_BIN "${HERDR_REJECTED:-}" ;;
     cmux)  _record_loud cmux "${CMUX:-}" '--launcher cmux' CMUX_BIN "${CMUX_REJECTED:-}" \
                         /Applications/cmux.app/Contents/Resources/bin/cmux ;;
+    rex)   _record_loud rex "${REX:-}" '--launcher rex' REX_BIN "${REX_REJECTED:-}" "$REX_BUNDLE_BIN" ;;
   esac
   [ "${HERDR_ENV:-}" = 1 ] \
     && _record_loud herdr "${HERDR:-}" 'HERDR_ENV=1' HERDR_BIN "${HERDR_REJECTED:-}"
   [ -n "${CMUX_WORKSPACE_ID:-}" ] \
     && _record_loud cmux "${CMUX:-}" 'CMUX_WORKSPACE_ID' CMUX_BIN "${CMUX_REJECTED:-}" \
                     /Applications/cmux.app/Contents/Resources/bin/cmux
+  [ -n "${REX_SESSION:-}" ] \
+    && _record_loud rex "${REX:-}" 'REX_SESSION' REX_BIN "${REX_REJECTED:-}" "$REX_BUNDLE_BIN"
   # Any OTHER forced backend announces itself LAST, and only if nothing else has. This
   # is the KTD-9 note at the ghostty resolution coming due — ghostty's ENV vars stay
   # excluded (set for every Ghostty window, they announce nothing) while the FLAG is a
@@ -341,12 +373,13 @@ resolve_launcher() {
   # announce nothing and exit 0 having launched nothing — the very defect this gate
   # closes, re-opened by omission. Default-deny here too.
   case "${FORCED_LAUNCHER:-auto}" in
-    auto|herdr|cmux) ;;
+    auto|herdr|cmux|rex) ;;
     *) [ -z "$ANNOUNCED_BIN" ] \
          && { ANNOUNCED_BIN="$FORCED_LAUNCHER"; ANNOUNCED_BY="--launcher $FORCED_LAUNCHER"; } ;;
   esac
   if   [ "${HERDR_ENV:-}" = 1 ] && _herdr_probe;          then LAUNCHER=herdr
   elif [ -n "${CMUX_WORKSPACE_ID:-}" ] && _cmux_probe;    then LAUNCHER=cmux
+  elif [ -n "${REX_SESSION:-}" ] && _rex_probe;           then LAUNCHER=rex
   # Nothing announced a multiplexer, but a herdr SERVER is up. HERDR_ENV is injected
   # by the herdr binary into panes it spawns, so it is a proxy for launch ancestry, not
   # for herdr being reachable: a session started from a plain terminal never holds it,
@@ -356,7 +389,7 @@ resolve_launcher() {
   # It sits BELOW both announced arms and keeps their `-z` guards, so it cannot steal a
   # session another backend owns, and HERDR_ENV=0 (present but switched off, R8) still
   # resolves `none` rather than reaching this probe.
-  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
+  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] && [ -z "${REX_SESSION:-}" ] \
        && _herdr_probe;                                   then LAUNCHER=herdr
   # ghostty is checked LAST, and only when NO multiplexer announced itself in the
   # environment at all. Two separate reasons, both load-bearing:
@@ -369,7 +402,7 @@ resolve_launcher() {
   #    new ghostty window is the wrong recovery there, so that resolves to `none`
   #    (worktree + manual line). `--launcher ghostty` forces it when that
   #    conservative call is wrong.
-  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] \
+  elif [ -z "${HERDR_ENV:-}" ] && [ -z "${CMUX_WORKSPACE_ID:-}" ] && [ -z "${REX_SESSION:-}" ] \
        && { [ -n "${GHOSTTY_SURFACE_ID:-}" ] || [ "${TERM_PROGRAM:-}" = ghostty ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ]; } \
        && _ghostty_probe;                                  then LAUNCHER=ghostty
   else                                                         LAUNCHER=none
@@ -377,13 +410,13 @@ resolve_launcher() {
 }
 
 # --- neutral verb dispatchers (case-on-$LAUNCHER, KTD-1) ----------------------
-launcher_new_tab()        { case "$LAUNCHER" in cmux) launcher_new_tab_cmux ;;        herdr) launcher_new_tab_herdr ;;        ghostty) launcher_new_tab_ghostty ;;        esac; }
-launcher_new_workspace()  { case "$LAUNCHER" in cmux) launcher_new_workspace_cmux ;;  herdr) launcher_new_workspace_herdr ;;  ghostty) launcher_new_workspace_ghostty ;;  esac; }
-launcher_new_split()      { case "$LAUNCHER" in cmux) launcher_new_split_cmux ;;      herdr) launcher_new_split_herdr ;;      ghostty) launcher_new_split_ghostty ;;      esac; }
-launcher_find_left_pane() { case "$LAUNCHER" in cmux) launcher_find_left_pane_cmux ;; herdr) launcher_find_left_pane_herdr ;; ghostty) launcher_find_left_pane_ghostty ;; esac; }
-launcher_launch_agent()   { case "$LAUNCHER" in cmux) launcher_launch_agent_cmux ;;   herdr) launcher_launch_agent_herdr ;;   ghostty) launcher_launch_agent_ghostty ;;   esac; }
-launcher_wait_ready()     { case "$LAUNCHER" in cmux) launcher_wait_ready_cmux ;;     herdr) launcher_wait_ready_herdr ;;     ghostty) launcher_wait_ready_ghostty ;;     esac; }
-launcher_open_viewer()    { case "$LAUNCHER" in cmux) launcher_open_viewer_cmux ;;    herdr) launcher_open_viewer_herdr ;;    ghostty) launcher_open_viewer_ghostty ;;    esac; }
+launcher_new_tab()        { case "$LAUNCHER" in cmux) launcher_new_tab_cmux ;;        herdr) launcher_new_tab_herdr ;;        ghostty) launcher_new_tab_ghostty ;; rex) launcher_new_tab_rex ;;        esac; }
+launcher_new_workspace()  { case "$LAUNCHER" in cmux) launcher_new_workspace_cmux ;;  herdr) launcher_new_workspace_herdr ;;  ghostty) launcher_new_workspace_ghostty ;; rex) launcher_new_workspace_rex ;;  esac; }
+launcher_new_split()      { case "$LAUNCHER" in cmux) launcher_new_split_cmux ;;      herdr) launcher_new_split_herdr ;;      ghostty) launcher_new_split_ghostty ;; rex) launcher_new_split_rex ;;      esac; }
+launcher_find_left_pane() { case "$LAUNCHER" in cmux) launcher_find_left_pane_cmux ;; herdr) launcher_find_left_pane_herdr ;; ghostty) launcher_find_left_pane_ghostty ;; rex) launcher_find_left_pane_rex ;; esac; }
+launcher_launch_agent()   { case "$LAUNCHER" in cmux) launcher_launch_agent_cmux ;;   herdr) launcher_launch_agent_herdr ;;   ghostty) launcher_launch_agent_ghostty ;; rex) launcher_launch_agent_rex ;;   esac; }
+launcher_wait_ready()     { case "$LAUNCHER" in cmux) launcher_wait_ready_cmux ;;     herdr) launcher_wait_ready_herdr ;;     ghostty) launcher_wait_ready_ghostty ;; rex) launcher_wait_ready_rex ;;     esac; }
+launcher_open_viewer()    { case "$LAUNCHER" in cmux) launcher_open_viewer_cmux ;;    herdr) launcher_open_viewer_herdr ;;    ghostty) launcher_open_viewer_ghostty ;; rex) launcher_open_viewer_rex ;;    esac; }
 
 # --- cmux backend (BEHAVIOR-PRESERVING: exact pre-seam CLI calls) -------------
 # Identify the left-hand agent pane: the lowest-indexed pane in this workspace
@@ -1436,6 +1469,208 @@ launcher_open_viewer_ghostty() {
   fi
 }
 
+# --- rex backend --------------------------------------------------------------
+# Like ghostty, the placement verbs create nothing: the surface is born running
+# $LAUNCH_CMD in launcher_launch_agent_rex, so no unbriefed pane can exist.
+REX_PLACE=""             # where launch_agent should create it: tab | split | session
+REX_SESS=""              # session the agent landed in
+REX_BLK=""               # block id of the launched agent
+REX_BLK_GONE_OUT=""      # last `rex wait --json` payload (the exit evidence)
+
+# Python-only: jq's array syntax differs from the dotted form, and a reader that
+# disagrees on a nested array returns an empty block id without failing.
+_rex_json() {
+  JPATH="$1" python3 -c '
+import sys, json, os
+try:
+    d = json.load(sys.stdin)
+    for k in os.environ["JPATH"].split("."):
+        d = d[int(k)] if isinstance(d, list) else d[k]
+    sys.stdout.write("" if d is None else str(d))
+except Exception:
+    sys.stdout.write("")
+' 2>/dev/null
+}
+
+# A split takes the session from the block being split: the background agent has not
+# necessarily inherited the originating REX_SESSION.
+_rex_session() {
+  local s=""
+  if [ "$REX_PLACE" = split ] && [ -n "${FROM_SURFACE:-}" ]; then
+    s="$(rexc block inspect "$FROM_SURFACE" --json 2>/dev/null | _rex_json session_id)"
+  fi
+  [ -n "$s" ] || s="${REX_SESSION:-}"
+  printf '%s' "$s"
+}
+
+launcher_find_left_pane_rex() { : ; }
+
+launcher_new_workspace_rex() {
+  step "new REX session queued (the briefed launch creates it)…"
+  REX_PLACE=session
+  LAUNCH_WS=""; LAUNCH_SFC="rex:pending"
+  LAUNCH_LABEL="agent surface"; LAUNCH_WHERE="workspace"
+}
+
+launcher_new_tab_rex() {
+  step "new REX tab queued (the briefed launch creates it)…"
+  REX_PLACE=tab
+  LAUNCH_WS=""; LAUNCH_SFC="rex:pending"
+  LAUNCH_LABEL="agent tab"; LAUNCH_WHERE="tab"
+}
+
+launcher_new_split_rex() {
+  step "REX split queued ($SPLIT_DIRECTION of $FROM_SURFACE)…"
+  REX_PLACE=split
+  LAUNCH_WS=""; LAUNCH_SFC="rex:pending"
+  LAUNCH_LABEL="agent split"; LAUNCH_WHERE="split"
+}
+
+# `rex new` does not display the session it creates. Best-effort: Claude is already
+# briefed, so a session that is not shown is reported, not failed.
+_rex_show_session() {
+  local sid="$1" client
+  client="$(rexc client ls --json 2>/dev/null | python3 -c '
+import sys, json
+try:
+    for c in json.load(sys.stdin).get("clients", []):
+        if c.get("info", {}).get("kind") == "app":
+            sys.stdout.write(c["client_id"]); break
+except Exception:
+    pass' 2>/dev/null)"
+  if [ -z "$client" ]; then
+    echo "  ⚠ no REX app client is connected — session $sid was created but not shown; select it in the Rex app" >&2
+    note_unnamed "REX session $sid (created, not shown: no app client connected)"
+    return
+  fi
+  if ! rexc -C "$client" do session.select session_id="$sid" >/dev/null 2>&1; then
+    echo "  ⚠ could not show session $sid in the REX app — select it there" >&2
+    note_unnamed "REX session $sid (created, not shown: session.select failed)"
+  fi
+}
+
+launcher_launch_agent_rex() {
+  LB_READY=0
+  local out sess=""
+  case "$REX_PLACE" in
+    tab)
+      sess="$(_rex_session)"
+      [ -n "$sess" ] || { _rex_no_session; return; }
+      out="$(rexc window new -s "$sess" "$LABEL" -c "$WORKTREE" --keep-open --focus=false --json \
+               -- sh -c "$LAUNCH_CMD" 2>&1)" ;;
+    split)
+      sess="$(_rex_session)"
+      [ -n "$sess" ] || { _rex_no_session; return; }
+      out="$(rexc split -s "$sess" -b "$FROM_SURFACE" --split="$SPLIT_DIRECTION" --label "$LABEL" \
+               -c "$WORKTREE" --keep-open --focus=false --json -- sh -c "$LAUNCH_CMD" 2>&1)" ;;
+    session)
+      out="$(rexc new "$LABEL" --window "$LABEL" -c "$WORKTREE" --keep-open --json \
+               -- sh -c "$LAUNCH_CMD" 2>&1)"
+      sess="$(printf '%s' "$out" | _rex_json session_id)" ;;
+    *) echo "  ⚠ no REX placement was recorded — nothing to launch" >&2; out="" ;;
+  esac
+  case "$REX_PLACE" in
+    session) REX_BLK="$(printf '%s' "$out" | _rex_json initial_windows.0.block_ids.0)" ;;
+    *)       REX_BLK="$(printf '%s' "$out" | _rex_json block_ids.0)" ;;
+  esac
+  if [ -z "$REX_BLK" ] || [ -z "$sess" ]; then
+    KICKOFF_OK=0
+    echo "  ⚠ rex returned no block for the briefed session; its reply was:" >&2
+    echo "$out" >&2
+    # LAUNCH_SFC keeps its sentinel: clearing it prints "✓ Spinoff complete" for a run
+    # that briefed nothing.
+    SURFACE_REF=""
+    return
+  fi
+  REX_SESS="$sess"
+  LAUNCH_SFC="$REX_BLK"; SURFACE_REF="$REX_BLK"
+  if [ "$LAUNCH_WHERE" = workspace ]; then
+    WORKSPACE_REF="$sess"; LAUNCH_WS="$sess"
+    _rex_show_session "$sess"
+  fi
+  KICKOFF_OK=1
+  step "  $LAUNCH_LABEL: $REX_BLK (session $sess, launched with the brief)"
+}
+
+_rex_no_session() {
+  KICKOFF_OK=0
+  SURFACE_REF=""
+  echo "  ⚠ no REX session to launch into: REX_SESSION is unset and --from-surface names no block rex can find." >&2
+  echo "    The skill passes REX_SESSION from the main session; pass it on the command line too." >&2
+}
+
+# Mirrors launcher_wait_ready_herdr (see it for why each marker is what it is). Only
+# the screen tail is matched: scrollback keeps a dismissed modal, and matching it all
+# re-answers a prompt that is long gone.
+launcher_wait_ready_rex() {
+  LB_READY=0
+  [ -n "${REX_BLK:-}" ] || return
+  local deadline screen
+  deadline=$(( $(date +%s) + SPINOFF_READY_TIMEOUT_MS / 1000 ))
+  while :; do
+    screen="$(_screen_tail "$(rexc capture -s "$REX_SESS" -b "$REX_BLK" --trim 2>/dev/null)")"
+    case "$screen" in
+      *"shift+tab to cycle"*|*"bypass permissions"*|*"? for shortcuts"*) LB_READY=1; return ;;
+      *"I trust this folder"*)
+        case "${SPINOFF_FOLDER_TRUST:-accept}" in
+          reject) rexc send-key -s "$REX_SESS" -b "$REX_BLK" escape >/dev/null 2>&1
+                  step "  … folder-trust prompt: declined (SPINOFF_FOLDER_TRUST=reject) — session will not run here" ;;
+          abort)  step "  … folder-trust prompt is up and SPINOFF_FOLDER_TRUST=abort — leaving it for you"; return ;;
+          *)      case "$(_trust_cursor "$screen")" in
+                    yes) rexc send-key -s "$REX_SESS" -b "$REX_BLK" enter >/dev/null 2>&1 ;;
+                    no)  rexc send-key -s "$REX_SESS" -b "$REX_BLK" down enter >/dev/null 2>&1 ;;
+                    *)   step "  … folder-trust prompt is up but its selected option is unreadable — leaving it for you"; return ;;
+                  esac
+                  step "  … folder-trust prompt: accepted for this worktree (same trust as the parent repo)" ;;
+        esac
+        sleep 2 ;;
+      *"new MCP servers found"*|*"Select any you wish to enable"*)
+        case "${SPINOFF_MCP_MODAL:-accept}" in
+          reject) rexc send-key -s "$REX_SESS" -b "$REX_BLK" escape >/dev/null 2>&1
+                  step "  … MCP trust modal: rejected all (SPINOFF_MCP_MODAL=reject)" ;;
+          abort)  step "  … MCP trust modal is up and SPINOFF_MCP_MODAL=abort — not briefing"; return ;;
+          *)      rexc send-key -s "$REX_SESS" -b "$REX_BLK" enter >/dev/null 2>&1
+                  step "  … MCP trust modal: accepted the pre-checked default (new worktree = new project path)" ;;
+        esac
+        sleep 2 ;;
+    esac
+    [ "$(date +%s)" -ge "$deadline" ] && return
+    sleep 1
+  done
+}
+
+# Read the payload, not the status: `rex wait` exits 1 for both a --for timeout and a
+# child that ran `exit 1`, but only an exited child prints {"exit_code":N}.
+rex_claude_gone() {
+  [ -n "${REX_BLK:-}" ] || return 1
+  REX_BLK_GONE_OUT="$(rexc wait "$REX_BLK" -s "$REX_SESS" --for 1s --json 2>/dev/null)" || true
+  case "$REX_BLK_GONE_OUT" in *'"exit_code"'*) return 0 ;; esac
+  return 1
+}
+
+# Best-effort, like herdr's: the launch has already succeeded.
+launcher_open_viewer_rex() {
+  local pager out view
+  [ -n "${REX_BLK:-}" ] || return
+  if command -v glow >/dev/null 2>&1; then
+    pager="glow '$HANDOFF_DST'"
+  elif command -v bat >/dev/null 2>&1; then
+    pager="bat --paging=always '$HANDOFF_DST'"
+  else
+    echo "  ⚠ no markdown pager (glow/bat) available — skipping the handoff viewer" >&2
+    return
+  fi
+  out="$(rexc split -s "$REX_SESS" -b "$REX_BLK" --split=right --label "$VIEWER_LABEL" \
+           -c "$WORKTREE" --focus=false --json -- sh -c "$pager" 2>&1)" || true
+  view="$(printf '%s' "$out" | _rex_json block_ids.0)"
+  if [ -n "$view" ]; then
+    VIEWER_OK=1
+    step "  handoff viewer: $view"
+  else
+    echo "  ⚠ could not open a right pane for the handoff viewer — continuing without it" >&2
+  fi
+}
+
 # _announced_unlaunched — the default-deny gate, as a function so it can be tested.
 # True when something announced a backend and nothing launched. It reads ONLY the
 # announcement and the settled launcher: no backend name, no probe. That is the whole
@@ -1458,7 +1693,7 @@ REPO=""                      # explicit target repo (when the originating cwd is
 BASE=""                      # empty => current HEAD
 PREFIX="feature"
 TARGET="tab"                 # tab => surface in current workspace; workspace => new workspace; split => beside --from-surface
-LAUNCHER="auto"              # launch backend: herdr | cmux | ghostty | auto (auto => detect, see resolve_launcher)
+LAUNCHER="auto"              # launch backend: herdr | cmux | ghostty | rex | auto (auto => detect, see resolve_launcher)
 SPLIT_DIRECTION="right"      # --target split only: which side of --from-surface (right | left)
 FROM_SURFACE=""              # the ORIGINATING pane/surface to split off (see the validation note below)
 # Set when a requested target could not be honoured. Declared HERE, beside the target
@@ -1491,8 +1726,8 @@ done
 
 # ---- validate --launcher ----------------------------------------------------
 case "$LAUNCHER" in
-  herdr|cmux|ghostty|auto) ;;
-  *) die "invalid --launcher '$LAUNCHER' (expected: herdr | cmux | ghostty | auto)" ;;
+  herdr|cmux|ghostty|rex|auto) ;;
+  *) die "invalid --launcher '$LAUNCHER' (expected: herdr | cmux | ghostty | rex | auto)" ;;
 esac
 # Keep what the user asked for. resolve_launcher overwrites $LAUNCHER with what it
 # actually settled on, and by the time the loud gate runs there is otherwise no way to
@@ -1560,6 +1795,11 @@ CMUX_REJECTED="$(resolve_bin_rejected "$CMUX" "${CMUX_BIN:-}")"
 # HERDR_ENV (KTD-2). No app-bundle fallback — herdr installs onto PATH only.
 HERDR="$(resolve_bin herdr "${HERDR_BIN:-}")"
 HERDR_REJECTED="$(resolve_bin_rejected "$HERDR" "${HERDR_BIN:-}")"
+
+# rex: PATH, then REX_BIN_DIR (set inside every REX terminal), then the Rex Server app
+# bundle. NEVER the GUI binary in Rex Beta.app/Contents/MacOS — running it hangs.
+REX="$(resolve_bin rex "${REX_BIN:-}" "${REX_BIN_DIR:+$REX_BIN_DIR/rex:}$REX_BUNDLE_BIN")"
+REX_REJECTED="$(resolve_bin_rejected "$REX" "${REX_BIN:-}")"
 
 # osascript: the ghostty backend's only transport (R4). /usr/bin/osascript is where
 # macOS ships it, but it is resolved rather than hardcoded so $OSASCRIPT_BIN can pin it
@@ -1984,6 +2224,16 @@ elif [ "$ANNOUNCED_UNLAUNCHED" = 1 ]; then
     fi
     echo "    the probe needs a \`status: running\` line and did not get one. If the server is" >&2
     echo "    down, start it and re-run; otherwise use the manual line below." >&2
+  elif [ "$ANNOUNCED_BIN" = rex ]; then
+    echo "    the binary resolved; \`rex whoami --json\` did not answer with a rex_version." >&2
+    if _rex_probe_said_something; then
+      echo "    rex reported:" >&2
+      _rex_probe_evidence "      "
+    else
+      echo "    rex printed nothing on stdout or stderr." >&2
+    fi
+    echo "    spinoff never starts the REX server (--autostart=false). Start the Rex app, then re-run;" >&2
+    echo "    otherwise use the manual line below." >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     # Ghostty has no server to be up or down: `_ghostty_probe` fails ONLY when the .app
     # or osascript did not resolve. Saying "the binary resolved fine" here would be
@@ -2043,6 +2293,11 @@ else
         KICKOFF_OK=0
         KICKOFF_FAIL="claude is not running in $HERDR_PANE — it exited or never started"
         echo "  ⚠ $KICKOFF_FAIL (the pane holds a bare shell)" >&2
+      fi
+      if [ "$LAUNCHER" = rex ] && [ "$KICKOFF_OK" = 1 ] && [ "$LB_READY" != 1 ] && rex_claude_gone; then
+        KICKOFF_OK=0
+        KICKOFF_FAIL="claude is not running in $REX_BLK — it exited or never started"
+        echo "  ⚠ $KICKOFF_FAIL (rex reported: $REX_BLK_GONE_OUT)" >&2
       fi
       [ "$TARGET" = "workspace" ] && launcher_open_viewer
     fi
@@ -2217,6 +2472,15 @@ if [ "${ANNOUNCED_UNLAUNCHED:-0}" = "1" ]; then
     fi
     echo "  The probe needs a \`status: running\` line and did not get one. If the server is down," >&2
     echo "  start it, then re-run — but the worktree and branch already exist, so use a NEW --name," >&2
+  elif [ "$ANNOUNCED_BIN" = rex ]; then
+    echo "  The binary resolved; \`rex whoami --json\` did not answer with a rex_version. What it printed:" >&2
+    if _rex_probe_said_something; then
+      _rex_probe_evidence "    "
+    else
+      echo "    (nothing, on either stream)" >&2
+    fi
+    echo "  Spinoff never starts the REX server. Start the Rex app, then re-run — but the worktree" >&2
+    echo "  and branch already exist, so use a NEW --name," >&2
   elif [ "$ANNOUNCED_BIN" = ghostty ]; then
     echo "  Ghostty could not be driven: the ⚠ above names what was missing — the .app itself," >&2
     echo "  or osascript (\$OSASCRIPT_BIN pins it). There is no ghostty server to start. Fix" >&2
