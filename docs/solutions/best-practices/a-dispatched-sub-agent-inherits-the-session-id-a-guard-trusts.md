@@ -116,3 +116,10 @@ The hook does not stop an agent with a Write tool from editing programme home fi
 directly. The pinned auto agents get no Write tool, and
 `plugins/auto/tests/smoke/agents.test.sh` checks that each agent file declares an
 explicit tool list.
+
+The sweep packager is the one agent that writes, and it writes through Bash. The hook
+therefore also polices redirects: in a command that names programme code, a viewer may
+redirect only to `/dev/null`, or `cat > <home>/sweep-digest.md`. `rg --pre` and
+`--output` flags are denied, quoted heredoc bodies are data and are not tokenised, and
+shell expansion (`$(...)`, backticks, `${...}` other than `${CLAUDE_PLUGIN_ROOT}`) is
+denied because the shell runs it before the verb the hook inspects.

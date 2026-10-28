@@ -103,12 +103,12 @@ not "nothing changed". You apply every programme write yourself.
    Read the digest, not the sources behind it: every item names its source. It
    is usable only when the agent returned `ok`, the file ends `DIGEST-DONE` and
    `generated` is after this sweep started. Otherwise it is unknown: run
-   `P status --json`, `P inbox` and `P rules` yourself, each ending
-   `| head -c 6000`, and say so in one line. If the digest shows a re-read
+   `P status --json | head -c 6000`, `P inbox | head -c 6000` and `P rules`
+   (never cut the rules) yourself, and say so in one line. If the digest shows a re-read
    requested, run `P rules --ack` and read the rules it prints.
    **Quiet sweep.** When the verdict is `unchanged`, the chained call printed
-   no refusal, no `fix:` line, no adopt or alias proposal and no new permission
-   proposal, and its output was under the cap, end the turn: steps 2 to 17 are
+   no refusal, no `fix:` line, no adopt or alias proposal, no new permission
+   proposal, `"refuted": []` from `P validate`, and its output was under the cap, end the turn: steps 2 to 17 are
    done. That is two PM turns. On a changed digest, take steps 2, 4, 5 and 9's
    chained verbs as run, and read their output from that call.
 2. **Prune prompts.** `"${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}" "${CLAUDE_PLUGIN_ROOT}/lib/programme_journal.py" prune --run <run>`.

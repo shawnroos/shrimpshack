@@ -30,3 +30,5 @@ Same session, 1.78M characters of tool results:
 | `herdr` (worker panes) | 29,971 | 1.7% |
 
 Of the plugin reads, 1.15M characters are compound-engineering references (`ce-plan`, `ce-doc-review`, `ce-work`, `ce-code-review`) and 53k are auto's own files. This PM ran CE pipelines in its own context. Neither an artifact generator (R9) nor a worker-chaser (R10) addresses a top class, so U6 is not built.
+
+Bytes are not cost. `token-cost.sh --ce` charges each turn to the CE skill called most recently, until another skill starts: ce-code-review 1.17M units, ce-doc-review 0.24M and ce-plan 0.05M (agents add 0.23M, 0.29M and 0), about 17% of the PM's 12.1M once their agents (0.8M) are counted. The other ~83% is the PM's own sweep work, which is what the packager and quiet sweep target. The CE reference reads still inflate the context that every later sweep turn re-reads.

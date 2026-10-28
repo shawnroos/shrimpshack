@@ -131,12 +131,23 @@ with tempfile.TemporaryDirectory(prefix='token-cost-') as work:
             assistant('c1', '2026-10-20T10:01:00Z', usage(200), [skill('s1', 'compound-engineering:ce-plan')]),
             assistant('c2', '2026-10-20T10:02:00Z', usage(300)),
             assistant('c3', '2026-10-20T10:03:00Z', usage(400), [skill('s2', 'ce-doc-review')]),
-            assistant('c4', '2026-10-20T10:04:00Z', usage(500))]) + '\n')
+            assistant('c4', '2026-10-20T10:04:00Z', usage(500)),
+            # a later non-CE skill ends the CE window: later turns are not CE work
+            assistant('c5', '2026-10-20T10:05:00Z', usage(600), [skill('s3', 'auto:programme-sweep')]),
+            assistant('c6', '2026-10-20T10:06:00Z', usage(700))]) + '\n')
+    os.makedirs(os.path.join(work, 'ce', 'subagents'))
+    with open(os.path.join(work, 'ce', 'subagents', 'agent-a.jsonl'), 'w') as handle:
+        handle.write('\n'.join([
+            assistant('ca1', '2026-10-20T10:02:30Z', usage(1000)),
+            assistant('ca2', '2026-10-20T10:05:30Z', usage(2000))]) + '\n')
     code, out, err = run('--json', '--ce', ce)
     groups = json.loads(out)['ce']
-    check('--ce groups cost by the CE skill active when the turn ran',
+    check('--ce charges a subagent turn to the CE skill active when it ran, apart from the parent cost',
+          {k: v['subagent_cost'] for k, v in groups.items()},
+          {'(none)': 2000.0, 'ce-plan': 1000.0, 'ce-doc-review': 0.0})
+    check('--ce groups cost by the CE skill active when the turn ran, until any other skill starts',
           {k: v['cost'] for k, v in groups.items()},
-          {'(none)': 100.0, 'ce-plan': 500.0, 'ce-doc-review': 900.0})
+          {'(none)': 1400.0, 'ce-plan': 500.0, 'ce-doc-review': 900.0})
     check('--ce counts invocations', {k: v['invocations'] for k, v in groups.items()},
           {'(none)': 0, 'ce-plan': 1, 'ce-doc-review': 1})
 

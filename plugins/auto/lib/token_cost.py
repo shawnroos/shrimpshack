@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Cost, turns, sweeps, context and idle-wake share of Claude Code session transcripts.
 
+`--ce` charges each turn to the CE skill called most recently; any other skill call ends that window.
+
 Cost is input + 1.25 x cache-create + 0.1 x cache-read + 5 x output. The cache-read
 weight is an approximation of the billing ratio, so compare runs with each other, not with an
 invoice. Assistant lines whose usage is all zero are placeholders (rate-limit and login notices),
@@ -39,8 +41,12 @@ def _parse_time(stamp):
     return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
 
 
+def _day_of(when):
+    return when.astimezone().strftime("%Y-%m-%d")
+
+
 def _local_day(stamp):
-    return _parse_time(stamp).astimezone().strftime("%Y-%m-%d")
+    return _day_of(_parse_time(stamp))
 
 
 def _short(name):
@@ -124,7 +130,7 @@ def session_files(paths):
     found = []
     for path in paths:
         if os.path.isdir(path):
-            found.extend(sorted(p for p in glob.glob(os.path.join(path, "*.jsonl"))))
+            found.extend(sorted(glob.glob(os.path.join(path, "*.jsonl"))))
         else:
             found.append(path)
     return found
@@ -157,17 +163,29 @@ def _finish(bucket):
 
 
 def _ce_label(call):
-    for name in CE_SKILLS:
-        if _short(call) == name:
-            return name
-    return None
+    name = _short(call)
+    return name if name in CE_SKILLS else None
+
+
+def _blank_ce():
+    return {"cost": 0.0, "subagent_cost": 0.0, "turns": 0, "invocations": 0}
+
+
+def _label_at(calls, stamp):
+    label = NO_CE
+    for call_stamp, call_label in calls:
+        if call_stamp > stamp:
+            break
+        label = call_label
+    return label
 
 
 def analyse(paths, idle_seconds=1200):
     days = collections.defaultdict(_blank_day)
     total = _blank_day()
     sources = collections.defaultdict(lambda: [0, 0])
-    ce = collections.defaultdict(lambda: {"cost": 0.0, "turns": 0, "invocations": 0})
+    ce = collections.defaultdict(_blank_ce)
+    ce[NO_CE] = _blank_ce()
     skipped = 0
     files = session_files(paths)
     for path in files:
@@ -181,11 +199,11 @@ def analyse(paths, idle_seconds=1200):
         for stamp in sweep_times:
             for bucket in (days[_local_day(stamp)], total):
                 bucket["sweeps"] += 1
-        ce_calls = sorted((stamp, _ce_label(name)) for stamp, name in skills if _ce_label(name))
+        ce_calls = [(stamp, _ce_label(name) or NO_CE) for stamp, name in skills]
         for stamp, label in ce_calls:
-            ce[label]["invocations"] += 1
+            if label != NO_CE:
+                ce[label]["invocations"] += 1
         label, upcoming = NO_CE, list(ce_calls)
-        ce[NO_CE]
         for stamp, usage in rows:
             while upcoming and upcoming[0][0] <= stamp:
                 label = upcoming.pop(0)[1]
@@ -193,8 +211,9 @@ def analyse(paths, idle_seconds=1200):
             ce[label]["cost"] += cost
             ce[label]["turns"] += 1
             ctx = context_tokens(usage)
-            idle = previous is not None and (_parse_time(stamp) - _parse_time(previous)).total_seconds() >= idle_seconds
-            for bucket in (days[_local_day(stamp)], total):
+            when = _parse_time(stamp)
+            idle = previous is not None and (when - previous).total_seconds() >= idle_seconds
+            for bucket in (days[_day_of(when)], total):
                 bucket["parent_cost"] += cost
                 bucket["turns"] += 1
                 bucket["ctx_sum"] += ctx
@@ -202,11 +221,12 @@ def analyse(paths, idle_seconds=1200):
                 if idle:
                     bucket["idle_turns"] += 1
                     bucket["idle_cost"] += cost
-            previous = stamp
+            previous = when
         for sub in subagent_files(path):
             sub_rows, _, _, bad = read_transcript(sub)
             skipped += bad
             for stamp, usage in sub_rows:
+                ce[_label_at(ce_calls, stamp)]["subagent_cost"] += weighted_cost(usage)
                 for bucket in (days[_local_day(stamp)], total):
                     bucket["subagent_cost"] += weighted_cost(usage)
                     bucket["subagent_turns"] += 1
@@ -217,7 +237,8 @@ def analyse(paths, idle_seconds=1200):
         "days": {day: _finish(days[day]) for day in sorted(days)},
         "sources": [{"key": key, "chars": chars, "calls": calls}
                     for key, (chars, calls) in sorted(sources.items(), key=lambda kv: -kv[1][0])],
-        "ce": {label: {"cost": round(v["cost"], 2), "turns": v["turns"], "invocations": v["invocations"]}
+        "ce": {label: {"cost": round(v["cost"], 2), "subagent_cost": round(v["subagent_cost"], 2),
+                       "turns": v["turns"], "invocations": v["invocations"]}
                for label, v in ce.items()},
     }
 
@@ -240,8 +261,8 @@ def render(report, with_sources, with_ce):
     if with_ce:
         out.append("")
         out.append("cost by CE skill active:")
-        out.extend("  {:<16} cost {:>12,.0f}  turns {:>5}  invocations {:>3}".format(
-            label, v["cost"], v["turns"], v["invocations"]) for label, v in sorted(report["ce"].items()))
+        out.extend("  {:<16} cost {:>12,.0f}  (agents {:>10,.0f})  turns {:>5}  invocations {:>3}".format(
+            label, v["cost"], v["subagent_cost"], v["turns"], v["invocations"]) for label, v in sorted(report["ce"].items()))
     return "\n".join(out)
 
 

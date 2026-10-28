@@ -115,6 +115,59 @@ it "an echo redirect into a programme path is denied"
 check deny "$(decision a1 "echo DIGEST-DONE >> /x/programmes/prog-1/sweep-digest.md")"
 it "the journal tail is allowed"
 check allow "$(decision a1 "tail -n 200 /x/programmes/prog-1/journal.jsonl")"
+it "a digest with a pipe and the word programme in a quoted heredoc body is allowed"
+check allow "$(decision a1 "cat > /x/programmes/prog-1/sweep-digest.md <<'EOF'
+- claim 1 | item AI-5 | programme view fix | ref
+DIGEST-DONE
+EOF")"
+it "a digest with a semicolon, &&, an apostrophe and programme in the body is allowed"
+check allow "$(decision a1 "cat > /x/programmes/prog-1/sweep-digest.md <<'EOF'
+- Shawn's task; a && b about the programme
+- journal:12 working_now | the model
+DIGEST-DONE
+EOF")"
+it "an unquoted heredoc with a command substitution in the body is denied, the shell would run it"
+check deny "$(decision a1 "cat > /x/programmes/prog-1/sweep-digest.md <<EOF
+\`rm /x/programmes/prog-1/journal.jsonl\`
+EOF")"
+it "cat redirected into the journal is denied"
+check deny "$(decision a1 "cat > /x/programmes/prog-1/journal.jsonl <<'EOF'
+{\"kind\": \"working_now\"}
+EOF")"
+it "cat appending to the claims file is denied"
+check deny "$(decision a1 "cat >> /x/programmes/prog-1/claims.jsonl <<'EOF'
+x
+EOF")"
+it "appending to the digest is denied, only a fresh write is allowed"
+check deny "$(decision a1 "cat >> /x/programmes/prog-1/sweep-digest.md <<'EOF'
+x
+EOF")"
+it "a digest-like name that is not exactly sweep-digest.md is denied"
+check deny "$(decision a1 "cat > /x/programmes/prog-1/sweep-digest.md.bak <<'EOF'
+x
+EOF")"
+it "grep redirected into a programme file is denied"
+check deny "$(decision a1 "grep -n x /x/programmes/prog-1/journal.jsonl > /x/programmes/prog-1/claims.jsonl")"
+it "only cat may write the digest, grep redirected there is denied"
+check deny "$(decision a1 "grep -n x /x/programmes/prog-1/journal.jsonl > /x/programmes/prog-1/sweep-digest.md")"
+it "a viewer redirected to /dev/null is allowed"
+check allow "$(decision a1 "grep -n x /x/programmes/prog-1/journal.jsonl > /dev/null")"
+it "rg --pre, which runs a command, is denied"
+check deny "$(decision a1 "rg --pre sh x /x/programmes/prog-1/journal.jsonl")"
+it "git log --output writes a file and is denied"
+check deny "$(decision a1 "git log --output=/x/programmes/prog-1/journal.jsonl -- lib/programme.py")"
+it "a command substitution in a read verb's argument is denied"
+check deny "$(decision a1 "$P rules --run \$(rm\${IFS}/x/programmes/prog-1/journal.jsonl)")"
+it "a command substitution in a status argument is denied"
+check deny "$(decision a1 "$P status --json --run \$(rm\${IFS}/tmp/q)")"
+it "backticks in a read verb's argument are denied"
+check deny "$(decision a1 "$P status --json --run \`rm /tmp/q\`")"
+it "a variable expansion in a read verb's argument is denied"
+check deny "$(decision a1 "$P status --json --run prog-1\${IFS}x")"
+it "the plugin root variable in the programme.sh path is allowed"
+check allow "$(decision a1 'bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --json --run prog-1')"
+it "rules with a flag as the run value is denied, not left to the parser"
+check deny "$(decision a1 "$P rules --run --ack")"
 it "a read verb wrapped in bash -c is allowed"
 check allow "$(decision a1 "bash -c '$P status --json --run prog-1'")"
 it "gh pr view and a GET gh api are allowed"

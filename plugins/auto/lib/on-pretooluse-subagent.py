@@ -23,8 +23,30 @@ _PYTHONS = frozenset({"python", "python3"})
 _SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PR_MERGE = re.compile(r"\bgh\b.*\bpr\b.*\bmerge\b|/pulls/\d+/merge|mergePullRequest", re.S)
+DIGEST_NAME = "sweep-digest.md"
+_QUOTED_HEREDOC = re.compile(r"<<-?\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1")
+_REDIRECT = re.compile(r"^(\d*)(>>?|&>>?)(.*)$")
+# A viewer that runs a command or writes a file is a write verb in disguise.
+_VIEWER_WRITE_FLAGS = frozenset({"--pre", "--pre-glob", "--output"})
+# ${CLAUDE_PLUGIN_ROOT} is how every agent file names programme.sh; any other expansion runs before the guard's verb.
+_EXPANSION = re.compile(r"\$(?!\{CLAUDE_PLUGIN_ROOT\})[({A-Za-z_]|`")
 _DENY_PROGRAMME = ("a sub-agent may only run `programme.sh` with a read verb ({}); this command reaches "
                    "programme code another way")
+
+
+def _strip_quoted_heredocs(command):
+    """Drop quoted-heredoc bodies before tokenising: the shell never expands them, so they are data."""
+    kept, closing = [], None
+    for line in command.split("\n"):
+        if closing is not None:
+            if line.strip() == closing:
+                closing = None
+            continue
+        kept.append(line)
+        found = _QUOTED_HEREDOC.search(line)
+        if found:
+            closing = found.group(2)
+    return "\n".join(kept)
 
 
 def _segments(command):
@@ -74,12 +96,29 @@ def _gh_refusal(args):
     return None
 
 
+def _viewer_refusal(segment):
+    for at, token in enumerate(segment):
+        if token.split("=", 1)[0] in _VIEWER_WRITE_FLAGS:
+            return "a sub-agent may not run a viewer with --pre or --output; they run a command or write a file"
+        found = _REDIRECT.match(token)
+        if not found:
+            continue
+        fd, op, target = found.groups()
+        target = target or (segment[at + 1] if at + 1 < len(segment) else "")
+        if target == "/dev/null":
+            continue
+        if os.path.basename(segment[0]) == "cat" and op == ">" and not fd and os.path.basename(target) == DIGEST_NAME:
+            continue
+        return f"a sub-agent may redirect only `cat > <home>/{DIGEST_NAME}` or to /dev/null"
+    return None
+
+
 def _is_read_call(rest):
     # `rules --ack` clears the compact flag and is a write; any flag beyond --run <id> stays denied.
     if rest[0] in READ_VERBS:
         return True
     args = rest[1:]
-    return rest[0] == "rules" and (not args or (len(args) == 2 and args[0] == "--run"))
+    return rest[0] == "rules" and (not args or (len(args) == 2 and args[0] == "--run" and not args[1].startswith("-")))
 
 
 def _segment_refusal(segment):
@@ -97,8 +136,10 @@ def _segment_refusal(segment):
         return _gh_refusal(segment[1:])
     if not any("programme" in token.lower() for token in segment):
         return None
+    if any(_EXPANSION.search(token) for token in segment):
+        return "a sub-agent may not use shell expansion in a command naming programme code"
     if base in VIEWERS or (base == "git" and len(segment) > 1 and segment[1] in GIT_READS):
-        return None
+        return _viewer_refusal(segment)
     rest = _programme_call(segment)
     if rest is None or not rest or not _is_read_call(rest):
         return _DENY_PROGRAMME.format(", ".join(sorted(READ_VERBS | {"rules"})))
@@ -108,6 +149,7 @@ def _segment_refusal(segment):
 
 
 def refusal(command):
+    command = _strip_quoted_heredocs(command)
     try:
         segments = list(_segments(command))
     except ValueError:
