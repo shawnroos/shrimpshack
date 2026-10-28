@@ -67,7 +67,10 @@ extract_calls() {                     # $1 = binary var name (HERDR|CMUX|REX)
 #  3. drop quoted strings containing a space — these are INNER commands, e.g.
 #     `pane run "$view" "bat --paging=always …"`. Those flags belong to bat.
 extract_flags() {                     # $1 = binary var, $2 = subcommand (space-separated)
-  grep -E "$(call_head "$1") $2( |\$)" "$SPINOFF" \
+  # Calls wrap with a trailing backslash; join them first or every flag on a
+  # continuation line goes unchecked.
+  awk '{ if (sub(/\\$/, "")) printf "%s ", $0; else print }' "$SPINOFF" \
+    | grep -E "$(call_head "$1") $2( |\$)" \
     | sed -E 's/"\$\(/ /g; s/\)"/ /g' \
     | sed -E 's/"\$[A-Za-z_][A-Za-z0-9_]*"/ /g' \
     | sed -E 's/"[^"]*[[:space:]][^"]*"/ /g' \
