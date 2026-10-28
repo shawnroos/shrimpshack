@@ -99,6 +99,10 @@ def approval_key(target: str, digest: str) -> str:
     return "%s@%s" % (target, digest)
 
 
+def carryover_target(key, entry_id) -> str:
+    return f"carryover:{key}:{entry_id}"
+
+
 def target_of(section: str, name: str, repo=None) -> str:
     if section == "checks":
         return "check:%s:%s" % (repo, name)

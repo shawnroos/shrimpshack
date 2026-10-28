@@ -76,21 +76,26 @@ def _touches(row, cid) -> bool:
         isinstance(e, dict) and e.get("ruling") == cid for e in payload.get("carried_over") or [])
 
 
-# Default-deny: the prompt must postdate every journaled change to the Ruling, so words Shawn typed about an
-# older version never approve a newer one, and it must be his newest unanswered words, so a later reply
-# ("no, keep it") voids an earlier approval.
-def check_fresh(rows, cid, prompt_id) -> None:
+# A later reply ("no, keep it") voids an earlier approval, so the prompt must be Shawn's newest unanswered words.
+def check_newest(rows, prompt_id) -> None:
     at = prompt_index(rows, prompt_id)
-    changed = [i for i, row in enumerate(rows) if _touches(row, cid)]
-    if changed and at < changed[-1]:
-        raise RulingError(f"prompt {prompt_id!r} was typed before the latest change to {cid!r}; a Ruling "
-                          "change binds only on a prompt Shawn typed after it was proposed")
     cited = programme_journal._cited_ids(rows)
     later = next((r.get("prompt_id") for r in rows[at + 1:] if r.get("kind") == "prompt"
                   and programme_journal.prompt_origin(r) == "typed" and r.get("prompt_id") not in cited), None)
     if later:
         raise RulingError(f"prompt {prompt_id!r} was typed before prompt {later!r}, which nothing has cited yet; "
                           f"a Ruling change binds only on Shawn's newest typed prompt")
+
+
+# Default-deny: the prompt must postdate every journaled change to the Ruling, so words Shawn typed about an
+# older version never approve a newer one.
+def check_fresh(rows, cid, prompt_id) -> None:
+    at = prompt_index(rows, prompt_id)
+    changed = [i for i, row in enumerate(rows) if _touches(row, cid)]
+    if changed and at < changed[-1]:
+        raise RulingError(f"prompt {prompt_id!r} was typed before the latest change to {cid!r}; a Ruling "
+                          "change binds only on a prompt Shawn typed after it was proposed")
+    check_newest(rows, prompt_id)
 
 
 def _approval_of(row):

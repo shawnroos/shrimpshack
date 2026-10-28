@@ -433,6 +433,14 @@ prog carry-rulings f1 --prompt "$P_FU" --run "$RUN_F"
 check "0 nonzero" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero)"
 has "already approved" "$OUT"
 
+it "carry-rulings refuses a prompt when Shawn typed a later prompt nothing has cited"
+prog carry-rulings --run "$RUN_F"
+P_FL1="$(prompt "$RUN_F" 'carry f1 to the next programme')"
+P_FL2="$(prompt "$RUN_F" "no, don't carry f1")"
+prog carry-rulings f1 --prompt "$P_FL1" --run "$RUN_F"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "newest typed prompt" "$OUT"
+
 it "carry-rulings refuses an offer that did not record the Ruling's revision"
 run_py "$RUN_F" <<'EOF' >/dev/null
 pj.append(args[0], "carryover_offered", "sess-pm",
@@ -462,8 +470,8 @@ print(ph.home_path(args[0]))
 EOF
 }
 wait_for() { local i; for i in $(seq 1 200); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.05; done; return 1; }
-# race <home> <first verb args> -- <second verb args>: the first writer pauses after its checks, before its
-# approval row reaches the journal; the second runs during that pause.
+# race <home> <first verb args> -- <second command>: the first writer pauses after its checks, before its
+# approval row reaches the journal; the second command runs during that pause.
 race() {
   local home="$1" first=()
   shift
@@ -473,9 +481,11 @@ race() {
   CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" "${first[@]}" > "${WORK}/race1.out" 2>&1 &
   local p1=$!
   PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
-  "$PY" "$PROG" "$@" > "${WORK}/race2.out" 2>&1 &
+  "$@" > "${WORK}/race2.out" 2>&1 &
   local p2=$!
   sleep 1
+  # A second writer that never waited on the lock has finished or printed by now.
+  BLOCKED="not blocked"; kill -0 "$p2" 2>/dev/null && [ ! -s "${WORK}/race2.out" ] && BLOCKED="blocked"
   touch "${home}/.test-resume-write"
   wait "$p1"; C1=$?
   wait "$p2"; C2=$?
@@ -500,20 +510,58 @@ for R in "$RUN_Q" "$RUN_L"; do
   it "$LABEL: a carry racing a record-ruling on the same prompt is refused once the record-ruling journals"
   P_QR="$(prompt "$R" 'carry q1, and q2: I pick the work sequencing on herdr:q')"
   race "$(home_of "$R")" record-ruling q2 --kind work_sequencing --effect restrict --scope "q2" \
-    --applies-to herdr:q --prompt "$P_QR" --run "$R" -- carry-rulings q1 --prompt "$P_QR" --run "$R"
-  check "paused 0 nonzero" "$PAUSED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+    --applies-to herdr:q --prompt "$P_QR" --run "$R" -- "$PY" "$PROG" carry-rulings q1 --prompt "$P_QR" --run "$R"
+  check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
   has "already approved" "$OUT2"
 done
 
-it "promoted: a carry racing a change to the Ruling re-reads its revision and refuses the stale offer"
-prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --run "$RUN_Q"
-prog carry-rulings --run "$RUN_Q"
-P_QC="$(prompt "$RUN_Q" 'carry q1 to the next programme')"
-P_QA="$(prompt "$RUN_Q" 'accept q1 for herdr:q')"
-race "$(home_of "$RUN_Q")" accept-context q1 --prompt "$P_QA" --run "$RUN_Q" -- \
-  carry-rulings q1 --prompt "$P_QC" --run "$RUN_Q"
-check "paused 0 nonzero" "$PAUSED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
-has "changed after the offer" "$OUT2"
+for R in "$RUN_Q" "$RUN_L"; do
+  [ "$R" = "$RUN_Q" ] && LABEL=promoted || LABEL=legacy
+  it "$LABEL: a carry racing a change to the Ruling re-reads its revision and refuses the stale offer"
+  prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --run "$R"
+  prog carry-rulings --run "$R"
+  P_QC="$(prompt "$R" 'carry q1 to the next programme')"
+  P_QA="$(prompt "$R" 'accept q1 for herdr:q')"
+  race "$(home_of "$R")" accept-context q1 --prompt "$P_QA" --run "$R" -- \
+    "$PY" "$PROG" carry-rulings q1 --prompt "$P_QC" --run "$R"
+  check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+  has "changed after the offer" "$OUT2"
+done
+
+# ── a carry that dies right after its write still arrives ─────────────────
+CRASH_PY='
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
+from _bootstrap import load_lib_module
+programme = load_lib_module("programme")
+authority = programme.programme_authority
+write = authority.write
+def write_then_die(*a, **k):
+    write(*a, **k)
+    os._exit(9)
+authority.write = write_then_die
+sys.exit(programme._cli(sys.argv[1:]))
+'
+for R in "$RUN_Q" "$RUN_L"; do
+  [ "$R" = "$RUN_Q" ] && { LABEL=promoted; SPACE=w12; NEXT=w13; } || { LABEL=legacy; SPACE=w11; NEXT=w14; }
+  REPO_K="${WORK}/repos/crash-${LABEL}"
+  mkdir -p "$REPO_K"
+  remit "$R" "{\"spaces\":[\"${SPACE}\"],\"repos\":[{\"path\":\"${REPO_K}\"}]}"
+  prog carry-rulings --run "$R"
+  P_K="$(prompt "$R" 'carry q2 to the next programme')"
+  OUT="$(AUTO_ROOT="$AUTO_ROOT" "$PY" -c "$CRASH_PY" carry-rulings q2 --prompt "$P_K" --run "$R" 2>&1)"
+  CODE=$?
+  it "$LABEL: a carry killed straight after its locked write leaves its entry in the store"
+  check "9 1" "$CODE $("$PY" -c '
+import json, sys
+print(len([e for e in json.load(open(sys.argv[1]))["keys"].get(sys.argv[2], []) if e["ruling"] == "q2"]))' "$STORE" "$REPO_K")"
+  it "$LABEL: the next programme's pre-fill verifies that entry from the rulings_carried row alone"
+  RUN_K="$(new_programme "$NEXT")"
+  prog propose-agreement --run "$RUN_K" --project-term "naming=kebab case files" --source "repo README"
+  remit "$RUN_K" "{\"spaces\":[\"${NEXT}\"],\"repos\":[{\"path\":\"${REPO_K}\"}]}"
+  check "0 q2" "$CODE $(field "$RUN_K" '" ".join(r for r, v in (prog.get("context") or {}).get("decisions", {}).items() if v[-1].get("carried"))' | tr -d '"')"
+  lacks "dropped carried-over entry" "$OUT"
+done
 
 it "no verb crashed with a traceback"
 check "" "$CRASHES"

@@ -653,8 +653,8 @@ print(load_lib_module("programme_authority").promoted(ph.home_path(args[0]), arg
 EOF
 )"
 wait_for() { local i; for i in $(seq 1 200); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.05; done; return 1; }
-# race <home> <first verb args> -- <second verb args>: the first writer pauses after its checks, before its
-# approval row reaches the journal; the second runs during that pause.
+# race <home> <first verb args> -- <second command>: the first writer pauses after its checks, before its
+# approval row reaches the journal; the second command runs during that pause.
 race() {
   local home="$1" first=()
   shift
@@ -664,9 +664,11 @@ race() {
   CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" "${first[@]}" > "${WORK}/race1.out" 2>&1 &
   local p1=$!
   PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
-  "$PY" "$PROG" "$@" > "${WORK}/race2.out" 2>&1 &
+  "$@" > "${WORK}/race2.out" 2>&1 &
   local p2=$!
   sleep 1
+  # A second writer that never waited on the lock has finished or printed by now.
+  BLOCKED="not blocked"; kill -0 "$p2" 2>/dev/null && [ ! -s "${WORK}/race2.out" ] && BLOCKED="blocked"
   touch "${home}/.test-resume-write"
   wait "$p1"; C1=$?
   wait "$p2"; C2=$?
@@ -677,11 +679,49 @@ for R in "$RUN" "$RUN_L"; do
   it "$LABEL: two writers racing on one typed prompt: the second is refused once the first journals its approval"
   P_RACE="$(prompt_in "$R" 'r-ra and r-rb: I pick the worker coordination on herdr:b')"
   race "$(home_of "$R")" record-ruling r-ra --kind worker_coordination --effect restrict --scope "a" \
-    --applies-to herdr:b --prompt "$P_RACE" --run "$R" -- record-ruling r-rb --kind worker_coordination \
+    --applies-to herdr:b --prompt "$P_RACE" --run "$R" -- "$PY" "$PROG" record-ruling r-rb --kind worker_coordination \
     --effect restrict --scope "b" --applies-to herdr:b --prompt "$P_RACE" --run "$R"
-  check "paused 0 nonzero" "$PAUSED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+  check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
   has "already approved" "$OUT2"
+
+  it "$LABEL: a prompt typed while a Ruling change is checked waits, and lands after the change's approval row"
+  P_PV1="$(prompt_in "$R" 'r-pv: I pick the tool choice on herdr:b')"
+  prog record-ruling r-pv --kind tool_choice --effect restrict --scope "pv" --applies-to herdr:b \
+    --prompt "$P_PV1" --run "$R"
+  P_PVW="$(prompt_in "$R" 'withdraw r-pv')"
+  race "$(home_of "$R")" close-ruling r-pv --as withdrawn --prompt "$P_PVW" --run "$R" -- \
+    prompt_in "$R" "no, keep r-pv"
+  P_PVK="$(printf '%s' "$OUT2" | tail -1)"
+  check "paused blocked 0 0" "$PAUSED $BLOCKED $C1 $C2"
+  check "True" "$(run_py "$R" "$P_PVK" <<'EOF'
+rows = pj.read(args[0])
+closed = next(i for i, r in enumerate(rows) if r["kind"] == "ruling_closed" and r["payload"].get("ruling_id") == "r-pv")
+typed = next((i for i, r in enumerate(rows) if r.get("prompt_id") == args[1]), None)
+print(typed is not None and closed < typed)
+EOF
+)"
 done
+
+it "legacy: a prompt that waits out the bounded run-lock wait is still journaled"
+P_PT1="$(prompt_in "$RUN_L" 'r-pt: I pick the tool choice on herdr:b')"
+prog record-ruling r-pt --kind tool_choice --effect restrict --scope "pt" --applies-to herdr:b \
+  --prompt "$P_PT1" --run "$RUN_L"
+P_PTW="$(prompt_in "$RUN_L" 'withdraw r-pt')"
+rm -f "${WORK}/race1.out" "${WORK}/race2.out"
+CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" close-ruling r-pt --as withdrawn --prompt "$P_PTW" \
+  --run "$RUN_L" > "${WORK}/race1.out" 2>&1 &
+P1=$!
+PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
+prompt_in "$RUN_L" "how is herdr:b going" > "${WORK}/race2.out" 2>&1
+C2=$?
+HELD="released"; kill -0 "$P1" 2>/dev/null && HELD="held"
+P_PTL="$(tail -1 "${WORK}/race2.out")"
+touch "$(home_of "$RUN_L")/.test-resume-write"
+wait "$P1"
+check "paused 0 held True" "$PAUSED $C2 $HELD $(run_py "$RUN_L" "$P_PTL" <<'EOF'
+print(pj.find_prompt(args[0], args[1]) is not None)
+EOF
+)"
 
 # ── which journal rows approve, and which change a Ruling ─────────────────
 it "a prompt that closed one Ruling cannot close a second"

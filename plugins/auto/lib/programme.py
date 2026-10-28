@@ -39,7 +39,8 @@ PROG = "programme.py"
 RULES_TAG = "auto-rules"
 SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep."
 PERSONAL_LOCK = ".personal-protocol.lock"
-APPROVAL_KINDS = ("rule_adopted",)
+CARRIED_KIND = "rulings_carried"
+APPROVAL_KINDS = ("rule_adopted", CARRIED_KIND)
 _OPERATION = {"id": None, "verb": None, "argv": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
@@ -63,8 +64,14 @@ def _approved(rows, prompt_id) -> list:
     out = []
     for row in rows:
         payload = row.get("payload") or {}
-        if row.get("kind") in APPROVAL_KINDS and (row.get("cites") or [None])[0] == prompt_id \
-                and payload.get("prompt_id") == prompt_id and row.get("provenance") != programme_authority.FOREIGN:
+        if row.get("kind") not in APPROVAL_KINDS or (row.get("cites") or [None])[0] != prompt_id \
+                or payload.get("prompt_id") != prompt_id or row.get("provenance") == programme_authority.FOREIGN:
+            continue
+        if row["kind"] == CARRIED_KIND:
+            out.extend(programme_protocol.approval_key(programme_protocol.carryover_target(e.get("key"), e.get("id")),
+                                                       e.get("hash"))
+                       for e in payload.get("stored") or [] if isinstance(e, dict))
+        else:
             out.append(programme_protocol.approval_key(payload.get("target"), payload.get("hash")))
     return out
 

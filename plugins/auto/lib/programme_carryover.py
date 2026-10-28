@@ -33,7 +33,6 @@ STORE_PATH_ENV = "CLAUDE_AUTO_CARRYOVER_STORE"
 STORE_NAME = "carryover.json"
 STORE_LOCK = ".carryover.lock"
 STORE_FORMAT = 1
-APPROVAL_KIND = "rule_adopted"
 OFFER_KEY = programme_predicate.OFFER_KEY
 OFFER_ROWS = ("carryover_offered", "programme_ended")
 CARRIED_KEYS = ("kind", "effect", "scope", "reason", "limits", "until")
@@ -58,8 +57,7 @@ def repo_keys(programme) -> list:
     return keys
 
 
-def target(key, entry_id) -> str:
-    return f"carryover:{key}:{entry_id}"
+target = programme_protocol.carryover_target
 
 
 def _read(path):
@@ -164,16 +162,6 @@ def _put(adopted) -> None:
     _write(update)
 
 
-# Pre-fill verifies an entry only through its approval row, so an entry stored without one is dropped.
-def _journal_adoptions(adopted, prompt, run_id, session_id, how) -> None:
-    for entry in adopted:
-        programme_journal.append(
-            run_id, APPROVAL_KIND, session_id,
-            {"entry": how, "target": target(entry["key"], entry["id"]), "hash": entry["adoption"]["hash"],
-             "prompt_id": prompt["prompt_id"], "quote": prompt["quote"]},
-            cites=[prompt["prompt_id"]])
-
-
 def _verified(entry, key, lookup):
     if entry.get("key") != key:
         return "stored under the wrong key"
@@ -261,6 +249,7 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
         raise host.ProgrammeError(f"prompt {prompt['prompt_id']!r} was not typed after an offer naming "
                                   f"{', '.join(ids)}: run carry-rulings with no ids, show Shawn the offer, then "
                                   "cite the prompt he types")
+    host.programme_rulings.check_newest(rows, prompt["prompt_id"])
     host.programme_rulings.check_prompt_unused(rows, prompt["prompt_id"])
     offered = {e.get("id"): e.get("rev") for e in rows[index]["payload"]["carryover"]
                if isinstance(e, dict) and e.get("source", "ruling") == "ruling"}
@@ -280,7 +269,8 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
 
 
 # The journal checks, the store write and the rulings_carried row share the programme's write lock, so a
-# concurrent Ruling change or a second use of the prompt waits for this carry and then sees it.
+# concurrent Ruling change or a second use of the prompt waits for this carry and then sees it. That one row
+# is also each stored entry's approval: pre-fill drops an entry with none, so no second write may follow it.
 def _carry(host, opts, ids):
     run_id, home, _ = host._locate(opts)
     sid = driver_session.driving_session_id()
@@ -305,7 +295,6 @@ def _carry(host, opts, ids):
                                        cites=[seen["prompt"]["prompt_id"]])
 
     out = host.programme_authority.write(home, run_id, mutate, compose)
-    _journal_adoptions(seen["adopted"], seen["prompt"], run_id, sid, "carryover")
     host._emit(dict({"ok": True, "run": run_id, "kind": "rulings_carried"}, **out["result"]))
     return 0
 

@@ -36,6 +36,8 @@ PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked", "suggested")
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
+# Seconds; well under the UserPromptSubmit hook's 5s timeout, so the hook still journals the prompt after it.
+PROMPT_RUN_LOCK_WAIT = 2.0
 
 KINDS = (
     "prompt",
@@ -299,8 +301,19 @@ def claims_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), CLAIMS_NAME)
 
 
+# A Ruling writer checks that its prompt is Shawn's newest and journals its approval under one run lock; a
+# prompt appended under the journal lock alone could land between the two. A timed-out wait still journals.
+def _serialized(run_id, append):
+    home = programme_home.home_path(run_id)
+    try:
+        return run_record_core._flock_run(run_record_core.lock_path(home, run_id), append, PROMPT_RUN_LOCK_WAIT)
+    except run_record_core.LockBusy:
+        sys.stderr.write(f"programme_journal: {run_id}: the run lock stayed held; prompt journaled without it\n")
+        return append()
+
+
 def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None,
-               lock_timeout=None) -> dict:
+               lock_timeout=None, serialize=False) -> dict:
     if isinstance(row, dict) and row.get("kind") == "prompt" and provenance != "derived":
         raise JournalError(f"a {provenance} copy is never journaled as a prompt; it approves nothing")
     if not _promoted(run_id):
@@ -315,8 +328,12 @@ def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived
             _write_line(path, row)
             return row
 
-        try:
+        def append():
             return _locked(path, body, lock_timeout)
+
+        try:
+            # The run lock is not re-entrant: only a caller that holds no lock may serialize.
+            return _serialized(run_id, append) if serialize else append()
         except _RoutedToAuthority:
             pass
     return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard,
@@ -346,7 +363,7 @@ def append_prompt(run_id: str, session_id, text: str, origin: str, now=None, *, 
     payload = {"text": redact(text), "origin": origin}
     if source is not None:
         payload["source"] = source
-    return append_row(run_id, entry("prompt", session_id, payload, prompt_id=prompt_id, now=now))
+    return append_row(run_id, entry("prompt", session_id, payload, prompt_id=prompt_id, now=now), serialize=True)
 
 
 def prompt_origin(row) -> str:
