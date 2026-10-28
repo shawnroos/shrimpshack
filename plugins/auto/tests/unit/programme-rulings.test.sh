@@ -628,6 +628,133 @@ prog accept-context r-oldw --prompt "$P_OW" --run "$RUN"
 check "nonzero 1" "$([ "$CODE" -ne 0 ] && echo nonzero) $(in_force_rev r-oldw)"
 has "re-record" "$OUT"
 
+# ── a Ruling approval is checked and journaled under one lock ─────────────
+home_of() {
+  run_py "$1" <<'EOF'
+print(ph.home_path(args[0]))
+EOF
+}
+prompt_in() {
+  run_py "$1" "$2" <<'EOF'
+run, text = args
+print(fixture_prompt(run, "sess-pm", text, "typed")["prompt_id"])
+EOF
+}
+# A legacy home: a JSON record and journal with no programme.db, as an older auto left it.
+RUN_L="$(run_py <<'EOF'
+load_lib_module("programme_authority").home_for = lambda *a: None
+print(ph.create_programme(["w7"], "sess-pm")["run"])
+EOF
+)"
+prog add-item herdr:b --title "herdr:b" --kind fix_only --run "$RUN_L"
+it "the legacy fixture has no programme.db"
+check "False" "$(run_py "$RUN_L" <<'EOF'
+print(load_lib_module("programme_authority").promoted(ph.home_path(args[0]), args[0]))
+EOF
+)"
+wait_for() { local i; for i in $(seq 1 200); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.05; done; return 1; }
+# race <home> <first verb args> -- <second verb args>: the first writer pauses after its checks, before its
+# approval row reaches the journal; the second runs during that pause.
+race() {
+  local home="$1" first=()
+  shift
+  while [ "$1" != "--" ]; do first+=("$1"); shift; done
+  shift
+  rm -f "${WORK}/race1.out" "${WORK}/race2.out"
+  CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" "${first[@]}" > "${WORK}/race1.out" 2>&1 &
+  local p1=$!
+  PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
+  "$PY" "$PROG" "$@" > "${WORK}/race2.out" 2>&1 &
+  local p2=$!
+  sleep 1
+  touch "${home}/.test-resume-write"
+  wait "$p1"; C1=$?
+  wait "$p2"; C2=$?
+  OUT2="$(cat "${WORK}/race2.out")"
+}
+for R in "$RUN" "$RUN_L"; do
+  [ "$R" = "$RUN" ] && LABEL=promoted || LABEL=legacy
+  it "$LABEL: two writers racing on one typed prompt: the second is refused once the first journals its approval"
+  P_RACE="$(prompt_in "$R" 'r-ra and r-rb: I pick the worker coordination on herdr:b')"
+  race "$(home_of "$R")" record-ruling r-ra --kind worker_coordination --effect restrict --scope "a" \
+    --applies-to herdr:b --prompt "$P_RACE" --run "$R" -- record-ruling r-rb --kind worker_coordination \
+    --effect restrict --scope "b" --applies-to herdr:b --prompt "$P_RACE" --run "$R"
+  check "paused 0 nonzero" "$PAUSED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+  has "already approved" "$OUT2"
+done
+
+# ── which journal rows approve, and which change a Ruling ─────────────────
+it "a prompt that closed one Ruling cannot close a second"
+prog record-ruling r-ca --kind technical_approach --effect restrict --scope "a" --applies-to herdr:c --run "$RUN"
+prog record-ruling r-cb --kind technical_approach --effect restrict --scope "b" --applies-to herdr:c --run "$RUN"
+P_CAB="$(prompt 'withdraw r-ca and r-cb')"
+prog close-ruling r-ca --as withdrawn --prompt "$P_CAB" --run "$RUN"
+K1="$CODE"
+prog close-ruling r-cb --as withdrawn --prompt "$P_CAB" --run "$RUN"
+check "0 nonzero pending" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero) $(ruling_state r-cb)"
+has "already approved" "$OUT"
+
+it "a record-ruling that changes nothing does not use up its prompt"
+P_UC1="$(prompt 'r-uc: I pick the technical approach on herdr:d')"
+prog record-ruling r-uc --kind technical_approach --effect restrict --scope "d" --applies-to herdr:d \
+  --prompt "$P_UC1" --run "$RUN"
+P_UC2="$(prompt 'r-uc stays, and r-ud: I pick the work sequencing on herdr:d')"
+prog record-ruling r-uc --kind technical_approach --effect restrict --scope "d" --applies-to herdr:d \
+  --prompt "$P_UC2" --run "$RUN"
+K1="$CODE $(pyget "$OUT" 'd["unchanged"]')"
+prog record-ruling r-ud --kind work_sequencing --effect restrict --scope "d" --applies-to herdr:d \
+  --prompt "$P_UC2" --run "$RUN"
+check "0 true 0 active" "$K1 $CODE $(ruling_state r-ud)"
+
+it "an accept-context row is a change: a prompt typed before it cannot close the Ruling"
+prog record-ruling r-dx --kind technical_approach --effect restrict --scope "dx" --applies-to herdr:a --run "$RUN"
+P_DX_OLD="$(prompt 'withdraw r-dx')"
+P_DX="$(prompt 'accept r-dx')"
+prog accept-context r-dx --prompt "$P_DX" --run "$RUN"
+K1="$CODE"
+prog close-ruling r-dx --as withdrawn --prompt "$P_DX_OLD" --run "$RUN"
+check "0 nonzero active" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero) $(ruling_state r-dx)"
+has "typed before the latest change" "$OUT"
+
+it "a later typed reply voids an earlier approval of a change to an existing Ruling"
+P_KW1="$(prompt 'r-kw: I pick the tool choice on herdr:c')"
+prog record-ruling r-kw --kind tool_choice --effect restrict --scope "c" --applies-to herdr:c --prompt "$P_KW1" --run "$RUN"
+P_KW_W="$(prompt 'withdraw r-kw')"
+P_KW_K="$(prompt "no, keep r-kw, don't")"
+prog close-ruling r-kw --as withdrawn --prompt "$P_KW_W" --run "$RUN"
+check "nonzero active" "$([ "$CODE" -ne 0 ] && echo nonzero) $(ruling_state r-kw)"
+has "newest typed prompt" "$OUT"
+
+it "an assign-item and a requirement citing a Ruling between Shawn's reply and accept-context leave the reply fresh"
+P_AS1="$(prompt 'r-as: tool choice on herdr:a is yours')"
+prog record-ruling r-as --kind tool_choice --effect grant --scope "as" --applies-to herdr:a --prompt "$P_AS1" --run "$RUN"
+prog record-ruling r-as --kind tool_choice --effect grant --scope "as" --applies-to herdr:a --applies-to herdr:b --run "$RUN"
+P_AS2="$(prompt 'accept r-as, herdr:b too')"
+prog assign-item herdr:a --decision-id r-as --run "$RUN"
+K1="$CODE"
+prog define-requirement q-as --text "as holds" --check herdr:a=merged --decision-id r-as --run "$RUN"
+K2="$CODE"
+prog accept-context r-as --prompt "$P_AS2" --run "$RUN"
+check "0 0 0 2" "$K1 $K2 $CODE $(in_force_rev r-as)"
+
+# ── --replies-to corrections under the journal checks ─────────────────────
+prog add-item herdr:e --title "herdr:e" --kind fix_only --run "$RUN"
+prog hand-item herdr:e --question "Which crop library?" --kind tool_choice --run "$RUN"
+ASK3="$(pyget "$OUT" 'd["ask"]')"
+it "a correction is refused when Shawn typed a later prompt nothing has cited"
+P_CR="$(prompt 'that one did not need me')"
+P_CR_LATER="$(prompt 'how is herdr:a going')"
+prog record-ruling r-cr --replies-to "$ASK3" --effect grant --scope "crop lib" --prompt "$P_CR" --run "$RUN"
+check "nonzero null" "$([ "$CODE" -ne 0 ] && echo nonzero) $(state_of r-cr)"
+has "newest typed prompt" "$OUT"
+it "a second correction from the same reply is refused"
+P_CR2="$(prompt 'you can pick that yourself')"
+prog record-ruling r-cr --replies-to "$ASK3" --effect grant --scope "crop lib" --prompt "$P_CR2" --run "$RUN"
+K1="$CODE"
+prog record-ruling r-cr2 --replies-to "$ASK3" --effect restrict --scope "again" --prompt "$P_CR2" --run "$RUN"
+check "0 nonzero null" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero) $(state_of r-cr2)"
+has "already approved" "$OUT"
+
 it "programme_context still loads no protocol or journal module"
 if grep -nE 'load_lib_module\("(programme_protocol|programme_journal|programme_record|programme)"\)' \
     "${AUTO_ROOT}/lib/programme_context.py" >/dev/null; then fail "programme_context loads a forbidden module"; else pass; fi

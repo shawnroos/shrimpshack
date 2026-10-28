@@ -422,6 +422,99 @@ prog record-ruling f2 --kind technical_approach --effect restrict --scope "x" --
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
 has "already approved" "$OUT"
 
+# ── which rows the carry checks read ──────────────────────────────────────
+it "carry-rulings refuses a prompt that already approved a record-ruling"
+prog carry-rulings --run "$RUN_F"
+P_FU="$(prompt "$RUN_F" 'carry f1, and f3: I pick the technical approach on herdr:f')"
+prog record-ruling f3 --kind technical_approach --effect restrict --scope "f3" --applies-to herdr:f \
+  --prompt "$P_FU" --run "$RUN_F"
+K1="$CODE"
+prog carry-rulings f1 --prompt "$P_FU" --run "$RUN_F"
+check "0 nonzero" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero)"
+has "already approved" "$OUT"
+
+it "carry-rulings refuses an offer that did not record the Ruling's revision"
+run_py "$RUN_F" <<'EOF' >/dev/null
+pj.append(args[0], "carryover_offered", "sess-pm",
+          {"carryover": [{"source": "ruling", "id": "f1", "kind": "tool_choice", "effect": "grant", "scope": "x",
+                          "items": ["herdr:f"]}]})
+EOF
+P_FN="$(prompt "$RUN_F" 'carry f1 to the next programme')"
+prog carry-rulings f1 --prompt "$P_FN" --run "$RUN_F"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "changed after the offer" "$OUT"
+
+it "a prompt typed before set-remit brought a carried Ruling in cannot bind it"
+RUN_G="$(new_programme w10)"
+prog propose-agreement --run "$RUN_G" --project-term "naming=kebab case files" --source "repo README"
+P_GPRE="$(prompt "$RUN_G" 'g1 tool choice applies to herdr:y now')"
+remit "$RUN_G" "{\"spaces\":[\"w10\"],\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"shawn/alpha\"}]}"
+prog add-item herdr:y --title "y" --kind fix_only --run "$RUN_G"
+prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" \
+  --applies-to herdr:y --prompt "$P_GPRE" --run "$RUN_G"
+check "nonzero pending_acceptance" "$([ "$CODE" -ne 0 ] && echo nonzero) $(field "$RUN_G" 'prog["context"]["decisions"]["g1"][-1]["state"]' | tr -d '"')"
+has "typed before the latest change" "$OUT"
+
+# ── a carry is checked and journaled under the programme's write lock ─────
+home_of() {
+  run_py "$1" <<'EOF'
+print(ph.home_path(args[0]))
+EOF
+}
+wait_for() { local i; for i in $(seq 1 200); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.05; done; return 1; }
+# race <home> <first verb args> -- <second verb args>: the first writer pauses after its checks, before its
+# approval row reaches the journal; the second runs during that pause.
+race() {
+  local home="$1" first=()
+  shift
+  while [ "$1" != "--" ]; do first+=("$1"); shift; done
+  shift
+  rm -f "${WORK}/race1.out" "${WORK}/race2.out"
+  CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" "${first[@]}" > "${WORK}/race1.out" 2>&1 &
+  local p1=$!
+  PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
+  "$PY" "$PROG" "$@" > "${WORK}/race2.out" 2>&1 &
+  local p2=$!
+  sleep 1
+  touch "${home}/.test-resume-write"
+  wait "$p1"; C1=$?
+  wait "$p2"; C2=$?
+  OUT2="$(cat "${WORK}/race2.out")"
+}
+RUN_L="$(run_py <<'EOF'
+load_lib_module("programme_authority").home_for = lambda *a: None
+print(ph.create_programme(["w11"], "sess-pm")["run"])
+EOF
+)"
+RUN_Q="$(new_programme w12)"
+for R in "$RUN_Q" "$RUN_L"; do
+  [ "$R" = "$RUN_Q" ] && { LABEL=promoted; SPACE=w12; } || { LABEL=legacy; SPACE=w11; }
+  REPO_R="${WORK}/repos/race-${LABEL}"
+  mkdir -p "$REPO_R"
+  remit "$R" "{\"spaces\":[\"${SPACE}\"],\"repos\":[{\"path\":\"${REPO_R}\"}]}"
+  prog add-item herdr:q --title "q" --kind fix_only --run "$R"
+  P_Q1="$(prompt "$R" 'q1: I pick the technical approach on herdr:q')"
+  prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --applies-to herdr:q \
+    --prompt "$P_Q1" --run "$R"
+  prog carry-rulings --run "$R"
+  it "$LABEL: a carry racing a record-ruling on the same prompt is refused once the record-ruling journals"
+  P_QR="$(prompt "$R" 'carry q1, and q2: I pick the work sequencing on herdr:q')"
+  race "$(home_of "$R")" record-ruling q2 --kind work_sequencing --effect restrict --scope "q2" \
+    --applies-to herdr:q --prompt "$P_QR" --run "$R" -- carry-rulings q1 --prompt "$P_QR" --run "$R"
+  check "paused 0 nonzero" "$PAUSED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+  has "already approved" "$OUT2"
+done
+
+it "promoted: a carry racing a change to the Ruling re-reads its revision and refuses the stale offer"
+prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --run "$RUN_Q"
+prog carry-rulings --run "$RUN_Q"
+P_QC="$(prompt "$RUN_Q" 'carry q1 to the next programme')"
+P_QA="$(prompt "$RUN_Q" 'accept q1 for herdr:q')"
+race "$(home_of "$RUN_Q")" accept-context q1 --prompt "$P_QA" --run "$RUN_Q" -- \
+  carry-rulings q1 --prompt "$P_QC" --run "$RUN_Q"
+check "paused 0 nonzero" "$PAUSED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
+has "changed after the offer" "$OUT2"
+
 it "no verb crashed with a traceback"
 check "" "$CRASHES"
 

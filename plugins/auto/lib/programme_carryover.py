@@ -155,14 +155,17 @@ def summary(adopted) -> list:
             for e in adopted]
 
 
-# Pre-fill verifies an entry only through its approval row, so every stored entry gets one.
-def store(adopted, prompt, run_id, session_id, how) -> None:
+def _put(adopted) -> None:
     def update(doc):
         for entry in adopted:
             kept = [e for e in entries_under(doc, entry["key"]) if e.get("ruling") != entry["ruling"]]
             doc["keys"][entry["key"]] = kept + [entry]
 
     _write(update)
+
+
+# Pre-fill verifies an entry only through its approval row, so an entry stored without one is dropped.
+def _journal_adoptions(adopted, prompt, run_id, session_id, how) -> None:
     for entry in adopted:
         programme_journal.append(
             run_id, APPROVAL_KIND, session_id,
@@ -251,16 +254,7 @@ def _make_offer(host, opts):
     return host._write(opts, change, "carryover_offered", verb="carry-rulings", target=OFFER_KEY)
 
 
-def _carry(host, opts, ids):
-    run_id, _, rec = host._locate(opts)
-    sid = driver_session.driving_session_id()
-    if not session_registry.caller_drives(rec, sid):
-        raise host.ProgrammeError("only the programme's driving session may carry Rulings over")
-    programme = programme_home.normalize_programme(rec.get("programme") or {})
-    if programme_home.sealed(programme):
-        raise host.ProgrammeError("the programme is archived; nothing more is carried over from it")
-    prompt = host._typed_prompt(run_id, rec, opts["prompt"], "carry-rulings")
-    host.require_named(prompt, *ids)
+def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
     rows = programme_journal.read(run_id)
     index = _offer_index(rows, ids, host.programme_rulings.prompt_index(rows, prompt["prompt_id"]))
     if index is None:
@@ -278,16 +272,41 @@ def _carry(host, opts, ids):
     if missing:
         raise host.ProgrammeError(f"no active Ruling {', '.join(missing)} in this programme")
     # An offer without revisions predates this check, so it cannot show which version Shawn picked.
-    stale = [rid for rid in ids if offered.get(rid) is None or offered[rid] != active[rid].get("rev")]
+    stale = [rid for rid in ids if offered.get(rid) != active[rid].get("rev")]
     if stale:
         raise host.ProgrammeError(f"Ruling {', '.join(stale)} changed after the offer Shawn answered: run "
                                   "carry-rulings with no ids for a fresh offer, then cite the prompt he types after it")
-    adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
-    store(adopted, prompt, run_id, sid, "carryover")
-    payload = {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path()}
-    programme_journal.append(run_id, "rulings_carried", sid, dict(payload, prompt_id=prompt["prompt_id"]),
-                             cites=[prompt["prompt_id"]])
-    host._emit(dict({"ok": True, "run": run_id, "kind": "rulings_carried"}, **payload))
+    return active, keys
+
+
+# The journal checks, the store write and the rulings_carried row share the programme's write lock, so a
+# concurrent Ruling change or a second use of the prompt waits for this carry and then sees it.
+def _carry(host, opts, ids):
+    run_id, home, _ = host._locate(opts)
+    sid = driver_session.driving_session_id()
+    seen = {}
+
+    def mutate(rec):
+        if not session_registry.caller_drives(rec, sid):
+            raise host.ProgrammeError("only the programme's driving session may carry Rulings over")
+        programme = programme_home.normalize_programme(rec.get("programme") or {})
+        if programme_home.sealed(programme):
+            raise host.ProgrammeError("the programme is archived; nothing more is carried over from it")
+        prompt = host._typed_prompt(run_id, rec, opts["prompt"], "carry-rulings")
+        host.require_named(prompt, *ids)
+        active, keys = _check_carry(host, run_id, programme, prompt, ids)
+        adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
+        _put(adopted)
+        seen.update(prompt=prompt, adopted=adopted)
+        return {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path()}
+
+    def compose(payload, _):
+        return programme_journal.entry("rulings_carried", sid, dict(payload, prompt_id=seen["prompt"]["prompt_id"]),
+                                       cites=[seen["prompt"]["prompt_id"]])
+
+    out = host.programme_authority.write(home, run_id, mutate, compose)
+    _journal_adoptions(seen["adopted"], seen["prompt"], run_id, sid, "carryover")
+    host._emit(dict({"ok": True, "run": run_id, "kind": "rulings_carried"}, **out["result"]))
     return 0
 
 

@@ -36,6 +36,7 @@ FOREIGN_KIND = "foreign_write_absorbed"
 LEGACY = "legacy_import"
 FOREIGN = "foreign_write"
 UNVERIFIED = (LEGACY, FOREIGN)
+WRITE_RESUME = ".test-resume-write"
 HISTORY = "history"
 OUTCOMES = ("absent", "legacy", "supported", "unsupported", "corrupt", "unavailable")
 HOLDS = ("unsupported", "corrupt", "unavailable")
@@ -240,18 +241,19 @@ def _replayed(store, run_id, operation_id) -> dict:
     return {"result": None, "row": row, "replayed": True, "revision": hits[0]["revision"] if hits else None}
 
 
+# The row is journaled before the run lock is released: a writer that checked the journal under the lock
+# (a prompt used once, a Ruling's latest change) must not race a second writer into the same gap.
 def _legacy_write(home, run_id, change, compose) -> dict:
-    seen = {}
+    seen = {"row": None}
 
-    def tracked(record):
-        seen["record"] = record
-        return change(record)
+    def journal(result, record):
+        seen["row"] = compose(result, record) if compose else None
+        _approval_pause(home)
+        if seen["row"] is not None:
+            _journal().append_row(run_id, seen["row"])
 
-    result = run_record_core._with_locked_run_record(home, run_id, tracked, reroute=False)
-    row = compose(result, seen["record"]) if compose else None
-    if row is not None:
-        _journal().append_row(run_id, row)
-    return {"result": result, "row": row, "replayed": False, "revision": None}
+    result = run_record_core._with_locked_run_record(home, run_id, change, reroute=False, after=journal)
+    return {"result": result, "row": seen["row"], "replayed": False, "revision": None}
 
 
 def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
@@ -273,6 +275,7 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             result = change(record)
             row = compose(result, record) if compose else None
             run_record_core._prepare_for_write(record)
+            _approval_pause(home)
             event = _row_event(row, "journal") if row is not None else \
                 {"kind": RECORD_KIND, "payload": {"channel": "none"}}
             if _REQUESTS.get(operation_id) is not None:
@@ -361,6 +364,11 @@ def _file_meta(path):
     except OSError:
         return None
     return {"digest": _sha(data), "size": len(data)}
+
+
+def _approval_pause(home) -> None:
+    if run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL"):
+        run_record_core.test_pause("write_before_journal", os.path.join(home, WRITE_RESUME), consume=True)
 
 
 def _test_pause(point) -> None:

@@ -28,7 +28,7 @@ pc = programme_context
 ENDINGS = ("fulfilled", "withdrawn")
 CORRECTION_EFFECTS = ("grant", "restrict")
 ANCHOR_ROWS = {"item_handed": "ask", "pm_decided": "decision_id", "handed_answered": "decision_id"}
-RULING_ROW_KEYS = ("ruling_id", "decision_id")
+CHANGE_ROWS = {"ruling_recorded": "ruling_id", "context_accepted": "decision_id", "ruling_closed": "ruling_id"}
 NAMED_WHEN_NEW = ("grant", "decided")
 
 
@@ -66,30 +66,31 @@ def check_anchor_order(rows, anchor_id, prompt_id) -> None:
                           "replies only to an ask or choice Shawn had already seen")
 
 
+# Only rows that change the Ruling count; an assignment or requirement that merely cites its id does not.
 def _touches(row, cid) -> bool:
     payload = row.get("payload") or {}
-    if row.get("kind") == "prompt":
-        return False
-    return any(payload.get(k) == cid for k in RULING_ROW_KEYS) or any(
+    key = CHANGE_ROWS.get(row.get("kind"))
+    if key is not None:
+        return payload.get(key) == cid and not payload.get("unchanged")
+    return row.get("kind") == "remit_set" and any(
         isinstance(e, dict) and e.get("ruling") == cid for e in payload.get("carried_over") or [])
 
 
 # Default-deny: the prompt must postdate every journaled change to the Ruling, so words Shawn typed about an
-# older version never approve a newer one. With no change journaled yet, only his newest unanswered words count.
+# older version never approve a newer one, and it must be his newest unanswered words, so a later reply
+# ("no, keep it") voids an earlier approval.
 def check_fresh(rows, cid, prompt_id) -> None:
     at = prompt_index(rows, prompt_id)
     changed = [i for i, row in enumerate(rows) if _touches(row, cid)]
-    if changed:
-        if at < changed[-1]:
-            raise RulingError(f"prompt {prompt_id!r} was typed before the latest change to {cid!r}; a Ruling "
-                              "change binds only on a prompt Shawn typed after it was proposed")
-        return
+    if changed and at < changed[-1]:
+        raise RulingError(f"prompt {prompt_id!r} was typed before the latest change to {cid!r}; a Ruling "
+                          "change binds only on a prompt Shawn typed after it was proposed")
     cited = programme_journal._cited_ids(rows)
     later = next((r.get("prompt_id") for r in rows[at + 1:] if r.get("kind") == "prompt"
                   and programme_journal.prompt_origin(r) == "typed" and r.get("prompt_id") not in cited), None)
     if later:
         raise RulingError(f"prompt {prompt_id!r} was typed before prompt {later!r}, which nothing has cited yet; "
-                          f"a new Ruling binds only on Shawn's newest typed prompt")
+                          f"a Ruling change binds only on Shawn's newest typed prompt")
 
 
 def _approval_of(row):
@@ -381,8 +382,8 @@ _SPECS = (
      "UTC time; a revision that changes the kind or effect, or revises a closed Ruling or a kind-less "
      "decision record; a change to a decided Ruling without a typed prompt; a prompt that is not typed or does "
      "not name the id, or for a new grant or decided Ruling its kind and every item too; a prompt that would "
-     "bind the change but was typed before the Ruling's latest journaled change (for a new Ruling, before a "
-     "typed prompt nothing has cited yet) or already approved a Ruling change. Without a prompt it "
+     "bind the change but was typed before the Ruling's latest journaled change or before a typed prompt "
+     "nothing has cited yet, or already approved a Ruling change. Without a prompt it "
      "waits for accept-context. A widening (a grant that adds items, drops a limit or ends later; a restrict "
      "that loses items, drops a limit or ends sooner) waits too, while the prior revision stays in force. "
      "With --replies-to the anchor gives the item and kind, the prompt must come after the anchor and approve "
@@ -390,15 +391,15 @@ _SPECS = (
     ("close-ruling", _h_close_ruling,
      "<id> --as fulfilled|withdrawn [--why <text>] [--prompt <id>] [--origin pm|ui] [--run <id>]",
      "no Ruling in force or pending; --as fulfilled without --why; --as withdrawn, or closing a restrict or a decided "
-     "Ruling, without a typed prompt naming the id; a prompt typed before the Ruling's latest change or that "
-     "already approved a Ruling change. Closing as fulfilled never counts as a beat."),
+     "Ruling, without a typed prompt naming the id; a prompt typed before the Ruling's latest change or before "
+     "a typed prompt nothing has cited yet, or that already approved a Ruling change. Closing as fulfilled never counts as a beat."),
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
      "no pending revision; a pick or accepted suggestion for a Ruling (a requirement takes one); a prompt "
      "that is not typed, came from a legacy journal or an obsolete writer, or does not name the id and every "
      "target the revision adds (for a Ruling, every item it gives the PM; for a grant revision, each limit it "
      "drops and its new end date as YYYY-MM-DD or 'no end date'; for a new grant or decided Ruling its kind); "
-     "for a Ruling, a prompt typed before the pending revision was recorded or that already approved a Ruling "
-     "change; a pending wider grant recorded before its dropped limits and end date were kept (re-record it); "
+     "for a Ruling, a prompt typed before the pending revision was recorded or before a typed prompt nothing "
+     "has cited yet, or that already approved a Ruling change; a pending wider grant recorded before its dropped limits and end date were kept (re-record it); "
      "a carried Ruling that has no items yet. A grant that becomes active records the Authority level for its "
      "kind as its baseline; accepting a narrowing keeps the prior baseline."),
 )
