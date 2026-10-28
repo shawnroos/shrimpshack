@@ -3,10 +3,7 @@
 
 ``focus_budget`` is a fixed agreement term. Its value is ``unlimited`` or ``limited``; the limits ride
 as the extras ``points`` and ``agents`` (a whole number, or None for no limit) and ``scale`` (size name
-to points), the way ``cadence`` carries ``seconds``. ``programme.py`` registers ``size-item``,
-``focus-recheck``, ``focus-note`` and ``swap-item`` through ``build_verbs(host)`` and calls ``check_extras``
-and ``apply`` from its term writers. ``start-worker`` calls ``admit``, the firm gate. The status view reads
-``usage`` and ``waiting``.
+to points), the way ``cadence`` carries ``seconds``.
 """
 
 from __future__ import annotations
@@ -136,16 +133,29 @@ def limits(programme) -> tuple:
     return term.get("points"), term.get("agents")
 
 
+def _unlimited(programme) -> bool:
+    return limits(programme) == (None, None)
+
+
+def _live_panes(workers) -> set:
+    return {w["pane_id"] for w in workers}
+
+
+def _in_play(item, live) -> bool:
+    return (programme_predicate.effective_state(item) in IN_PLAY_STATES and not item.get("held")
+            and (item.get("owner") or {}).get("pane") in live)
+
+
 def census(programme, key, workers) -> dict:
-    live = {w["pane_id"] for w in workers}
+    live = _live_panes(workers)
     scale = scale_of(programme)
+    parked = {item["parked_pane"] for item in programme["items"].values()
+              if item.get("held") and item.get("parked_pane")}
     points = 0
     for other, item in programme["items"].items():
-        if other == key or item.get("held"):
-            continue
-        if programme_predicate.effective_state(item) in IN_PLAY_STATES and item["owner"].get("pane") in live:
+        if other != key and _in_play(item, live):
             points += points_of(item, scale) or 0
-    return {"points": points, "agents": len(workers), "live": live}
+    return {"points": points, "agents": sum(w["pane_id"] not in parked for w in workers), "live": live}
 
 
 def old_worker(item, live):
@@ -175,7 +185,7 @@ def verdict(programme, key, counts):
 
 def reason_for(host, record, programme, key):
     parked = programme["items"][key].get("parked_pane")
-    if limits(programme) == (None, None) and not parked:
+    if _unlimited(programme) and not parked:
         return None
     workers, why = host.programme_sources.worker_panes(programme, record)
     if workers is None:
@@ -224,6 +234,10 @@ def _clear_held(item) -> None:
 
 
 def admit(host, run_id, home, record, programme, key, despite) -> None:
+    # A replayed --op never launches (start-worker returns the recorded outcome), so gating it
+    # would only hold an item whose own worker is already counted.
+    if programme_authority.has_outcome(home, run_id, host._OPERATION["id"]):
+        return
     item = programme["items"][key]
     reason = reason_for(host, record, programme, key)
     if reason is None:
@@ -248,7 +262,7 @@ def _h_focus_recheck(host, argv):
     run_id, home, record = host._locate(opts)
     programme = programme_home.normalize_programme(record.get("programme") or {})
     order = held_order(programme)
-    limited = limits(programme) != (None, None)
+    limited = not _unlimited(programme)
     parked = {key for key in order if programme["items"][key].get("parked_pane")}
     cleared, still, unavailable, counts = [], [], None, None
     if order and (limited or parked):
@@ -300,7 +314,7 @@ def usage(programme, workers) -> dict:
 
 def live_usage(host, record) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
-    if limits(programme) == (None, None):
+    if _unlimited(programme):
         return usage(programme, None)
     workers, _ = host.programme_sources.worker_panes(programme, record)
     return usage(programme, workers)
@@ -308,7 +322,7 @@ def live_usage(host, record) -> dict:
 
 def waiting(programme) -> list:
     scale = scale_of(programme)
-    shown = limits(programme) != (None, None)
+    shown = not _unlimited(programme)
     out = []
     for key in held_order(programme):
         item = programme["items"][key]
@@ -361,12 +375,11 @@ def _swap_refusal(programme, out, newcomer, workers):
     scale = scale_of(programme)
     item = programme["items"][out]
     pane = (item.get("owner") or {}).get("pane")
-    live = {w["pane_id"] for w in workers}
-    if programme_predicate.effective_state(item) not in IN_PLAY_STATES or item.get("held") or pane not in live:
+    live = _live_panes(workers)
+    if not _in_play(item, live):
         return f"{out} is not in play (no live worker holds it), so there is nothing to swap out"
     other = programme["items"][newcomer]
-    if (programme_predicate.effective_state(other) in IN_PLAY_STATES and not other.get("held")
-            and other["owner"].get("pane") in live):
+    if _in_play(other, live):
         return f"{newcomer} is already in play"
     counts = census(programme, None, workers)
     freed = points_of(item, scale) or 0

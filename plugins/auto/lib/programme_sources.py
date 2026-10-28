@@ -192,10 +192,10 @@ def worker_panes(programme, record):
     if snap is None:
         return None, reason
     drivers = _drivers(record)
-    return [p for p in pane_views(snap, remit(programme)) if role(p, drivers) == "worker"], None
+    return [p for p in pane_views(snap, remit(programme), with_branch=False) if role(p, drivers) == "worker"], None
 
 
-def pane_views(snap, scope) -> list:
+def pane_views(snap, scope, with_branch=True) -> list:
     agents = {a.get("pane_id"): a for a in snap.get("agents") or [] if isinstance(a, dict)}
     registry = {ws: session_registry.read_space(scope["server"], ws) for ws in scope["workspaces"]}
     branches = {}
@@ -222,7 +222,7 @@ def pane_views(snap, scope) -> list:
             "title": programme_sanitize.clean(
                 row.get("terminal_title_stripped") or row.get("terminal_title"), 200) or None,
             "cwd": programme_sanitize.clean(cwd, 400) or None,
-            "branch": _branch(cwd, branches) if has_agent else "",
+            "branch": _branch(cwd, branches) if has_agent and with_branch else "",
             "agent": programme_sanitize.token((agent or row).get("agent")) if has_agent else None,
             "agent_status": programme_sanitize.token((agent or row).get("agent_status")),
             "owner": _owner(row, agent, hint),

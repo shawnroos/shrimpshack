@@ -662,7 +662,7 @@ check 0 "$(grep -c 'api snapshot' "$CALLS")"
 PICKS="${WORK}/transcripts"
 mkdir -p "$PICKS"
 pickit() {
-  run_py "$RUN" "$1" "$PICKS" <<'EOF2'
+  run_py "${2:-$RUN}" "$1" "$PICKS" <<'EOF2'
 import copy, pathlib, uuid
 ps = load_lib_module("programme_pick_source")
 fx = [json.loads(l) for l in open(os.path.join(sys.argv[1], "tests/fixtures/askuser_transcript.jsonl"))]
@@ -803,6 +803,63 @@ check 0 "$CODE"
 check "$((S3 + 1))" "$(spins)"
 check "null" "$(gitem 101 held)"
 check "null" "$(gitem 101 parked_pane)"
+
+# ---- review fixes: parked pane leaves the agent count; a replay is not re-gated ----
+limit limited --points none --agents 2
+mk 201 s1 p71
+mk 202 s1
+mk 203 s1 p73
+snapshot p71:agent p73:agent
+it "a first start with the agents limit full is still held"
+start 202
+check 1 "$CODE"
+has "agents at limit: 2 of 2" "$OUT"
+check '"agents at limit: 2 of 2"' "$(gitem 202 held)"
+
+it "swap-item parks 201 and its still-live pane no longer counts: the newcomer is admitted"
+PW="$(pickit "$(swap_label 201 202)")"
+prog swap-item "${NS}201" "${NS}202" --prompt "$PW" --run "$RUN"
+check 0 "$CODE"
+S4="$(spins)"
+start 202
+check 0 "$CODE"
+check "$((S4 + 1))" "$(spins)"
+check "null" "$(gitem 202 held)"
+
+it "the parked item still cannot resume while its old pane is live"
+snapshot p71:agent p73:agent
+S5="$(spins)"
+start 201
+check 1 "$CODE"
+has "old worker still live in pane w2:p71" "$OUT"
+check "$S5" "$(spins)"
+
+it "a replayed start-worker --op with the agents limit exactly full is not held"
+mk 204 s1
+snapshot p73:agent
+start 204 --op op-replay-1
+check 0 "$CODE"
+snapshot p73:agent p40:agent
+S6="$(spins)"
+start 204 --op op-replay-1
+check 0 "$CODE"
+has '"replayed": true' "$OUT"
+check "null" "$(gitem 204 held)"
+check "$S6" "$(spins)"
+
+it "take-recommendations leaves focus_budget unlimited, set_by default, with no limits"
+RUN2="$(run_py w9 <<'EOF2'
+print(ph.create_programme([args[0]], "sess-pm")["run"])
+EOF2
+)"
+PR="$(pickit "Take all recommendations" "$RUN2")"
+prog take-recommendations --pick "$PR" --run "$RUN2"
+check 0 "$CODE"
+check '["unlimited", "default", null, null]' "$(run_py "$RUN2" <<'EOF2'
+t = record(args[0])["programme"]["agreement"]["terms"]["focus_budget"]
+print(json.dumps([t["value"], t["set_by"], t.get("points"), t.get("agents")]))
+EOF2
+)"
 
 echo ""
 echo "programme-focus.test.sh: ${PASS} passed, ${FAIL} failed"
