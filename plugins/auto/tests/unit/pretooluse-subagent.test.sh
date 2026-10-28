@@ -194,6 +194,15 @@ it "the packager's journal reads are allowed"
 check allow "$(decision a1 "wc -l /x/programmes/prog-1/journal.jsonl")"
 check allow "$(decision a1 "grep -n '\"kind\": *\"working_now\"' /x/programmes/prog-1/journal.jsonl | tail -n 1")"
 check allow "$(decision a1 "tail -n +12 /x/programmes/prog-1/journal.jsonl | head -n 301")"
+it "a read verb redirected into a programme file is denied"
+check deny "$(decision a1 "$P status --json --run prog-1 >/x/programmes/prog-1/state.json")"
+it "a read verb with its stderr appended to a file is denied"
+check deny "$(decision a1 "$P status --json --run prog-1 2>>/x/programmes/prog-1/journal.jsonl")"
+it "a read verb redirected to /dev/null is allowed"
+check allow "$(decision a1 "$P status --json --run prog-1 > /dev/null")"
+it "a backslash-newline inside a word does not hide programme.sh"
+check deny "$(decision a1 'bash "/x/plugins/auto/lib/pro\
+gramme.sh" beat --run prog-1')"
 it "a read verb wrapped in bash -c is allowed"
 check allow "$(decision a1 "bash -c '$P status --json --run prog-1'")"
 it "gh pr view and a GET gh api are allowed"
@@ -238,6 +247,10 @@ it "the PM itself (no agent_id) writing the journal path is not this hook's busi
 check allow "$(tool_decision "" Write "${HOME_DIR}/journal.jsonl")"
 it "a sub-agent of a session that drives no programme is not this hook's business"
 check allow "$(tool_decision a1 Write "${HOME_DIR}/journal.jsonl" sess-other)"
+
+it "a different-case spelling of the programmes folder is the same folder on macOS and is denied"
+UPPER_HOME="$(printf '%s' "${HOME_DIR}" | sed 's#/programmes/#/PROGRAMMES/#')"
+check deny "$(tool_decision a1 Write "${UPPER_HOME}/journal.jsonl")"
 
 echo "pretooluse-subagent.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

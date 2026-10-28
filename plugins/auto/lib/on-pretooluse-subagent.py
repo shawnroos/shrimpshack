@@ -81,15 +81,20 @@ def _gh_refusal(args):
     return None
 
 
-def _viewer_refusal(segment):
+def _redirect_refusal(segment):
     for at, token in enumerate(segment):
-        if token.split("=", 1)[0] in _VIEWER_WRITE_FLAGS or token.startswith("-O"):
-            return "a sub-agent may not run a viewer with --pre, --output or -O; they run a command or write a file"
         if ">" not in token:
             continue
         after = token[token.index(">"):].lstrip(">&")
         if (after or (segment[at + 1] if at + 1 < len(segment) else "")) != "/dev/null":
             return "a sub-agent may not redirect output from a command naming programme code, except to /dev/null"
+    return None
+
+
+def _viewer_refusal(segment):
+    for token in segment:
+        if token.split("=", 1)[0] in _VIEWER_WRITE_FLAGS or token.startswith("-O"):
+            return "a sub-agent may not run a viewer with --pre, --output or -O; they run a command or write a file"
     return None
 
 
@@ -121,6 +126,9 @@ def _segment_refusal(segment):
         return None
     if any(_EXPANSION.search(token) for token in segment):
         return "a sub-agent may not use shell expansion in a command naming programme code"
+    redirect = _redirect_refusal(segment)
+    if redirect:
+        return redirect
     if base in VIEWERS or (base == "git" and len(segment) > 1 and segment[1] in GIT_READS):
         return _viewer_refusal(segment)
     rest = _programme_call(segment)
@@ -132,6 +140,7 @@ def _segment_refusal(segment):
 
 
 def refusal(command):
+    command = command.replace("\\\n", "")
     try:
         segments = list(_segments(command))
     except ValueError:
@@ -166,15 +175,17 @@ def _driven_homes(session_id):
 
 
 def write_refusal(tool_input, homes, programmes_dir):
-    """Deny a programme-home write by path, not by shell text: only the packager's digest file is allowed."""
+    """Deny a programme-home write by path, not by shell text: only the packager's digest file is allowed.
+
+    Paths compare case-folded because the macOS filesystem treats PROGRAMMES and programmes as one folder."""
     target = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not isinstance(target, str) or not target:
         return None
-    real = os.path.realpath(target)
-    protected = os.path.realpath(programmes_dir)
+    real = os.path.realpath(target).casefold()
+    protected = os.path.realpath(programmes_dir).casefold()
     if real != protected and not real.startswith(protected + os.sep):
         return None
-    if real in {os.path.join(os.path.realpath(home), DIGEST_NAME) for home in homes}:
+    if real in {os.path.join(os.path.realpath(home), DIGEST_NAME).casefold() for home in homes}:
         return None
     return f"a sub-agent may write only <home>/{DIGEST_NAME} inside a programme's home folder"
 

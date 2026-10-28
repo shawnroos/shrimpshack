@@ -131,3 +131,20 @@ time: a heredoc opener inside quoted text hid the next line, a newline never spl
 `f>path` skipped a token-anchored redirect check. A write that has to pass through shell
 parsing is a list of forms to enumerate. Give the agent a tool whose target the hook reads as
 a path, and the shell never sees the digest at all.
+
+## Known limits (open)
+
+The Bash side of the hook is a best-effort filter, not a sandbox. It judges one command at a
+time and engages only when a token contains the substring `programme`. An adversarial review
+(2026-10-28) showed these still pass, and they predate the packager:
+
+- A pipe into a shell or interpreter whose own segment names no programme code, such as
+  `cat <home>/sweep-digest.md | sh` or `... | xargs rm`. A sub-agent that can write the digest
+  can therefore run the digest.
+- `gh api` method spellings the check does not read (`-XPUT`, `--method=PUT`), `git push`,
+  `gh issue close` and `gh alias set` followed by the alias.
+
+Closing this needs a different shape, not another regex: either a per-agent tool allowlist so the
+packager has no Bash at all (reads would go through a read-only verb that returns the digest
+inputs), or an allowlist of whole commands. Until then, treat a sub-agent that reads untrusted
+programme text as able to run any command.
