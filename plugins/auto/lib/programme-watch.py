@@ -32,6 +32,7 @@ programme_home = load_lib_module("programme_home")
 programme_predicate = load_lib_module("programme_predicate")
 programme_record = load_lib_module("programme_record")
 programme_sanitize = load_lib_module("programme_sanitize")
+terminal_host = load_lib_module("terminal_host")
 programme_tracker = load_lib_module("programme_tracker")
 programme_tasks = load_lib_module("programme_tasks")
 programme_plans = load_lib_module("programme_plans")
@@ -231,12 +232,10 @@ def _session_value(entry):
 
 
 def _read_herdr(ctx):
-    data, err = _read_json_command(["herdr", "api", "snapshot"])
-    if err:
-        return None, err
-    snapshot = (data.get("result") or {}).get("snapshot") if isinstance(data.get("result"), dict) else None
-    if not isinstance(snapshot, dict):
-        return None, "bad-json"
+    token = terminal_host.current().change_token(_read_json_command)
+    if not token.ok:
+        return None, token.why
+    snapshot = token.value
     workspaces = ctx["workspaces"]
     panes, sessions, cwds = set(), set(), set()
     for pane in snapshot.get("panes") or []:

@@ -213,9 +213,7 @@ def _notify(proposal):
     body = (f"Allow {', '.join(proposal.get('rules') or [])} in {proposal.get('settings_file')} "
             f"for {len(proposal.get('items') or [])} items. Answer: applied, not now, or reject "
             f"{proposal.get('id')}.")
-    return programme_record._run_tool(["herdr", "notification", "show",
-                                       f"auto: permission {proposal.get('id')} needs you",
-                                       "--body", body, "--sound", "request"])
+    return programme_record.notify_host(f"auto: permission {proposal.get('id')} needs you", body)
 
 
 def notify_pending(run_id, home) -> dict:

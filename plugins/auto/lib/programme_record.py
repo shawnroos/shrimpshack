@@ -28,6 +28,7 @@ programme_focus = load_lib_module("programme_focus")
 programme_journal = load_lib_module("programme_journal")
 programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
+terminal_host = load_lib_module("terminal_host")
 driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
 programme_decisions = load_lib_module("programme_decisions")
@@ -539,6 +540,10 @@ def _run_tool(argv):
     return done.returncode
 
 
+def notify_host(title, body):
+    return terminal_host.current().notify(title, body).value
+
+
 def notify_handed(item_id, question, title=None) -> dict:
     source, _, key = item_id.partition(":")
     tracker = "skipped"
@@ -546,8 +551,7 @@ def notify_handed(item_id, question, title=None) -> dict:
         tracker = _run_tool(programme_tracker.needs_you_argv(key))
     herdr = None
     if tracker != 0:
-        herdr = _run_tool(["herdr", "notification", "show", f"auto: {programme_naming.label(title, item_id)} needs you",
-                           "--body", question, "--sound", "request"])
+        herdr = notify_host(f"auto: {programme_naming.label(title, item_id)} needs you", question)
     return {"tracker": tracker, "herdr": herdr}
 
 

@@ -15,7 +15,6 @@ import os
 import re
 import shutil
 import sys
-import time
 import uuid
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +29,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_record = load_lib_module("programme_record")
 programme_context = load_lib_module("programme_context")
 programme_exec = load_lib_module("programme_exec")
+terminal_host = load_lib_module("terminal_host")
 programme_tracker = load_lib_module("programme_tracker")
 programme_tasks = load_lib_module("programme_tasks")
 programme_plans = load_lib_module("programme_plans")
@@ -40,11 +40,9 @@ programme_focus = load_lib_module("programme_focus")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
-HERDR_TIMEOUT = 5.0
 GIT_TIMEOUT = 2.0
 SPINOFF_TIMEOUT = 600.0
 WORKER_WAIT = 30.0
-POLL_SECONDS = 1.0
 PROMPT_CAP = 4000
 QUOTE_CAP = 500
 SPINOFF_REL = os.path.join("skills", "spinoff", "scripts", "spinoff.sh")
@@ -53,50 +51,22 @@ REPO_OUT_OF_REMIT = "repo_out_of_remit"
 PROJECT_UNKNOWN = "project_unknown"
 UNSTAFFED_CAP = 20
 SIGNALS = ("tracker", "branch", "title", "label", "registry", "plan")
-_PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
 RESTRICTION_SOURCES = ("human", "runtime", "requirement", "pm_choice", "worker_assumption")
 REOPEN_CLAUSE = ("Proceed under this decision. Do not reopen it: if you find new evidence that it cannot "
                  "hold, stop and state that evidence in your pane.")
 
 bounded = programme_exec.bounded
-_json = programme_exec.parse_json
 _failure = programme_exec.failure
 _seconds = programme_exec.seconds
-_source_timeout = programme_exec.source_timeout
-
-
-def _herdr(args):
-    return bounded(["herdr"] + list(args), _source_timeout(HERDR_TIMEOUT))
-
-
-def probe():
-    result = _herdr(["status", "server"])
-    if not result["ran"] or result["code"] != 0:
-        return _failure(result, "herdr status server")
-    if not any(line.strip() == "status: running" for line in result["stdout"].splitlines()):
-        return "herdr server is not running"
-    return None
 
 
 def read_herdr():
-    reason = probe()
-    if reason:
-        return None, reason
-    result = _herdr(["api", "snapshot"])
-    if not result["ran"] or result["code"] != 0:
-        return None, _failure(result, "herdr api snapshot")
-    snap = ((_json(result["stdout"]) or {}).get("result") or {}).get("snapshot")
-    if not isinstance(snap, dict) or not isinstance(snap.get("panes"), list):
-        return None, "herdr api snapshot returned no pane list"
-    return snap, None
+    found = terminal_host.current().list_panes()
+    return (found.value, None) if found.ok else (None, found.why)
 
 
 def agent_rows():
-    result = _herdr(["agent", "list"])
-    if not result["ran"] or result["code"] != 0:
-        return None
-    rows = ((_json(result["stdout"]) or {}).get("result") or {}).get("agents")
-    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
+    return terminal_host.current().list_panes(agents=True).value
 
 
 def current_server() -> str:
@@ -432,7 +402,7 @@ def sweep(record) -> dict:
 def _herdr_state(snap) -> str:
     if snap is not None:
         return "available"
-    return "unavailable" if shutil.which("herdr") else "unsupported"
+    return "unavailable" if terminal_host.current().installed() else "unsupported"
 
 
 def _seen_state(seen) -> str | None:
@@ -499,38 +469,12 @@ def spinoff_path():
     return cached[0] if cached else None
 
 
-def await_agent(session_id, pane, before, wait) -> dict:
-    deadline = time.monotonic() + wait
-    while True:
-        rows = agent_rows() or []
-        for row in rows:
-            if session_of(row) == session_id:
-                return {"row": row}
-        if pane:
-            for row in rows:
-                if row.get("pane_id") == pane:
-                    other = session_of(row)
-                    if other and other != session_id:
-                        return {"row": None, "reason": f"pane {pane} reports session {other}, not {session_id}"}
-                    return {"row": row}
-        else:
-            fresh = [r for r in rows if r.get("pane_id") not in before and not session_of(r)]
-            if len(fresh) == 1:
-                return {"row": fresh[0]}
-        if time.monotonic() >= deadline:
-            where = f"pane {pane}" if pane else "any new pane"
-            return {"row": None, "reason": f"no agent appeared in {where} within {wait:g}s"}
-        time.sleep(POLL_SECONDS)
-
-
 def launch_worker(spinoff, extra, session_id=None) -> dict:
     session_id = session_id or str(uuid.uuid4())
     before = {r.get("pane_id") for r in agent_rows() or []}
-    run = bounded([spinoff] + list(extra) + ["--session-id", session_id],
-                  _seconds(SPINOFF_TIMEOUT_ENV, SPINOFF_TIMEOUT))
-    output = programme_sanitize.clean(run["stdout"] + "\n" + run["stderr"], 0, keep_newlines=True)
-    match = _PANE_LINE.search(output)
-    pane = programme_sanitize.token(match.group(1)) if match else None
+    launched = terminal_host.current().start_pane([spinoff] + list(extra) + ["--session-id", session_id],
+                                                  _seconds(SPINOFF_TIMEOUT_ENV, SPINOFF_TIMEOUT)).value
+    run, output, pane = launched["run"], launched["output"], launched["pane"]
     out = {"session_id": session_id, "pane": pane, "terminal_id": None, "spinoff_exit": run["code"],
            "ok": False, "reason": None, "output_tail": programme_sanitize.clean(output[-400:], 400),
            "outcome": "failed"}
@@ -539,9 +483,11 @@ def launch_worker(spinoff, extra, session_id=None) -> dict:
         if not run["ran"]:
             out["outcome"] = "uncertain" if run["timed_out"] else "not_executed"
         return out
-    found = await_agent(session_id, pane, before, _seconds(WORKER_WAIT_ENV, WORKER_WAIT))
+    confirmed = terminal_host.current().confirm_started(
+        session_id, pane, before, _seconds(WORKER_WAIT_ENV, WORKER_WAIT), session_of)
+    found = confirmed.value
     if found["row"] is None:
-        out.update(reason=found["reason"], outcome="uncertain")
+        out.update(reason=confirmed.why, outcome="uncertain")
         return out
     out.update(ok=True, outcome="completed", pane=programme_sanitize.token(found["row"].get("pane_id")) or pane,
                terminal_id=programme_sanitize.token(found["row"].get("terminal_id")))
@@ -857,14 +803,15 @@ def send_to_item(host, opts, located, programme, key, text, *, kind="prompt_sent
         payload["reason"] = reason
         _settled(host, run_id, home, op, "prompt_refused", payload, "not_executed")
         raise host.ProgrammeError(f"prompt refused: {reason}")
-    sent = _herdr(["agent", "prompt", target["pane"], text])
+    delivery = terminal_host.current().send_prompt(target["pane"], text)
+    sent = delivery.value
     programme_recovery.pause(run_id, "after_invoke")
     ok = sent["ran"] and sent["code"] == 0
     outcome = "completed" if ok else ("failed" if sent["ran"] else
                                       ("uncertain" if sent["timed_out"] else "not_executed"))
     payload.update(sent=ok, session_unknown=target["session_unknown"], owner_source=target["owner_source"],
                    text=programme_journal.redact(programme_sanitize.clean(text, QUOTE_CAP)),
-                   error=None if ok else _failure(sent, "herdr agent prompt"), **(extra or {}))
+                   error=None if ok else delivery.why, **(extra or {}))
     assign = None
     if ok and on_sent:
         def assign(prog, settled):
