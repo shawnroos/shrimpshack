@@ -549,7 +549,7 @@ it "an exact-label pick records the approval and journals it"
 POV="$(pickit "$(override_label 54)")"
 prog override-focus "${NS}54" --prompt "$POV" --run "$RUN"
 check 0 "$CODE"
-check "\"${POV}\"" "$(gitem 54 focus_override)"
+check "\"${POV}\"" "$(field "prog['items']['${NS}54']['focus_override']['prompt_id']")"
 check 1 "$(grep -c '"focus_override_approved"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
 
 it "the same pick cannot approve a second override"
@@ -561,7 +561,6 @@ it "an approved override starts the held item once, journals it and consumes the
 start 54 --despite focus
 check 0 "$CODE"
 check "null" "$(gitem 54 focus_override)"
-check "null" "$(gitem 54 held)"
 check "null" "$(gitem 54 held)"
 check 'true' "$(run_py "$RUN" <<'EOF2'
 pr = load_lib_module("programme_recovery")
@@ -577,6 +576,109 @@ snapshot p31:agent
 start 54 --despite focus
 check 1 "$CODE"
 has "needs Shawn's pick first" "$OUT"
+it "override-focus on an item with no hold is refused, and the refused pick is not spent"
+mk 190 s5
+snapshot p31:agent
+PV190="$(pickit "$(override_label 190)")"
+prog override-focus "${NS}190" --prompt "$PV190" --run "$RUN"
+check 1 "$CODE"
+has "not held" "$OUT"
+check "null" "$(gitem 190 focus_override)"
+start 190
+check 1 "$CODE"
+prog override-focus "${NS}190" --prompt "$PV190" --run "$RUN"
+check 0 "$CODE"
+check "\"${PV190}\"" "$(field "prog['items']['${NS}190']['focus_override']['prompt_id']")"
+drop 190
+
+it "an approval is cleared when room frees and the item starts normally, so the next full budget needs a fresh pick"
+mk 191 s5
+snapshot p31:agent
+start 191
+check 1 "$CODE"
+approve_override 191
+check 0 "$CODE"
+snapshot
+start 191
+check 0 "$CODE"
+check "null" "$(gitem 191 focus_override)"
+snapshot p31:agent
+start 191 --despite focus
+check 1 "$CODE"
+has "needs Shawn's pick first" "$OUT"
+drop 191
+
+it "dropping an item clears its approval"
+mk 192 s5
+start 192
+approve_override 192
+check "true" "$(field "bool(prog['items']['${NS}192']['focus_override'])")"
+drop 192
+check "null" "$(gitem 192 focus_override)"
+
+it "granting an approval to a finished item is refused"
+mk 196 s5
+start 196
+check 1 "$CODE"
+drop 196
+approve_override 196
+check 1 "$CODE"
+has "is dropped" "$OUT"
+check "null" "$(gitem 196 focus_override)"
+
+it "a size change clears the approval"
+mk 193 s5
+start 193
+approve_override 193
+check "true" "$(field "bool(prog['items']['${NS}193']['focus_override'])")"
+prog size-item "${NS}193" s7 --run "$RUN"
+check 0 "$CODE"
+check "null" "$(gitem 193 focus_override)"
+drop 193
+
+it "an approval is refused once the hold has grown, and a fresh pick is needed"
+mk 194 s5
+start 194
+approve_override 194
+mk 195 s1 p32
+snapshot p31:agent p32:agent
+S194="$(spins)"
+start 194 --despite focus
+check 1 "$CODE"
+has "needs Shawn's pick first" "$OUT"
+check "$S194" "$(spins)"
+check "null" "$(gitem 194 focus_override)"
+approve_override 194
+check 0 "$CODE"
+start 194 --despite focus
+check 0 "$CODE"
+drop 194
+drop 195
+snapshot p31:agent
+
+it "two consumes of one approval against the same stale snapshot let only one through"
+mk 197 s5
+start 197
+approve_override 197
+check 'consumed,refused' "$(run_py "$RUN" "${NS}197" <<'EOF2'
+host = load_lib_module("programme")
+pf = load_lib_module("programme_focus")
+run, key = args[0], args[1]
+home = ph.home_path(run)
+rec = record(run)
+stale = ph.normalize_programme(rec["programme"])
+out = []
+for _ in range(2):
+    try:
+        pf.admit(host, run, home, rec, stale, key, ("focus",))
+        out.append("consumed")
+    except host.ProgrammeError:
+        out.append("refused")
+print(",".join(out))
+EOF2
+)"
+drop 197
+
 drop 54
 drop 72
 drop 64

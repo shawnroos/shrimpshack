@@ -120,6 +120,8 @@ def set_size(host, programme, item, size) -> None:
     scale = scale_of(programme)
     if size not in scale:
         raise host.ProgrammeError(f"size {size!r} is not in the scale (sizes: {', '.join(scale) or 'none'})")
+    if item.get("size") != size:
+        drop_approval(item)
     item["size"] = size
     item["history"].append({"at": run_record_core.now_iso(), "kind": "sized", "size": size})
 
@@ -248,9 +250,20 @@ def _commit(host, run_id, home, keys, change, kind=None, payload=None) -> None:
             change(rec["programme"]["items"][key])
 
     def compose(_, rec):
-        return programme_journal.entry(kind, seen["sid"], payload) if kind else None
+        name = kind() if callable(kind) else kind
+        body = payload() if callable(payload) else payload
+        return programme_journal.entry(name, seen["sid"], body) if name else None
 
     programme_authority.write(home, run_id, mutate, compose, operation_id=None)
+
+
+def drop_approval(item) -> None:
+    item["focus_override"] = None
+
+
+def _approval_for(item, hold_text):
+    approval = item.get("focus_override")
+    return approval if isinstance(approval, dict) and approval.get("hold") == hold_text else None
 
 
 def _set_held(reason):
@@ -258,19 +271,18 @@ def _set_held(reason):
         if not item.get("held"):
             item["held_at"] = run_record_core.now_iso()
         item["held"] = reason
+        if not _approval_for(item, reason):
+            drop_approval(item)
     return change
 
 
 def _clear_held(item) -> None:
     item.update(held=None, held_at=None, parked_pane=None)
-
-
-def _consume_override(item) -> None:
-    _clear_held(item)
-    item["focus_override"] = None
+    drop_approval(item)
 
 
 def _park(item, newcomer, prompt_id) -> None:
+    drop_approval(item)
     item.update(held=f"parked: swapped out for {newcomer}", held_at=run_record_core.now_iso(),
                 parked_pane=item["owner"]["pane"])
     item["history"].append({"at": item["held_at"], "kind": "parked", "for": newcomer, "prompt_id": prompt_id})
@@ -288,16 +300,30 @@ def admit(host, run_id, home, record, programme, key, despite) -> None:
             _commit(host, run_id, home, [key], _clear_held)
         return
     asked = OVERRIDE in despite and hold.kind != OLD_WORKER_KIND
-    if asked and item.get("focus_override"):
-        _commit(host, run_id, home, [key], _consume_override, "focus_overridden",
-                {"item": key, "would_hold": hold.text, "approval_prompt_id": item["focus_override"]})
+    if not asked:
+        _commit(host, run_id, home, [key], _set_held(hold.text), "item_held", {"item": key, "reason": hold.text})
+        raise host.ProgrammeError(f"focus budget holds {key}: {hold.text}. {_next_step(hold, key)}")
+    # The approval is read again under the lock so two starts racing on one pick cannot both spend it;
+    # the loser's hold is committed before the raise, because a raising verb discards its own writes.
+    spent = {}
+
+    def take(locked):
+        approval = _approval_for(locked, hold.text)
+        spent["stale"] = bool(locked.get("focus_override")) and not approval
+        spent["prompt_id"] = approval and approval["prompt_id"]
+        (_clear_held if approval else _set_held(hold.text))(locked)
+
+    _commit(host, run_id, home, [key], take,
+            lambda: "focus_overridden" if spent["prompt_id"] else "item_held",
+            lambda: ({"item": key, "would_hold": hold.text, "approval_prompt_id": spent["prompt_id"]}
+                     if spent["prompt_id"] else {"item": key, "reason": hold.text}))
+    if spent["prompt_id"]:
         return
-    _commit(host, run_id, home, [key], _set_held(hold.text), "item_held", {"item": key, "reason": hold.text})
-    if asked:
-        step = _OVERRIDE_STEP.format(key=key, override=OVERRIDE)
-        raise host.ProgrammeError(f"focus budget holds {key}: {hold.text}. `--despite {OVERRIDE}` alone "
-                                  f"overrides nothing; it needs Shawn's pick first. Next: {step}")
-    raise host.ProgrammeError(f"focus budget holds {key}: {hold.text}. {_next_step(hold, key)}")
+    step = _OVERRIDE_STEP.format(key=key, override=OVERRIDE)
+    why = ("the approval was for a different hold than the current one, so it is withdrawn"
+           if spent["stale"] else "`--despite focus` alone overrides nothing")
+    raise host.ProgrammeError(f"focus budget holds {key}: {hold.text}. {why}; it needs Shawn's pick first. "
+                              f"Next: {step}")
 
 
 def held_order(programme) -> list:
@@ -490,7 +516,11 @@ def _h_override_focus(host, argv):
         item = programme["items"][key]
         if item["state"] in programme_home.FINISHED_ITEM_STATES:
             raise host.ProgrammeError(f"item {key!r} is {item['state']}")
-        item["focus_override"] = prompt["prompt_id"]
+        if not item.get("held"):
+            raise host.ProgrammeError(
+                f"item {key!r} is not held, so there is no hold to approve; start it, and ask again only "
+                f"if the focus budget holds it")
+        item["focus_override"] = {"prompt_id": prompt["prompt_id"], "hold": item["held"]}
         return {"item": key, "next": f"start-worker {key} --despite {OVERRIDE}"}
 
     return host._write(opts, change, "focus_override_approved", prompt_id=opts["prompt"], needs_prompt=True,
@@ -512,9 +542,10 @@ _SPECS = (
      "decision naming both items. <in> then starts through start-worker."),
     ("override-focus", _h_override_focus, "<item> --prompt <pick id> [--run <id>]",
      "typed or suggested text (only a pick whose answer is exactly the approval-label for this command "
-     "approves it); a finished item. Records one approval on the item. The next `start-worker --despite "
-     "focus` for it passes the focus gate once and uses the approval up; without it that flag is refused. "
-     "The old-worker hold is never overridden."),
+     "approves it); a finished item; an item that is not held. Records one approval on the item, bound to "
+     "its current hold. The next `start-worker --despite focus` for it passes the focus gate once, if the "
+     "hold reads the same, and uses the approval up; without it that flag is refused. A size change, a "
+     "cleared hold or a drop withdraws it. The old-worker hold is never overridden."),
     ("focus-recheck", _h_focus_recheck, "[--run <id>]",
      "any session but the driving one. Clears `held` on each held item that now fits the focus budget, in "
      "held order, counting the room each cleared item takes before testing the next; leaves the rest held "

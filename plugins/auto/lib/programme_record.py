@@ -366,6 +366,7 @@ def _h_drop_item(host, argv):
                 f"item {key!r} is issue-backed with open deliverables {still_open}; "
                 "dropping it needs --prompt <id> of a typed prompt")
         item.update(state="dropped", dropped_reason=reason, waiting_on=None)
+        programme_focus.drop_approval(item)
         _history(item, "dropped", reason=reason, prompt_id=prompt and prompt["prompt_id"])
         return {"item": key, "reason": reason, "open_deliverables": still_open}
 

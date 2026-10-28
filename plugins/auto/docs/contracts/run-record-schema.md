@@ -722,7 +722,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `dropped_reason` | string or `null` |
 | `size` | a name in `agreement.terms.focus_budget.scale`, or `null`. Written by `size-item` and `add-item --size`; the gate reads its points from the scale |
 | `held`, `held_at` | `null`, or a reason string and the `<iso>` time it was first held. The focus gate sets them on a refused start; `focus-recheck` and a start that now fits clear them. A held item is not in play, is left out of the predicate's actionable reasons, and is listed in held order by the status view. `swap-item` sets `held` to `parked: swapped out for <item>` |
-| `focus_override` | `null`, or the prompt id of the pick that approved one `start-worker --despite focus` for this item. `override-focus` sets it; the start that uses it clears it |
+| `focus_override` | `null`, or `{prompt_id, hold}`: the pick that approved one `start-worker --despite focus` for this item, and the `held` text it approved. `override-focus` sets it and only while the item is held. The start that uses it clears it, checked and cleared in one locked write. Anything that clears `held`, a hold with different text, a size change and `drop-item` also clear it, so a bigger overrun needs a fresh pick |
 | `parked_pane` | the pane id of the worker `swap-item` parked, or `null`. While that pane holds a live worker the item cannot start again; clearing `held` clears it |
 | `history[]` | `{at, kind, …}`; kinds include `sized` (`size`), `parked` (`for`, `prompt_id`), `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `trajectory_changed`, `started`, `start_failed`, `reopened` |
 
