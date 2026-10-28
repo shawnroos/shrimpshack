@@ -237,11 +237,8 @@ def _read_herdr(ctx):
     snapshot = (data.get("result") or {}).get("snapshot") if isinstance(data.get("result"), dict) else None
     if not isinstance(snapshot, dict):
         return None, "bad-json"
-    workspaces, own = ctx["workspaces"], os.environ.get("HERDR_PANE_ID")
-    seqs, panes, sessions, cwds = {}, set(), set(), set()
-    for agent in snapshot.get("agents") or []:
-        if isinstance(agent, dict) and agent.get("pane_id") != own:
-            seqs[_pane_label(agent.get("pane_id"))] = agent.get("state_change_seq")
+    workspaces = ctx["workspaces"]
+    panes, sessions, cwds = set(), set(), set()
     for pane in snapshot.get("panes") or []:
         if isinstance(pane, dict) and pane.get("workspace_id") in workspaces:
             panes.add(_pane_label(pane.get("pane_id")))
@@ -251,21 +248,13 @@ def _read_herdr(ctx):
                 cwds.add(cwd)
     sessions.discard(None)
     ctx.update(sessions=sessions, cwds=cwds)
-    return {"seqs": seqs, "panes": panes}, None
+    return {"panes": panes}, None
 
 
 def _herdr_changes(old, new) -> list:
     parts = [f"+{p}" for p in sorted(new["panes"] - old["panes"])]
     parts += [f"-{p}" for p in sorted(old["panes"] - new["panes"])]
-    for pane in sorted(set(old["seqs"]) | set(new["seqs"])):
-        before, after = old["seqs"].get(pane), new["seqs"].get(pane)
-        if before != after and pane in new["panes"] and pane in old["panes"]:
-            parts.append(f"{pane} {_seq_label(before)}->{_seq_label(after)}")
     return _listed("remit-changed", parts)
-
-
-def _seq_label(value) -> str:
-    return str(value) if isinstance(value, int) else "-"
 
 
 def _latest_update(node, best):
