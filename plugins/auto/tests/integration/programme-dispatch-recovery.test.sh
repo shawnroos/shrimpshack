@@ -81,6 +81,42 @@ check 0 "$CODE"
 it "--despite does not settle the earlier uncertain prompt"
 check "[\"${SEND}\"]" "$(unreconciled "$RUN")"
 
+# Focus budget: a held start leaves no launch record, --despite focus overrides, a hand-started worker counts.
+limit() {
+  local pid
+  pid="$(run_py "$RUN" "focus budget limited $*" <<'PYEOF'
+run, text = args
+print(fixture_prompt(run, "sess-pm", text, "typed")["prompt_id"])
+PYEOF
+)"
+  prog amend-term focus_budget limited "$@" --prompt "$pid" --run "$RUN"
+}
+write_snapshot base
+prog add-item linear:AI-61 --title "focus item" --run "$RUN"
+limit --points 5
+OPS0="$(field "$RUN" "len(ops)")"
+: > "$CALLS"
+prog start-worker linear:AI-61 --run "$RUN" -- --name w1
+it "an unsized item is held while a point limit is set"
+check 1 "$CODE"
+has "unsized" "$OUT"
+it "the held start admitted no launch and ran no spinoff"
+check "[${OPS0}, 0]" "$(field "$RUN" "[len(ops), $(calls_of spinoff)]")"
+it "the hold survives the raised refusal"
+check 'true' "$(field "$RUN" "bool(items['linear:AI-61']['held'])")"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-61 --run "$RUN" --despite focus -- --name w1
+it "--despite focus starts the held item and clears the hold"
+check "0 null" "${CODE} $(field "$RUN" "items['linear:AI-61']['held']")"
+it "the override is recorded on the launch"
+check '[["focus"]]' "$(field "$RUN" "[o['despite'] for o in ops.values() if o['item'] == 'linear:AI-61']")"
+write_snapshot base
+prog add-item linear:AI-9 --title "late" --size small --run "$RUN"
+limit --points none --agents 1
+prog start-worker linear:AI-9 --run "$RUN" -- --name w9
+it "a worker already running in the snapshot uses up the agent limit"
+check 1 "$CODE"
+has "agents at limit: 1 of 1" "$OUT"
+
 # Scenario 4: end at each point between intent, admission and dispatch.
 fresh w4
 : > "$CALLS"

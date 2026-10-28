@@ -83,6 +83,8 @@ KINDS = (
     "stop_quiet",
     "item_added",
     "item_updated",
+    "item_held",
+    "focus_overridden",
     "item_aliased",
     "item_merged",
     "item_dropped",

@@ -31,11 +31,72 @@ unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH CLAUDE_A
 
 FAKES="${WORK}/fakes"
 mkdir -p "$FAKES"
-for tool in board herdr; do
-  printf '#!/bin/sh\nexit 0\n' > "${FAKES}/${tool}"
-  chmod +x "${FAKES}/${tool}"
+printf '#!/bin/sh\nexit 0\n' > "${FAKES}/board"
+CALLS="${WORK}/calls.log"
+SNAP="${WORK}/snapshot.json"
+: > "$CALLS"
+export CALLS SNAP PY CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_SOURCE_TIMEOUT=2 CLAUDE_AUTO_WORKER_WAIT=1
+cat > "${FAKES}/herdr" <<'FEOF'
+#!/bin/bash
+printf 'herdr %s\n' "$*" >> "$CALLS"
+case "$1 ${2:-}" in
+  "status server")
+    [ -n "${FAKE_HERDR_DOWN:-}" ] && exit 1
+    echo "status: running" ;;
+  "api snapshot") cat "$SNAP" ;;
+  "agent list")
+    "$PY" -c 'import json,sys; s=json.load(open(sys.argv[1]))["result"]["snapshot"]; print(json.dumps({"id":"1","result":{"type":"agent_list","agents":s["agents"]}}))' "$SNAP" ;;
+esac
+exit 0
+FEOF
+cat > "${FAKES}/spinoff" <<'FEOF'
+#!/bin/bash
+printf 'spinoff %s\n' "$*" >> "$CALLS"
+sid=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--session-id" ] && sid="$2"
+  shift
 done
+echo "  herdr agent pane: w2:p40 (launched with the brief)"
+"$PY" - "$SNAP" "$sid" <<'PYEOF'
+import json, sys
+path, sid = sys.argv[1:3]
+doc = json.load(open(path))
+snap = doc["result"]["snapshot"]
+pane = {"pane_id": "w2:p40", "tab_id": "w2:t1", "workspace_id": "w2", "terminal_id": "term_p40",
+        "agent": "claude", "agent_status": "idle", "cwd": "/tmp", "label": "worker",
+        "terminal_title_stripped": "worker",
+        "agent_session": {"source": "auto", "agent": "claude", "kind": "id", "value": sid}}
+snap["panes"] = [p for p in snap["panes"] if p["pane_id"] != "w2:p40"] + [pane]
+snap["agents"] = [p for p in snap["agents"] if p["pane_id"] != "w2:p40"] + [pane]
+json.dump(doc, open(path, "w"))
+PYEOF
+FEOF
+chmod +x "${FAKES}"/*
 export PATH="${FAKES}:${PATH}"
+
+snapshot() {
+  "$PY" - "$SNAP" "$@" <<'PYEOF'
+import json, sys
+path, specs = sys.argv[1], sys.argv[2:]
+def pane(pid, agent, label=None, sess=None):
+    return {"pane_id": pid, "tab_id": "w2:t1", "workspace_id": "w2", "terminal_id": "term_" + pid.split(":")[1],
+            "agent": agent, "agent_status": "idle" if agent else None, "cwd": "/tmp", "label": label,
+            "terminal_title_stripped": None,
+            "agent_session": {"source": "auto", "agent": "claude", "kind": "id", "value": sess} if sess else None}
+panes = [pane("w2:p10", "claude", "PM", "sess-pm")]
+for spec in specs:
+    pid, kind = spec.split(":", 2)[:2]
+    pid = "w2:" + pid
+    panes.append(pane(pid, "claude" if kind == "agent" else None, None, "sess-" + pid.split(":")[1] if kind == "agent" else None))
+doc = {"id": "1", "result": {"type": "snapshot", "snapshot": {
+    "workspaces": [{"workspace_id": "w2", "label": "Ai Editor"}],
+    "tabs": [{"tab_id": "w2:t1", "workspace_id": "w2", "label": "Work"}],
+    "panes": panes, "agents": [p for p in panes if p["agent"]]}}}
+json.dump(doc, open(path, "w"))
+PYEOF
+}
+snapshot
 
 run_py() {
   "$PY" - "$AUTO_ROOT" "$@" <<PYEOF 2>&1
@@ -250,6 +311,274 @@ it "an old item record without a size field normalizes to unsized"
 check 'null' "$(run_py "$RUN" <<'EOF'
 print(json.dumps(ph.normalize_item({"id": "mem:old", "title": "x"}).get("size", "missing")))
 EOF
+)"
+
+# ---- U3: the gate in start-worker ----
+NS="mem:g"
+mk() {
+  local id="$1" size="$2" pane="${3:-}"
+  local args=(add-item "${NS}${id}" --title "g${id}" --run "$RUN")
+  [ -n "$size" ] && args+=(--size "$size")
+  [ -n "$pane" ] && args+=(--pane "w2:${pane}" --terminal-id "term_${pane}" --session "sess-${pane}")
+  prog "${args[@]}"
+  [ "$CODE" -eq 0 ] || echo "mk failed: $OUT"
+}
+drop() { prog drop-item "${NS}$1" --reason "test cleanup" --run "$RUN"; }
+start() { FAKE_HERDR_DOWN="${DOWN:-}" prog start-worker "${NS}$1" "${@:2}" --run "$RUN" -- --name "w$1"; }
+spins() { grep -c '^spinoff' "$CALLS"; }
+nops() { run_py "$RUN" <<'EOF2'
+pr = load_lib_module("programme_recovery")
+print(len(pr.operations(record(args[0])["programme"])))
+EOF2
+}
+gitem() { field "prog['items']['${NS}$1']['$2']"; }
+limit() {
+  local p; p="$(prompt typed "focus budget $*")"
+  prog amend-term focus_budget "$@" --prompt "$p"
+  [ "$CODE" -eq 0 ] || echo "limit failed: $OUT"
+}
+
+SP="$(prompt typed 'focus budget unlimited, scale s1 s3 s5 s7')"
+prog amend-term focus_budget unlimited --scale s1=1,s3=3,s5=5,s7=7 --prompt "$SP"
+
+snapshot
+mk 0 ""
+it "no limit set: an unsized item starts exactly as before and is not held"
+S0="$(spins)"
+start 0
+check 0 "$CODE"
+check "null" "$(gitem 0 held)"
+check "$((S0 + 1))" "$(spins)"
+drop 0
+
+it "no limit set: herdr is not read for the gate"
+: > "$CALLS"
+mk 00 ""
+start 00
+check 0 "$CODE"
+check 0 "$(grep -c 'api snapshot' "$CALLS")"
+drop 00
+
+limit limited --points 10
+mk 7 s7 p31
+mk 3 s3
+snapshot p31:agent
+it "10-point limit, 7 in play: a 3-point item starts (exactly 10 of 10)"
+start 3
+check 0 "$CODE"
+check "null" "$(gitem 3 held)"
+drop 3
+
+mk 5 s5
+snapshot p31:agent
+S1="$(spins)"; O1="$(nops)"
+it "10-point limit, 7 in play: a 5-point item is held, no launch is attempted"
+start 5
+check 1 "$CODE"
+has "over points: 7 of 10 in play" "$OUT"
+has "Next:" "$OUT"
+check '"over points: 7 of 10 in play (this item is 5)"' "$(gitem 5 held)"
+check "$S1" "$(spins)"
+check "$O1" "$(nops)"
+
+it "a refused start leaves held and held_at committed after the verb raised"
+check 'true' "$(field "bool(prog['items']['${NS}5']['held_at'])")"
+
+it "each refusal adds one journal row and keeps the first held_at"
+HELD_AT="$(gitem 5 held_at)"
+J1="$(grep -c '"item_held"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
+sleep 1.1
+start 5
+check "$HELD_AT" "$(gitem 5 held_at)"
+check "$((J1 + 1))" "$(grep -c '"item_held"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
+
+mk 1 s1
+mk 31 s3 p32
+snapshot p31:agent p32:agent
+it "at 10 of 10 in play a 1-point item is held (11 would pass the limit)"
+start 1
+check 1 "$CODE"
+has "over points: 10 of 10 in play" "$OUT"
+
+it "an item that finishes frees its points and the next start passes"
+drop 7
+snapshot p32:agent
+start 1
+check 0 "$CODE"
+check "null" "$(gitem 1 held)"
+drop 1
+drop 31
+
+it "a successful start clears an earlier hold"
+snapshot
+start 5
+check 0 "$CODE"
+check "null" "$(gitem 5 held)"
+check "null" "$(gitem 5 held_at)"
+drop 5
+
+mk 71 s7 p31
+mk 51 s5
+snapshot
+it "an item whose worker pane died does not count toward points in play"
+start 51
+check 0 "$CODE"
+drop 51
+
+mk 52 s5
+snapshot p31:shell
+it "an item whose pane holds a shell with no agent does not count"
+start 52
+check 0 "$CODE"
+drop 52
+
+mk 53 s5
+snapshot p31:agent
+it "the same item with a live worker pane does count and is held"
+start 53
+check 1 "$CODE"
+
+it "an unsized item is held while a point limit is set, naming size-item"
+mk 6 ""
+snapshot
+start 6
+check 1 "$CODE"
+has "unsized" "$OUT"
+has "size-item ${NS}6" "$OUT"
+
+it "an unsized item starts when only an agent limit is set"
+limit limited --points none --agents 3
+start 6
+check 0 "$CODE"
+drop 6
+drop 71
+drop 53
+
+mk 61 ""
+mk 62 "" p33
+mk 63 "" p34
+snapshot p33:agent p34:agent p35:agent
+it "agents at the limit hold the start, counting a worker no item owns"
+start 61
+check 1 "$CODE"
+has "agents at limit: 3 of 3" "$OUT"
+check '"agents at limit: 3 of 3"' "$(gitem 61 held)"
+
+it "a shell pane does not use up the agent limit"
+snapshot p33:agent p34:agent p35:shell
+start 61
+check 0 "$CODE"
+
+it "herdr unreadable with only a points limit set holds the start and names the retry step"
+drop 61
+mk 64 s1
+limit limited --points 10 --agents none
+DOWN=1 start 64
+check 1 "$CODE"
+has "count unavailable" "$OUT"
+has "--despite focus" "$OUT"
+check 'true' "$(field "bool(prog['items']['${NS}64']['held'])")"
+
+it "--despite focus starts a held item and journals the override"
+snapshot p31:agent
+mk 72 s7 p31
+mk 54 s5
+start 54
+check 1 "$CODE"
+start 54 --despite focus
+check 0 "$CODE"
+check "null" "$(gitem 54 held)"
+check 'true' "$(run_py "$RUN" <<'EOF2'
+pr = load_lib_module("programme_recovery")
+ops = [o for o in pr.operations(record(args[0])["programme"]).values() if o["item"] == "mem:g54"]
+print(json.dumps(any(o.get("despite") == ["focus"] for o in ops)))
+EOF2
+)"
+check 1 "$(grep -c '"focus_overridden"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
+drop 54
+drop 72
+drop 64
+
+it "focus-recheck clears a held item that now fits and leaves one that does not"
+mk 73 s7 p31
+snapshot p31:agent
+mk 81 s3
+mk 82 s5
+start 81
+check 0 "$CODE"
+drop 81
+start 82
+check 1 "$CODE"
+sleep 1.1
+snapshot p31:agent
+drop 73
+snapshot
+prog focus-recheck --run "$RUN"
+check 0 "$CODE"
+check "null" "$(gitem 82 held)"
+
+it "focus-recheck clears the earlier held item first and subtracts its room before the next"
+limit limited --points 5
+mk 91 s3
+mk 92 s3
+mk 93 s7 p36
+snapshot p36:agent
+start 92
+check 1 "$CODE"
+sleep 1.1
+start 91
+check 1 "$CODE"
+drop 93
+snapshot
+prog focus-recheck --run "$RUN"
+check 0 "$CODE"
+check "null" "$(gitem 92 held)"
+has "over points: 3 of 5 in play" "$OUT"
+has "over points" "$(gitem 91 held)"
+
+it "focus-recheck with herdr unreadable leaves every held item held"
+FAKE_HERDR_DOWN=1 prog focus-recheck --run "$RUN"
+check 0 "$CODE"
+has "over points" "$(gitem 91 held)"
+
+it "census ignores an item whose evidence reads done, a held item and a dropped item"
+check '[3, 4]' "$(run_py "$RUN" <<'EOF2'
+focus = load_lib_module("programme_focus")
+prog = ph.new_programme_block([("default", "w2")], "2026-10-28T00:00:00Z")
+prog["agreement"]["terms"]["focus_budget"]["scale"] = {"s3": 3, "s5": 5}
+def item(i, size, pane, **kw):
+    out = ph.new_item(i, i, state="open", now_iso="2026-10-28T00:00:00Z")
+    out.update(size=size, owner=dict(out["owner"], pane=pane), **kw)
+    prog["items"][i] = out
+item("mem:live", "s3", "w2:p1")
+item("mem:evid", "s5", "w2:p2", matched_rule="r", deliverables={"d": {"result": "confirmed"}})
+item("mem:held", "s5", "w2:p3", held="over points", held_at="2026-10-28T00:00:01Z")
+item("mem:gone", "s5", "w2:p4")
+prog["items"]["mem:gone"]["state"] = "dropped"
+item("mem:new", "s3", None)
+panes = [{"pane_id": "w2:p%d" % n} for n in (1, 2, 3, 4)]
+c = focus.census(prog, "mem:new", panes)
+print(json.dumps([c["points"], c["agents"]]))
+EOF2
+)"
+
+it "with only held items left may_stop is true; with one startable item it stays false"
+check '["True", "False"]' "$(run_py "$RUN" <<'EOF2'
+import datetime
+pp = load_lib_module("programme_predicate")
+def build(*items):
+    block = ph.new_programme_block([("default", "w2")], "2026-10-28T00:00:00Z")
+    block["agreement"]["accepted"] = {"at": "2026-10-28T00:00:01Z", "prompt_id": "p1"}
+    for i, kw in items:
+        it_ = ph.new_item(i, i, state="open", now_iso="2026-10-28T00:00:00Z")
+        it_.update(matched_rule="r", **kw)
+        block["items"][i] = it_
+    return {"run_id": "prog-1", "run_kind": "programme", "programme_format": 1, "programme": block, "steps": []}
+now = datetime.datetime(2026, 10, 28, 1, 0, tzinfo=datetime.timezone.utc)
+held = pp.compute(build(("mem:h", {"held": "over points", "held_at": "2026-10-28T00:00:02Z"})), now, None)
+live = pp.compute(build(("mem:h", {"held": "over points", "held_at": "2026-10-28T00:00:02Z"}), ("mem:s", {})), now, None)
+print(json.dumps([str(held["may_stop"]), str(live["may_stop"])]))
+EOF2
 )"
 
 echo ""

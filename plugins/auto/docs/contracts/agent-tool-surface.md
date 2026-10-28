@@ -348,6 +348,7 @@ session.
   prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
   item then refuses, and requirements stay unchanged.
 - **Item size**: `size-item` (`<item> <size>`) sets an item's size from the agreement's `focus_budget` scale; `add-item --size <name>` does the same. A name outside the scale is refused and the refusal lists the valid names.
+- **Focus gate**: with a `focus_budget` limit set, `start-worker` holds an item that would pass the point limit, pass the agent limit, lacks a size (point limit only), or cannot be counted because herdr is unreadable. The hold records a reason and a held-at time on the item, and the start refuses with the next step. Passing `--despite focus` starts it anyway and journals the override. `focus-recheck` releases each held item that now fits, in held order, counting the room each released item takes.
 - **Waits and watchers**: `set-waiting` sets who an item waits on, with an
   optional named reporter, a watcher (process or task id), the blocker kind and a
   trace or job id; `--clear` returns the item to open. `--blocker` needs

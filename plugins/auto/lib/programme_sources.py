@@ -36,6 +36,7 @@ programme_plans = load_lib_module("programme_plans")
 programme_recovery = load_lib_module("programme_recovery")
 session_registry = load_lib_module("session_registry")
 programme_behaviours = load_lib_module("programme_behaviours")
+programme_focus = load_lib_module("programme_focus")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -184,6 +185,14 @@ def _owner(row, agent, hint) -> dict:
         return {"session_id": programme_sanitize.token(hint.get("session_id")), "source": "registry",
                 "name": programme_sanitize.clean(name, 120) or None}
     return {"session_id": None, "source": None, "name": None}
+
+
+def worker_panes(programme, record):
+    snap, reason = read_herdr()
+    if snap is None:
+        return None, reason
+    drivers = _drivers(record)
+    return [p for p in pane_views(snap, remit(programme)) if role(p, drivers) == "worker"], None
 
 
 def pane_views(snap, scope) -> list:
@@ -708,6 +717,7 @@ def _h_start_worker(host, argv):
     refusal = programme_context.unsafe_reason(programme, key, "start_worker")
     if refusal:
         raise host.ProgrammeError(refusal)
+    programme_focus.admit(host, run_id, home, record, programme, key, opts.get("despite") or ())
     spinoff = spinoff_path()
     if not spinoff:
         raise host.ProgrammeError("spinoff.sh not found beside this plugin or on PATH")
