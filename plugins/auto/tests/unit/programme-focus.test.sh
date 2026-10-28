@@ -377,6 +377,7 @@ start 5
 check 1 "$CODE"
 has "over points: 7 of 10 in play" "$OUT"
 has "Next:" "$OUT"
+has 'Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, or start it anyway with `--despite focus`.' "$OUT"
 check '"over points: 7 of 10 in play (this item is 5)"' "$(gitem 5 held)"
 check "$S1" "$(spins)"
 check "$O1" "$(nops)"
@@ -445,6 +446,7 @@ start 6
 check 1 "$CODE"
 has "unsized" "$OUT"
 has "size-item ${NS}6" "$OUT"
+has "Next: \`size-item ${NS}6 <size>\`, then start it again." "$OUT"
 
 it "an unsized item starts when only an agent limit is set"
 limit limited --points none --agents 3
@@ -477,6 +479,7 @@ DOWN=1 start 64
 check 1 "$CODE"
 has "count unavailable" "$OUT"
 has "--despite focus" "$OUT"
+has 'Next: retry once the count is readable, or pass `--despite focus`.' "$OUT"
 check 'true' "$(field "bool(prog['items']['${NS}64']['held'])")"
 
 it "--despite focus starts a held item and journals the override"
@@ -784,6 +787,7 @@ check 1 "$CODE"
 has "p61" "$OUT"
 has "wait for the worker to stop" "$OUT"
 has "close the pane" "$OUT"
+has "Next: once the old worker has stopped, start ${NS}101 again." "$OUT"
 check "$S3" "$(spins)"
 
 it "--despite focus does not bypass the old-worker check"
@@ -834,6 +838,17 @@ check 1 "$CODE"
 has "old worker still live in pane w2:p71" "$OUT"
 check "$S5" "$(spins)"
 
+it "a parked item stays held with its old pane live after the programme is set back to unlimited"
+limit unlimited
+start 201
+check 1 "$CODE"
+has "old worker still live in pane w2:p71" "$OUT"
+has "Next: once the old worker has stopped, start ${NS}201 again." "$OUT"
+check "$S5" "$(spins)"
+prog focus-recheck --run "$RUN"
+case "$(gitem 201 held)" in null) fail "recheck cleared a parked item under unlimited" ;; *) pass ;; esac
+limit limited --points none --agents 2
+
 it "a replayed start-worker --op with the agents limit exactly full is not held"
 mk 204 s1
 snapshot p73:agent
@@ -860,6 +875,29 @@ t = record(args[0])["programme"]["agreement"]["terms"]["focus_budget"]
 print(json.dumps([t["value"], t["set_by"], t.get("points"), t.get("agents")]))
 EOF2
 )"
+
+# ---- agreement text: scale and opt-in visibility ----
+agreement_probe() {
+  run_py "$1" "$2" <<'EOF2'
+pv = load_lib_module("programme_view")
+value, set_by = args[1].split("/")
+term = {"value": value, "default": "unlimited", "options": ["unlimited", "limited"], "set_by": set_by,
+        "points": 10, "agents": 3, "scale": {"s1": 1, "s3": 3}}
+block = {"agreement": {"terms": {"focus_budget": term}}}
+print(json.dumps([ph.term_extra_texts(term), pv.agreement_lines(block),
+                  [t for t, _ in pv.rule_texts(block) if t.startswith("focus_budget")]]))
+EOF2
+}
+LINE='focus_budget: limited, points 10, agents 3, scale s1=1 s3=3'
+it "a limited focus_budget renders points, agents and the scale in the extras, the agreement and the rules"
+check "[[\"points 10\", \"agents 3\", \"scale s1=1 s3=3\"], [\"${LINE}\"], [\"${LINE}\"]]" "$(agreement_probe "$RUN" limited/shawn)"
+
+it "an opt-in focus_budget set to unlimited by Shawn still shows in the agreement"
+has '"focus_budget: unlimited,' "$(agreement_probe "$RUN" unlimited/shawn)"
+
+it "an opt-in focus_budget at its default value but set by default (not by Shawn) is hidden; limited by default shows"
+check '[[], []]' "$(agreement_probe "$RUN" unlimited/default | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps([d[1], d[2]]))')"
+has '"focus_budget: limited,' "$(agreement_probe "$RUN" limited/default)"
 
 # ---- remit spaces on another herdr server cannot be counted ----
 remit_space() {

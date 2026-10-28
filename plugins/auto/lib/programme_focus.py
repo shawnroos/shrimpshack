@@ -27,7 +27,6 @@ programme_predicate = load_lib_module("programme_predicate")
 
 KEY = "focus_budget"
 LIMIT_NAMES = ("points", "agents")
-EXTRA_NAMES = programme_home.TERM_EXTRAS
 NO_LIMIT = "none"
 OVERRIDE = "focus"
 OLD_WORKER = "old worker"
@@ -70,7 +69,7 @@ def parse_extras(host, extra) -> dict:
 def check_extras(host, term, value, extra) -> None:
     key = term.get("key")
     if key != KEY:
-        stray = [name for name in EXTRA_NAMES if extra.get(name) is not None]
+        stray = [name for name in programme_home.TERM_EXTRAS if extra.get(name) is not None]
         if stray:
             raise host.ProgrammeError(f"--{stray[0]} applies to {KEY}, not {key!r}")
         return
