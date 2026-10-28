@@ -121,7 +121,7 @@ def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lea
     programme_journal.append(
         lease["run"], f"{verb}_request", session_id,
         {"verb": verb, "text": programme_journal.redact(text), "origin": origin,
-         "space": programme_home.space_key(lease.get("server"), lease.get("workspace")),
+         "space": programme_home.space_key(*programme_home.space_parts(lease)),
          "lease_status": status, "driving": driving, "source": source},
         cites=[prompt_id] if driving and prompt_id else None,
     )

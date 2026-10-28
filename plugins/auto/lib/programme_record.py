@@ -36,14 +36,15 @@ programme_context = load_lib_module("programme_context")
 programme_naming = load_lib_module("programme_naming")
 programme_asks = load_lib_module("programme_asks")
 
-SOURCES = ("herdr", "tracker", "tasks", "plans")
+HOST_SOURCES = terminal_host.HOSTS
+SOURCES = HOST_SOURCES + ("tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
 CHOICES = ("ship", "decline")
 ID_CAP = 128
 CRON_PROMPT_CAP = 4000
 NOTIFY_TIMEOUT_SECONDS = 5
 ISSUE_SOURCE = "linear"
-ISSUELESS_SOURCE = "herdr"
+ISSUELESS_SOURCES = frozenset(HOST_SOURCES)
 WAITABLE_STATES = ("open", "waiting")
 BLOCKER_FIELDS = ("serves", "evidence", "unblocks-when")
 DENIED_OPERATION = "denied_operation"
@@ -331,7 +332,7 @@ def _h_merge_item(host, argv):
 
 
 def _issue_backed(item_id) -> bool:
-    return item_id.split(":", 1)[0] != ISSUELESS_SOURCE
+    return item_id.split(":", 1)[0] not in ISSUELESS_SOURCES
 
 
 def _open_deliverables(item) -> list:

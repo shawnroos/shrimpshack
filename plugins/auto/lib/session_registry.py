@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +26,10 @@ driver_session = load_lib_module("driver_session")
 terminal_host = load_lib_module("terminal_host")
 
 LINES_PER_PANE = 50
+# SessionStart's hook timeout is 5s; the whole walk (a few ps calls) must stay far under it.
+PS_TIMEOUT = 0.5
+CHAIN_DEPTH = 8
+_NO_TTY = {"", "?", "??"}
 FIELD_CAP = 512
 # "unavailable": a programme whose store is held still has a driver pane to protect.
 DRIVER_LEASE_STATES = ("live", "orphaned", "expired", "unavailable")
@@ -49,8 +54,8 @@ def sessions_dir() -> str:
     return os.path.join(programme_home.data_dir(), "sessions")
 
 
-def registry_path(server: str, workspace: str) -> str:
-    return os.path.join(sessions_dir(), programme_home.space_key(server, workspace) + ".jsonl")
+def registry_path(server: str, workspace: str, host=None) -> str:
+    return os.path.join(sessions_dir(), programme_home.space_key(server, workspace, host) + ".jsonl")
 
 
 def server_from_socket(sock) -> str | None:
@@ -64,6 +69,35 @@ def server_from_socket(sock) -> str | None:
         except programme_home.ProgrammeHomeError:
             return None
     return programme_home.DEFAULT_SERVER
+
+
+def _ps(pid, fields):
+    try:
+        done = subprocess.run(["ps", "-o", fields, "-p", str(pid)], capture_output=True, text=True,
+                              timeout=PS_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.split() if done.returncode == 0 else None
+
+
+def process_tty(pid=None):
+    """The tty of the claude process above this one, or None.
+
+    A hook has no controlling tty, so its own tty reads "??"; only the claude ancestor's tty means
+    anything. The claude process is found by argv, not comm (comm hides launcher-run processes). "??" from claude itself (headless) is None too, never a path.
+    """
+    pid = pid or os.getppid()
+    for _ in range(CHAIN_DEPTH):
+        row = _ps(pid, "ppid=,tty=,args=")
+        if not row or len(row) < 3:
+            return None
+        parent, tty, argv0 = row[0], row[1], row[2]
+        if os.path.basename(argv0) == "claude":
+            return None if tty in _NO_TTY else (tty if tty.startswith("/dev/") else "/dev/" + tty)
+        if not parent.isdigit() or int(parent) <= 1:
+            return None
+        pid = int(parent)
+    return None
 
 
 def is_headless(env) -> bool:
@@ -116,13 +150,9 @@ def _append(path: str, entry: dict) -> None:
     run_record_core._flock_run(os.path.join(folder, ".registry.lock"), body)
 
 
-def record_session(hook_input: dict, env) -> dict | None:
-    env_pane = env.get("HERDR_PANE_ID")
-    session_id = hook_input.get("session_id")
-    if not env_pane or not isinstance(session_id, str) or not session_id:
-        return None
+def _herdr_entry(env, env_pane):
     server = server_from_socket(env.get("HERDR_SOCKET_PATH")) or programme_home.DEFAULT_SERVER
-    pane = terminal_host.current().own_pane(env).value["pane"]
+    pane = terminal_host.host_named("herdr").own_pane(env).value["pane"]
     if pane:
         pane_id = pane.get("pane_id") or env_pane
         workspace = pane.get("workspace_id") or env.get("HERDR_WORKSPACE_ID")
@@ -131,33 +161,70 @@ def record_session(hook_input: dict, env) -> dict | None:
         pane, pane_id, workspace, resolved = {}, env_pane, env.get("HERDR_WORKSPACE_ID"), "env"
     if not workspace and ":" in pane_id:
         workspace = pane_id.split(":", 1)[0]
+    return {"pane_id": pane_id, "terminal_id": pane.get("terminal_id"), "tab_id": pane.get("tab_id"),
+            "server": server, "workspace": workspace, "resolved": resolved, "tab_space_name": None}
+
+
+def _other_entry(found, host):
+    """A non-herdr host proves the pane itself; a host that cannot (refuse) records nothing."""
+    if not found.ok or not isinstance(found.value, dict):
+        return None
+    pane = found.value
+    ids = (pane.get("pane_id"), pane.get("server"), pane.get("workspace"))
+    if not all(isinstance(i, str) and i for i in ids):
+        return None
+    return {"pane_id": pane["pane_id"], "terminal_id": pane.get("terminal_id"), "tab_id": None,
+            "server": pane["server"], "workspace": pane["workspace"], "resolved": host,
+            "tab_space_name": pane.get("tab_space_name")}
+
+
+def record_session(hook_input: dict, env, tty=None) -> dict | None:
+    session_id = hook_input.get("session_id")
+    found = terminal_host.detect(env)
+    if found.name is None or not isinstance(session_id, str) or not session_id:
+        return None
+    host = found.name
+    env_pane = env.get("HERDR_PANE_ID")
+    if host == programme_home.DEFAULT_HOST:
+        if not env_pane:
+            return None
+        place = _herdr_entry(env, env_pane)
+    else:
+        place = _other_entry(terminal_host.host_named(host).own_pane(env), host)
+        if place is None:
+            return None
+        env_pane = place["pane_id"]
     headless = is_headless(env)
     source = _clean(hook_input.get("source"))
     entry = {
         "at": run_record_core.now_iso(),
         "session_id": _clean(session_id),
-        "pane_id": _clean(pane_id),
+        "pane_id": _clean(place["pane_id"]),
         "env_pane": _clean(env_pane),
-        "terminal_id": _clean(pane.get("terminal_id")),
-        "tab_id": _clean(pane.get("tab_id")),
-        "server": server,
-        "workspace": _clean(workspace),
+        "terminal_id": _clean(place["terminal_id"]),
+        "tab_id": _clean(place["tab_id"]),
+        "server": place["server"],
+        "workspace": _clean(place["workspace"]),
         "source": source,
         "cwd": _clean(hook_input.get("cwd")),
         "transcript_path": _path(hook_input.get("transcript_path")),
         "interactive": not headless,
-        "resolved": resolved,
+        "resolved": place["resolved"],
     }
-    path = registry_path(server, workspace)
+    entry["host"] = host
+    for key, value in (("tty", tty), ("tab_space_name", place["tab_space_name"])):
+        if _clean(value):
+            entry[key] = _clean(value)
+    path = registry_path(entry["server"], entry["workspace"], host)
     if not headless:
-        terminal_host.current().report_session(session_id, pane_id, source)
+        terminal_host.host_named(host).report_session(session_id, place["pane_id"], source)
     _append(path, entry)
     return entry
 
 
-def read_space(server: str, workspace: str) -> list:
+def read_space(server: str, workspace: str, host=None) -> list:
     try:
-        return _read_rows(registry_path(server, workspace))
+        return _read_rows(registry_path(server, workspace, host))
     except programme_home.ProgrammeHomeError:
         return []
 
@@ -174,14 +241,14 @@ def _all_rows() -> list:
     return rows
 
 
-def lookup(session_id, server=None, workspace=None, *, include_headless=False):
+def lookup(session_id, server=None, workspace=None, *, include_headless=False, host=None):
     if not session_id:
         return None
     def hits(rows):
         return [r for r in rows if r.get("session_id") == session_id
                 and (include_headless or r.get("interactive"))]
 
-    found = hits(read_space(server, workspace)) if server and workspace else []
+    found = hits(read_space(server, workspace, host)) if server and workspace else []
     found = found or hits(_all_rows())
     if not found:
         return None
@@ -208,10 +275,24 @@ def latest_rows(*, include_headless=False) -> dict:
     return latest
 
 
+def host_of_row(row) -> str:
+    return (row or {}).get("host") or programme_home.DEFAULT_HOST
+
+
+def host_of_session(session_id, env) -> str:
+    """The host the registry recorded for the session; the environment only picks one for a session with no row (KTD3)."""
+    row = lookup(session_id, include_headless=True) if session_id else None
+    if row:
+        return host_of_row(row)
+    return terminal_host.detect(env).name or programme_home.DEFAULT_HOST
+
+
 def space_of_session(session_id, env):
+    """(server, workspace) for a herdr session, (server, workspace, host) for any other host."""
     row = lookup(session_id, include_headless=True)
     if row and row.get("server") and row.get("workspace"):
-        return row["server"], row["workspace"]
+        host = host_of_row(row)
+        return (row["server"], row["workspace"]) + ((host,) if host != programme_home.DEFAULT_HOST else ())
     workspace = env.get("HERDR_WORKSPACE_ID")
     if not workspace and ":" in (env.get("HERDR_PANE_ID") or ""):
         workspace = env["HERDR_PANE_ID"].split(":", 1)[0]
@@ -233,7 +314,8 @@ def driver_panes(now=None) -> list:
         if marker in seen:
             continue
         seen.add(marker)
-        row = lookup(lease.get("session_id"), lease.get("server"), lease.get("workspace"))
+        row = lookup(lease.get("session_id"), lease.get("server"), lease.get("workspace"),
+                     host=lease.get("host"))
         if row and row.get("pane_id"):
             out.append({"run": lease.get("run"), "session_id": lease.get("session_id"),
                         "pane_id": row["pane_id"], "terminal_id": row.get("terminal_id"),
@@ -261,7 +343,7 @@ def _cli(argv) -> int:
         raw = sys.stdin.read() if not sys.stdin.isatty() else ""
         data = json.loads(raw) if raw else {}
         if isinstance(data, dict):
-            record_session(data, os.environ)
+            record_session(data, os.environ, process_tty())
     except Exception:
         pass
     return 0

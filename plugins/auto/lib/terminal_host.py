@@ -90,13 +90,79 @@ class TerminalHost:
     def is_host_command(self, argv) -> bool:
         return False
 
+    def report_session(self, session_id, pane_id, source) -> None:
+        return None
 
-_current = None
+
+TEST_HOST_ENV = "AUTO_TEST_HOST"
+FALLBACK_HOST = "herdr"
+_FIX_BOTH = "start Claude inside one multiplexer only: unset HERDR_PANE_ID and HERDR_ENV, or unset REX_SESSION"
+_FIX_CMUX = "run Claude from a herdr pane, a Rex session or a Ghostty window; cmux is not supported"
+
+_hosts = {}
+_server_probe = []
+
+
+class Detection:
+    """What the session environment announces. A name of None means auto must refuse; `why` and `fix` then say how."""
+    __slots__ = ("name", "announced", "why", "fix")
+
+    def __init__(self, name=None, announced=False, why=None, fix=None):
+        self.name, self.announced, self.why, self.fix = name, announced, why, fix
+
+
+def key_hosts() -> tuple:
+    """Hosts a space key may carry. stub exists only while AUTO_TEST_HOST selects it, so no production state names it."""
+    return HOSTS + (("stub",) if os.environ.get(TEST_HOST_ENV) == "stub" else ())
+
+
+def _herdr_server_up() -> bool:
+    if not _server_probe:
+        _server_probe.append(load_lib_module("host_herdr").server_running())
+    return _server_probe[0]
+
+
+def detect(env=None) -> Detection:
+    """Environment variables only SELECT an adapter (KTD3); the adapter then proves the pane from its own host."""
+    env = os.environ if env is None else env
+    if env.get(TEST_HOST_ENV) == "stub":
+        return Detection("stub", True)
+    announced = [name for name, hit in (("herdr", env.get("HERDR_PANE_ID") or env.get("HERDR_ENV")),
+                                        ("rex", env.get("REX_SESSION"))) if hit]
+    if len(announced) == 2:
+        return Detection(None, True, "this session announces both herdr and Rex, so auto cannot tell which host to type into",
+                         _FIX_BOTH)
+    if announced:
+        return Detection(announced[0], True)
+    if env.get("CMUX_WORKSPACE_ID"):
+        return Detection(None, True, "this session runs in cmux, which auto does not support", _FIX_CMUX)
+    if env.get("TERM_PROGRAM") == "ghostty":
+        return Detection("herdr" if _herdr_server_up() else "ghostty", True)
+    return Detection(FALLBACK_HOST, False)
+
+
+class RefusedHost(TerminalHost):
+    """Stands in when detection refuses: every capability answers refuse with the detection's fix line."""
+    name = ""
+
+    def __init__(self, detection):
+        self._detection = detection
+
+    def _unimplemented(self, method) -> HostResult:
+        return refuse(self._detection.why, fix=self._detection.fix)
+
+
+def _build(name) -> TerminalHost:
+    module = {"herdr": "host_herdr", "rex": "host_rex", "ghostty": "host_ghostty", "stub": "host_stub"}[name]
+    return getattr(load_lib_module(module), name.capitalize() + "Host")()
+
+
+def host_named(name) -> TerminalHost:
+    if name not in _hosts:
+        _hosts[name] = _build(name)
+    return _hosts[name]
 
 
 def current(env=None) -> TerminalHost:
-    """Detection arrives with the Rex and Ghostty hosts; until then every session is herdr."""
-    global _current
-    if _current is None:
-        _current = load_lib_module("host_herdr").HerdrHost()
-    return _current
+    found = detect(env)
+    return RefusedHost(found) if found.name is None else host_named(found.name)

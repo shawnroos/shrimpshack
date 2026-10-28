@@ -22,6 +22,7 @@ HERDR_TIMEOUT = 5.0
 # SessionStart's hook timeout is 5s; both herdr calls together must stay well under it.
 PANE_GET_TIMEOUT = 1.0
 REPORT_TIMEOUT = 1.0
+SERVER_PROBE_TIMEOUT = 1.0
 NOTIFY_TIMEOUT = 5
 POLL_SECONDS = 1.0
 BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
@@ -211,3 +212,15 @@ class HerdrHost(terminal_host.TerminalHost):
 
 def _herdr(args):
     return programme_exec.bounded(["herdr"] + list(args), programme_exec.source_timeout(HERDR_TIMEOUT))
+
+
+def server_running() -> bool:
+    binary = shutil.which("herdr")
+    if not binary:
+        return False
+    try:
+        done = subprocess.run([binary, "status", "server"], capture_output=True, text=True,
+                              timeout=SERVER_PROBE_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.strip() == "status: running" for line in done.stdout.splitlines())

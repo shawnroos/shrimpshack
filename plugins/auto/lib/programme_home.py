@@ -28,6 +28,7 @@ run_record_core = load_lib_module("run_record_core")
 DATA_DIR_ENV = "CLAUDE_AUTO_DATA_DIR"
 DEFAULT_DATA_DIR = "~/.claude/plugins/data/auto-shrimpshack"
 DEFAULT_SERVER = "default"
+DEFAULT_HOST = "herdr"
 DEFAULT_CADENCE_SECONDS = 3600
 ORPHAN_CADENCE_PERIODS = 2
 
@@ -74,6 +75,12 @@ class UnsafeDataDir(ProgrammeHomeError):
 
 class UnsafeSegment(ProgrammeHomeError):
     pass
+
+
+class HostMismatch(ProgrammeHomeError):
+    def __init__(self, session_host, space_host, what):
+        self.fix = f"run Claude from a {space_host} terminal, or name a {session_host} space instead"
+        super().__init__(f"this session runs in {session_host}, so it cannot {what} a {space_host} space; {self.fix}")
 
 
 class LeaseHeld(ProgrammeHomeError):
@@ -165,24 +172,85 @@ def stop_shown_path(run_id: str, session_id: str) -> str:
     return os.path.join(home_path(run_id), f".stop-shown-{safe}.json")
 
 
+def check_host(host) -> str:
+    host = host or DEFAULT_HOST
+    if host not in load_lib_module("terminal_host").key_hosts():
+        raise UnsafeSegment(f"unknown terminal host: {host!r}")
+    return host
+
+
+def check_host_id(value) -> str:
+    # A "." is what tells a herdr key from a host-qualified one, and "--" is the host-qualified separator.
+    check_segment(value)
+    if "." in value or "--" in value:
+        raise UnsafeSegment(f"unsafe host id: {value!r}")
+    return value
+
+
+def space_parts(space) -> tuple:
+    """(server, workspace, host) of a lease, a remit entry or a registry row; host defaults to herdr."""
+    return space.get("server"), space.get("workspace"), (space.get("host") or DEFAULT_HOST)
+
+
 def parse_space(spec):
+    """(server, workspace) for herdr, (server, workspace, host) for any other host."""
+    host = DEFAULT_HOST
     if isinstance(spec, dict):
-        server, workspace = spec.get("server") or DEFAULT_SERVER, spec.get("workspace")
+        server, workspace, host = spec.get("server") or DEFAULT_SERVER, spec.get("workspace"), spec.get("host") or DEFAULT_HOST
     elif isinstance(spec, (list, tuple)) and len(spec) == 2:
         server, workspace = spec
+    elif isinstance(spec, (list, tuple)) and len(spec) == 3:
+        server, workspace, host = spec
     elif isinstance(spec, str) and "." in spec:
         server, workspace = spec.split(".", 1)
+    elif isinstance(spec, str) and spec.count("--") == 2 and spec.split("--", 1)[0] in load_lib_module("terminal_host").key_hosts():
+        host, server, workspace = spec.split("--")
     else:
         server, workspace = DEFAULT_SERVER, spec
-    return check_segment(server), check_segment(workspace)
+    host = check_host(host)
+    if host == DEFAULT_HOST:
+        return check_segment(server), check_segment(workspace)
+    return check_host_id(server), check_host_id(workspace), host
 
 
-def space_key(server: str, workspace: str) -> str:
-    return f"{check_segment(server)}.{check_segment(workspace)}"
+def space_parts_of(spec) -> dict:
+    """The remit-entry form of any space spec, for host checks and key building."""
+    return remit_entry(spec)
 
 
-def lease_path(server: str, workspace: str) -> str:
-    return _contained(os.path.join(leases_dir(), space_key(server, workspace) + ".json"))
+def remit_entry(spec) -> dict:
+    return _remit_entry(*parse_space(spec))
+
+
+def space_key(server: str, workspace: str, host=None) -> str:
+    host = check_host(host)
+    if host == DEFAULT_HOST:
+        return f"{check_segment(server)}.{check_segment(workspace)}"
+    return f"{host}--{check_host_id(server)}--{check_host_id(workspace)}"
+
+
+def parse_key(key: str) -> tuple:
+    """Inverse of space_key: (server, workspace, host)."""
+    if "." in key:
+        server, workspace = key.split(".", 1)
+        return server, workspace, DEFAULT_HOST
+    host, server, workspace = key.split("--")
+    return server, workspace, host
+
+
+def lease_path(server: str, workspace: str, host=None) -> str:
+    return _contained(os.path.join(leases_dir(), space_key(server, workspace, host) + ".json"))
+
+
+def lease_path_of(lease: dict) -> str:
+    return lease_path(*space_parts(lease))
+
+
+def refuse_host_mismatch(session_host, lease_or_space, what="act on") -> None:
+    """R3: a space has one host. Raised before any write so a wrong-host session changes nothing."""
+    space_host = space_parts(lease_or_space)[2]
+    if (session_host or DEFAULT_HOST) != space_host:
+        raise HostMismatch(session_host or DEFAULT_HOST, space_host, what)
 
 
 def _now(now=None) -> datetime.datetime:
@@ -308,10 +376,17 @@ def empty_tracker_scope() -> dict:
     return {part: [] for part in TRACKER_SCOPE_PARTS}
 
 
+def _remit_entry(server, workspace, host=None) -> dict:
+    entry = {"server": server, "workspace": workspace}
+    if host and host != DEFAULT_HOST:
+        entry["host"] = host
+    return entry
+
+
 def new_programme_block(spaces, now_iso: str) -> dict:
     return {
         "remit": {
-            "spaces": [{"server": s, "workspace": w} for s, w in spaces],
+            "spaces": [_remit_entry(*space) for space in spaces],
             "tabs": [],
             "repos": [],
             "tracker": empty_tracker_scope(),
@@ -612,7 +687,7 @@ def driven_runs(session_id, now=None) -> list:
     return found
 
 
-def _write_lease(server, workspace, run_id, home, session_id, now_iso):
+def _write_lease(server, workspace, run_id, home, session_id, now_iso, host=None):
     lease = {
         "programme_format": run_record_core.PROGRAMME_FORMAT,
         "run": run_id,
@@ -622,12 +697,14 @@ def _write_lease(server, workspace, run_id, home, session_id, now_iso):
         "workspace": workspace,
         "created_at": now_iso,
     }
+    if check_host(host) != DEFAULT_HOST:
+        lease["host"] = host
 
     def write(fh):
         json.dump(lease, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
-    atomic_write(lease_path(server, workspace), write, ".lease.")
+    atomic_write(lease_path(server, workspace, host), write, ".lease.")
 
 
 def atomic_write(path, write, prefix, folder=None) -> None:
@@ -729,7 +806,7 @@ def _remit_keys(record) -> list:
     keys = []
     for space in ((record.get("programme") or {}).get("remit") or {}).get("spaces") or []:
         try:
-            keys.append(space_key(space.get("server") or DEFAULT_SERVER, space.get("workspace")))
+            keys.append(space_key(space.get("server") or DEFAULT_SERVER, space.get("workspace"), space.get("host")))
         except (ProgrammeHomeError, AttributeError):
             continue
     return keys
@@ -771,12 +848,12 @@ def _claimants(now, stamp) -> dict:
     return found
 
 
-def _republish(claim, server, workspace, stamp) -> None:
+def _republish(claim, server, workspace, stamp, host=None) -> None:
     lease = claim["lease"]
-    if claim["record"] is None or read_lease(lease_path(server, workspace)) is not None:
+    if claim["record"] is None or read_lease(lease_path(server, workspace, host)) is not None:
         return
     _write_lease(server, workspace, lease["run"], lease["home"], lease["session_id"],
-                 lease.get("created_at") or stamp)
+                 lease.get("created_at") or stamp, host)
 
 
 def _test_pause(point) -> None:
@@ -797,13 +874,13 @@ def reconcile_run_leases(run_id: str) -> list:
         home, sid = home_path(run_id), record.get("driving_session_id")
         written = []
         for key in _remit_keys(record):
-            server, workspace = key.split(".", 1)
-            lease = read_lease(lease_path(server, workspace))
+            server, workspace, host = parse_key(key)
+            lease = read_lease(lease_path(server, workspace, host))
             if lease and (lease.get("corrupt") or lease.get("run") != run_id):
                 raise LeaseHeld(key, lease, lease_status(lease))
             if lease is None or lease.get("session_id") != sid or lease.get("home") != home:
                 _write_lease(server, workspace, run_id, home, sid,
-                             (lease or {}).get("created_at") or _iso(_now()))
+                             (lease or {}).get("created_at") or _iso(_now()), host)
                 written.append(key)
                 _test_pause("after_write")
         return written
@@ -821,6 +898,7 @@ def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=N
     parsed = []
     for spec in spaces or []:
         space = parse_space(spec)
+        space = space + (DEFAULT_HOST,) if len(space) == 2 else space
         if space not in parsed:
             parsed.append(space)
     if not parsed:
@@ -833,20 +911,20 @@ def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=N
     # _end_locked and init_run_record). Every caller holding both must take them
     # in this order or two writers can deadlock.
     def body():
-        for server, workspace in parsed:
-            lease = read_lease(lease_path(server, workspace))
+        for server, workspace, host in parsed:
+            lease = read_lease(lease_path(server, workspace, host))
             if lease_status(lease, now) == "expired":
                 _end_locked(lease["run"], "agreement_unaccepted", stamp)
         claimants = _claimants(now, stamp)
-        for server, workspace in parsed:
-            lease = read_lease(lease_path(server, workspace))
+        for server, workspace, host in parsed:
+            lease = read_lease(lease_path(server, workspace, host))
             status = lease_status(lease, now)
             if status not in ("free", "ended"):
-                raise LeaseHeld(space_key(server, workspace), lease, status)
-            claim = claimants.get(space_key(server, workspace))
+                raise LeaseHeld(space_key(server, workspace, host), lease, status)
+            claim = claimants.get(space_key(server, workspace, host))
             if claim is not None:
-                _republish(claim, server, workspace, stamp)
-                raise LeaseHeld(space_key(server, workspace), claim["lease"], claim["status"])
+                _republish(claim, server, workspace, stamp, host)
+                raise LeaseHeld(space_key(server, workspace, host), claim["lease"], claim["status"])
         home = home_path(run_id)
         if os.path.exists(home):
             raise ProgrammeHomeError(f"programme home already exists: {home}")
@@ -859,9 +937,9 @@ def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=N
             run_kind="programme", programme=block,
             driving_session_id=session_id,
         )
-        for server, workspace in parsed:
-            _write_lease(server, workspace, run_id, home, session_id, stamp)
+        for server, workspace, host in parsed:
+            _write_lease(server, workspace, run_id, home, session_id, stamp, host)
         return {"run": run_id, "home": home,
-                "leases": [space_key(s, w) for s, w in parsed]}
+                "leases": [space_key(s, w, h) for s, w, h in parsed]}
 
     return _with_leases_lock(body)

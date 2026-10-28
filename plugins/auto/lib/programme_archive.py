@@ -145,8 +145,7 @@ def _receipt(resource, part, outcome, source, detail, sid) -> bool:
 
 
 def _lease_observation(run_id, space):
-    server, workspace = space.split(".", 1)
-    lease = programme_home.read_lease(programme_home.lease_path(server, workspace))
+    lease = programme_home.read_lease(programme_home.lease_path(*programme_home.parse_key(space)))
     if lease is None:
         return "confirmed", "lease_file", "the lease file is gone"
     if not lease.get("corrupt") and lease.get("run") != run_id:
@@ -682,7 +681,7 @@ def _h_successor(host, argv):
                            "not_sealed")
     info = _seal_view(source)
     body = _read_manifest(source, info)
-    spaces = opts["space"] or [f"{s.get('server')}.{s.get('workspace')}"
+    spaces = opts["space"] or [programme_home.space_key(*programme_home.space_parts(s))
                                for s in (programme.get("remit") or {}).get("spaces") or []]
     link = {"run": source, "manifest": info["manifest"]["digest"], "sealed_revision": info["sealed_revision"],
             "sealed_at": info["sealed_at"],

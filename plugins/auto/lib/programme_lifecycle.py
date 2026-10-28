@@ -25,6 +25,7 @@ run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 session_registry = load_lib_module("session_registry")
+terminal_host = load_lib_module("terminal_host")
 driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
@@ -106,7 +107,7 @@ def _lease_for(host, opts, sid):
 
 
 def _fresh_status(lease) -> str:
-    current = programme_home.read_lease(programme_home.lease_path(lease["server"], lease["workspace"]))
+    current = programme_home.read_lease(programme_home.lease_path_of(lease))
     if not current or current.get("corrupt") or current.get("run") != lease.get("run"):
         return "free"
     return programme_home.lease_status(current)
@@ -193,7 +194,7 @@ def _move(run, new_sid, kind, sid, extra, cites=None) -> dict:
     programme_authority().write(home, run, mutate, compose)
     for _, lease in leases:
         programme_home._write_lease(lease["server"], lease["workspace"], run, lease["home"], new_sid,
-                                    lease.get("created_at") or _stamp())
+                                    lease.get("created_at") or _stamp(), lease.get("host"))
     return seen["moved"]
 
 
@@ -220,13 +221,33 @@ def _finish(host, run, kind, sid, payload, cites=None, journal=True) -> None:
     host._emit(dict({"ok": True, "run": run, "kind": kind}, **payload))
 
 
+def _session_host(host, sid) -> str:
+    row = session_registry.lookup(sid, include_headless=True) if sid else None
+    if row:
+        return session_registry.host_of_row(row)
+    found = terminal_host.detect()
+    if found.name is None:
+        raise host.ProgrammeError(found.why, fix=found.fix)
+    return found.name
+
+
+def _check_host(host, session_host, space, what) -> None:
+    try:
+        programme_home.refuse_host_mismatch(session_host, space, what)
+    except programme_home.HostMismatch as exc:
+        raise host.ProgrammeError(str(exc), fix=exc.fix) from None
+
+
 def _h_start(host, argv):
     positional, opts = host._parse(_tokens(argv), multi=("space",))
     sid = _caller(host)
+    session_host = _session_host(host, sid)
     spaces = list(opts["space"]) + positional or [session_registry.space_of_session(sid, os.environ)]
     if not spaces[0]:
         raise host.ProgrammeError("this session is not in a herdr space; start from a herdr pane "
                                   "or pass --space <server.workspace>")
+    for spec in spaces:
+        _check_host(host, session_host, programme_home.space_parts_of(spec), "start a programme in")
     made = programme_home.create_programme(spaces, sid)
     _finish(host, made["run"], "programme_started", sid,
             {"home": made["home"], "leases": made["leases"], "session": sid})
@@ -290,7 +311,7 @@ def _live_driver(lease, presence, name) -> str:
         and label[-1] not in "'\""
     reply = presence.get("session_id") or (label if typable else None) or presence.get("pane_id")
     wrong = f"--replace {name} does not name the current PM. " if name else ""
-    space = programme_home.space_key(lease.get("server"), lease.get("workspace"))
+    space = programme_home.space_key(*programme_home.space_parts(lease))
     return (f"{wrong}{_driver_words(presence)} is still the live PM for space {space}: "
             f"{presence.get('why')}. To replace it, type: /auto:programme-takeover --replace {reply}  "
             "This session then drives the programme, and that PM's next programme write is refused. "
@@ -313,7 +334,7 @@ def _check_movable(lease, run, sid, status) -> None:
 
 def _fresh_state(lease) -> tuple:
     # (status, record); record is None when the status did not come from a readable run record.
-    current = programme_home.read_lease(programme_home.lease_path(lease["server"], lease["workspace"]))
+    current = programme_home.read_lease(programme_home.lease_path_of(lease))
     if not current or current.get("corrupt") or current.get("run") != lease.get("run"):
         return "free", None
     status, read = programme_home.lease_state(current)
@@ -322,10 +343,11 @@ def _fresh_state(lease) -> tuple:
 
 def _in_space(run, sid) -> bool:
     # Only a registry row counts: HERDR_* env is set by the caller, so any session could claim the space.
+    # The tab space name is only a label: the row must sit in the lease's own host, server and workspace.
     for _, lease in _run_leases(run):
-        space = (lease.get("server"), lease.get("workspace"))
-        row = session_registry.lookup(sid, *space)
-        if row and (row.get("server"), row.get("workspace")) == space:
+        space = programme_home.space_parts(lease)
+        row = session_registry.lookup(sid, space[0], space[1], host=space[2])
+        if row and (row.get("server"), row.get("workspace"), session_registry.host_of_row(row)) == space:
             return True
     return False
 
@@ -398,6 +420,7 @@ def _h_takeover(host, argv):
     _, opts = host._parse(_tokens(argv), values=("run", "replace", "prompt"))
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
+    _check_host(host, _session_host(host, sid), lease, "take over")
     run = lease["run"]
     if opts.get("prompt"):
         return _took_over(host, run, sid, _prompt_takeover(host, lease, run, sid, opts["prompt"]))
@@ -524,6 +547,7 @@ def _h_become_pm(host, argv):
         raise ValueError("usage: become-pm (it takes no arguments)")
     sid = _caller(host)
     out = {"session": sid}
+    session_host = _session_host(host, sid)
     driven = programme_home.lease_driven_by(sid)
     if driven:
         step = dict(out, step="already-pm", run=driven["run"], driver=sid)
@@ -533,6 +557,7 @@ def _h_become_pm(host, argv):
             _become_refused(host, out, "this session is not in a herdr space, so it cannot be a space's PM",
                             "run Claude from a pane in the herdr space, then run `programme.sh become-pm` there")
         out["space"] = programme_home.space_key(*space)
+        _check_host(host, session_host, programme_home.space_parts_of(space), "become the PM of")
         step = _become_step(host, out, sid, space)
     host._emit(step)
     if step["step"] == "ask-shawn":
@@ -741,9 +766,9 @@ def parse_remit(doc, current) -> dict:
     if "spaces" in doc:
         spaces = []
         for spec in _capped(doc["spaces"], "spaces", REMIT_CAPS["spaces"]):
-            server, workspace = programme_home.parse_space(spec)
-            if {"server": server, "workspace": workspace} not in spaces:
-                spaces.append({"server": server, "workspace": workspace})
+            entry = programme_home.remit_entry(spec)
+            if entry not in spaces:
+                spaces.append(entry)
         if not spaces:
             raise _remit_error("the remit needs at least one herdr space")
         out["spaces"] = spaces
@@ -761,7 +786,7 @@ def parse_remit(doc, current) -> dict:
 
 
 def _space_key(space) -> str:
-    return f"{space['server']}.{space['workspace']}"
+    return programme_home.space_key(*programme_home.space_parts(space))
 
 
 def _identity(part, entry) -> str:
@@ -804,7 +829,7 @@ def _move_leases(run, sid, home, changes) -> None:
     for part, how, space in changes:
         if part != "spaces":
             continue
-        path = programme_home.lease_path(space["server"], space["workspace"])
+        path = programme_home.lease_path_of(space)
         lease = programme_home.read_lease(path)
         ours = bool(lease) and lease.get("run") == run
         if how == "added" and not ours:
@@ -816,7 +841,7 @@ def _move_leases(run, sid, home, changes) -> None:
         if how == "removed" and ours:
             os.unlink(path)
         elif how == "added" and not ours:
-            programme_home._write_lease(space["server"], space["workspace"], run, home, sid, stamp)
+            programme_home._write_lease(space["server"], space["workspace"], run, home, sid, stamp, space.get("host"))
 
 
 def _h_set_remit(host, argv):

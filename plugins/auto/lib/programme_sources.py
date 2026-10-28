@@ -300,7 +300,7 @@ def propose(programme, panes, drivers, issues_found, verified, scope=None, info=
             continue
         ident, signals = _choose(found, verified)
         item_id = (f"{programme_record.ISSUE_SOURCE}:{ident}" if ident
-                   else f"{programme_record.ISSUELESS_SOURCE}:" + pane["pane_id"].replace(":", "/"))
+                   else f"{programme_home.DEFAULT_HOST}:" + pane["pane_id"].replace(":", "/"))
         action, existing = _existing(programme, item_id, pane["pane_id"])
         entry = {"item": item_id, "action": action, "pane": pane["pane_id"], "issue": ident,
                  "signals": signals, "terminal_id": pane["terminal_id"],

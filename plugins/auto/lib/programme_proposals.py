@@ -88,7 +88,7 @@ def settle_remit(term, changes) -> None:
     if not proposal:
         return
     add = (proposal.get("extras") or {}).get("add")
-    added = {f"{e['server']}.{e['workspace']}" for part, how, e in changes if part == "spaces" and how == "added"}
+    added = {programme_home.space_key(*programme_home.space_parts(e)) for part, how, e in changes if part == "spaces" and how == "added"}
     _settle(term, bool(add) and add in added)
 
 
@@ -121,10 +121,10 @@ def _remit_proposal(host, term, value, opts):
     if value is not None:
         raise ValueError("usage: propose-term remit <option> | --add <server.workspace>")
     try:
-        server, workspace = programme_home.parse_space(opts["add"])
+        space = programme_home.parse_space(opts["add"])
     except programme_home.ProgrammeHomeError as exc:
         raise host.ProgrammeError(f"--add needs a herdr space: {exc}") from None
-    return term.get("value"), {"add": programme_home.space_key(server, workspace)}
+    return term.get("value"), {"add": programme_home.space_key(*space)}
 
 
 def _proposal(host, term, value, opts):
