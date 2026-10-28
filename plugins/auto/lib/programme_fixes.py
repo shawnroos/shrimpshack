@@ -124,6 +124,7 @@ FIXES = {
     "start": _START,
     "start-worker": _ITEM,
     "status": _READ,
+    "override-focus": _PICKED,
     "swap-item": _PICKED,
     "sweep": _WRITE,
     "take-recommendations": _PICK_ID,

@@ -375,8 +375,14 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      `P swap-item <out> <in> --prompt <pick id>`, then send the returned
      `stop_prompt` to the parked worker with `P prompt-item <out> "<stop_prompt>"`
      and start `<in>` once the room is there. On "Queue <in>", or when the
-     newcomer does not outrank anything, leave it queued. `--despite focus`
-     starts a held item anyway; use it only when Shawn said to.
+     newcomer does not outrank anything, leave it queued. When the
+     budget must be broken anyway, ask Shawn in one AskUserQuestion picker with
+     two options: the exact text `P approval-label override-focus <item>`
+     prints, and "Leave it queued". On the override pick, run
+     `P override-focus <item> --prompt <pick id>`, then start the item with
+     `P start-worker <item> --despite focus -- <spinoff arguments>`. The
+     approval covers one start; `--despite focus` without it is refused. A
+     parked item's old-worker hold is never overridden.
    - Before you start or prompt a worker on new work, find what it waits for
      with section 3 of [references/sequencing.md](references/sequencing.md),
      and re-check the requirements with sections 1, 3 and 10 of

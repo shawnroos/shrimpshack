@@ -722,6 +722,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `dropped_reason` | string or `null` |
 | `size` | a name in `agreement.terms.focus_budget.scale`, or `null`. Written by `size-item` and `add-item --size`; the gate reads its points from the scale |
 | `held`, `held_at` | `null`, or a reason string and the `<iso>` time it was first held. The focus gate sets them on a refused start; `focus-recheck` and a start that now fits clear them. A held item is not in play, is left out of the predicate's actionable reasons, and is listed in held order by the status view. `swap-item` sets `held` to `parked: swapped out for <item>` |
+| `focus_override` | `null`, or the prompt id of the pick that approved one `start-worker --despite focus` for this item. `override-focus` sets it; the start that uses it clears it |
 | `parked_pane` | the pane id of the worker `swap-item` parked, or `null`. While that pane holds a live worker the item cannot start again; clearing `held` clears it |
 | `history[]` | `{at, kind, …}`; kinds include `sized` (`size`), `parked` (`for`, `prompt_id`), `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `trajectory_changed`, `started`, `start_failed`, `reopened` |
 
@@ -740,7 +741,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `prompt`, `takeover_request`, `handover_request`, `end_request`,
 `blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
 `term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviours_kept`, `rule_proposed`,
-`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`, `item_swapped`, `focus_noted`, `focus_overridden`,
+`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`, `item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`,
 `item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
 `item_handed`, `handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`, `claim`, `claims_read`, `working_now`,
 `queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
@@ -751,7 +752,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `permission_settled`, `blocked_settings_write`.
 
 - `item_held {item, reason}` is journaled by `start-worker` each time the focus gate refuses a start (one row per refusal).
-  `focus_overridden {item, would_hold}` is journaled when `--despite focus` starts an item the gate would have held.
+  `focus_override_approved {item, next, prompt_id, quote}` is journaled by `override-focus`.
+  `focus_overridden {item, would_hold, approval_prompt_id}` is journaled when an approved `--despite focus` starts an item the gate would have held.
   `item_swapped {out, in, parked_pane, decision_id, stop_prompt, next}` is journaled by `swap-item`;
   `focus_noted {subagents}` by `focus-note`. `size-item` journals `item_updated`.
 - `trajectory_changed {item, old_hash, new_hash}`: one row per item whose step path changed under the same

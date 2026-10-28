@@ -224,14 +224,18 @@ def reason_for(host, record, programme, key):
 _NEXT_STEPS = {
     OLD_WORKER_KIND: "Next: once the old worker has stopped, start {key} again.",
     UNSIZED: "Next: `size-item {key} <size>`, then start it again.",
-    COUNT: "Next: retry once the count is readable, or pass `--despite {override}`.",
+    COUNT: "Next: retry once the count is readable, or {override_step}",
 }
 _QUEUE_STEP = ("Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, "
-               "or start it anyway with `--despite {override}`.")
+               "or {override_step}")
+_OVERRIDE_STEP = ("ask Shawn to approve breaking the budget: offer `programme.sh approval-label override-focus "
+                  "{key}` through AskUserQuestion, run `override-focus {key} --prompt <pick id>`, then start "
+                  "again with `--despite {override}`.")
 
 
 def _next_step(hold, key) -> str:
-    return _NEXT_STEPS.get(hold.kind, _QUEUE_STEP).format(key=key, override=OVERRIDE)
+    step = _OVERRIDE_STEP.format(key=key, override=OVERRIDE)
+    return _NEXT_STEPS.get(hold.kind, _QUEUE_STEP).format(key=key, override_step=step)
 
 
 def _commit(host, run_id, home, keys, change, kind=None, payload=None) -> None:
@@ -261,6 +265,11 @@ def _clear_held(item) -> None:
     item.update(held=None, held_at=None, parked_pane=None)
 
 
+def _consume_override(item) -> None:
+    _clear_held(item)
+    item["focus_override"] = None
+
+
 def _park(item, newcomer, prompt_id) -> None:
     item.update(held=f"parked: swapped out for {newcomer}", held_at=run_record_core.now_iso(),
                 parked_pane=item["owner"]["pane"])
@@ -278,10 +287,16 @@ def admit(host, run_id, home, record, programme, key, despite) -> None:
         if item.get("held"):
             _commit(host, run_id, home, [key], _clear_held)
         return
-    if OVERRIDE in despite and hold.kind != OLD_WORKER_KIND:
-        _commit(host, run_id, home, [key], _clear_held, "focus_overridden", {"item": key, "would_hold": hold.text})
+    asked = OVERRIDE in despite and hold.kind != OLD_WORKER_KIND
+    if asked and item.get("focus_override"):
+        _commit(host, run_id, home, [key], _consume_override, "focus_overridden",
+                {"item": key, "would_hold": hold.text, "approval_prompt_id": item["focus_override"]})
         return
     _commit(host, run_id, home, [key], _set_held(hold.text), "item_held", {"item": key, "reason": hold.text})
+    if asked:
+        step = _OVERRIDE_STEP.format(key=key, override=OVERRIDE)
+        raise host.ProgrammeError(f"focus budget holds {key}: {hold.text}. `--despite {OVERRIDE}` alone "
+                                  f"overrides nothing; it needs Shawn's pick first. Next: {step}")
     raise host.ProgrammeError(f"focus budget holds {key}: {hold.text}. {_next_step(hold, key)}")
 
 
@@ -461,6 +476,27 @@ def _h_swap_item(host, argv):
                        verb="swap-item")
 
 
+def _h_override_focus(host, argv):
+    positional, opts = host._parse(argv, values=("run", "prompt"))
+    if len(positional) != 1 or not opts.get("prompt"):
+        raise ValueError("usage: override-focus <item> --prompt <pick id> [--run <id>]")
+
+    def change(programme, prompt, rec):
+        if prompt.get("origin") != "picked":
+            raise host.ProgrammeError(
+                f"override-focus needs a pick of its exact label, not typed or suggested text; run "
+                f"`programme.sh approval-label override-focus {positional[0]}`")
+        key = host.programme_record._resolve(programme, positional[0])
+        item = programme["items"][key]
+        if item["state"] in programme_home.FINISHED_ITEM_STATES:
+            raise host.ProgrammeError(f"item {key!r} is {item['state']}")
+        item["focus_override"] = prompt["prompt_id"]
+        return {"item": key, "next": f"start-worker {key} --despite {OVERRIDE}"}
+
+    return host._write(opts, change, "focus_override_approved", prompt_id=opts["prompt"], needs_prompt=True,
+                       verb="override-focus")
+
+
 _SPECS = (
     ("size-item", _h_size_item, "<item> <size> [--run <id>]",
      "an unknown item; a size that is not a name in the agreement's focus_budget scale (the refusal lists "
@@ -474,6 +510,11 @@ _SPECS = (
      "refusal names the missing points); herdr unreadable. Parks <out>: held with a reason, its old pane "
      "recorded, its points freed, and returns the stop prompt for its worker. Records a work_sequencing "
      "decision naming both items. <in> then starts through start-worker."),
+    ("override-focus", _h_override_focus, "<item> --prompt <pick id> [--run <id>]",
+     "typed or suggested text (only a pick whose answer is exactly the approval-label for this command "
+     "approves it); a finished item. Records one approval on the item. The next `start-worker --despite "
+     "focus` for it passes the focus gate once and uses the approval up; without it that flag is refused. "
+     "The old-worker hold is never overridden."),
     ("focus-recheck", _h_focus_recheck, "[--run <id>]",
      "any session but the driving one. Clears `held` on each held item that now fits the focus budget, in "
      "held order, counting the room each cleared item takes before testing the next; leaves the rest held "

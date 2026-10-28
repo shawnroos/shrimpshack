@@ -338,6 +338,37 @@ limit() {
   [ "$CODE" -eq 0 ] || echo "limit failed: $OUT"
 }
 
+PICKS="${WORK}/transcripts"
+mkdir -p "$PICKS"
+pickit() {
+  run_py "${2:-$RUN}" "$1" "$PICKS" <<'EOF2'
+import copy, pathlib, uuid
+ps = load_lib_module("programme_pick_source")
+fx = [json.loads(l) for l in open(os.path.join(sys.argv[1], "tests/fixtures/askuser_transcript.jsonl"))]
+ASK, ANSWER = fx[0], fx[1]
+run, answer, folder = args
+sid, tid, q = "sess-pm", "toolu_" + uuid.uuid4().hex[:10], "Swap or queue?"
+answers = {q: answer}
+path = pathlib.Path(folder) / (sid + ".jsonl")
+ask = copy.deepcopy(ASK); ask.update(uuid="a-" + tid, sessionId=sid)
+ask["message"]["content"][0].update(id=tid, input={"questions": [
+    {"question": q, "header": "Setup", "multiSelect": False,
+     "options": [{"label": answer, "description": ""}, {"label": "other", "description": ""}]}]})
+res = copy.deepcopy(ANSWER)
+res.update(uuid="u-" + tid, sessionId=sid, sourceToolAssistantUUID="a-" + tid,
+           toolUseResult={"questions": [{"question": q}], "answers": answers, "annotations": {}})
+res["message"]["content"][0].update(tool_use_id=tid)
+with path.open("a") as stream:
+    stream.write(json.dumps(ask) + "\n" + json.dumps(res) + "\n")
+source = ps.capture({"transcript_path": str(path), "session_id": sid, "tool_use_id": tid,
+                     "tool_response": {"answers": answers}})
+print(pj.append_prompt(run, sid, ps.summary(answers), "unknown", source=source)["prompt_id"])
+EOF2
+}
+swap_label() { "$PY" "$PROG" approval-label swap-item "${NS}$1" "${NS}$2"; }
+override_label() { "$PY" "$PROG" approval-label override-focus "${NS}$1"; }
+approve_override() { prog override-focus "${NS}$1" --prompt "$(pickit "$(override_label "$1")")" --run "$RUN"; }
+
 SP="$(prompt typed 'focus budget unlimited, scale s1 s3 s5 s7')"
 prog amend-term focus_budget unlimited --scale s1=1,s3=3,s5=5,s7=7 --prompt "$SP"
 
@@ -377,7 +408,7 @@ start 5
 check 1 "$CODE"
 has "over points: 7 of 10 in play" "$OUT"
 has "Next:" "$OUT"
-has 'Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, or start it anyway with `--despite focus`.' "$OUT"
+has 'Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, or ask Shawn to approve breaking the budget: offer `programme.sh approval-label override-focus '"${NS}5"'` through AskUserQuestion, run `override-focus '"${NS}5"' --prompt <pick id>`, then start again with `--despite focus`.' "$OUT"
 check '"over points: 7 of 10 in play (this item is 5)"' "$(gitem 5 held)"
 check "$S1" "$(spins)"
 check "$O1" "$(nops)"
@@ -478,18 +509,59 @@ limit limited --points 10 --agents none
 DOWN=1 start 64
 check 1 "$CODE"
 has "count unavailable" "$OUT"
-has "--despite focus" "$OUT"
-has 'Next: retry once the count is readable, or pass `--despite focus`.' "$OUT"
+has 'Next: retry once the count is readable, or ask Shawn to approve breaking the budget: offer `programme.sh approval-label override-focus '"${NS}64"'` through AskUserQuestion' "$OUT"
 check 'true' "$(field "bool(prog['items']['${NS}64']['held'])")"
 
-it "--despite focus starts a held item and journals the override"
+it "--despite focus with no approval is refused, holds the item and names the override-focus step"
 snapshot p31:agent
 mk 72 s7 p31
 mk 54 s5
 start 54
 check 1 "$CODE"
+S54="$(spins)"
+start 54 --despite focus
+check 1 "$CODE"
+has "needs Shawn's pick first" "$OUT"
+has "approval-label override-focus ${NS}54" "$OUT"
+has "override-focus ${NS}54 --prompt <pick id>" "$OUT"
+check "$S54" "$(spins)"
+check 'true' "$(field "bool(prog['items']['${NS}54']['held'])")"
+
+it "override-focus approves nothing from typed text, even the exact label"
+for TXT in "yes override ${NS}54" "$(override_label 54)"; do
+  prog override-focus "${NS}54" --prompt "$(prompt typed "$TXT")" --run "$RUN"
+  check 1 "$CODE"
+done
+check "null" "$(gitem 54 focus_override)"
+
+it "override-focus approves nothing from a suggested prompt, another verb's label or another item's label"
+prog override-focus "${NS}54" --prompt "$(prompt suggested "$(override_label 54)")" --run "$RUN"
+check 1 "$CODE"
+prog override-focus "${NS}54" --prompt "$(pickit "$(swap_label 72 54)")" --run "$RUN"
+check 1 "$CODE"
+prog override-focus "${NS}54" --prompt "$(pickit "$(override_label 72)")" --run "$RUN"
+check 1 "$CODE"
+check "null" "$(gitem 54 focus_override)"
+start 54 --despite focus
+check 1 "$CODE"
+
+it "an exact-label pick records the approval and journals it"
+POV="$(pickit "$(override_label 54)")"
+prog override-focus "${NS}54" --prompt "$POV" --run "$RUN"
+check 0 "$CODE"
+check "\"${POV}\"" "$(gitem 54 focus_override)"
+check 1 "$(grep -c '"focus_override_approved"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
+
+it "the same pick cannot approve a second override"
+prog override-focus "${NS}54" --prompt "$POV" --run "$RUN"
+check true "$([ "$CODE" -ne 0 ] && echo true || echo false)"
+has "already used" "$OUT"
+
+it "an approved override starts the held item once, journals it and consumes the approval"
 start 54 --despite focus
 check 0 "$CODE"
+check "null" "$(gitem 54 focus_override)"
+check "null" "$(gitem 54 held)"
 check "null" "$(gitem 54 held)"
 check 'true' "$(run_py "$RUN" <<'EOF2'
 pr = load_lib_module("programme_recovery")
@@ -498,6 +570,13 @@ print(json.dumps(any(o.get("despite") == ["focus"] for o in ops)))
 EOF2
 )"
 check 1 "$(grep -c '"focus_overridden"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
+has "${POV}" "$(grep '"focus_overridden"' "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/journal.jsonl")"
+
+it "the approval is single-use: a second --despite focus start on the item is held again"
+snapshot p31:agent
+start 54 --despite focus
+check 1 "$CODE"
+has "needs Shawn's pick first" "$OUT"
 drop 54
 drop 72
 drop 64
@@ -661,35 +740,6 @@ case "$OUT" in *"Waiting for a slot"*) fail "waiting list shown with no limit" ;
 prog status --run "$RUN"
 check 0 "$(grep -c 'api snapshot' "$CALLS")"
 
-# ---- U5: swap pick ----
-PICKS="${WORK}/transcripts"
-mkdir -p "$PICKS"
-pickit() {
-  run_py "${2:-$RUN}" "$1" "$PICKS" <<'EOF2'
-import copy, pathlib, uuid
-ps = load_lib_module("programme_pick_source")
-fx = [json.loads(l) for l in open(os.path.join(sys.argv[1], "tests/fixtures/askuser_transcript.jsonl"))]
-ASK, ANSWER = fx[0], fx[1]
-run, answer, folder = args
-sid, tid, q = "sess-pm", "toolu_" + uuid.uuid4().hex[:10], "Swap or queue?"
-answers = {q: answer}
-path = pathlib.Path(folder) / (sid + ".jsonl")
-ask = copy.deepcopy(ASK); ask.update(uuid="a-" + tid, sessionId=sid)
-ask["message"]["content"][0].update(id=tid, input={"questions": [
-    {"question": q, "header": "Setup", "multiSelect": False,
-     "options": [{"label": answer, "description": ""}, {"label": "other", "description": ""}]}]})
-res = copy.deepcopy(ANSWER)
-res.update(uuid="u-" + tid, sessionId=sid, sourceToolAssistantUUID="a-" + tid,
-           toolUseResult={"questions": [{"question": q}], "answers": answers, "annotations": {}})
-res["message"]["content"][0].update(tool_use_id=tid)
-with path.open("a") as stream:
-    stream.write(json.dumps(ask) + "\n" + json.dumps(res) + "\n")
-source = ps.capture({"transcript_path": str(path), "session_id": sid, "tool_use_id": tid,
-                     "tool_response": {"answers": answers}})
-print(pj.append_prompt(run, sid, ps.summary(answers), "unknown", source=source)["prompt_id"])
-EOF2
-}
-swap_label() { "$PY" "$PROG" approval-label swap-item "${NS}$1" "${NS}$2"; }
 
 limit limited --points 6 --agents none
 mk 101 s5 p61
@@ -790,9 +840,12 @@ has "close the pane" "$OUT"
 has "Next: once the old worker has stopped, start ${NS}101 again." "$OUT"
 check "$S3" "$(spins)"
 
-it "--despite focus does not bypass the old-worker check"
+it "--despite focus does not bypass the old-worker check, even with an approved override"
+approve_override 101
+check 0 "$CODE"
 start 101 --despite focus
 check 1 "$CODE"
+has "old worker still live" "$OUT"
 check "$S3" "$(spins)"
 
 it "focus-recheck leaves a parked item held while its old pane is live"
@@ -922,10 +975,12 @@ start 301
 check 1 "$CODE"
 has "count unavailable" "$OUT"
 has "elsewhere.w9" "$OUT"
-has "--despite focus" "$OUT"
+has "override-focus ${NS}301" "$OUT"
 check 'true' "$(field "bool(prog['items']['${NS}301']['held'])")"
 
-it "--despite focus still starts it when a remit space cannot be counted"
+it "an approved override still starts it when a remit space cannot be counted"
+approve_override 301
+check 0 "$CODE"
 start 301 --despite focus
 check 0 "$CODE"
 
