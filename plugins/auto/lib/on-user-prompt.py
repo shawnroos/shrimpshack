@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -24,6 +25,9 @@ session_registry = load_lib_module("session_registry")
 programme_prompt_source = load_lib_module("programme_prompt_source")
 
 DATA_TAG = "auto-data"
+# Seconds of run-lock waiting across every prompt this hook journals; under the hook's 5s timeout with room
+# for startup. A prompt past it is journaled without the run lock, and the Ruling writer re-checks for it.
+LOCK_BUDGET = 3.5
 _REQUEST = re.compile(r"^\s*/auto:programme-(takeover|handover|end)(?=\s|$)")
 
 
@@ -72,9 +76,11 @@ def _closing_runs(session_id) -> list:
 
 def _closing_context(session_id, text, closing, notes, source) -> dict | None:
     journaled = []
+    deadline = time.monotonic() + LOCK_BUDGET
     for run, record in closing:
         origin = classify_origin(text, record)
-        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
+        wait = max(0.0, min(programme_journal.PROMPT_RUN_LOCK_WAIT, deadline - time.monotonic()))
+        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source, wait=wait)
         journaled.append({"run": run, "prompt_id": entry["prompt_id"], "origin": origin})
     return _context(
         "auto journaled this prompt into each ended programme this session is closing. Cite the "

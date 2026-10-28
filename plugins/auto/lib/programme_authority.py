@@ -241,26 +241,34 @@ def _replayed(store, run_id, operation_id) -> dict:
     return {"result": None, "row": row, "replayed": True, "revision": hits[0]["revision"] if hits else None}
 
 
-# The row is journaled before the run lock is released: a writer that checked the journal under the lock
-# (a prompt used once, a Ruling's latest change) must not race a second writer into the same gap.
-def _legacy_write(home, run_id, change, compose) -> dict:
+# The approval row lands before the record and the store write it approves, all under the run lock: a writer
+# that checked the journal under the lock must not race a second writer into the gap, and a refused or
+# crashed approval leaves at worst a used prompt, never a change applied without its row. ``recheck`` sees
+# the journal under the journal lock, so a prompt journaled after a timed-out run-lock wait is not missed.
+def _legacy_write(home, run_id, change, compose, recheck, then) -> dict:
     seen = {"row": None}
 
-    def journal(result, record):
+    def staged(record):
+        result = change(record)
         seen["row"] = compose(result, record) if compose else None
         _approval_pause(home)
         if seen["row"] is not None:
-            _journal().append_row(run_id, seen["row"])
+            _journal().append_row(run_id, seen["row"], check=recheck)
+        return result
 
-    result = run_record_core._with_locked_run_record(home, run_id, change, reroute=False, after=journal)
+    def after(result, _):
+        if then is not None:
+            then(result)
+
+    result = run_record_core._with_locked_run_record(home, run_id, staged, reroute=False, after=after)
     return {"result": result, "row": seen["row"], "replayed": False, "revision": None}
 
 
 def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
-          payload_refs=(), base_revision=None, seal=None) -> dict:
+          payload_refs=(), base_revision=None, seal=None, recheck=None, then=None) -> dict:
     if not promoted(home, run_id):
         try:
-            return _legacy_write(home, run_id, change, compose)
+            return _legacy_write(home, run_id, change, compose, recheck, then)
         except run_record_core.RoutedToAuthority:
             pass
 
@@ -276,6 +284,8 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             row = compose(result, record) if compose else None
             run_record_core._prepare_for_write(record)
             _approval_pause(home)
+            if recheck is not None and row is not None:
+                recheck(rows_of(_guarded(run_id, store.read)["events"])[0], row)
             event = _row_event(row, "journal") if row is not None else \
                 {"kind": RECORD_KIND, "payload": {"channel": "none"}}
             if _REQUESTS.get(operation_id) is not None:
@@ -283,6 +293,8 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             base = head["revision"] if base_revision is None else base_revision
             receipt = commit(store, run_id, operation_id or _new_op("w"), base, record,
                              event, provenance, payload_refs, seal)
+            if then is not None and not receipt["replayed"]:
+                then(result)
         export(home, run_id, final=seal is not None)
         return {"result": result, "row": row, "replayed": receipt["replayed"],
                 "revision": receipt["revision"]}

@@ -329,7 +329,8 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
                                        cites=[prompt["prompt_id"]] if prompt else None)
 
     try:
-        out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"])
+        out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"],
+                                        recheck=programme_rulings.recheck_approval)
     except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
             programme_behaviours.BehaviourError) as exc:
         if (needs_prompt or prompt_id) and "sid" in seen:

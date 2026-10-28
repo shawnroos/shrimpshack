@@ -268,9 +268,10 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
     return active, keys
 
 
-# The journal checks, the store write and the rulings_carried row share the programme's write lock, so a
+# The journal checks, the rulings_carried row and then the store write share the programme's write lock, so a
 # concurrent Ruling change or a second use of the prompt waits for this carry and then sees it. That one row
-# is also each stored entry's approval: pre-fill drops an entry with none, so no second write may follow it.
+# is also each stored entry's approval: pre-fill drops an entry with none, so no second write may follow it,
+# and the store is written only after the row, so a refused carry stores nothing.
 def _carry(host, opts, ids):
     run_id, home, _ = host._locate(opts)
     sid = driver_session.driving_session_id()
@@ -286,7 +287,6 @@ def _carry(host, opts, ids):
         host.require_named(prompt, *ids)
         active, keys = _check_carry(host, run_id, programme, prompt, ids)
         adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
-        _put(adopted)
         seen.update(prompt=prompt, adopted=adopted)
         return {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path()}
 
@@ -294,7 +294,9 @@ def _carry(host, opts, ids):
         return programme_journal.entry("rulings_carried", sid, dict(payload, prompt_id=seen["prompt"]["prompt_id"]),
                                        cites=[seen["prompt"]["prompt_id"]])
 
-    out = host.programme_authority.write(home, run_id, mutate, compose)
+    out = host.programme_authority.write(home, run_id, mutate, compose,
+                                         recheck=host.programme_rulings.recheck_approval,
+                                         then=lambda _: _put(seen["adopted"]))
     host._emit(dict({"ok": True, "run": run_id, "kind": "rulings_carried"}, **out["result"]))
     return 0
 

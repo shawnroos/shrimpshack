@@ -702,24 +702,102 @@ EOF
 )"
 done
 
+# fallback_race <verb args>: the legacy writer pauses after its checks, holding the run lock; a typed prompt
+# waits out the bounded run-lock wait and is journaled without it; then the writer resumes.
+fallback_race() {
+  rm -f "${WORK}/race1.out" "${WORK}/race2.out"
+  CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" "$@" > "${WORK}/race1.out" 2>&1 &
+  local p1=$!
+  PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
+  prompt_in "$RUN_L" "how is herdr:b going" > "${WORK}/race2.out" 2>&1
+  C2=$?
+  HELD="released"; kill -0 "$p1" 2>/dev/null && HELD="held"
+  P_LATE="$(tail -1 "${WORK}/race2.out")"
+  touch "$(home_of "$RUN_L")/.test-resume-write"
+  wait "$p1"; C1=$?
+  OUT1="$(cat "${WORK}/race1.out")"
+  case "$OUT1" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
+}
+legacy_state() { pyget "$("$PY" "$PROG" context --run "$RUN_L" 2>&1)" "((d['decisions'].get('$1') or {}).get('state'))"; }
+legacy_rows() {
+  run_py "$RUN_L" "$1" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == args[1]))
+EOF
+}
+
 it "legacy: a prompt that waits out the bounded run-lock wait is still journaled"
 P_PT1="$(prompt_in "$RUN_L" 'r-pt: I pick the tool choice on herdr:b')"
 prog record-ruling r-pt --kind tool_choice --effect restrict --scope "pt" --applies-to herdr:b \
   --prompt "$P_PT1" --run "$RUN_L"
 P_PTW="$(prompt_in "$RUN_L" 'withdraw r-pt')"
-rm -f "${WORK}/race1.out" "${WORK}/race2.out"
-CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" close-ruling r-pt --as withdrawn --prompt "$P_PTW" \
-  --run "$RUN_L" > "${WORK}/race1.out" 2>&1 &
-P1=$!
-PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
-prompt_in "$RUN_L" "how is herdr:b going" > "${WORK}/race2.out" 2>&1
-C2=$?
-HELD="released"; kill -0 "$P1" 2>/dev/null && HELD="held"
-P_PTL="$(tail -1 "${WORK}/race2.out")"
-touch "$(home_of "$RUN_L")/.test-resume-write"
-wait "$P1"
-check "paused 0 held True" "$PAUSED $C2 $HELD $(run_py "$RUN_L" "$P_PTL" <<'EOF'
+N_CLOSED="$(legacy_rows ruling_closed)"
+fallback_race close-ruling r-pt --as withdrawn --prompt "$P_PTW" --run "$RUN_L"
+check "paused 0 held True" "$PAUSED $C2 $HELD $(run_py "$RUN_L" "$P_LATE" <<'EOF'
 print(pj.find_prompt(args[0], args[1]) is not None)
+EOF
+)"
+it "legacy: a close-ruling whose prompt a later typed prompt overtook during the wait is refused, Ruling unchanged"
+check "nonzero active $N_CLOSED" "$([ "$C1" -ne 0 ] && echo nonzero) $(legacy_state r-pt) $(legacy_rows ruling_closed)"
+has "newest typed prompt" "$OUT1"
+
+it "legacy: a record-ruling overtaken the same way is refused and records nothing"
+P_PF="$(prompt_in "$RUN_L" 'r-pf: I pick the work sequencing on herdr:b')"
+N_REC="$(legacy_rows ruling_recorded)"
+fallback_race record-ruling r-pf --kind work_sequencing --effect restrict --scope "pf" --applies-to herdr:b \
+  --prompt "$P_PF" --run "$RUN_L"
+check "paused nonzero null $N_REC" "$PAUSED $([ "$C1" -ne 0 ] && echo nonzero) $(legacy_state r-pf) $(legacy_rows ruling_recorded)"
+has "newest typed prompt" "$OUT1"
+
+it "legacy: an accept-context overtaken the same way is refused and the revision stays pending"
+prog record-ruling r-pa --kind work_sequencing --effect restrict --scope "pa" --applies-to herdr:b --run "$RUN_L"
+P_PA="$(prompt_in "$RUN_L" 'accept r-pa')"
+N_ACC="$(legacy_rows context_accepted)"
+fallback_race accept-context r-pa --prompt "$P_PA" --run "$RUN_L"
+check "paused nonzero pending $N_ACC" "$PAUSED $([ "$C1" -ne 0 ] && echo nonzero) $(legacy_state r-pa) $(legacy_rows context_accepted)"
+has "newest typed prompt" "$OUT1"
+
+it "legacy: a busy journal lock inside the run lock fails the append; it is not retried without the run lock"
+check "busy no-fallback" "$(run_py "$RUN_L" <<'EOF'
+import contextlib, fcntl, io
+run = args[0]
+held = open(os.path.join(ph.home_path(run), pj.LOCK_NAME), "a+")
+fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    try:
+        pj.append_row(run, pj.entry("prompt", "sess-pm", {"text": "x", "origin": "typed"}, prompt_id="pjbusy1"),
+                      serialize=True, lock_timeout=0.1)
+        out = "appended"
+    except core.LockBusy:
+        out = "busy"
+print(out, "fallback" if "journaled without it" in err.getvalue() else "no-fallback")
+EOF
+)"
+
+it "the prompt hook shares one lock budget across the ended programmes it journals into"
+check "fast 3" "$(run_py <<'EOF'
+import fcntl, time
+auth = load_lib_module("programme_authority")
+auth.home_for = lambda *a: None
+oup = load_lib_module("on-user-prompt")
+runs = [ph.create_programme([f"w2{i}"], "sess-pm")["run"] for i in range(3)]
+held = []
+for run in runs:
+    home = ph.home_path(run)
+    core._with_locked_run_record(home, run, lambda r: r["programme"].update(
+        ended={"at": "2026-01-01T00:00:00Z", "reason": "done"}, closure={"ended_by": "sess-close"}))
+    ph.write_closing(run, ["sess-close"])
+    fh = open(core.lock_path(home, run), "a+")
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    held.append(fh)
+import contextlib, io
+start = time.monotonic()
+with contextlib.redirect_stderr(io.StringIO()):
+    oup.handle(json.dumps({"session_id": "sess-close", "prompt": "keep the build logs"}), {})
+took = time.monotonic() - start
+found = sum(1 for run in runs if any(r.get("kind") == "prompt" and r["payload"]["text"] == "keep the build logs"
+                                     for r in pj.read(run)))
+print("fast" if took < oup.LOCK_BUDGET + 0.5 else f"slow {took:.1f}s", found)
 EOF
 )"
 

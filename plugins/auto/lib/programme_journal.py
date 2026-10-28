@@ -302,18 +302,28 @@ def claims_path(run_id: str) -> str:
 
 
 # A Ruling writer checks that its prompt is Shawn's newest and journals its approval under one run lock; a
-# prompt appended under the journal lock alone could land between the two. A timed-out wait still journals.
-def _serialized(run_id, append):
+# prompt appended under the journal lock alone could land between the two. A timed-out wait still journals:
+# the writer re-checks the journal under the journal lock before its approval row lands.
+def _serialized(run_id, append, wait):
     home = programme_home.home_path(run_id)
+    entered = []
+
+    def held():
+        entered.append(True)
+        return append()
+
     try:
-        return run_record_core._flock_run(run_record_core.lock_path(home, run_id), append, PROMPT_RUN_LOCK_WAIT)
+        return run_record_core._flock_run(run_record_core.lock_path(home, run_id), held, wait)
     except run_record_core.LockBusy:
+        # Only the run lock's own wait falls back; a busy journal lock inside it is a real failure.
+        if entered:
+            raise
         sys.stderr.write(f"programme_journal: {run_id}: the run lock stayed held; prompt journaled without it\n")
         return append()
 
 
 def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived", guard=None,
-               lock_timeout=None, serialize=False) -> dict:
+               lock_timeout=None, serialize=False, check=None, wait=PROMPT_RUN_LOCK_WAIT) -> dict:
     if isinstance(row, dict) and row.get("kind") == "prompt" and provenance != "derived":
         raise JournalError(f"a {provenance} copy is never journaled as a prompt; it approves nothing")
     if not _promoted(run_id):
@@ -325,6 +335,8 @@ def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived
             # run lock first, so re-route only after releasing this one.
             if _promoted(run_id):
                 raise _RoutedToAuthority()
+            if check is not None:
+                check(read_path(path), row)
             _write_line(path, row)
             return row
 
@@ -333,7 +345,7 @@ def append_row(run_id: str, row: dict, *, channel="journal", provenance="derived
 
         try:
             # The run lock is not re-entrant: only a caller that holds no lock may serialize.
-            return _serialized(run_id, append) if serialize else append()
+            return _serialized(run_id, append, wait) if serialize else append()
         except _RoutedToAuthority:
             pass
     return _authority().append_row(run_id, row, channel=channel, provenance=provenance, guard=guard,
@@ -356,14 +368,16 @@ def append_claim(run_id: str, session_id, payload) -> dict:
                       provenance="worker_result", guard=_refuse_after_end)
 
 
-def append_prompt(run_id: str, session_id, text: str, origin: str, now=None, *, source=None) -> dict:
+def append_prompt(run_id: str, session_id, text: str, origin: str, now=None, *, source=None,
+                  wait=PROMPT_RUN_LOCK_WAIT) -> dict:
     if origin not in STORED_PROMPT_ORIGINS:
         raise JournalError(f"prompt origin must be one of {list(STORED_PROMPT_ORIGINS)}; got {origin!r}")
     prompt_id = "p" + secrets.token_hex(3)
     payload = {"text": redact(text), "origin": origin}
     if source is not None:
         payload["source"] = source
-    return append_row(run_id, entry("prompt", session_id, payload, prompt_id=prompt_id, now=now), serialize=True)
+    return append_row(run_id, entry("prompt", session_id, payload, prompt_id=prompt_id, now=now), serialize=True,
+                      wait=wait)
 
 
 def prompt_origin(row) -> str:

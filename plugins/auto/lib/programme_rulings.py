@@ -119,6 +119,16 @@ def check_prompt_unused(rows, prompt_id) -> None:
                               "prompt approves one Ruling change")
 
 
+# Runs on the journal as the approval row lands: a prompt journaled after a timed-out run-lock wait, or a
+# second use, refuses the change before its record is written.
+def recheck_approval(rows, row) -> None:
+    if _approval_of(row) is None:
+        return
+    for prompt_id in row.get("cites") or []:
+        check_newest(rows, prompt_id)
+        check_prompt_unused(rows, prompt_id)
+
+
 def check_approval(rows, cid, prompt_id) -> None:
     check_fresh(rows, cid, prompt_id)
     check_prompt_unused(rows, prompt_id)

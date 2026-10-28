@@ -528,6 +528,49 @@ for R in "$RUN_Q" "$RUN_L"; do
   has "changed after the offer" "$OUT2"
 done
 
+it "legacy: a carry whose prompt a typed prompt overtook during the bounded wait is refused, store unchanged"
+prog carry-rulings --run "$RUN_L"
+P_QF="$(prompt "$RUN_L" 'carry q1 to the next programme')"
+rm -f "${WORK}/race1.out" "${WORK}/race2.out"
+CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" carry-rulings q1 --prompt "$P_QF" --run "$RUN_L" \
+  > "${WORK}/race1.out" 2>&1 &
+P1=$!
+PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
+prompt "$RUN_L" "how is herdr:q going" > "${WORK}/race2.out" 2>&1
+C2=$?
+HELD="released"; kill -0 "$P1" 2>/dev/null && HELD="held"
+touch "$(home_of "$RUN_L")/.test-resume-write"
+wait "$P1"; C1=$?
+check "paused 0 held nonzero 0 0" "$PAUSED $C2 $HELD $([ "$C1" -ne 0 ] && echo nonzero) $("$PY" -c '
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+except OSError:
+    doc = {"keys": {}}
+print(len([e for e in doc["keys"].get(sys.argv[2], []) if e["ruling"] == "q1"]))' "$STORE" "${WORK}/repos/race-legacy") $(run_py "$RUN_L" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "rulings_carried"))
+EOF
+)"
+has "newest typed prompt" "$(cat "${WORK}/race1.out")"
+lacks "Traceback" "$(cat "${WORK}/race1.out")"
+
+it "a rulings_carried row approves each stored entry; a foreign row or one citing another prompt first approves nothing"
+check "True" "$(run_py <<'EOF'
+programme = load_lib_module("programme")
+pp = programme.programme_protocol
+def carried(cites, prompt_id, stored, **extra):
+    return dict({"kind": "rulings_carried", "cites": cites, "payload": {"prompt_id": prompt_id, "stored": stored}}, **extra)
+rows = [
+    carried(["pa1"], "pa1", [{"key": "/r/a", "id": "k1", "hash": "h1"}, {"key": "/r/b", "id": "k2", "hash": "h2"}]),
+    carried(["pa1"], "pa1", [{"key": "/r/c", "id": "k3", "hash": "h3"}], provenance=programme.programme_authority.FOREIGN),
+    carried(["pb2", "pa1"], "pa1", [{"key": "/r/d", "id": "k4", "hash": "h4"}]),
+    carried(["pa1"], "pb2", [{"key": "/r/e", "id": "k5", "hash": "h5"}]),
+]
+want = [pp.approval_key(pp.carryover_target("/r/a", "k1"), "h1"), pp.approval_key(pp.carryover_target("/r/b", "k2"), "h2")]
+print(programme._approved(rows, "pa1") == want and programme._approved(rows, "pb2") == [])
+EOF
+)"
+
 # ── a carry that dies right after its write still arrives ─────────────────
 CRASH_PY='
 import os, sys
