@@ -14,7 +14,7 @@ Three flavours:
 - **`/start-workspace`** — a **brand-new workspace**, two panes: briefed Claude on
   the left, the handoff rendered on the right.
 
-It launches through whichever terminal you're actually in — **herdr**, **cmux** or
+It launches through whichever terminal you're actually in — **herdr**, **cmux**, **REX** or
 **ghostty**, auto-detected, no flag needed.
 
 The mechanical work (worktree, handoff, the launch, readiness polling) runs in a
@@ -61,7 +61,7 @@ What happens:
 
 ## Requirements
 
-- A terminal it can drive: [herdr](https://herdr.dev), [cmux](https://cmux.io), or
+- A terminal it can drive: [herdr](https://herdr.dev), [cmux](https://cmux.io), REX, or
   [Ghostty](https://ghostty.org) on macOS. Without one the script still creates the
   worktree + handoff and prints the manual `cd … && claude` command.
 - A git repo. Worktrees nest under `<repo>/worktrees/`.
@@ -73,7 +73,7 @@ AppleScript rather than a CLI:
   it in System Settings → Privacy & Security → Automation before trying again — macOS
   remembers a denial, so the script won't retry into it.
 - **Claude's startup prompts aren't auto-answered.** A fresh worktree path makes
-  Claude ask things like "N new MCP servers found in this project"; herdr and cmux read
+  Claude ask things like "N new MCP servers found in this project"; herdr, cmux and REX read
   the screen and answer them, Ghostty has no way to read a surface at all, so the new
   session waits on the prompt and may start without its MCP servers. The brief itself
   is unaffected.
