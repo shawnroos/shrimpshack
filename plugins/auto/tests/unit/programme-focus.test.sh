@@ -861,6 +861,52 @@ print(json.dumps([t["value"], t["set_by"], t.get("points"), t.get("agents")]))
 EOF2
 )"
 
+# ---- remit spaces on another herdr server cannot be counted ----
+remit_space() {
+  run_py "$RUN" "$1" <<'EOF2'
+run, mode = args
+def mutate(rec):
+    spaces = rec["programme"]["remit"]["spaces"]
+    spaces[:] = [s for s in spaces if s.get("server") != "elsewhere"]
+    if mode == "add":
+        spaces.append({"server": "elsewhere", "workspace": "w9"})
+    return rec
+core._with_locked_run_record(ph.home_path(run), run, mutate)
+EOF2
+}
+snapshot
+remit_space add
+
+it "limit set + a remit space on another server holds the start and names that space"
+limit limited --points 10 --agents 3 --run "$RUN"
+mk 301 s1
+start 301
+check 1 "$CODE"
+has "count unavailable" "$OUT"
+has "elsewhere.w9" "$OUT"
+has "--despite focus" "$OUT"
+check 'true' "$(field "bool(prog['items']['${NS}301']['held'])")"
+
+it "--despite focus still starts it when a remit space cannot be counted"
+start 301 --despite focus
+check 0 "$CODE"
+
+it "status shows the counts as unavailable, not zero, when a remit space cannot be counted"
+prog status --run "$RUN"
+has "agents unavailable" "$OUT"
+check 'null' "$(statusj | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["model"]["focus"]["agents"]["used"]))')"
+drop 301
+
+it "no limit set + a remit space on another server starts as before and reads no herdr"
+limit unlimited --run "$RUN"
+mk 302 s1
+: > "$CALLS"
+start 302
+check 0 "$CODE"
+check 0 "$(grep -c 'api snapshot' "$CALLS")"
+drop 302
+remit_space drop
+
 echo ""
 echo "programme-focus.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

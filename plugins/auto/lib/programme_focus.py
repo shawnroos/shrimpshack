@@ -190,8 +190,8 @@ def reason_for(host, record, programme, key):
     workers, why = host.programme_sources.worker_panes(programme, record)
     if workers is None:
         if parked:
-            return f"{OLD_WORKER} {parked} may still be live: herdr unreadable ({why}); retry once it answers"
-        return f"count unavailable: herdr unreadable ({why})"
+            return f"{OLD_WORKER} {parked} may still be live: {why}; retry once it answers"
+        return f"count unavailable: {why}"
     return verdict(programme, key, census(programme, key, workers))
 
 
@@ -201,7 +201,7 @@ def _next_step(reason, key) -> str:
     if reason.startswith("unsized"):
         return f"Next: `size-item {key} <size>`, then start it again."
     if reason.startswith("count unavailable"):
-        return f"Next: retry once herdr answers, or pass `--despite {OVERRIDE}`."
+        return f"Next: retry once the count is readable, or pass `--despite {OVERRIDE}`."
     return ("Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, "
             f"or start it anyway with `--despite {OVERRIDE}`.")
 
@@ -272,7 +272,7 @@ def _h_focus_recheck(host, argv):
         if not (limited or key in parked):
             reason = None
         elif counts is None:
-            reason = f"count unavailable: herdr unreadable ({unavailable})"
+            reason = f"count unavailable: {unavailable}"
         else:
             reason = verdict(programme, key, counts)
         if reason is not None:
@@ -410,7 +410,7 @@ def _h_swap_item(host, argv):
                 f"swap-item needs a pick of its exact label, not typed or suggested text; run "
                 f"`programme.sh approval-label swap-item {positional[0]} {positional[1]}`")
         if workers is None:
-            raise host.ProgrammeError(f"swap refused: cannot count workers, herdr unreadable ({why}); retry")
+            raise host.ProgrammeError(f"swap refused: cannot count workers, {why}; retry")
         out = host.programme_record._resolve(programme, positional[0])
         newcomer = host.programme_record._resolve(programme, positional[1])
         if out == newcomer:

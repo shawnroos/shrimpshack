@@ -188,11 +188,14 @@ def _owner(row, agent, hint) -> dict:
 
 
 def worker_panes(programme, record):
+    scope = remit(programme)
+    if scope["unreached"]:
+        return None, f"remit spaces on another herdr server cannot be counted: {', '.join(scope['unreached'])}"
     snap, reason = read_herdr()
     if snap is None:
-        return None, reason
+        return None, f"herdr unreadable ({reason})"
     drivers = _drivers(record)
-    return [p for p in pane_views(snap, remit(programme), with_branch=False) if role(p, drivers) == "worker"], None
+    return [p for p in pane_views(snap, scope, with_branch=False) if role(p, drivers) == "worker"], None
 
 
 def pane_views(snap, scope, with_branch=True) -> list:
