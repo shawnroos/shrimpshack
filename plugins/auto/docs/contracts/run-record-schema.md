@@ -1011,6 +1011,7 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_WORKER_WAIT` | `30` | `start-worker`, waiting for the new session |
 | `CLAUDE_AUTO_SPINOFF_TIMEOUT` | `600` | `start-worker`, the spinoff call |
 | `CLAUDE_AUTO_WATCH_INTERVAL_SECONDS` | `30` | `programme-watch`, the poll interval |
+| `CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS` | `120` | `programme-watch`, how long non-urgent remit lines are held and merged |
 | `CLAUDE_AUTO_PROGRAMME_CLI` | `python3 lib/programme.py` | `programme-watch`, the CLI it writes through |
 
 ---

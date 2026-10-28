@@ -93,6 +93,15 @@ not "nothing changed". You apply every programme write yourself.
 
 ## The sweep
 
+**An expiry wake is a re-arm, not a sweep.** When the remit watcher's Monitor
+stream ended with no `remit-watcher-exit` line, run the arm command in step 16
+and `P watcher-beat remit --task-id <Monitor task id> --kind monitor`. If the
+stream printed no other line since your last wake, stop there: run no other
+step and no status read, and send no message. If it printed change lines (the
+watcher prints its held lines as it stops), handle them as a normal wake after
+re-arming. Changes made
+between the expiry and the re-arm are not reported; the next sweep reads them.
+
 1. **Beat, expire and package.** Send one message with three calls: `P beat`;
    one Bash call that chains steps 2, 4, 5 and 9's `prune`, `P validate`,
    `P sweep --record-sources`, `P propose-permission` and `P settle-permissions`
@@ -473,16 +482,18 @@ not "nothing changed". You apply every programme write yourself.
     record `P tracker-synced` for each issue it lists as written. It never
     writes a done state or a root-cause comment.
 16. **Re-arm the wake-ups.**
-    - The remit watcher keeps running across changes and prints one line per
-      change. Arm it only at programme start, after a resume or a takeover,
-      and when its Monitor stream ended by expiry or a crash (a
-      `remit-watcher-exit crashed: <error>` line, or no exit line at all). Do not arm it on
-      a routine sweep, and do not re-arm after it printed
+    - The remit watcher keeps running across changes and prints a line only
+      for a change you must act on. Non-urgent lines arrive merged, up to 2
+      minutes after the first change. Arm it only at programme start, after a
+      resume or a takeover, after a `remit-watcher-exit crashed: <error>` line,
+      and on an expiry (a stream end with no exit line: re-arm only, as above).
+      Do not arm it on a routine sweep, and do not re-arm after it printed
       `remit-watcher-exit superseded` or `remit-watcher-exit ended`.
     - To arm it: Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh"`
       with the longest timeout. Add `--tracker` only when the space has an
-      issue tracker it can poll. Tasks and plans are always watched unless the
-      agreement turns them off. Record the Monitor:
+      issue tracker it can poll. Unless the agreement turns them off, it polls
+      tasks and plans for outages and new plans; a task-count move or a plan
+      edit prints nothing. Record the Monitor:
       `P watcher-beat remit --task-id <Monitor task id> --kind monitor`.
     - Keep the cron fallback. If it is missing (after a resume or takeover),
       CronCreate it again at the cadence term with the exact text

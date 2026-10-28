@@ -20,9 +20,12 @@ A watcher counts as live only while its heartbeat is newer than the cadence
 term. A watcher whose Monitor expired stops beating, so the wait turns
 unwatched and the Stop hook holds the PM until it is re-armed.
 
-The remit watcher (`programme-watch.sh` with no `--item`) prints one line each
-time anything in the space changes, and keeps polling. It runs until its Monitor
-expires or is killed:
+The remit watcher (`programme-watch.sh` with no `--item`) prints a line only
+for a change the PM must act on, and keeps polling. It runs until its Monitor
+expires or is killed. Non-urgent lines (`remit-changed`, `tracker-changed`,
+`plans-changed`) arrive merged into one line, up to 2 minutes after the first
+change. The other lines print at once, after anything held. A worker's task
+counts moving or a plan being edited prints nothing; the next sweep reads them.
 
 | Line | Do |
 |---|---|
@@ -30,8 +33,7 @@ expires or is killed:
 | `claim <n> new` | sweep: read the inbox |
 | `wait-due <item>` | check that item's wait |
 | `tracker-changed ...` | sweep: issue states moved |
-| `tasks-changed <session> <before>-><after> ...` | sweep: a worker's task list moved (counts are pending/in progress/completed) |
-| `plans-changed +<repo>/<path> ...` | sweep: a plan was added (`+`) or edited (`~`) in a remit repo |
+| `plans-changed +<repo>/<path> ...` | sweep: a plan was added in a remit repo |
 | `source-unavailable <name> missing`, or a reason naming `op unsupported` | `set-source <name> --unsupported` (this machine cannot read it; it never holds the stop) |
 | any other `source-unavailable <name> <reason>` | `set-source <name> --unavailable --watcher remit` (a watched outage does not hold the stop) |
 | `source-available <name>` | `set-source <name> --available` |
@@ -51,10 +53,18 @@ Record every watcher's kind with its task id: `--kind cron` for the cadence
 cron, `--kind monitor` for a Monitor. `/auto:programme-end` prints
 `CronDelete <id>` for cron watchers and `TaskStop <id>` for Monitor watchers.
 
-Every Monitor expires after at most 30 minutes. Re-arm the remit watcher only
-when its Monitor stream ends by expiry or crash, never because a sweep ran and
-never after a `remit-watcher-exit` line. An expiry wake is quiet. The cron fallback (default hourly) wakes the PM when no
-watcher is running, and survives a resume.
+Every Monitor expires after at most 30 minutes. When the remit watcher's
+stream ends with no `remit-watcher-exit` line, that is an expiry: re-arm first.
+Run the arm command and `watcher-beat remit --task-id <Monitor task id> --kind
+monitor`. When the stream printed no other line since the last wake, stop
+there: no sweep, no status read, no message. When it printed change lines
+(the watcher prints its held lines as it stops), handle them as a normal wake.
+Changes made between the expiry and the re-arm are not reported: the re-armed
+watcher starts from a fresh baseline, and the next sweep reads them. Re-arm
+after a `remit-watcher-exit crashed` line too, never because a sweep ran, and
+never after `remit-watcher-exit superseded` or `remit-watcher-exit ended`. The
+cron fallback (default hourly) wakes the PM when no watcher is running, and
+survives a resume.
 
 After a takeover or handover, the old session's watchers can no longer beat
 (their calls are refused, and the remit watcher exits after three refusals).
