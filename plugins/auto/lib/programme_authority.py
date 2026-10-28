@@ -241,22 +241,27 @@ def _replayed(store, run_id, operation_id) -> dict:
     return {"result": None, "row": row, "replayed": True, "revision": hits[0]["revision"] if hits else None}
 
 
-# The approval row lands before the record and the store write it approves, all under the run lock: a writer
+# An approval row lands before the record and the store write it approves, all under the run lock: a writer
 # that checked the journal under the lock must not race a second writer into the gap, and a refused or
 # crashed approval leaves at worst a used prompt, never a change applied without its row. ``recheck`` sees
 # the journal under the journal lock, so a prompt journaled after a timed-out run-lock wait is not missed.
-def _legacy_write(home, run_id, change, compose, recheck, then) -> dict:
-    seen = {"row": None}
+# Every other row follows its record, so a crash leaves at worst a record change with no row, never a row
+# the record lacks.
+def _legacy_write(home, run_id, change, compose, approval, recheck, then) -> dict:
+    seen = {"row": None, "first": False}
 
     def staged(record):
         result = change(record)
         seen["row"] = compose(result, record) if compose else None
         _approval_pause(home)
-        if seen["row"] is not None:
+        seen["first"] = seen["row"] is not None and approval is not None and approval(seen["row"])
+        if seen["first"]:
             _journal().append_row(run_id, seen["row"], check=recheck)
         return result
 
     def after(result, _):
+        if seen["row"] is not None and not seen["first"]:
+            _journal().append_row(run_id, seen["row"])
         if then is not None:
             then(result)
 
@@ -265,10 +270,10 @@ def _legacy_write(home, run_id, change, compose, recheck, then) -> dict:
 
 
 def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
-          payload_refs=(), base_revision=None, seal=None, recheck=None, then=None) -> dict:
+          payload_refs=(), base_revision=None, seal=None, approval=None, recheck=None, then=None) -> dict:
     if not promoted(home, run_id):
         try:
-            return _legacy_write(home, run_id, change, compose, recheck, then)
+            return _legacy_write(home, run_id, change, compose, approval, recheck, then)
         except run_record_core.RoutedToAuthority:
             pass
 

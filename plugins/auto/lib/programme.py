@@ -330,6 +330,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
 
     try:
         out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"],
+                                        approval=programme_rulings.is_approval,
                                         recheck=programme_rulings.recheck_approval)
     except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
             programme_behaviours.BehaviourError) as exc:

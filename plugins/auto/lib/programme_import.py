@@ -28,6 +28,8 @@ LEGACY = programme_authority.LEGACY
 APPROVAL_KINDS = ("agreement_accepted", "term_amended", "instruction_recorded", "instruction_closed",
                   "rule_adopted", "item_reopened", "handed_answered", "remit_set", "item_dropped",
                   "project_term_amended", "rulings_carried")
+RULING_APPROVALS = {"ruling_recorded": ("ruling_id", "accepted"), "context_accepted": ("decision_id", "accepted"),
+                    "ruling_closed": ("ruling_id", "closed")}
 RESUME_FILE = ".test-resume-import"
 
 
@@ -121,11 +123,43 @@ def _record_only(record, rows) -> list:
     for item_id in sorted(((record.get("programme") or {}).get("items") or {})):
         if item_id not in mentioned:
             gaps.append({"kind": "record_only_update", "item": item_id})
+    raised = {(r.get("payload") or {}).get("blocker") for r in rows}
+    for blocker in sorted(_context(record).get("blockers") or {}):
+        if blocker not in raised:
+            gaps.append({"kind": "record_only_update", "blocker": blocker})
     terms = (((record.get("programme") or {}).get("agreement") or {}).get("terms") or {})
     for key, term in sorted(terms.items()):
         if isinstance(term, dict) and term.get("set_by") not in (None, "default") \
                 and not _term_explained(rows, key, term.get("value")):
             gaps.append({"kind": "record_only_update", "term": key})
+    return gaps
+
+
+def _context(record) -> dict:
+    context = (record.get("programme") or {}).get("context")
+    return context if isinstance(context, dict) else {}
+
+
+def _approval_applied(revisions, row, mark) -> bool:
+    rev = (row.get("payload") or {}).get("rev")
+    found = [r for r in revisions if isinstance(r, dict) and r.get("rev") == rev] if isinstance(revisions, list) else []
+    return bool(found) and ((found[0].get(mark) or {}).get("prompt_id") == row["cites"][0])
+
+
+# A Ruling approval row whose change the record lacks is one a crash cut off between the row and the record
+# write; the record stays the state, so the change is listed here and never applied.
+def _journal_only(record, rows) -> list:
+    decisions = _context(record).get("decisions") or {}
+    gaps = []
+    for row in rows:
+        kind, payload = row.get("kind"), row.get("payload") or {}
+        key, mark = RULING_APPROVALS.get(kind, (None, None))
+        if key is None or not row.get("cites") or payload.get("unchanged") \
+                or (kind == "ruling_recorded" and payload.get("state") != "accepted"):
+            continue
+        ruling = payload.get(key)
+        if isinstance(ruling, str) and not _approval_applied(decisions.get(ruling), row, mark):
+            gaps.append({"kind": "journal_only_update", "ruling": ruling, "row": kind, "prompt_id": row["cites"][0]})
     return gaps
 
 
@@ -165,7 +199,8 @@ def _build(run_id, inventory, parsed) -> dict:
     run_record_core._prepare_for_write(state)
     journal, journal_gaps = parsed["journal"] or ([], [])
     claims, claims_gaps = _claims_rows(parsed["claims"])
-    gaps = journal_gaps + claims_gaps + _record_only(state, journal) + _label_conflicts(journal)
+    gaps = journal_gaps + claims_gaps + _record_only(state, journal) + _journal_only(state, journal) \
+        + _label_conflicts(journal)
     summary = {"kind": "legacy_imported", "at": run_record_core.now_iso(), "session_id": None,
                "payload": {"import_id": inventory.import_id, "journal": len(journal),
                            "claims": len(claims), "gaps": len(gaps)}}

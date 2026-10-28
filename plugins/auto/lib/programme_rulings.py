@@ -111,6 +111,11 @@ def _approval_of(row):
     return None
 
 
+# A prompt-less close (a grant fulfilled) only narrows the PM, so it is written like any unapproved row.
+def is_approval(row) -> bool:
+    return _approval_of(row) is not None and bool(row.get("cites"))
+
+
 def check_prompt_unused(rows, prompt_id) -> None:
     for row in rows:
         approved = _approval_of(row) if prompt_id in (row.get("cites") or []) else None

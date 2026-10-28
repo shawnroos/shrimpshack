@@ -606,6 +606,108 @@ print(len([e for e in json.load(open(sys.argv[1]))["keys"].get(sys.argv[2], []) 
   lacks "dropped carried-over entry" "$OUT"
 done
 
+# ── the store is a cache of the rulings_carried rows ─────────────────────
+# DIE_AT=put kills the carry after its row and record land, before the store write; DIE_AT=row (legacy only)
+# kills it just after the row lands, before the record write.
+DIE_PY='
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
+from _bootstrap import load_lib_module
+programme = load_lib_module("programme")
+carry = load_lib_module("programme_carryover")
+if os.environ["DIE_AT"] == "put":
+    carry._put = lambda adopted: os._exit(9)
+else:
+    pj = programme.programme_journal
+    append_row = pj.append_row
+    def dying(run_id, row, *a, **k):
+        out = append_row(run_id, row, *a, **k)
+        if row.get("kind") == "rulings_carried":
+            os._exit(9)
+        return out
+    pj.append_row = dying
+sys.exit(programme._cli(sys.argv[1:]))
+'
+stored_under() {
+  "$PY" -c '
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+except OSError:
+    doc = {"keys": {}}
+print(len([e for e in doc["keys"].get(sys.argv[2], []) if e["ruling"] == sys.argv[3]]))' "$STORE" "$1" "$2"
+}
+carried_rows() {
+  run_py "$1" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "rulings_carried" and r["payload"].get("adopted")))
+EOF
+}
+# heal_case <run> <label> <die-at> <space> <next-space> [--op <id>]
+heal_case() {
+  local run="$1" label="$2" at="$3" space="$4" next="$5"
+  shift 5
+  local repo="${WORK}/repos/heal-${label}-${at}"
+  mkdir -p "$repo"
+  remit "$run" "{\"spaces\":[\"${space}\"],\"repos\":[{\"path\":\"${repo}\"}]}"
+  prog carry-rulings --run "$run"
+  local p
+  p="$(prompt "$run" 'carry q2 to the next programme')"
+  N_ROWS="$(carried_rows "$run")"
+  OUT="$(AUTO_ROOT="$AUTO_ROOT" DIE_AT="$at" "$PY" -c "$DIE_PY" carry-rulings q2 --prompt "$p" --run "$run" "$@" 2>&1)"
+  CODE=$?
+  it "$label ($at): a carry killed after its row stores nothing yet, and its row holds the adopted entries"
+  check "9 0 $((N_ROWS + 1))" "$CODE $(stored_under "$repo" q2) $(carried_rows "$run")"
+  it "$label ($at): the spent prompt cannot carry again"
+  prog carry-rulings q2 --prompt "$p" --run "$run"
+  check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+  if [ "$#" -gt 0 ]; then
+    it "$label ($at): a replay of the same operation id reports the carry and still stores nothing"
+    prog carry-rulings q2 --prompt "$p" --run "$run" "$@"
+    check "0 true 0" "$CODE $(printf '%s' "$OUT" | "$PY" -c 'import json,sys; print(str(json.load(sys.stdin).get("replayed")).lower())' 2>&1) $(stored_under "$repo" q2)"
+  fi
+  it "$label ($at): the next programme's pre-fill refills the store from the row and brings the Ruling in"
+  local next_run
+  next_run="$(new_programme "$next")"
+  prog propose-agreement --run "$next_run" --project-term "naming=kebab case files" --source "repo README"
+  remit "$next_run" "{\"spaces\":[\"${next}\"],\"repos\":[{\"path\":\"${repo}\"}]}"
+  check "0 q2 1" "$CODE $(field "$next_run" '" ".join(r for r, v in (prog.get("context") or {}).get("decisions", {}).items() if v[-1].get("carried"))' | tr -d '"') $(stored_under "$repo" q2)"
+  lacks "dropped carried-over entry" "$OUT"
+  it "$label ($at): a second pre-fill stores nothing twice"
+  remit "$next_run" "{\"spaces\":[\"${next}\"],\"repos\":[{\"path\":\"${repo}\"}]}"
+  check "0 1" "$CODE $(stored_under "$repo" q2)"
+}
+heal_case "$RUN_Q" promoted put w12 w15
+heal_case "$RUN_L" legacy put w11 w16
+heal_case "$RUN_L" legacy row w11 w17
+heal_case "$RUN_Q" promoted-replay put w12 w18 --op carry-heal-1
+
+it "a refill never overwrites a later carry of the same Ruling"
+check "kept-newer" "$(run_py "$RUN_Q" <<'EOF'
+carry = load_lib_module("programme_carryover")
+row = next(r for r in reversed(pj.read(args[0])) if r["kind"] == "rulings_carried" and r["payload"].get("adopted"))
+entry = row["payload"]["adopted"][0]
+doc = {"format": 1, "keys": {entry["key"]: [dict(entry, id="knewer0", at="2999-01-01T00:00:00Z")]}}
+print("kept-newer" if not carry._missing(doc, entry) else "overwrote")
+EOF
+)"
+
+it "a refill skips an adopted entry its row does not approve: nothing is stored or carried"
+REPO_FORGE="${WORK}/repos/heal-forged"
+mkdir -p "$REPO_FORGE"
+run_py "$RUN_Q" "$REPO_FORGE" <<'EOF' >/dev/null
+import copy
+proto = load_lib_module("programme_protocol")
+row = next(r for r in reversed(pj.read(args[0])) if r["kind"] == "rulings_carried" and r["payload"].get("adopted"))
+forged = copy.deepcopy(row["payload"]["adopted"][0])
+forged.update(id="kforge0", key=args[1], scope="widened by hand")
+forged["adoption"]["hash"] = proto.content_hash(forged)
+pj.append(args[0], "rulings_carried", "sess-pm", dict(row["payload"], adopted=[forged]), cites=row["cites"])
+EOF
+RUN_FG="$(new_programme w19)"
+prog propose-agreement --run "$RUN_FG" --project-term "naming=kebab case files" --source "repo README"
+remit "$RUN_FG" "{\"spaces\":[\"w19\"],\"repos\":[{\"path\":\"${REPO_FORGE}\"}]}"
+check "0 0 []" "$CODE $(stored_under "$REPO_FORGE" q2) $(carried_rulings "$RUN_FG")"
+
 it "no verb crashed with a traceback"
 check "" "$CRASHES"
 

@@ -153,13 +153,14 @@ def summary(adopted) -> list:
             for e in adopted]
 
 
-def _put(adopted) -> None:
-    def update(doc):
-        for entry in adopted:
-            kept = [e for e in entries_under(doc, entry["key"]) if e.get("ruling") != entry["ruling"]]
-            doc["keys"][entry["key"]] = kept + [entry]
+def _put_into(doc, adopted) -> None:
+    for entry in adopted:
+        kept = [e for e in entries_under(doc, entry["key"]) if e.get("ruling") != entry["ruling"]]
+        doc["keys"][entry["key"]] = kept + [entry]
 
-    _write(update)
+
+def _put(adopted) -> None:
+    _write(lambda doc: _put_into(doc, adopted))
 
 
 def _verified(entry, key, lookup):
@@ -201,14 +202,63 @@ def _arrive(ctx, entry, key):
     return {"ruling": rid, "kind": kind, "effect": entry["effect"], "origin": key}, None
 
 
+def _carried_rows(journals, notices) -> list:
+    try:
+        names = sorted(os.listdir(programme_home.programmes_dir()))
+    except OSError:
+        return []
+    rows = []
+    for run in names:
+        try:
+            programme_home.check_run_id(run)
+            if not os.path.isdir(programme_home.home_path(run)):
+                continue
+            journals[run] = programme_journal.read(run)
+        except programme_home.ProgrammeHomeError:
+            continue
+        # A held or unreadable home must not block set-remit; its carries wait for the next pre-fill.
+        except Exception as exc:
+            notices.append(programme_sanitize.clean(f"carry-over rows of {run} unreadable: {exc}", cap=0))
+            continue
+        rows.extend(r for r in journals[run] if r.get("kind") == "rulings_carried")
+    return rows
+
+
+def _missing(doc, entry) -> bool:
+    held = [e for e in entries_under(doc, entry["key"]) if e.get("ruling") == entry.get("ruling")]
+    return not any(e.get("id") == entry.get("id") or str(e.get("at") or "") >= str(entry.get("at") or "")
+                   for e in held)
+
+
+# Refills the store from the rulings_carried rows: an entry is written only when it verifies as the store
+# entry would, and only when no entry for its Ruling under that key is as new, so a later carry is never
+# overwritten and a healed entry is never stored twice.
+def _refill(host, keys, journals, notices) -> None:
+    def lookup(run, prompt):
+        return host.prompt_lookup(run, prompt, journals)
+
+    def update(current):
+        for entry in due:
+            if _missing(current, entry):
+                _put_into(current, [entry])
+
+    doc = read_store()
+    due = [e for row in _carried_rows(journals, notices) for e in (row.get("payload") or {}).get("adopted") or []
+           if isinstance(e, dict) and e.get("key") in keys and _missing(doc, e)
+           and _verified(e, e["key"], lookup) is None]
+    if due:
+        _write(update)
+
+
 # Never raises on store content: a bad store must not block set-remit.
 def prefill(host, programme) -> tuple:
+    added, notices, journals = [], [], {}
     try:
+        _refill(host, repo_keys(programme), journals, notices)
         doc = read_store()
         ctx = pc._mutable(programme)
     except (OSError, ValueError, pc.ContextError) as exc:
         return [], [programme_sanitize.clean(f"carry-over store unreadable, nothing carried over: {exc}", cap=0)]
-    added, notices, journals = [], [], {}
     for key in repo_keys(programme):
         for entry in entries_under(doc, key):
             reason = _verified(entry, key, lambda run, prompt: host.prompt_lookup(run, prompt, journals))
@@ -270,8 +320,8 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
 
 # The journal checks, the rulings_carried row and then the store write share the programme's write lock, so a
 # concurrent Ruling change or a second use of the prompt waits for this carry and then sees it. That one row
-# is also each stored entry's approval: pre-fill drops an entry with none, so no second write may follow it,
-# and the store is written only after the row, so a refused carry stores nothing.
+# is also each stored entry's approval and holds the entries it adopted: the store is a cache of those rows,
+# which pre-fill refills, so a carry cut off after its row still arrives and a refused carry stores nothing.
 def _carry(host, opts, ids):
     run_id, home, _ = host._locate(opts)
     sid = driver_session.driving_session_id()
@@ -291,12 +341,18 @@ def _carry(host, opts, ids):
         return {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path()}
 
     def compose(payload, _):
-        return programme_journal.entry("rulings_carried", sid, dict(payload, prompt_id=seen["prompt"]["prompt_id"]),
+        return programme_journal.entry("rulings_carried", sid, dict(payload, prompt_id=seen["prompt"]["prompt_id"],
+                                                                    adopted=seen["adopted"]),
                                        cites=[seen["prompt"]["prompt_id"]])
 
-    out = host.programme_authority.write(home, run_id, mutate, compose,
+    out = host.programme_authority.write(home, run_id, mutate, compose, operation_id=host._OPERATION["id"],
+                                         approval=host.programme_rulings.is_approval,
                                          recheck=host.programme_rulings.recheck_approval,
                                          then=lambda _: _put(seen["adopted"]))
+    if out["replayed"]:
+        payload = {k: v for k, v in ((out["row"] or {}).get("payload") or {}).items() if k != "adopted"}
+        host._emit(dict(payload, ok=True, run=run_id, kind="rulings_carried", replayed=True, revision=out["revision"]))
+        return 0
     host._emit(dict({"ok": True, "run": run_id, "kind": "rulings_carried"}, **out["result"]))
     return 0
 
