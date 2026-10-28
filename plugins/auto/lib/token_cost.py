@@ -3,7 +3,8 @@
 
 Cost units are input + 1.25 x cache-create + 0.1 x cache-read + 5 x output. The cache-read
 weight is an approximation of the billing ratio, so compare runs with each other, not with an
-invoice. A session's subagent transcripts (`<session-id>/subagents/*.jsonl`, next to
+invoice. Assistant lines whose usage is all zero are placeholders (rate-limit and login notices),
+not turns, and are left out. A session's subagent transcripts (`<session-id>/subagents/*.jsonl`, next to
 `<session-id>.jsonl`) are summed in, so moving work into agents cannot hide its cost.
 """
 
@@ -99,7 +100,7 @@ def read_transcript(path):
                     pending[block.get("id")] = _source_key(block)
                     if block.get("name") == "Skill" and stamp:
                         skills[block.get("id")] = (stamp, str((block.get("input") or {}).get("skill") or ""))
-                if message.get("usage") and stamp:
+                if message.get("usage") and stamp and (cost_units(message["usage"]) or context_tokens(message["usage"])):
                     key = message.get("id") or entry.get("uuid")
                     if key not in turns:
                         order.append(key)

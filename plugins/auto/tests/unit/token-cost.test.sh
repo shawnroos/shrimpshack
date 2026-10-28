@@ -72,6 +72,8 @@ with tempfile.TemporaryDirectory(prefix='token-cost-') as work:
     lines.append(assistant('m3', '2026-10-20T10:25:00Z', usage(10, 0, 20000, 0), [skill('t3', 'auto:programme-sweep')]))
     lines.append(tool_result('t4', [{'type': 'text', 'text': 'y' * 3000}]))
     lines.append('{not json')
+    # a synthetic placeholder line (all-zero usage) is not a turn
+    lines.append(assistant('zero', '2026-10-20T10:26:00Z', usage()))
     lines.append(json.dumps({'type': 'assistant', 'uuid': 'nousage', 'timestamp': '2026-10-20T11:00:00Z',
                              'message': {'id': 'nu', 'role': 'assistant', 'content': [
                                  {'type': 'tool_use', 'id': 't5', 'name': 'Glob', 'input': {}}]}}))
