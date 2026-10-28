@@ -74,6 +74,14 @@ def _gh_refusal(args):
     return None
 
 
+def _is_read_call(rest):
+    # `rules --ack` clears the compact flag and is a write; any flag beyond --run <id> stays denied.
+    if rest[0] in READ_VERBS:
+        return True
+    args = rest[1:]
+    return rest[0] == "rules" and (not args or (len(args) == 2 and args[0] == "--run"))
+
+
 def _segment_refusal(segment):
     while segment and _ASSIGNMENT.match(segment[0]):
         segment = segment[1:]
@@ -92,8 +100,8 @@ def _segment_refusal(segment):
     if base in VIEWERS or (base == "git" and len(segment) > 1 and segment[1] in GIT_READS):
         return None
     rest = _programme_call(segment)
-    if rest is None or not rest or rest[0] not in READ_VERBS:
-        return _DENY_PROGRAMME.format(", ".join(sorted(READ_VERBS)))
+    if rest is None or not rest or not _is_read_call(rest):
+        return _DENY_PROGRAMME.format(", ".join(sorted(READ_VERBS | {"rules"})))
     if rest[0] == "check-mergeable" and "--pin" in rest:
         return "a sub-agent may not pin a merge head; the PM runs check-mergeable --pin"
     return None
