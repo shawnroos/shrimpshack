@@ -2,7 +2,7 @@
 description: Spin the current topic/plan/idea off into a fresh worktree + a briefed Claude session in a split beside this pane
 ---
 
-The current topic, plan, or idea we've been discussing is becoming its own batch of work. Spin it off into a **split beside the pane I'm in**, in this same tab — herdr, cmux or ghostty, whichever this session is running in.
+The current topic, plan, or idea we've been discussing is becoming its own batch of work. Spin it off into a **split beside the pane I'm in**, in this same tab — herdr, cmux, REX or ghostty, whichever this session is running in.
 
 Invoke the **spinoff** skill and follow it end to end with `--target split`. The skill owns the workflow — synthesize the handoff, confirm the branch base (here, before backgrounding), resolve this session's transcript, dispatch a background agent to run the spinoff script, and relay the result.
 

@@ -11,7 +11,7 @@ description: >-
   boots a briefed Claude — in a new tab on the current workspace (/start-session),
   beside the pane you're in (/start-split), or in a brand-new two-pane workspace with
   the handoff alongside (/start-workspace) — using whichever launcher backend is live
-  (herdr, cmux or ghostty, auto-detected). The mechanical work runs in a background
+  (herdr, cmux, REX or ghostty, auto-detected). The mechanical work runs in a background
   agent so it doesn't consume this session's context. Only run when the user
   explicitly invokes one of the commands — if they merely describe wanting to fork
   work, suggest the command rather than acting.
@@ -47,23 +47,24 @@ not the mechanical git/terminal plumbing (which the bundled script handles).
 All three run the same `spinoff.sh`; they differ only in the `--target` they pass
 (and, for split, the direction and the originating surface).
 
-## Three backends: herdr, cmux or ghostty (auto-detected)
+## Four backends: herdr, cmux, REX or ghostty (auto-detected)
 
 The launch is driven through a backend the script picks at run time — **herdr**,
-**cmux** or **ghostty** — so `/start` works in whichever terminal this session is
+**cmux**, **REX** or **ghostty** — so `/start` works in whichever terminal this session is
 running in. You don't choose it; the script detects it. The `--launcher` flag
-(`herdr | cmux | ghostty | auto`, default `auto`) forces a backend or leaves it to
+(`herdr | cmux | rex | ghostty | auto`, default `auto`) forces a backend or leaves it to
 detection:
 
 - **`auto`** (default) — pick **herdr** when `HERDR_ENV=1` *and* the herdr server is
   live (a `herdr status server` probe — a stale `HERDR_ENV` never wins); else **cmux**
-  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **herdr** again when
+  when `CMUX_WORKSPACE_ID` is set and the cmux CLI resolves; else **REX** when
+  `REX_SESSION` is set and `rex whoami --json` answers; else **herdr** again when
   *nothing* announced itself and the server is live anyway; else **ghostty** when
   Ghostty is the terminal *and* no multiplexer announced itself at all; else **none**
   (worktree + handoff still produced, plus a manual `cd … && claude` line). Landing on
   **none** is only a success when nothing announced a backend — if something did and
   the launch never happened, the run exits 4 or 5. Precedence is explicit:
-  **herdr (announced, live) > cmux > herdr (unannounced, live) > ghostty > none**.
+  **herdr (announced, live) > cmux > REX > herdr (unannounced, live) > ghostty > none**.
 - The **unannounced herdr** arm exists because `HERDR_ENV` records launch ancestry, not
   reachability. herdr injects it into the panes it spawns, so a session started from a
   plain terminal never holds it — while `herdr pane` and `herdr agent` still address
@@ -75,7 +76,18 @@ detection:
   A session that reaches herdr this way holds no `HERDR_PANE_ID`, so `--target split`
   has nothing to split — see the `--from-surface` note below; the script warns and opens
   a tab.
-- Ghostty is deliberately suppressed whenever `HERDR_ENV` or `CMUX_WORKSPACE_ID` is
+- A REX terminal sets `REX_SESSION`, `REX_BLOCK`, `REX_SERVER` and `TERM_PROGRAM=rex`.
+  `REX_SESSION` is the announcement; a live REX server alone is not, because
+  `rex whoami` also answers from a plain terminal. REX ranks below herdr and cmux so no
+  existing session changes backend, which means a REX terminal opened *inside* a herdr
+  pane resolves to herdr — pass `--launcher rex` to override. The probe is
+  `rex whoami --json` exiting 0 and naming a `rex_version` (another tool called `rex`
+  can sit on `PATH`), and every `rex` call carries `--autostart=false`: spinoff never
+  starts a REX server. The binary is `rex` on `PATH`, then `$REX_BIN_DIR/rex` (set in
+  every REX terminal), then the Rex Server app bundle; never `Rex Beta.app/Contents/MacOS/Rex`,
+  which is the GUI and hangs.
+- Ghostty is deliberately suppressed whenever `HERDR_ENV`, `CMUX_WORKSPACE_ID` or
+  `REX_SESSION` is
   set, even if the multiplexer's own probe then fails. Those vars are both present
   inside herdr-running-in-ghostty, and a multiplexer that announced itself owns the
   session — opening a bare ghostty window would be the wrong recovery. That
@@ -84,7 +96,7 @@ detection:
   printed rather than naming a cause — read it, then act on what it says. Ghostty and
   any other backend name only what was missing. Pass `--launcher ghostty` when you
   actually want a bare window.
-- **`--launcher herdr` / `cmux` / `ghostty`** — force that backend, but it's *still*
+- **`--launcher herdr` / `cmux` / `rex` / `ghostty`** — force that backend, but it's *still*
   probed; if the probe fails it falls back to auto-detection rather than hard-erroring.
   But the flag itself counts as announcing a backend, so if that fallback also lands on
   `none`, the run exits **4 or 5 rather than 0** — naming a backend and launching
@@ -96,11 +108,12 @@ detection:
 Where the backends differ, in the parts worth knowing:
 
 - **Readiness.** On herdr it's a real blocking primitive (`agent wait --status idle`);
-  on cmux it's a screen-scrape poll for the prompt glyph; on ghostty it's just the
+  on cmux and REX it's a screen read (`read-screen`, `rex capture`) for claude's footer;
+  on ghostty it's just the
   terminal's pid, because the AppleScript dictionary has no way to read a surface's
   contents.
 - **Claude's startup prompts on a fresh worktree** — most notably "N new MCP servers
-  found in this project". herdr and cmux read the screen and answer them, so the new
+  found in this project". herdr, cmux and REX read the screen and answer them, so the new
   session gets its MCP servers. **Ghostty can't**: with no screen-read verb it can't
   see a prompt, let alone answer one, so the session sits there until someone does —
   and may end up running without its MCP servers. The brief is unaffected either way
@@ -110,6 +123,15 @@ Where the backends differ, in the parts worth knowing:
   before a launch works. The script names the remedy and stops retrying.
 - **Ghostty's `tab` target lands in the front window**, not in some remembered one,
   and its `workspace` target is a new ghostty window.
+- **Ghostty's `split` needs `--from-surface`** (a terminal id or tty). Without one the
+  script opens a tab and exits 0; the summary's "NOT what was asked for" block is the
+  only place that says so.
+- **REX's `tab` and `split` land in the session named by `REX_SESSION`** (or, for a
+  split, the session of the `--from-surface` block), and its `workspace` target is a new
+  REX session that spinoff then selects in the first connected app client. If no app
+  client is connected the session still exists and the summary says it was not shown.
+  A REX launch runs `claude` as the block's own process, so "claude exited" is
+  `rex wait` reporting that process's exit, and the pane stays (`--keep-open`).
 
 Everything else (worktree, handoff, doc carry-over, the brief riding the launch, the
 honest summary) is identical across backends.
@@ -127,8 +149,8 @@ exists to remove. Every non-zero code here has a named cause and a named fix.
 | `1` | `die` — a precondition failed (no repo resolves, `git worktree add` refused, a bad `--label`). The message names it. | Surface the message verbatim; fix the input and re-run. |
 | `2` | Unknown argument. | A skill bug. Fix the invocation. |
 | `3` | A session **launched but was not briefed** — the launch itself failed partway. | Worktree survives. Relay the recovery line the script prints and brief the tab by hand. |
-| `4` | A backend was **named** — by the environment (`HERDR_ENV=1`, `CMUX_WORKSPACE_ID`) or by an explicit `--launcher` — and its **binary could not be resolved**; nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN`, then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. |
-| `5` | A backend was **named** the same two ways, and it **wouldn't take the launch**; nothing launched. | Worktree survives. Read the `⚠`. For herdr it quotes what `herdr status server` printed on stdout and stderr — that quoted text is the evidence, and the message deliberately asserts no cause beyond it. For `--launcher ghostty`: the `.app` or `osascript` was missing, and there is no server to start. Then re-run **with a new `--name`**, or use the manual line the script prints. Don't reach for `HERDR_BIN` on a herdr 5 — the binary was never the problem. |
+| `4` | A backend was **named** — by the environment (`HERDR_ENV=1`, `CMUX_WORKSPACE_ID`, `REX_SESSION`) or by an explicit `--launcher` — and its **binary could not be resolved**; nothing launched. | Worktree survives. The `⚠` names the binary, every path searched, and the override. Set `HERDR_BIN` / `CMUX_BIN` / `REX_BIN`, then re-run **with a new `--name`** — the worktree and branch already exist, so re-running the same name dies at exit 1. |
+| `5` | A backend was **named** the same two ways, and it **wouldn't take the launch**; nothing launched. | Worktree survives. Read the `⚠`. For herdr it quotes what `herdr status server` printed on stdout and stderr — that quoted text is the evidence, and the message deliberately asserts no cause beyond it. For REX it quotes what `rex whoami --json` printed; spinoff never starts the REX server, so start the Rex app. For `--launcher ghostty`: the `.app` or `osascript` was missing, and there is no server to start. Then re-run **with a new `--name`**, or use the manual line the script prints. Don't reach for `HERDR_BIN` on a herdr 5 — the binary was never the problem. |
 
 Codes 3, 4 and 5 are mutually exclusive by construction. 3 means a backend resolved
 and the launch broke, so a launcher was in play. 4 and 5 both mean no launch happened
@@ -155,6 +177,7 @@ and a dev build, because it asks the shell that actually has them.
 | --- | --- |
 | `HERDR_BIN` | Absolute path to `herdr`. Wins outright; if it's set and isn't an executable file, resolution fails there rather than quietly running a different binary. |
 | `CMUX_BIN` | Same, for `cmux` (otherwise found on `PATH` or in `/Applications/cmux.app/Contents/Resources/bin/cmux`). |
+| `REX_BIN` | Same, for `rex` (otherwise found on `PATH`, then `$REX_BIN_DIR/rex`, then `/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex`). Never the GUI binary in `Contents/MacOS`. |
 | `OSASCRIPT_BIN` | Same, for the ghostty backend's `osascript` (default `/usr/bin/osascript`). |
 | `SPINOFF_BIN_PATHS` | Colon-separated install directories searched after `PATH`. Default `/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin`. |
 
@@ -311,7 +334,7 @@ them explicitly whenever `--repo` is set.
 ## Step 3.5 — Confirm the target workspace (when it differs)
 
 A `--target tab` or `--target split` spinoff opens in the **current** workspace or
-window (herdr, cmux or ghostty). Usually that's right — but if the workspace you're in is anchored on a *different*
+window (herdr, cmux, REX or ghostty). Usually that's right — but if the workspace you're in is anchored on a *different*
 repo than the one you're forking (`--repo`), the new tab would land somewhere
 surprising. Catch that here, before dispatch (the background agent can't ask):
 
@@ -375,6 +398,7 @@ instead of a split. Resolve it before dispatch, per backend:
 | --- | --- | --- |
 | herdr | the pane id | `$HERDR_PANE_ID` from this session's env |
 | cmux | the surface ref | `$CMUX_SURFACE_ID` from this session's env |
+| REX | the block id | `$REX_BLOCK` from this session's env (also pass `REX_SESSION`, below) |
 | ghostty | a terminal UUID **or its tty** | `$(tty)` — run it in this session |
 
 On ghostty, do **not** pass `$GHOSTTY_SURFACE_ID`. It's a hex pointer that matches
@@ -399,6 +423,7 @@ is right.
 | --- | --- | --- |
 | `HERDR_ENV=1` | `command -v herdr` | `HERDR_BIN=<that absolute path>` |
 | `CMUX_WORKSPACE_ID` | `command -v cmux` | `CMUX_BIN=<that absolute path>` |
+| `REX_SESSION` | `command -v rex` | `REX_BIN=<that absolute path>`, and `REX_SESSION=<this session's $REX_SESSION>` |
 
 Rules that keep this honest:
 
@@ -450,6 +475,8 @@ the summary fields.
 # non-empty — omit the line entirely otherwise.
 HERDR_BIN="<absolute path from `command -v herdr` here>" \
 CMUX_BIN="<absolute path from `command -v cmux` here>" \
+REX_BIN="<absolute path from `command -v rex` here>" \
+REX_SESSION="<this session's $REX_SESSION, REX sessions only>" \
 bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   --name "<kebab-feature-name>" \
   --label "<Ticket: Title, or just Title when there is no ticket>" \
@@ -462,12 +489,12 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/spinoff/scripts/spinoff.sh" \
   [--from-surface "<originating pane/surface id>"] \  # REQUIRED for --target split (see above)
   [--split-direction right|left] \                   # --target split only; default right
   [--branch-prefix feature] \    # default: feature/
-  [--launcher auto]              # default: auto (herdr-live > cmux > ghostty > none);
-                                 # force with herdr|cmux|ghostty
+  [--launcher auto]              # default: auto (herdr-live > cmux > rex > ghostty > none);
+                                 # force with herdr|cmux|rex|ghostty
 ```
 
 `--launcher` almost never needs setting — `auto` picks the right backend (see
-*Three backends* above). Force one only for a reason, e.g. to reproduce a cmux launch
+*Four backends* above). Force one only for a reason, e.g. to reproduce a cmux launch
 while herdr is also live, or `ghostty` to open a plain ghostty window from inside a
 multiplexer (auto-detection suppresses ghostty there on purpose).
 
@@ -490,8 +517,8 @@ order:
 5. Copies recent `docs/` plan/brainstorm/notes files (modified in the last ~6h)
    into the new worktree's `docs/`.
 6. Writes the brief to a per-run file in the worktree (`.spinoff-brief`) and
-   **launches a briefed Claude** via the auto-detected backend (herdr, cmux or
-   ghostty — see *Three backends*), per `--target`. The brief is `claude`'s
+   **launches a briefed Claude** via the auto-detected backend (herdr, cmux, REX or
+   ghostty — see *Four backends*), per `--target`. The brief is `claude`'s
    positional prompt at launch, read from that file — so a successful launch *is* a
    successful briefing, and there's no separate step that types it in afterwards.
    The brief says: read `docs/handoff.md`, treat it as directional (author intent and
