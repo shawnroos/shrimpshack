@@ -18,6 +18,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_focus = load_lib_module("programme_focus")
 programme_journal = load_lib_module("programme_journal")
 programme_authority = load_lib_module("programme_authority")
 programme_naming = load_lib_module("programme_naming")
@@ -149,7 +150,8 @@ def _pick_write(host, opts, change, kind, *, verb, target):
 
 
 def _h_pick_term(host, argv):
-    positional, opts = host._parse(argv, values=("run", "pick", "why", "until", "seconds"))
+    positional, opts = host._parse(
+        argv, values=("run", "pick", "why", "until", "seconds") + programme_focus.EXTRA_NAMES)
     if len(positional) != 2:
         raise ValueError("usage: pick-term <key> <value> --pick <id>")
     key, value = positional
@@ -191,7 +193,7 @@ def _h_take_recommendations(host, argv):
         cite = _cite(pick, *taken[0])
         applied = {}
         for key, term in programme["agreement"]["terms"].items():
-            if key in SHARED_TERMS or not isinstance(term, dict):
+            if key in SHARED_TERMS or key == programme_focus.KEY or not isinstance(term, dict):
                 continue
             value, extras, settle = _recommendation(term)
             _set(host, term, value, extras, cite, TAKE_ALL, settle=settle)

@@ -55,7 +55,8 @@ p = setup.build(fresh())
 check("a fresh proposal lists the terms in agreement order, then rulings, shared, items and accept",
       keys(p) == terms + tail, keys(p))
 check("the first unfinished step is current", p["current"] == terms[0] and states(p)[terms[0]] == "current"
-      and all(states(p)[k] == "upcoming" for k in keys(p)[1:] if k != "items"), states(p))
+      and all(states(p)[k] == "upcoming" for k in keys(p)[1:] if k not in ("items", "focus_budget")), states(p))
+check("an optional focus_budget left at its default never blocks setup", states(p)["focus_budget"] == "done", states(p))
 check("with no probe recorded the items step is not done and the scope is not probed",
       states(p)["items"] != "done" and p["scope"]["probed"] is False, (states(p), p["scope"]))
 check("each term step offers the term's option names",
