@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Programme wake watcher: polls cheap signals and prints one line per remit change.
+"""Programme wake watcher: polls cheap signals and prints a line when the remit needs the PM.
+
+Non-urgent lines are held and merged into one line per collapse window; urgent lines print at
+once, after anything held. Every exit path prints what is held first.
 
 Remit mode beats the `remit` watcher each interval and keeps polling after each change, until
 its Monitor expires or kills it. A superseded or ended watcher prints `remit-watcher-exit
@@ -37,10 +40,13 @@ driver_session = load_lib_module("driver_session")
 PROG = "programme-watch"
 REMIT_WATCHER = "remit"
 DEFAULT_INTERVAL_SECONDS = 30.0
+DEFAULT_COLLAPSE_SECONDS = 120.0
 READ_TIMEOUT_SECONDS = 20
 BEAT_TIMEOUT_SECONDS = 20
 REFUSED_BEATS_LIMIT = 3
 MAX_LISTED_CHANGES = 6
+# Listed as the kinds that may wait, so a line kind added later prints at once rather than being held.
+HELD_KINDS = frozenset({"remit-changed", "tracker-changed", "plans-changed"})
 USAGE = ("usage: programme-watch [--run <id>] [--tracker] [--max-polls <n>]\n"
          "       programme-watch [--run <id>] --item <id> -- <command> [args...]")
 
@@ -61,13 +67,21 @@ def _warn(message) -> None:
     sys.stderr.flush()
 
 
-def _interval() -> float:
-    raw = os.environ.get("CLAUDE_AUTO_WATCH_INTERVAL_SECONDS")
+def _seconds(name, default) -> float:
+    raw = os.environ.get(name)
     try:
-        value = float(raw) if raw else DEFAULT_INTERVAL_SECONDS
+        value = float(raw) if raw else default
     except ValueError:
-        value = DEFAULT_INTERVAL_SECONDS
-    return value if value > 0 else DEFAULT_INTERVAL_SECONDS
+        value = default
+    return value if value > 0 else default
+
+
+def _interval() -> float:
+    return _seconds("CLAUDE_AUTO_WATCH_INTERVAL_SECONDS", DEFAULT_INTERVAL_SECONDS)
+
+
+def _collapse() -> float:
+    return _seconds("CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS", DEFAULT_COLLAPSE_SECONDS)
 
 
 def _parse(argv):
@@ -301,11 +315,9 @@ def _read_tasks(ctx):
 
 
 def _tasks_changes(old, new) -> list:
-    empty = tuple(0 for _ in programme_tasks.STATUSES)
-    parts = [f"{programme_sanitize.token(sid, 64) or '?'} {'/'.join(map(str, old.get(sid, empty)))}->"
-             f"{'/'.join(map(str, new.get(sid, empty)))}"
-             for sid in sorted(set(old) | set(new)) if old.get(sid, empty) != new.get(sid, empty)]
-    return _listed("tasks-changed", parts)
+    # Task counts are worker progress the PM reads on its next sweep. The source still polls so its
+    # outage and recovery lines keep printing.
+    return []
 
 
 def _read_plans(ctx):
@@ -320,8 +332,7 @@ def _read_plans(ctx):
 
 
 def _plans_changes(old, new) -> list:
-    parts = [("+" if path not in old else "~") + programme_sanitize.clean(path, 200)
-             for path in sorted(new) if old.get(path) != new[path]]
+    parts = ["+" + programme_sanitize.clean(path, 200) for path in sorted(new) if path not in old]
     return _listed("plans-changed", parts)
 
 
@@ -347,10 +358,9 @@ class Source:
         recorded_down = self.state is None and isinstance(known, dict) and bool(known.get("unavailable_since"))
         value, err = self.read(ctx)
         if err:
-            if self.state != "down" and not recorded_down:
-                _say(f"source-unavailable {self.name} {err}")
+            first = self.state != "down" and not recorded_down
             self.state = "down"
-            return []
+            return [f"source-unavailable {self.name} {err}"] if first else []
         if self.state == "down" or recorded_down:
             self.state, self.baseline = "up", value
             return [f"source-available {self.name}"]
@@ -414,34 +424,74 @@ class RemitSignals:
         return changes
 
 
-def _ended(record) -> bool:
+class Held:
+    def __init__(self, window):
+        self.window, self.lines, self.since = window, [], None
+
+    def take(self, changes) -> None:
+        urgent = [line for line in changes if line.split(" ", 1)[0] not in HELD_KINDS]
+        for line in changes:
+            if line not in urgent and line not in self.lines:
+                self.lines.append(line)
+        if self.lines and self.since is None:
+            self.since = time.monotonic()
+        if urgent or (self.lines and time.monotonic() - self.since >= self.window):
+            self.flush(urgent)
+
+    def flush(self, urgent=()) -> None:
+        out = self.lines + list(urgent)
+        # Cleared before printing, so a stop signal landing mid-print cannot print the lines twice.
+        self.lines, self.since = [], None
+        if out:
+            _say("; ".join(out))
+
+
+def _flush_on_stop(held):
+    def handler(signum, frame):
+        held.flush()
+        sys.exit(128 + signum)
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, handler)
+
+
+def _ended(record):
     if _programme(record).get("ended"):
         _warn("programme ended; not watching")
-        _say("remit-watcher-exit ended")
-        return True
-    return False
+        return "remit-watcher-exit ended"
+    return None
 
 
-def _superseded(record) -> bool:
+def _superseded(record):
     other = _other_remit_watcher(record)
     if other:
         _warn(f"remit watcher {other} is current; exiting")
-        _say("remit-watcher-exit superseded")
-    return bool(other)
+        return "remit-watcher-exit superseded"
+    return None
+
+
+def _exiting(record, held) -> bool:
+    line = _ended(record) or _superseded(record)
+    if line:
+        held.flush()
+        _say(line)
+    return bool(line)
 
 
 def _remit_mode(run_id, opts) -> int:
     record = _read(run_id)
+    held = Held(_collapse())
+    _flush_on_stop(held)
     try:
-        return _remit_loop(run_id, opts, record)
+        return _remit_loop(run_id, opts, record, held)
     except Exception as exc:  # noqa: BLE001 — the sweep re-arms on a crash line, never on silence
+        held.flush()
         _say(f"remit-watcher-exit crashed: {type(exc).__name__}")
         _warn(f"{type(exc).__name__}: {exc}")
         return 1
 
 
-def _remit_loop(run_id, opts, record) -> int:
-    if _ended(record) or _superseded(record):
+def _remit_loop(run_id, opts, record, held) -> int:
+    if _exiting(record, held):
         return 0
     if opts["tracker"] and not programme_home.source_enabled(_programme(record), "tracker"):
         _warn("the agreement turns the tracker off; not watching it")
@@ -450,25 +500,23 @@ def _remit_loop(run_id, opts, record) -> int:
     if not _beat(run_id, REMIT_WATCHER):
         return 1
     signals = RemitSignals({"home": programme_home.home_path(run_id)}, opts["tracker"])
-    changes = signals.poll(record)
-    if changes:
-        _say("; ".join(changes))
+    held.take(signals.poll(record))
     interval, deadline, polls, refused = _interval(), time.monotonic(), 0, 0
     while True:
         deadline += interval
         time.sleep(max(0.0, deadline - time.monotonic()))
         polls += 1
         record = _read(run_id)
-        if _ended(record) or _superseded(record):
+        if _exiting(record, held):
             return 0
-        changes = signals.poll(record)
-        if changes:
-            _say("; ".join(changes))
+        held.take(signals.poll(record))
         refused = 0 if _beat(run_id, REMIT_WATCHER) else refused + 1
         if refused >= REFUSED_BEATS_LIMIT:
+            held.flush()
             _warn(f"{refused} beats refused in a row; exiting")
             return 1
         if opts["max_polls"] and polls >= opts["max_polls"]:
+            held.flush()
             return 0
 
 
