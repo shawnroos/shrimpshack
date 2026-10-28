@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cost, turns, sweeps, context and idle-wake share of Claude Code session transcripts.
 
-Cost units are input + 1.25 x cache-create + 0.1 x cache-read + 5 x output. The cache-read
+Cost is input + 1.25 x cache-create + 0.1 x cache-read + 5 x output. The cache-read
 weight is an approximation of the billing ratio, so compare runs with each other, not with an
 invoice. Assistant lines whose usage is all zero are placeholders (rate-limit and login notices),
 not turns, and are left out. A session's subagent transcripts (`<session-id>/subagents/*.jsonl`, next to
@@ -24,7 +24,7 @@ NO_CE = "(none)"
 COMMAND_NAME = re.compile(r"<command-name>/?([^<]+)</command-name>")
 
 
-def cost_units(usage):
+def weighted_cost(usage):
     return ((usage.get("input_tokens") or 0)
             + 1.25 * (usage.get("cache_creation_input_tokens") or 0)
             + 0.1 * (usage.get("cache_read_input_tokens") or 0)
@@ -100,7 +100,7 @@ def read_transcript(path):
                     pending[block.get("id")] = _source_key(block)
                     if block.get("name") == "Skill" and stamp:
                         skills[block.get("id")] = (stamp, str((block.get("input") or {}).get("skill") or ""))
-                if message.get("usage") and stamp and (cost_units(message["usage"]) or context_tokens(message["usage"])):
+                if message.get("usage") and stamp and (weighted_cost(message["usage"]) or context_tokens(message["usage"])):
                     key = message.get("id") or entry.get("uuid")
                     if key not in turns:
                         order.append(key)
@@ -189,7 +189,7 @@ def analyse(paths, idle_seconds=1200):
         for stamp, usage in rows:
             while upcoming and upcoming[0][0] <= stamp:
                 label = upcoming.pop(0)[1]
-            cost = cost_units(usage)
+            cost = weighted_cost(usage)
             ce[label]["cost"] += cost
             ce[label]["turns"] += 1
             ctx = context_tokens(usage)
@@ -208,7 +208,7 @@ def analyse(paths, idle_seconds=1200):
             skipped += bad
             for stamp, usage in sub_rows:
                 for bucket in (days[_local_day(stamp)], total):
-                    bucket["subagent_cost"] += cost_units(usage)
+                    bucket["subagent_cost"] += weighted_cost(usage)
                     bucket["subagent_turns"] += 1
     return {
         "files": len(files),
