@@ -558,7 +558,7 @@ prog["items"]["mem:gone"]["state"] = "dropped"
 item("mem:new", "s3", None)
 panes = [{"pane_id": "w2:p%d" % n} for n in (1, 2, 3, 4)]
 c = focus.census(prog, "mem:new", panes)
-print(json.dumps([c["points"], c["agents"]]))
+print(json.dumps([c.points, c.agents]))
 EOF2
 )"
 

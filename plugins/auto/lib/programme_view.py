@@ -534,7 +534,7 @@ def _adopted_on(entry) -> str:
 
 def _term_text(key, term) -> str:
     extras = [f"{name} {term[name]}" for name in ("until", "seconds") if term.get(name) is not None]
-    extras += programme_home.focus_extra_texts(term)
+    extras += programme_home.term_extra_texts(term)
     value = term.get("value")
     if isinstance(value, list):
         value = ", ".join(str(v) for v in value) or "none"
@@ -635,7 +635,7 @@ def _permission_text(p) -> str:
 def agreement_lines(block) -> list:
     agreement = _dict(block.get("agreement"))
     lines = [_term_text(key, _dict(term)) for key, term in sorted(_dict(agreement.get("terms")).items())
-             if not programme_home.focus_term_hidden(key, _dict(term))]
+             if not programme_home.opt_in_hidden(key, _dict(term))]
     lines += [_project_term_text(_dict(t)) for t in programme_home.project_terms(block)]
     return [programme_sanitize.clean(text, cap=0) for text in lines]
 
@@ -645,7 +645,7 @@ def rule_texts(r) -> list:
     accepted = _dict(agreement.get("accepted"))
     out = [("agreement: " + (f"accepted {accepted.get('at')}" if accepted else "not accepted"), "text")]
     out += [(_term_text(key, _dict(term)), "text") for key, term in sorted(_dict(agreement.get("terms")).items())
-            if not programme_home.focus_term_hidden(key, _dict(term))]
+            if not programme_home.opt_in_hidden(key, _dict(term))]
     out += [(_instruction_text(_dict(e)), "text") for e in r.get("instructions") or []]
     out += behaviour_texts(r)
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]

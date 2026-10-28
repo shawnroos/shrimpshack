@@ -78,7 +78,7 @@ def settle_amend(term, value) -> None:
     # A proposed new space is accepted only by set-remit; an amend of the remit option supersedes it.
     matched = "add" not in extras or tool is not None
     matched = matched and proposal.get("value") == value and all(
-        term.get(name) == extras[name] for name in ("seconds", "until") + programme_focus.EXTRA_NAMES
+        term.get(name) == extras[name] for name in ("seconds", "until") + programme_home.TERM_EXTRAS
         if name in extras)
     _settle(term, matched)
 
@@ -153,7 +153,7 @@ def _ui_write(host, opts, change, kind):
 
 def _h_propose_term(host, argv):
     positional, opts = host._parse(
-        argv, values=("run", "seconds", "until", "add", "description", "origin") + programme_focus.EXTRA_NAMES)
+        argv, values=("run", "seconds", "until", "add", "description", "origin") + programme_home.TERM_EXTRAS)
     if len(positional) not in (1, 2):
         raise ValueError("usage: propose-term <key> [<value>] [--seconds N] [--until <iso>] "
                          "[--add <name> [--description <text>]]")

@@ -266,6 +266,7 @@ TERM_GUIDE = {
     "focus_budget": {
         "editor": "choice",
         "binding": "code",
+        "opt_in": True,
         "description": "How many task points and agents the programme runs at once.",
         "options": {
             "unlimited": "No limit on what runs at once.",
@@ -397,15 +398,27 @@ def normalize_programme(block: dict) -> dict:
     return out
 
 
-def focus_extra_texts(term: dict) -> list:
-    out = [f"{name} {term[name]}" for name in ("points", "agents") if term.get(name) is not None]
-    if term.get("key") == "focus_budget" and isinstance(term.get("scale"), dict):
-        out.append("scale " + " ".join(f"{k}={v}" for k, v in term["scale"].items()))
+TERM_EXTRAS = ("points", "agents", "scale")
+
+
+def term_extra_texts(term: dict) -> list:
+    out = []
+    for name in TERM_EXTRAS:
+        value = term.get(name)
+        if isinstance(value, dict):
+            out.append(f"{name} " + " ".join(f"{k}={v}" for k, v in value.items()))
+        elif value is not None:
+            out.append(f"{name} {value}")
     return out
 
 
-def focus_term_hidden(key: str, term: dict) -> bool:
-    return key == "focus_budget" and term.get("value") == "unlimited" and term.get("set_by") in (None, "default")
+def is_opt_in(key: str) -> bool:
+    return bool(TERM_GUIDE.get(key, {}).get("opt_in"))
+
+
+def opt_in_hidden(key: str, term: dict) -> bool:
+    default = term.get("default", (term.get("options") or [None])[0])
+    return is_opt_in(key) and term.get("value") == default and term.get("set_by") in (None, "default")
 
 
 def cadence_seconds(record: dict) -> int:

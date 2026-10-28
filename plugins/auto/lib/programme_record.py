@@ -190,7 +190,7 @@ def _h_add_item(host, argv):
             _set_repo(item, programme, opts.get("repo"))
             payload["repo"] = item["repo"]
             _history(item, "added")
-            programme_focus.set_size_if(host, programme, item, opts.get("size"))
+            programme_focus.set_size(host, programme, item, opts.get("size"))
             programme["items"][item_id] = item
             return payload
         item = programme["items"][key]
@@ -206,7 +206,7 @@ def _h_add_item(host, argv):
         _set_repo(item, programme, opts.get("repo"))
         payload["repo"] = item.get("repo")
         _history(item, "updated")
-        programme_focus.set_size_if(host, programme, item, opts.get("size"))
+        programme_focus.set_size(host, programme, item, opts.get("size"))
         return payload
 
     return host._write(opts, change, lambda payload: "item_updated" if seen.get("update") else "item_added")

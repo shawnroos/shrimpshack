@@ -12,6 +12,7 @@ import functools
 import os
 import re
 import sys
+from typing import NamedTuple
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -26,10 +27,11 @@ programme_predicate = load_lib_module("programme_predicate")
 
 KEY = "focus_budget"
 LIMIT_NAMES = ("points", "agents")
-EXTRA_NAMES = LIMIT_NAMES + ("scale",)
+EXTRA_NAMES = programme_home.TERM_EXTRAS
 NO_LIMIT = "none"
 OVERRIDE = "focus"
 OLD_WORKER = "old worker"
+OLD_WORKER_KIND, UNSIZED, COUNT, POINTS, AGENTS = "old_worker", "unsized", "count", "points", "agents"
 IN_PLAY_STATES = ("open", "waiting")
 _SIZE_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 
@@ -114,16 +116,13 @@ def points_of(item, scale):
 
 
 def set_size(host, programme, item, size) -> None:
+    if size is None:
+        return
     scale = scale_of(programme)
     if size not in scale:
         raise host.ProgrammeError(f"size {size!r} is not in the scale (sizes: {', '.join(scale) or 'none'})")
     item["size"] = size
     item["history"].append({"at": run_record_core.now_iso(), "kind": "sized", "size": size})
-
-
-def set_size_if(host, programme, item, size) -> None:
-    if size is not None:
-        set_size(host, programme, item, size)
 
 
 def limits(programme) -> tuple:
@@ -137,8 +136,25 @@ def _unlimited(programme) -> bool:
     return limits(programme) == (None, None)
 
 
-def _live_panes(workers) -> set:
-    return {w["pane_id"] for w in workers}
+class Hold(NamedTuple):
+    kind: str
+    text: str
+
+
+class Census(NamedTuple):
+    points: int
+    agents: int
+    live: frozenset
+
+    def without(self, points, pane) -> "Census":
+        return Census(self.points - points, self.agents - 1, self.live - {pane})
+
+    def with_admitted(self, points) -> "Census":
+        return Census(self.points + points, self.agents + 1, self.live)
+
+
+def _live_panes(workers) -> frozenset:
+    return frozenset(w["pane_id"] for w in workers)
 
 
 def _in_play(item, live) -> bool:
@@ -146,7 +162,7 @@ def _in_play(item, live) -> bool:
             and (item.get("owner") or {}).get("pane") in live)
 
 
-def census(programme, key, workers) -> dict:
+def census(programme, key, workers) -> Census:
     live = _live_panes(workers)
     scale = scale_of(programme)
     parked = {item["parked_pane"] for item in programme["items"].values()
@@ -155,19 +171,19 @@ def census(programme, key, workers) -> dict:
     for other, item in programme["items"].items():
         if other != key and _in_play(item, live):
             points += points_of(item, scale) or 0
-    return {"points": points, "agents": sum(w["pane_id"] not in parked for w in workers), "live": live}
+    return Census(points, sum(w["pane_id"] not in parked for w in workers), live)
 
 
 def old_worker(item, live):
     pane = item.get("parked_pane")
     if pane and pane in live:
-        return (f"{OLD_WORKER} still live in pane {pane}: wait for the worker to stop, "
-                f"or close the pane")
+        return Hold(OLD_WORKER_KIND, f"{OLD_WORKER} still live in pane {pane}: wait for the worker to stop, "
+                                     f"or close the pane")
     return None
 
 
 def verdict(programme, key, counts):
-    stale = old_worker(programme["items"][key], counts.get("live") or ())
+    stale = old_worker(programme["items"][key], counts.live)
     if stale:
         return stale
     max_points, max_agents = limits(programme)
@@ -175,35 +191,48 @@ def verdict(programme, key, counts):
         scale = scale_of(programme)
         size = points_of(programme["items"][key], scale)
         if size is None:
-            return f"unsized: size-item {key} <{'|'.join(scale) or 'size'}>"
-        if counts["points"] + size > max_points:
-            return f"over points: {counts['points']} of {max_points} in play (this item is {size})"
-    if max_agents is not None and counts["agents"] >= max_agents:
-        return f"agents at limit: {counts['agents']} of {max_agents}"
+            return Hold(UNSIZED, f"unsized: size-item {key} <{'|'.join(scale) or 'size'}>")
+        if counts.points + size > max_points:
+            return Hold(POINTS, f"over points: {counts.points} of {max_points} in play (this item is {size})")
+    if max_agents is not None and counts.agents >= max_agents:
+        return Hold(AGENTS, f"agents at limit: {counts.agents} of {max_agents}")
     return None
 
 
-def reason_for(host, record, programme, key):
-    parked = programme["items"][key].get("parked_pane")
-    if _unlimited(programme) and not parked:
+def _needs_count(programme, key) -> bool:
+    return not _unlimited(programme) or bool(programme["items"][key].get("parked_pane"))
+
+
+def _hold_for(programme, key, counts, why):
+    if not _needs_count(programme, key):
         return None
+    if counts is None:
+        return Hold(COUNT, f"count unavailable: {why}")
+    return verdict(programme, key, counts)
+
+
+def reason_for(host, record, programme, key):
+    if not _needs_count(programme, key):
+        return None
+    parked = programme["items"][key].get("parked_pane")
     workers, why = host.programme_sources.worker_panes(programme, record)
-    if workers is None:
-        if parked:
-            return f"{OLD_WORKER} {parked} may still be live: {why}; retry once it answers"
-        return f"count unavailable: {why}"
-    return verdict(programme, key, census(programme, key, workers))
+    if workers is None and parked:
+        return Hold(OLD_WORKER_KIND, f"{OLD_WORKER} {parked} may still be live: {why}; retry once it answers")
+    counts = census(programme, key, workers) if workers is not None else None
+    return _hold_for(programme, key, counts, why)
 
 
-def _next_step(reason, key) -> str:
-    if reason.startswith(OLD_WORKER):
-        return f"Next: once the old worker has stopped, start {key} again."
-    if reason.startswith("unsized"):
-        return f"Next: `size-item {key} <size>`, then start it again."
-    if reason.startswith("count unavailable"):
-        return f"Next: retry once the count is readable, or pass `--despite {OVERRIDE}`."
-    return ("Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, "
-            f"or start it anyway with `--despite {OVERRIDE}`.")
+_NEXT_STEPS = {
+    OLD_WORKER_KIND: "Next: once the old worker has stopped, start {key} again.",
+    UNSIZED: "Next: `size-item {key} <size>`, then start it again.",
+    COUNT: "Next: retry once the count is readable, or pass `--despite {override}`.",
+}
+_QUEUE_STEP = ("Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, "
+               "or start it anyway with `--despite {override}`.")
+
+
+def _next_step(hold, key) -> str:
+    return _NEXT_STEPS.get(hold.kind, _QUEUE_STEP).format(key=key, override=OVERRIDE)
 
 
 def _commit(host, run_id, home, keys, change, kind=None, payload=None) -> None:
@@ -233,22 +262,28 @@ def _clear_held(item) -> None:
     item.update(held=None, held_at=None, parked_pane=None)
 
 
+def _park(item, newcomer, prompt_id) -> None:
+    item.update(held=f"parked: swapped out for {newcomer}", held_at=run_record_core.now_iso(),
+                parked_pane=item["owner"]["pane"])
+    item["history"].append({"at": item["held_at"], "kind": "parked", "for": newcomer, "prompt_id": prompt_id})
+
+
 def admit(host, run_id, home, record, programme, key, despite) -> None:
     # A replayed --op never launches (start-worker returns the recorded outcome), so gating it
     # would only hold an item whose own worker is already counted.
     if programme_authority.has_outcome(home, run_id, host._OPERATION["id"]):
         return
     item = programme["items"][key]
-    reason = reason_for(host, record, programme, key)
-    if reason is None:
+    hold = reason_for(host, record, programme, key)
+    if hold is None:
         if item.get("held"):
             _commit(host, run_id, home, [key], _clear_held)
         return
-    if OVERRIDE in despite and not reason.startswith(OLD_WORKER):
-        _commit(host, run_id, home, [key], _clear_held, "focus_overridden", {"item": key, "would_hold": reason})
+    if OVERRIDE in despite and hold.kind != OLD_WORKER_KIND:
+        _commit(host, run_id, home, [key], _clear_held, "focus_overridden", {"item": key, "would_hold": hold.text})
         return
-    _commit(host, run_id, home, [key], _set_held(reason), "item_held", {"item": key, "reason": reason})
-    raise host.ProgrammeError(f"focus budget holds {key}: {reason}. {_next_step(reason, key)}")
+    _commit(host, run_id, home, [key], _set_held(hold.text), "item_held", {"item": key, "reason": hold.text})
+    raise host.ProgrammeError(f"focus budget holds {key}: {hold.text}. {_next_step(hold, key)}")
 
 
 def held_order(programme) -> list:
@@ -262,26 +297,20 @@ def _h_focus_recheck(host, argv):
     run_id, home, record = host._locate(opts)
     programme = programme_home.normalize_programme(record.get("programme") or {})
     order = held_order(programme)
-    limited = not _unlimited(programme)
-    parked = {key for key in order if programme["items"][key].get("parked_pane")}
-    cleared, still, unavailable, counts = [], [], None, None
-    if order and (limited or parked):
-        workers, unavailable = host.programme_sources.worker_panes(programme, record)
+    counts, why = None, None
+    if any(_needs_count(programme, key) for key in order):
+        workers, why = host.programme_sources.worker_panes(programme, record)
         counts = census(programme, None, workers) if workers is not None else None
+    scale = scale_of(programme)
+    cleared, still = [], []
     for key in order:
-        if not (limited or key in parked):
-            reason = None
-        elif counts is None:
-            reason = f"count unavailable: {unavailable}"
-        else:
-            reason = verdict(programme, key, counts)
-        if reason is not None:
-            still.append({"item": key, "reason": reason})
+        hold = _hold_for(programme, key, counts, why)
+        if hold is not None:
+            still.append({"item": key, "reason": hold.text})
             continue
         cleared.append(key)
         if counts is not None:
-            counts["points"] += points_of(programme["items"][key], scale_of(programme)) or 0
-            counts["agents"] += 1
+            counts = counts.with_admitted(points_of(programme["items"][key], scale) or 0)
     if cleared:
         _commit(host, run_id, home, cleared, _clear_held)
     host._emit({"ok": True, "run": run_id, "kind": "focus_rechecked", "cleared": cleared, "held": still})
@@ -307,8 +336,8 @@ def usage(programme, workers) -> dict:
     max_points, max_agents = limits(programme)
     counts = census(programme, None, workers) if workers is not None else None
     noted = (programme.get("working_model") or {}).get("subagents")
-    return {"points": {"limit": max_points, "used": counts and counts["points"]},
-            "agents": {"limit": max_agents, "used": counts and counts["agents"]},
+    return {"points": {"limit": max_points, "used": counts and counts.points},
+            "agents": {"limit": max_agents, "used": counts and counts.agents},
             "subagents": noted.get("count") if isinstance(noted, dict) else None}
 
 
@@ -383,17 +412,17 @@ def _swap_refusal(programme, out, newcomer, workers):
         return f"{newcomer} is already in play"
     counts = census(programme, None, workers)
     freed = points_of(item, scale) or 0
-    after = {"points": counts["points"] - freed, "agents": counts["agents"] - 1, "live": live - {pane}}
-    reason = verdict(programme, newcomer, after)
-    if reason is None:
+    after = counts.without(freed, pane)
+    hold = verdict(programme, newcomer, after)
+    if hold is None:
         return None
     max_points, _ = limits(programme)
     size = points_of(programme["items"][newcomer], scale)
-    if reason.startswith("over points") and size is not None:
-        missing = after["points"] + size - max_points
+    if hold.kind == POINTS and size is not None:
+        missing = after.points + size - max_points
         return (f"parking {out} frees {freed} point(s), but {newcomer} needs {missing} more point(s) "
-                f"({reason}); pick a bigger item to swap out or queue {newcomer}")
-    return f"parking {out} would not let {newcomer} start: {reason}"
+                f"({hold.text}); pick a bigger item to swap out or queue {newcomer}")
+    return f"parking {out} would not let {newcomer} start: {hold.text}"
 
 
 def _h_swap_item(host, argv):
@@ -421,10 +450,7 @@ def _h_swap_item(host, argv):
         if refusal:
             raise host.ProgrammeError(f"swap refused: {refusal}")
         item = programme["items"][out]
-        item.update(held=f"parked: swapped out for {newcomer}", held_at=run_record_core.now_iso(),
-                    parked_pane=item["owner"]["pane"])
-        item["history"].append({"at": item["held_at"], "kind": "parked", "for": newcomer,
-                                "prompt_id": prompt["prompt_id"]})
+        _park(item, newcomer, prompt["prompt_id"])
         decision = host.programme_decisions.shawn_decision(
             programme, kind="work_sequencing", item=newcomer, prompt=prompt, out=out, **{"in": newcomer})
         text = stop_prompt(out, newcomer)

@@ -33,6 +33,7 @@ programme_naming = load_lib_module("programme_naming")
 programme_approval = load_lib_module("programme_approval")
 programme_proposals = load_lib_module("programme_proposals")
 programme_trajectory = load_lib_module("programme_trajectory")
+programme_focus = load_lib_module("programme_focus")
 
 _Verb = run_record._Verb
 
@@ -455,7 +456,7 @@ def _h_rules(argv):
 
 
 def _h_propose_agreement(argv):
-    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source") + programme_focus.EXTRA_NAMES,
+    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source") + programme_home.TERM_EXTRAS,
                      multi=("term", "project-term", "reserved-term"))
     host = sys.modules[__name__]
     parsed, source = programme_terms.parse_specs(host, opts)
@@ -503,7 +504,7 @@ def _h_accept_agreement(argv):
 
 
 def _h_amend_term(argv):
-    positional, opts = _parse(argv, values=("run", "prompt", "why", "until", "seconds") + programme_focus.EXTRA_NAMES)
+    positional, opts = _parse(argv, values=("run", "prompt", "why", "until", "seconds") + programme_home.TERM_EXTRAS)
     if len(positional) != 2:
         raise ValueError("usage: amend-term <key> <value> --prompt <id>")
     key, value = positional
@@ -983,7 +984,6 @@ _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name_
 _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
-programme_focus = load_lib_module("programme_focus")
 _VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
 
 
