@@ -116,12 +116,12 @@ def _segment(tokens: list, start: int) -> list:
     return tokens[start:end]
 
 
-def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list) -> None:
+def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, strict=False) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     if depth < MAX_DEPTH:
         nested = _substitutions(main) + bodies + [ln for body in bodies for ln in body.splitlines()]
         for script in nested:
-            _scan(script, depth + 1, hosts, pane_ids, found)
+            _scan(script, depth + 1, hosts, pane_ids, found, strict)
     tokens = _lex(main)
     piped = main + "\n" + "\n".join(bodies)
     for start, token in enumerate(tokens):
@@ -135,21 +135,24 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list) -> No
             script = rest[0]
         if script is not None:
             if depth < MAX_DEPTH:
-                _scan(script, depth + 1, hosts, pane_ids, found)
+                _scan(script, depth + 1, hosts, pane_ids, found, strict)
             continue
         segment = _segment(tokens, start)
         for host in hosts:
-            hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
+            hit = host.is_piped_script(segment, piped, pane_ids=pane_ids, strict=True) if strict else (
+                host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids))
             if hit:
                 found.append((host.name, hit[0], hit[1]))
 
 
-def host_sends(command: str, pane_ids: list) -> list:
-    """(host, verb, target) for every host command in ``command`` that types into a pane."""
+def host_sends(command: str, pane_ids: list, strict=False) -> list:
+    """(host, verb, target) for every host command in ``command`` that types into a pane.
+
+    strict (a session that is not the driver) also reports every script the host cannot prove harmless."""
     terminal_host = load_lib_module("terminal_host")
     hosts = [terminal_host.host_named(name) for name in terminal_host.key_hosts()]
     found = []
-    _scan(command, 0, hosts, [i for i in pane_ids if i], found)
+    _scan(command, 0, hosts, [i for i in pane_ids if i], found, strict)
     return found
 
 
@@ -191,6 +194,9 @@ def _driver_hit(command: str, session_id, driver: dict, sender=None):
                 return host, verb, target
     if session_id == driver.get("session_id"):
         return None
+    unlisted = host_sends(command, ids, strict=True) if driver.get("host") == "ghostty" else None
+    if unlisted:
+        return unlisted[0][0], unlisted[0][1], unlisted[0][2]
     named = _names_pane(command, driver)
     return (None, None, named) if named else None
 
@@ -205,12 +211,16 @@ def denial(session_id, command):
         host, verb, target = hit
         row = (driver["run"], "blocked_driver_send", session_id, {
             "verb": verb, "target": target, "pane_id": driver["pane_id"], "command": command})
-        what = f"`{host} {verb}` into pane" if verb else "a command naming pane"
+        unlisted = verb == "unlisted osascript"
+        what = ("an osascript call that auto cannot prove harmless to pane" if unlisted else
+                f"`{host} {verb}` into pane" if verb else "a command naming pane")
         reason = (
             f"auto: blocked {what} {driver['pane_id']}, the driver's pane of programme "
             f"{driver['run']!r}. Only the person types into the programme driver's pane, "
             "and other sessions may not name it in any command; report through the "
             "programme's inbox instead. This attempt is journaled."
+            + (" Fix: run osascript only with -e and a script that does not mention Ghostty, a terminal, key presses "
+               "or string joins, and never from a file, a pipe or a heredoc." if unlisted else "")
         )
         return {"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

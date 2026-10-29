@@ -158,8 +158,11 @@ class TerminalHost:
                     return "send", ident
         return None
 
-    def is_piped_script(self, argv, text, pane_ids=()):
-        """Like is_host_command for a command whose script arrives on stdin: ``text`` is everything the shell sees."""
+    def is_piped_script(self, argv, text, pane_ids=(), strict=False):
+        """Like is_host_command for a command whose script arrives on stdin: ``text`` is everything the shell sees.
+
+        strict is for a session that is not the programme's PM: the host then allows only what it can prove harmless.
+        """
         return None
 
     def installed(self) -> bool:
