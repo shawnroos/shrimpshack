@@ -225,6 +225,25 @@ prog check-mergeable shawnroos/shrimpshack#120 --pin linear:AI-1109 --run "$RUN"
 fx
 check "1" "$(journal_rows merge_pinned | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
 
+variant noci "c['nodes'] = []; c['totalCount'] = 0"
+it "a head with no checks in a repo with CI workflows is unknown"
+fx FAKE_GH_GRAPHQL="${WORK}/fx/noci.json" FAKE_GH_WORKFLOWS=1
+prog check-mergeable shawnroos/shrimpshack#120 --run "$RUN"
+check "unknown" "$(ready_of "$OUT")"
+has "no checks to read" "$OUT"
+
+it "a head with no checks in a repo with no CI is ready and says so"
+fx FAKE_GH_GRAPHQL="${WORK}/fx/noci.json" FAKE_GH_WORKFLOWS=0
+prog check-mergeable shawnroos/shrimpshack#120 --run "$RUN"
+check "ready" "$(ready_of "$OUT")"
+has '"ci": "none"' "$OUT"
+
+it "a repo with no CI can pin the head"
+prog check-mergeable shawnroos/shrimpshack#120 --pin linear:AI-1109 --run "$RUN"
+check 0 "$CODE"
+has "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "$(journal_rows merge_pinned)"
+fx
+
 run_py "$RUN" <<'EOF' >/dev/null
 sys.path.insert(0, os.path.join(sys.argv[1], "tests", "helpers"))
 import programme_records

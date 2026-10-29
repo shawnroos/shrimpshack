@@ -31,7 +31,7 @@ def canonical_ref(ref) -> str:
     return f"{owner}/{name}#{number}"
 
 
-def _read(ref) -> dict:
+def _read(ref):
     owner, name, number = programme_evidence.parse_pr_ref(ref)
     env = programme_evidence._gh_env()
     if shutil.which("gh", path=env["PATH"]) is None:
@@ -44,10 +44,11 @@ def _read(ref) -> dict:
     pr = programme_evidence._dig(graph, "data", "repository", "pullRequest")
     if not isinstance(pr, dict) or not pr.get("headRefOid"):
         raise Unknown("GitHub returned no pull request")
-    return pr
+    no_ci = programme_evidence.head_context_count(pr) == 0 and not programme_evidence.repo_has_ci(owner, name, env)
+    return pr, no_ci
 
 
-def _bar(pr) -> dict:
+def _bar(pr, no_ci=False) -> dict:
     threads = pr.get("reviewThreads") or {}
     nodes = threads.get("nodes") or []
     if not isinstance(threads.get("totalCount"), int) or threads["totalCount"] > len(nodes):
@@ -66,6 +67,8 @@ def _bar(pr) -> dict:
              "review": pr.get("reviewDecision"), "base": pr.get("baseRefName"),
              "head": pr.get("headRefOid"), "title": pr.get("title"), "url": pr.get("url"),
              "unresolved_threads": unresolved, "checks": checks}
+    if no_ci and not checks:
+        facts["ci"] = "none"
     facts["fingerprint"] = fingerprint(facts)
     if facts["state"] == "MERGED":
         return dict(facts, result="not_ready", gates=["already merged"], ended=True)
@@ -73,7 +76,7 @@ def _bar(pr) -> dict:
         return dict(facts, result="not_ready", gates=[f"PR is {facts['state']}"], ended=True)
     if facts["mergeable"] in _NOT_COMPUTED or facts["merge_state"] in _NOT_COMPUTED:
         raise Unknown("GitHub has not computed the merge state yet")
-    if not checks:
+    if not checks and not no_ci:
         raise Unknown("the head has no checks to read")
     gates = []
     if facts["draft"]:
@@ -108,7 +111,7 @@ def check_mergeable(ref, remit_repos=None) -> dict:
     try:
         pr_ref = canonical_ref(ref)
         programme_evidence._require_remit_repo(pr_ref, remit_repos)
-        verdict = _bar(_read(pr_ref))
+        verdict = _bar(*_read(pr_ref))
     except Unknown as exc:
         return {"result": "unknown", "pr": ref, "gates": [], "note": str(exc)}
     except Exception as exc:  # noqa: BLE001 — any read failure is "unknown", never "ready"

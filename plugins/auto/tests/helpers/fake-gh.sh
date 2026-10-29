@@ -8,5 +8,6 @@ printf 'gh-env %s\n' "$(env | cut -d= -f1 | sort | tr '\n' ' ')" >> "${FAKE_CALL
 case "$1 $2" in
   "pr view") cat "$FAKE_GH_VIEW" ;;
   "api graphql") cat "$FAKE_GH_GRAPHQL" ;;
+  "api repos/"*"/actions/workflows") printf '{"total_count": %s}\n' "${FAKE_GH_WORKFLOWS:-1}" ;;
   *) echo "fake gh: unhandled $*" >&2; exit 2 ;;
 esac
