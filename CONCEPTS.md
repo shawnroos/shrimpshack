@@ -190,6 +190,7 @@ The one-way move of a Programme's home from plain files to its durable store.
 After promotion the store is the only source of truth and the files are exports rebuilt from it.
 A writer that chose the plain-file path before promotion must check again under the lock before it writes.
 A Ruling change never lands on the plain-file path: once its checks pass there, it promotes the home and runs again in the store, and refuses, changing nothing, when promotion cannot run.
+Prompts carried across the move approve nothing new, but what they approved on the plain-file home stays in force.
 
 ### Foreign write
 A change found in a promoted Programme's exports that the store did not make.
@@ -242,6 +243,11 @@ record of calls made, not a Ruling, and it approves nothing.
 ### Carry-over store
 A per-machine file that keeps the Rulings the human picks at a Programme's end, so the next
 Programme on the same project starts with them pending until the human names their items.
+
+It is a cache, not the record. The approval row journaled when the human picks the Rulings
+holds every entry it adopts, and when a new Programme's remit is set, before its agreement is
+accepted, the store is refilled from those rows, so an entry a crash lost after its approval row still arrives. A refill never
+overwrites a later carry of the same Ruling and never stores an entry twice.
 
 ### Permission proposal
 A request for the human to apply a narrow native permission that resolves blocked read-only work. It does not grant permission itself. Programme protocol proposals instead concern completion rules and evidence requirements.
