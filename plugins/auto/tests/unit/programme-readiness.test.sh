@@ -238,6 +238,18 @@ prog check-mergeable shawnroos/shrimpshack#120 --run "$RUN"
 check "ready" "$(ready_of "$OUT")"
 has '"ci": "none"' "$OUT"
 
+run_py "$READY" "${WORK}/fx/nullroll.json" <<'EOF'
+src, dst = args
+g = json.load(open(src))
+g["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = None
+json.dump(g, open(dst, "w"))
+EOF
+it "a head GitHub reports with a null check rollup, in a repo with no CI, is ready"
+fx FAKE_GH_GRAPHQL="${WORK}/fx/nullroll.json" FAKE_GH_WORKFLOWS=0
+prog check-mergeable shawnroos/shrimpshack#120 --run "$RUN"
+check "ready" "$(ready_of "$OUT")"
+fx FAKE_GH_GRAPHQL="${WORK}/fx/noci.json" FAKE_GH_WORKFLOWS=0
+
 it "a repo with no CI can pin the head"
 prog check-mergeable shawnroos/shrimpshack#120 --pin linear:AI-1109 --run "$RUN"
 check 0 "$CODE"

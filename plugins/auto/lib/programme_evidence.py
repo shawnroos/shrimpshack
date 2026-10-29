@@ -202,7 +202,12 @@ def _check_outcomes(contexts) -> list:
 def head_context_count(pr):
     commits = _dig(pr, "commits", "nodes") or []
     head = _dig(commits[-1], "commit") if commits else None
-    return _dig(head, "statusCheckRollup", "contexts", "totalCount") if isinstance(head, dict) else None
+    if not isinstance(head, dict):
+        return None
+    # GitHub sends statusCheckRollup: null, not an empty list, for a commit that never had a check.
+    if head.get("statusCheckRollup") is None:
+        return 0
+    return _dig(head, "statusCheckRollup", "contexts", "totalCount")
 
 
 def repo_has_ci(owner, name, env) -> bool:
