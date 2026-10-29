@@ -419,6 +419,86 @@ print(out is not None and "did not journal" in json.dumps(out) and args[0] in js
 EOF
 )"
 
+# ── 5. set-remit and a move that starts while it runs ──────────────────────
+# inproc_remit <run> <doc> <hook>: set-remit run in this process, with <hook> run first; SIGALRM ends a hang.
+inproc_remit() {
+  printf '%s' "$2" | AUTO_ROOT="$AUTO_ROOT" HOOK="$3" "$PY" -c '
+import os, signal, sys
+sys.path.insert(0, os.path.join(os.environ["AUTO_ROOT"], "lib"))
+from _bootstrap import load_lib_module
+signal.alarm(20)
+programme = load_lib_module("programme")
+ph = load_lib_module("programme_home")
+auth = programme.programme_authority
+pw = load_lib_module("programme_worktree")
+run = sys.argv[1]
+exec(os.environ["HOOK"])
+code = programme._cli(["set-remit", "--run", run])
+print("RESULT", code)
+' "$1" 2>&1
+}
+LT="$(new_legacy w56)"
+prog propose-agreement --run "$LT" --project-term "naming=kebab case files" --source "repo README"
+it "a move that starts after set-remit looked for one and before the leases lock: set-remit refuses as held, not hangs"
+OUT="$(inproc_remit "$LT" '{"spaces":["w56","w57"]}' '
+real_lock = ph._with_leases_lock
+def marked(body, *a, **k):
+    open(os.path.join(ph.home_path(run), auth.IMPORT_MARKER), "w").write("{\"import_id\": \"imp-late\"}\n")
+    return real_lock(body, *a, **k)
+ph._with_leases_lock = marked
+')"
+has "RESULT 1" "$OUT"
+has "an import was interrupted" "$OUT"
+it "that refused set-remit wrote no lease for the added space"
+check "False" "$(run_py <<'EOF'
+print(any("w57" in n for n in os.listdir(ph.leases_dir())))
+EOF
+)"
+run_py "$LT" <<'EOF' >/dev/null
+os.unlink(os.path.join(ph.home_path(args[0]), auth.IMPORT_MARKER))
+EOF
+
+REPO3="${WORK}/repos/three"
+mkdir -p "$REPO3" && git init -q "$REPO3" && git -C "$REPO3" commit -q --allow-empty -m init
+LC="$(new_legacy w58)"
+prog propose-agreement --run "$LC" --project-term "naming=kebab case files" --source "repo README"
+old_remit "$LC" "{\"spaces\":[\"w58\"],\"repos\":[{\"path\":\"${REPO3}\"}]}"
+prog add-item herdr:x --title "x" --kind fix_only --run "$LC"
+old_prog record-ruling c3 --kind technical_approach --effect restrict --scope c3 --applies-to herdr:x \
+  --prompt "$(prompt_in "$LC" "c3: I pick the technical approach on herdr:x")" --run "$LC"
+old_prog carry-rulings --run "$LC"
+old_prog carry-rulings c3 --prompt "$(prompt_in "$LC" "carry c3 to the next programme")" --run "$LC"
+LN="$(new_legacy w59)"
+prog propose-agreement --run "$LN" --project-term "naming=kebab case files" --source "repo README"
+it "a set-remit on a JSON home refused for a carried Ruling, moved and retried makes the worktree once"
+OUT="$(inproc_remit "$LN" "{\"spaces\":[\"w59\"],\"repos\":[{\"path\":\"${REPO3}\"}]}" '
+real_create, real_promote = pw.create, programme.upgrade_legacy
+calls = []
+def counted(*a, **k):
+    calls.append("create")
+    return real_create(*a, **k)
+def moved(*a, **k):
+    calls.append("move")
+    return real_promote(*a, **k)
+pw.create, programme.upgrade_legacy = counted, moved
+import atexit
+atexit.register(lambda: print("CALLS", calls))
+')"
+has "RESULT 0" "$OUT"
+has "CALLS ['create', 'move']" "$OUT"
+has '"carried_over"' "$OUT"
+case "$OUT" in *unreadable*) fail "a notice names an unreadable home: $OUT" ;; esac
+TARGET3="$(run_py "$LN" "$REPO3" <<'EOF'
+pw = load_lib_module("programme_worktree")
+print(pw.target_path(pw.main_checkout(args[1]), args[0]))
+EOF
+)"
+it "that retried set-remit leaves exactly one worktree for the run, and records it"
+check "1 True" "$(git -C "$REPO3" worktree list --porcelain | grep -c "^worktree $(cd "$(dirname "$TARGET3")" 2>/dev/null && pwd -P)/$(basename "$TARGET3")$") $(run_py "$LN" <<'EOF'
+print(bool(record(args[0])["programme"].get("pm_worktree")))
+EOF
+)"
+
 it "no verb crashed with a traceback"
 check "" "$CRASHES"
 

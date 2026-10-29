@@ -333,7 +333,7 @@ def promoting(run_id, home, verb, attempt):
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
            journal=True, after=None, verb=None, target=None, beat=True, names_change=True, promote=True):
-    run_id, home, _ = _locate(opts, finish_move=True)
+    run_id, home, _ = _locate(opts, finish_move=promote)
     seen = {}
 
     def mutate(rec):

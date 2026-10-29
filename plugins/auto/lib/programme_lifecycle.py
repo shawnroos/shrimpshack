@@ -709,7 +709,8 @@ def _h_set_remit(host, argv):
         _move_leases(rec["run_id"], rec.get("driving_session_id"), programme_home.home_path(rec["run_id"]), moves)
         return out
 
-    # Promotion takes the leases lock this write holds, so the move runs outside it.
+    # Promotion takes the leases lock this write holds, so the move runs outside it: the _locate above finishes a
+    # cut-off move, and promote=False also stops _write finishing one, so a later marker refuses as a held home.
     return host.promoting(run, home, "set-remit", lambda: programme_home._with_leases_lock(
         lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"), verb="set-remit",
                             target="remit", promote=False)))
