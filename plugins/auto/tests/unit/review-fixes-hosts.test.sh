@@ -329,6 +329,27 @@ check "1 $CASE_PM" "$CODE $(driver)"
 it "the pick refusal names the missing pane"
 has "cannot identify this session's stub terminal pane" "$OUT"
 
+echo "review-fixes: a stored row is not proof once the host's command is gone (AE4 with a stale row)"
+row rex srv s-stale sess-rex-stale rex-blk-9 rex-term-9
+row herdr default w6 sess-herdr-stale w6:p9 term_p9
+LEASES_BEFORE="$(ls "${CLAUDE_AUTO_DATA_DIR}/programmes/leases" | grep -vc '^\.')"
+OUT="$(env PATH="/usr/bin:/bin" CLAUDE_CODE_SESSION_ID=sess-rex-stale REX_SESSION=s-stale REX_BLOCK=rex-blk-9 "$PY" "$PROG" start 2>&1)"; CODE=$?
+it "rex: a registry row, but no rex on PATH: start refuses and names the install step"
+check "1" "$CODE"
+has "install Rex and put its rex command on PATH" "$OUT"
+it "rex: become-pm refuses the same way"
+OUT="$(env PATH="/usr/bin:/bin" CLAUDE_CODE_SESSION_ID=sess-rex-stale REX_SESSION=s-stale REX_BLOCK=rex-blk-9 "$PY" "$PROG" become-pm 2>&1)"
+has "not on PATH" "$OUT"
+OUT="$(env PATH="/usr/bin:/bin" CLAUDE_CODE_SESSION_ID=sess-herdr-stale HERDR_PANE_ID=w6:p9 HERDR_WORKSPACE_ID=w6 "$PY" "$PROG" start 2>&1)"; CODE=$?
+it "herdr: a registry row, but no herdr on PATH: start refuses"
+check "1" "$CODE"
+has "the herdr command is not on PATH" "$OUT"
+it "herdr: the environment alone is not a pane (herdr cannot answer pane get)"
+OUT="$(env PATH="/usr/bin:/bin" CLAUDE_CODE_SESSION_ID=sess-env-only HERDR_PANE_ID=w6:p9 HERDR_WORKSPACE_ID=w6 "$PY" "$PROG" start 2>&1)"; CODE=$?
+check "1" "$CODE"
+it "none of the refused starts wrote a lease"
+check "$LEASES_BEFORE" "$(ls "${CLAUDE_AUTO_DATA_DIR}/programmes/leases" | grep -vc '^\.')"
+
 # ---------------------------------------------------------------- RefusedHost in the source paths (finding 4)
 echo "review-fixes: a refused host does not crash the sweep, launch or send paths (finding 4)"
 BOTH=(HERDR_PANE_ID=w1:2 REX_SESSION=s)
