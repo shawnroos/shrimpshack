@@ -23,17 +23,25 @@ _PYTHONS = frozenset({"python", "python3"})
 _SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PR_MERGE = re.compile(r"\bgh\b.*\bpr\b.*\bmerge\b|/pulls/\d+/merge|mergePullRequest", re.S)
+DIGEST_NAME = "sweep-digest.md"
+WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+PACKAGER_TYPE = "programme-sweep-packager"
+# A viewer that runs a command or writes a file is a write verb in disguise.
+_VIEWER_WRITE_FLAGS = frozenset({"--pre", "--pre-glob", "--output", "-O", "--open-files-in-pager"})
+# ${CLAUDE_PLUGIN_ROOT} is how every agent file names programme.sh; any other expansion runs before the guard's verb.
+_EXPANSION = re.compile(r"\$(?!\{CLAUDE_PLUGIN_ROOT\})[({A-Za-z_]|`|[<>]\(")
 _DENY_PROGRAMME = ("a sub-agent may only run `programme.sh` with a read verb ({}); this command reaches "
                    "programme code another way")
 
 
 def _segments(command):
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
     lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"
     lexer.commenters = ""
     segment = []
     for token in lexer:
-        if token in _SEPARATORS or set(token) <= set(";&|"):
+        if token in _SEPARATORS or set(token) <= set(";&|\n"):
             if segment:
                 yield segment
             segment = []
@@ -74,7 +82,35 @@ def _gh_refusal(args):
     return None
 
 
+def _redirect_refusal(segment):
+    for at, token in enumerate(segment):
+        if ">" not in token:
+            continue
+        after = token[token.index(">"):].lstrip(">&")
+        if (after or (segment[at + 1] if at + 1 < len(segment) else "")) != "/dev/null":
+            return "a sub-agent may not redirect output from a command naming programme code, except to /dev/null"
+    return None
+
+
+def _viewer_refusal(segment):
+    for token in segment:
+        if token.split("=", 1)[0] in _VIEWER_WRITE_FLAGS or token.startswith("-O"):
+            return "a sub-agent may not run a viewer with --pre, --output or -O; they run a command or write a file"
+    return None
+
+
+def _is_read_call(rest):
+    # `rules --ack` clears the compact flag and is a write; any flag beyond --run <id> stays denied.
+    if rest[0] in READ_VERBS:
+        return True
+    args = rest[1:]
+    return rest[0] == "rules" and (not args or (len(args) == 2 and args[0] == "--run" and not args[1].startswith("-")))
+
+
 def _segment_refusal(segment):
+    mentions = any("programme" in token.lower() for token in segment)
+    if mentions and segment and _ASSIGNMENT.match(segment[0]):
+        return "a sub-agent may not set environment variables on a command naming programme code"
     while segment and _ASSIGNMENT.match(segment[0]):
         segment = segment[1:]
     if not segment:
@@ -87,19 +123,25 @@ def _segment_refusal(segment):
         return refusal(" ".join(segment[1:]))
     if base == "gh":
         return _gh_refusal(segment[1:])
-    if not any("programme" in token.lower() for token in segment):
+    if not mentions:
         return None
+    if any(_EXPANSION.search(token) for token in segment):
+        return "a sub-agent may not use shell expansion in a command naming programme code"
+    redirect = _redirect_refusal(segment)
+    if redirect:
+        return redirect
     if base in VIEWERS or (base == "git" and len(segment) > 1 and segment[1] in GIT_READS):
-        return None
+        return _viewer_refusal(segment)
     rest = _programme_call(segment)
-    if rest is None or not rest or rest[0] not in READ_VERBS:
-        return _DENY_PROGRAMME.format(", ".join(sorted(READ_VERBS)))
+    if rest is None or not rest or not _is_read_call(rest):
+        return _DENY_PROGRAMME.format(", ".join(sorted(READ_VERBS | {"rules"})))
     if rest[0] == "check-mergeable" and "--pin" in rest:
         return "a sub-agent may not pin a merge head; the PM runs check-mergeable --pin"
     return None
 
 
 def refusal(command):
+    command = command.replace("\\\n", "")
     try:
         segments = list(_segments(command))
     except ValueError:
@@ -116,25 +158,57 @@ def refusal(command):
     return None
 
 
-def _drives_programme(session_id) -> bool:
+def _driven_homes(session_id):
     lib = os.path.dirname(os.path.abspath(__file__))
     if lib not in sys.path:
         sys.path.insert(0, lib)
     from _bootstrap import load_lib_module
-    return bool(load_lib_module("programme_home").driven_runs(session_id))
+    programme_home = load_lib_module("programme_home")
+    return [hold["home"] for hold in programme_home.driven_runs(session_id)], programme_home.programmes_dir()
 
 
-def decide(stdin_raw, drives=_drives_programme):
+def write_refusal(tool_input, homes, programmes_dir, only_digest=False):
+    """Deny a programme-home write by path, not by shell text: only the packager's digest file is allowed.
+
+    Paths compare case-folded because the macOS filesystem treats PROGRAMMES and programmes as one folder."""
+    target = tool_input.get("file_path") or tool_input.get("notebook_path")
+    if not isinstance(target, str) or not target:
+        return None
+    real = os.path.realpath(target).casefold()
+    protected = os.path.realpath(programmes_dir).casefold()
+    if real in {os.path.join(os.path.realpath(home), DIGEST_NAME).casefold() for home in homes}:
+        return None
+    if not only_digest and real != protected and not real.startswith(protected + os.sep):
+        return None
+    return f"a sub-agent may write only <home>/{DIGEST_NAME} inside a programme's home folder"
+
+
+def _drives_programme(session_id) -> bool:
+    return bool(_driven_homes(session_id)[0])
+
+
+def decide(stdin_raw, drives=_drives_programme, homes=_driven_homes):
     try:
         data = json.loads(stdin_raw or "{}")
     except ValueError:
         return None
-    if not isinstance(data, dict) or not data.get("agent_id") or data.get("tool_name") != "Bash":
+    if not isinstance(data, dict) or not data.get("agent_id"):
         return None
-    command = (data.get("tool_input") or {}).get("command")
-    if not isinstance(command, str) or not drives(data.get("session_id")):
+    tool, tool_input = data.get("tool_name"), data.get("tool_input") or {}
+    if tool == "Bash":
+        command = tool_input.get("command")
+        if not isinstance(command, str) or not drives(data.get("session_id")):
+            return None
+        reason = refusal(command)
+    elif tool in WRITE_TOOLS:
+        driven, programmes_dir = homes(data.get("session_id"))
+        packager = str(data.get("agent_type") or "").endswith(PACKAGER_TYPE)
+        if packager and not driven:
+            reason = f"the sweep packager may write only <home>/{DIGEST_NAME}, and this session drives no programme"
+        else:
+            reason = write_refusal(tool_input, driven, programmes_dir, only_digest=packager) if driven else None
+    else:
         return None
-    reason = refusal(command)
     if reason is None:
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",

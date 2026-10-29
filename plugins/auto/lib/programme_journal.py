@@ -512,15 +512,24 @@ def prune_uncited_prompts(run_id: str, now=None, max_age_seconds=PRUNE_AFTER_SEC
     return _locked(path, body)
 
 
+def _driven_run() -> str:
+    # The sweep's chained call runs this before the PM has read a run id; the lease names it.
+    sid = load_lib_module("driver_session").driving_session_id()
+    runs = [hold["run"] for hold in programme_home.driven_runs(sid)] if sid else []
+    if len(runs) != 1:
+        raise JournalError("pass --run <id>: this session does not drive exactly one programme")
+    return runs[0]
+
+
 def _cli(argv) -> int:
     parser = argparse.ArgumentParser(prog="programme_journal")
     sub = parser.add_subparsers(dest="verb", required=True)
     prune = sub.add_parser("prune")
-    prune.add_argument("--run", required=True)
+    prune.add_argument("--run")
     args = parser.parse_args(argv)
     if args.verb == "prune":
         try:
-            removed = prune_uncited_prompts(args.run)
+            removed = prune_uncited_prompts(args.run or _driven_run())
         except (JournalError, run_record_core.RunRecordError) as exc:
             sys.stderr.write(f"programme_journal: {exc}\n")
             return 1

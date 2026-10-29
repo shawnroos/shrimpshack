@@ -18,8 +18,11 @@ from this session's lease.
 
 - Run every programme write verb in your own Bash tool. A dispatched Agent
   inherits your session id, so the verbs' own guard cannot refuse it; a hook
-  does instead. It lets a sub-agent run only `status`, `inbox`, `describe` and
-  `check-mergeable` without `--pin`, and never `gh pr merge`.
+  does instead. It lets a sub-agent run only `status`, `inbox`, `describe`,
+  `rules` without `--ack` and `check-mergeable` without `--pin`, and never
+  `gh pr merge`.
+- Read nothing over 6,000 characters yourself, whether a file or a command's
+  output. Have an agent read it and write a digest file, then read the digest.
 - Your context comes from the programme's store, not from this chat. A new
   session, a compaction, a handover or a takeover restores it: the rules in force
   and an `<auto-context>` block with the decisions, their reasons and limits, the
@@ -99,11 +102,36 @@ watcher prints its held lines as it stops), handle them as a normal wake after
 re-arming. Changes made
 between the expiry and the re-arm are not reported; the next sweep reads them.
 
-1. **Beat and expire.** `P beat`. If it refuses because the programme ended,
-   stop. `P expire` ends a programme whose agreement was never accepted; if it
-   prints `"ended": true`, tell Shawn in one line and stop. If the journal has a
-   `reread_requested` row newer than your last `rules_acked` or `rules_loaded`
-   row, run `P rules --ack` and read the rules it prints.
+1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
+   Bash call of the form `{ echo SWEEP-START; <step 2's prune, which finds the run
+   from this session's lease>; P validate; P sweep --record-sources;
+   P propose-permission; P settle-permissions; P sweep-inputs --save; } 2>&1 | tail -c 6000`. If
+   `P beat` refuses because the programme ended, stop. `P expire` ends a
+   programme whose agreement was never accepted; if it prints `"ended": true`,
+   tell Shawn in one line and stop. The last JSON in that output is the verdict of
+   `sweep-inputs`: `unchanged` or `changed`, with `why`, `home`, `unread_claims`
+   and `next_offset`. No `SWEEP-START` line (the cap cut the head) or no verdict
+   JSON (a verb crashed) means unknown: take the changed path with the fallback
+   reads below. If `why` has `rules_reread_requested`, run `P rules --ack` and
+   read the rules it prints.
+   **Quiet sweep.** End the turn, steps 2 to 17 done, only when all of these
+   hold: the wake carried no watcher line (a watcher line is step 6 work);
+   `sweep-inputs` said `unchanged`, which already covers actionable reasons,
+   unread claims, open asks, items that moved (so a due tracker write, step 15),
+   merge readiness, a worker whose pane is not working (step 11) and both
+   wake-ups armed (step 16); and the chained call printed no refusal, no `fix:`
+   line, no adopt or alias proposal, no new permission proposal, no `pending`
+   line from `settle-permissions`, and `"refuted": []` from `P validate`. That is
+   two PM turns.
+   **Changed sweep.** Dispatch `auto:programme-sweep-packager` with `home`. It has
+   no shell: it digests `<home>/sweep-inputs.json` into `<home>/sweep-digest.md`
+   and returns the path. Read the digest, not the sources behind it: every line
+   names its source. It is usable only when the agent returned `ok`, the file
+   ends `DIGEST-DONE`, its `generated` matches the verdict's and it lists
+   `unread_claims` claims. Otherwise it is unknown: dispatch
+   `auto:programme-status-reader` and `auto:programme-inbox-reader`, and run
+   `P rules` (never cut the rules) yourself, and say so in one line. Take steps 2,
+   4, 5 and 9's chained verbs as run, and read their output from that call.
 2. **Prune prompts.** `"${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}" "${CLAUDE_PLUGIN_ROOT}/lib/programme_journal.py" prune --run <run>`.
    The run id is the `run` field of `P status --json`.
 3. **Apply Shawn's answers.** For each message Shawn typed since the last
@@ -181,41 +209,8 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    (`P record-instruction --prompt <id>`), and tell Shawn in one line:
    "Corrections are not on yet, so I recorded this as a standing instruction."
 
-   **Behaviours.** A behaviour is Shawn's standing guidance on how the work is
-   done. It carries no authority and no done bar: who decides stays with the
-   terms and corrections, and acceptance stays with Done standards.
-   - Before you record one, read the behaviours in force (`P rules`). When the
-     new one overlaps or disagrees with one of them, pass `--conflicts-with <id>`.
-     The new one wins, because the narrower layer wins (programme over repo over
-     personal).
-   - Draft the checks from his words. A check you can test from what the sweep
-     sees (item state, a claim, a merge, a block, the tracker) is `--pm-check`.
-     One only the agent doing the work can judge is `--agent-check`. Keep as many
-     PM checks as you can. You cannot see a PR being opened unless the worker
-     reports it, so ask the worker to name the PR in its claim or make that check
-     an agent check.
-   - In one message, show Shawn the checks it printed, the ones you cannot test
-     and why, the `undo` line it printed, any conflict and which one wins, and
-     ask: "Keep it for this programme, move it to the repo, or make it global?"
-     It moves only on his typed answer naming the layer.
-   - When the output's `related` list shows a disagreement you did not link, name
-     it the same way. If he wants it linked, undo the new one and record it again
-     with `--conflicts-with`.
-   - A new or changed behaviour reaches work in progress as a reminder from now
-     on (step 5). Never send back work that already passed its trigger.
-   - A do line, skill, tool or agent that names a protected escalation
-     (production deploys, releases, spend over cap, merging around the gate,
-     refused permissions) is refused. Tell Shawn those still come to him.
-   - When Shawn corrects you twice on the same thing, you may draft a behaviour
-     from his words with `P propose-behaviour`. Tell him its id. It applies only
-     when his typed reply names it (the "Apply a behaviour you proposed" row).
-   - Once per programme, offer to move tool preferences out of the project
-     terms. For each term in `P status --terms` that names a preferred tool, run
-     `P propose-behaviour --from-term <term-id>`. Show him each term with its
-     drafted behaviour id and ask which are tool preferences. Apply the ids his
-     typed reply names with `--from-proposal`, and retire the rest with
-     `--as retired`, citing the same reply. The term itself stays as it is; from
-     then on, read the preferred tool from the behaviour.
+   **Behaviours.** Read [references/behaviours.md](references/behaviours.md) before you record, move,
+   retire or propose one.
 
    The cited message must name what it approves, or the verb refuses it and
    lists the missing words: the item id or key (`AI-753`) for the item rows, the
@@ -305,9 +300,9 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      tracker` line is expected: the watcher cannot read through the MCP. Do not
      record it; record the issues through the MCP again instead.
    The sweep records the changes it saw itself, including unsupported sources.
-7. **Read the inbox.** `P inbox` prints the unread claims from the store, each
-   with its index. Act on them, then `P mark-read --offset <n>` with the offset
-   it names. Never read `claims.jsonl`: it is an export and can be stale.
+7. **Read the inbox.** The digest lists the unread claims with their index, each
+   cut to one line; read the ones you act on in full with `P inbox`. Act on them,
+   then `P mark-read --offset <n>` with `next_offset` from the verdict. Never read `claims.jsonl`: it is an export and can be stale.
 8. **Check claims.** First send back work that skips a behaviour. For each
    claim, take each worker behaviour in force for the item that names evidence
    and whose checks held for this work. Look for that evidence in the claim's
@@ -540,8 +535,9 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
       CronCreate it again at the cadence term with the exact text
       `Run the programme sweep: load the auto:programme-sweep skill and follow it.`
       and run `P watcher-beat cron --task-id <id> --kind cron --prompt "<that exact text>"`.
-17. **Check, then stop.** Run `P status --json` and read
-    `programme.actionable_reasons`. Clear each one (read the claim, run the
+17. **Check, then stop.** Run `P sweep-inputs --reasons`, a fresh read taken after
+    your actions, and read `actionable_reasons` (`programme.actionable_reasons` in
+    `P status --json`). Clear each one (read the claim, run the
     queued action, watch the wait, propose the rule), then read them again.
     When none is left, or only a stop-rule reason (`never_stop`, `not_done`,
     `until_time`) remains, end the turn. Do not tell Shawn about these checks.

@@ -925,6 +925,14 @@ _VERBS["inbox"] = _Verb(
     reads=True,
     rejects="nothing; read-only. Reads the committed store, never claims.jsonl, which is an export.",
 )
+_VERBS["sweep-inputs"] = _Verb(
+    lambda argv: load_lib_module("programme_sweep_inputs").verb(sys.modules[__name__], argv),
+    "[--run <id>] [--save] [--reasons]  (the read side of a sweep as data, with a quiet verdict; --save writes "
+    "<home>/sweep-inputs.json and prints the verdict, --reasons prints only the actionable reasons)",
+    reads=True,
+    rejects="nothing; it changes no programme state and journals nothing. --save writes only its own file "
+    "in the programme home. A PR it cannot read counts as changed, never unchanged.",
+)
 _VERBS["status"] = _Verb(
     _h_status,
     "[<run>|--run <id>] [--terms] [--json]  (prints the working model: doing now, queue, watching, "

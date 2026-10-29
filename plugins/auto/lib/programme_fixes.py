@@ -74,6 +74,7 @@ FIXES = {
     "handover": ("ask Shawn to type /auto:programme-handover <session-id> in the driving session, "
                  "then rerun `programme.sh handover`"),
     "inbox": _READ,
+    "sweep-inputs": _READ,
     "keep-behaviours": _PICKED,
     "keep-corrections": _PICKED,
     "lift-pause": _PICKED,

@@ -116,3 +116,28 @@ The hook does not stop an agent with a Write tool from editing programme home fi
 directly. The pinned auto agents get no Write tool, and
 `plugins/auto/tests/smoke/agents.test.sh` checks that each agent file declares an
 explicit tool list.
+
+The sweep packager is the one agent that writes, and it has no shell at all: its tools are
+`Read` and `Write`. The PM runs the read-only verb `programme.sh sweep-inputs --save`, which
+gathers everything a sweep reads and computes the quiet-or-changed verdict from the store, and
+the packager digests that saved file into `<home>/sweep-digest.md`. The hook checks `Write`,
+`Edit`, `MultiEdit` and `NotebookEdit` by path: inside a programme home only
+`<home>/sweep-digest.md` is allowed, with symlinks, `..` and letter case resolved first. The packager
+(matched by its `agent_type`) may write that one file and nothing else anywhere; other sub-agents are
+only kept out of the rest of the programmes folder.
+
+For every other sub-agent the Bash side of the hook is a best-effort filter. From Bash, a
+command naming programme code may not redirect output except to `/dev/null`, a newline starts a
+new command, `--pre`, `--output` and `-O` are denied, and shell expansion (`$(...)`, backticks,
+`<(...)`, `${...}` other than `${CLAUDE_PLUGIN_ROOT}`) and environment prefixes are denied.
+
+How it got here: the first design let the packager write its digest with
+`cat > <home>/sweep-digest.md <<'EOF'` and stripped heredoc bodies before tokenising. Review
+rounds found a way around it each time: a heredoc opener inside quoted text hid the next line, a
+newline never split commands, `f>path` skipped a token-anchored redirect check. A third round
+then showed a per-command filter cannot be closed with another pattern: a pipe into a shell
+whose own segment names no programme code still passes, as do `gh api -XPUT`, `git push`,
+`gh issue close` and `gh alias set`. The decision (da92533) was to stop widening the filter and
+take Bash away from the one agent that read untrusted programme text and could write. Any other
+sub-agent that holds Bash and reads untrusted text can still run any command; give it the same
+treatment (a saved input file and no shell) before it handles programme data.
