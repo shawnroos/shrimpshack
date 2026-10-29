@@ -22,7 +22,8 @@ programme_home = load_lib_module("programme_home")
 PICK_VERBS = frozenset((
     "adopt-rule", "adopt-autonomy", "adopt-check", "set-remit", "amend-term", "keep-corrections",
     "move-behaviour", "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context",
-    "lift-pause", "answer-permission", "dispose-action", "accept-agreement"))
+    "lift-pause", "answer-permission", "dispose-action", "accept-agreement", "swap-item",
+    "override-focus"))
 ACCEPT_VERB = "accept-agreement"
 # The accept is the moment the PM gains authority: a pick must name the terms digest Shawn saw, and an
 # accepted suggestion shows him no terms at all, so it never approves the accept.

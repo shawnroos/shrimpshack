@@ -7,7 +7,7 @@ SWEEP="${AUTO_ROOT}/skills/programme-sweep/SKILL.md"
 BEHAVIOURS="${AUTO_ROOT}/skills/programme-sweep/references/behaviours.md"
 PACKER="${AUTO_ROOT}/agents/programme-sweep-packager.md"
 # SKILL.md is loaded into the PM's context on every activation, so its size is part of the cost. The cap is main's copy.
-SIZE_ON_MAIN=37765
+SIZE_ON_MAIN=39630
 
 PASS=0
 FAIL=0

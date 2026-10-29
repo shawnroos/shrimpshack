@@ -172,6 +172,7 @@ def _value_text(term) -> str:
     if isinstance(value, list):
         value = ", ".join(str(v) for v in value) or "none"
     extras = [f"{name} {term[name]}" for name in ("until", "seconds") if term.get(name) is not None]
+    extras += programme_home.term_extra_texts(term)
     return str(value) + "".join(f", {e}" for e in extras)
 
 

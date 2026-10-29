@@ -24,6 +24,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
+programme_focus = load_lib_module("programme_focus")
 programme_journal = load_lib_module("programme_journal")
 programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
@@ -167,7 +168,7 @@ def _set_repo(item, programme, path) -> None:
 
 def _h_add_item(host, argv):
     positional, opts = host._parse(
-        argv, values=("run", "title", "repo", "pane", "terminal-id", "session", "session-name"),
+        argv, values=("run", "title", "repo", "pane", "terminal-id", "session", "session-name", "size"),
         multi=("kind",))
     if len(positional) != 1:
         raise ValueError("usage: add-item <source:key> [--title <text>] [--kind <change-kind>]...")
@@ -189,6 +190,7 @@ def _h_add_item(host, argv):
             _set_repo(item, programme, opts.get("repo"))
             payload["repo"] = item["repo"]
             _history(item, "added")
+            programme_focus.set_size(host, programme, item, opts.get("size"))
             programme["items"][item_id] = item
             return payload
         item = programme["items"][key]
@@ -204,6 +206,7 @@ def _h_add_item(host, argv):
         _set_repo(item, programme, opts.get("repo"))
         payload["repo"] = item.get("repo")
         _history(item, "updated")
+        programme_focus.set_size(host, programme, item, opts.get("size"))
         return payload
 
     return host._write(opts, change, lambda payload: "item_updated" if seen.get("update") else "item_added")
@@ -363,6 +366,7 @@ def _h_drop_item(host, argv):
                 f"item {key!r} is issue-backed with open deliverables {still_open}; "
                 "dropping it needs --prompt <id> of a typed prompt")
         item.update(state="dropped", dropped_reason=reason, waiting_on=None)
+        programme_focus.drop_approval(item)
         _history(item, "dropped", reason=reason, prompt_id=prompt and prompt["prompt_id"])
         return {"item": key, "reason": reason, "open_deliverables": still_open}
 
@@ -882,7 +886,7 @@ def _h_tracker_synced(host, argv):
 _SPECS = (
     ("add-item", _h_add_item,
      "<source:key> [--title <text>] [--kind <change-kind>]... [--repo <path>] [--pane <id>] "
-     "[--terminal-id <id>] [--session <id>] [--session-name <name>] [--run <id>]",
+     "[--terminal-id <id>] [--session <id>] [--session-name <name>] [--size <name>] [--run <id>]",
      "an id that is not source:key or holds '..', spaces or control text; an unknown change kind; "
      "a handed or dropped item. --repo also stores the item's repository when it matches a remit "
      "repo path; any other --repo only selects the protocol."),

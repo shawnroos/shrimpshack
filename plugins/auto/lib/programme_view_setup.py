@@ -56,7 +56,7 @@ def _term_step(key, term, kept) -> dict:
         recommendation, source = term.get("value"), SOURCES.get(term.get("set_by"), "set by Shawn")
     if isinstance(recommendation, list):
         recommendation = ", ".join(str(v) for v in recommendation) or "none"
-    done = term.get("set_by") not in UNSET_BY or key in kept
+    done = term.get("set_by") not in UNSET_BY or key in kept or programme_home.is_opt_in(key)
     out = _step(key, guide.get("label") or key.replace("_", " "),
                 term.get("section") or guide.get("section") or key, done,
                 programme_view_work._value_text(term), recommendation, source, needs_typed=key in SHARED_TERMS)

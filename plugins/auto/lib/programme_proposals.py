@@ -19,6 +19,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_focus = load_lib_module("programme_focus")
 programme_sanitize = load_lib_module("programme_sanitize")
 
 ORIGINS = ("pm", "ui")
@@ -77,7 +78,8 @@ def settle_amend(term, value) -> None:
     # A proposed new space is accepted only by set-remit; an amend of the remit option supersedes it.
     matched = "add" not in extras or tool is not None
     matched = matched and proposal.get("value") == value and all(
-        term.get(name) == extras[name] for name in ("seconds", "until") if name in extras)
+        term.get(name) == extras[name] for name in ("seconds", "until") + programme_home.TERM_EXTRAS
+        if name in extras)
     _settle(term, matched)
 
 
@@ -141,6 +143,7 @@ def _proposal(host, term, value, opts):
         extras["seconds"] = int(opts["seconds"])
     if checked == "until_time":
         extras["until"] = opts.get("until")
+    extras.update(programme_focus.extras_of(host, key, opts))
     return checked, extras
 
 
@@ -149,7 +152,8 @@ def _ui_write(host, opts, change, kind):
 
 
 def _h_propose_term(host, argv):
-    positional, opts = host._parse(argv, values=("run", "seconds", "until", "add", "description", "origin"))
+    positional, opts = host._parse(
+        argv, values=("run", "seconds", "until", "add", "description", "origin") + programme_home.TERM_EXTRAS)
     if len(positional) not in (1, 2):
         raise ValueError("usage: propose-term <key> [<value>] [--seconds N] [--until <iso>] "
                          "[--add <name> [--description <text>]]")
