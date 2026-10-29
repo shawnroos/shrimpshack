@@ -228,25 +228,16 @@ def host_of_row(row) -> str:
     return (row or {}).get("host") or programme_home.DEFAULT_HOST
 
 
-def space_of_session(session_id, env, *, registry_only=False):
-    """(server, workspace) for a herdr session, (server, workspace, host) for any other host.
+def space_of_session(session_id):
+    """(server, workspace) for a herdr session, (server, workspace, host) for any other host; None without a registry row.
 
-    Without a registry row the herdr variables name the space, but a variable is not evidence of
-    membership (KTD3): a gate passes registry_only=True and gets None instead.
+    A host variable is not evidence of membership (KTD3), so the environment never names a space.
     """
     row = lookup(session_id, include_headless=True)
     if row and row.get("server") and row.get("workspace"):
         host = host_of_row(row)
         return (row["server"], row["workspace"]) + ((host,) if host != programme_home.DEFAULT_HOST else ())
-    if registry_only:
-        return None
-    workspace = env.get("HERDR_WORKSPACE_ID")
-    if not workspace and ":" in (env.get("HERDR_PANE_ID") or ""):
-        workspace = env["HERDR_PANE_ID"].split(":", 1)[0]
-    if not workspace:
-        return None
-    server = load_lib_module("host_herdr").server_from_socket(env.get("HERDR_SOCKET_PATH")) or programme_home.DEFAULT_SERVER
-    return server, workspace
+    return None
 
 
 def driver_panes(now=None) -> list:

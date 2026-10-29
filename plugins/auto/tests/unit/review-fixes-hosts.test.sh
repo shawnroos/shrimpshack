@@ -350,6 +350,23 @@ check "1" "$CODE"
 it "none of the refused starts wrote a lease"
 check "$LEASES_BEFORE" "$(ls "${CLAUDE_AUTO_DATA_DIR}/programmes/leases" | grep -vc '^\.')"
 
+echo "review-fixes: HERDR variables stand in for no registry row (B)"
+row herdr default w2 pm-herdr-b w2:p31 term_p31
+programme herdr default w2 pm-herdr-b >/dev/null
+it "a bare pane suffix from a sender with no row is denied whatever HERDR_WORKSPACE_ID says"
+check deny "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w3)")"
+check deny "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
+it "a sender whose row puts it in another workspace is still allowed"
+row herdr default w3 sess-far-b w3:p60 term_far
+check allow "$(verdict "$(hook sess-far-b 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
+it "space_of_session ignores the environment and answers from the registry only"
+OUT="$(env HERDR_PANE_ID=w2:p31 HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+print(sr.space_of_session("sess-no-row"), sr.space_of_session("sess-far-b"))
+PYEOF
+)"
+check "None ('default', 'w3')" "$OUT"
+
 # ---------------------------------------------------------------- RefusedHost in the source paths (finding 4)
 echo "review-fixes: a refused host does not crash the sweep, launch or send paths (finding 4)"
 BOTH=(HERDR_PANE_ID=w1:2 REX_SESSION=s)

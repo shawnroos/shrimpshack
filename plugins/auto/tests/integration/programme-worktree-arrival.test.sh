@@ -124,6 +124,7 @@ remit() {
 }
 
 typed() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2" 2>/dev/null )
 }
 

@@ -158,10 +158,8 @@ def host_sends(command: str, pane_ids: list, strict=False) -> list:
 
 def _sender_workspace(session_id):
     row = load_lib_module("session_registry").lookup(session_id, include_headless=True) if session_id else None
-    if row and row.get("workspace"):
-        return row["workspace"]
-    # A sender with no registry row has no other evidence of its workspace.
-    return os.environ.get("HERDR_WORKSPACE_ID") or None
+    # A sender with no registry row has no workspace: a bare pane suffix is then treated as possibly the driver's.
+    return row["workspace"] if row and row.get("workspace") else None
 
 
 def _targets_pane(target: str, driver: dict, workspace) -> bool:

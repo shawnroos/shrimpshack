@@ -128,6 +128,7 @@ old_typed() {
 
 # Runs the current hook with a transcript row that shows Shawn typed the prompt.
 new_typed() {
+  register_session "$1" "${WS:-w9}" >/dev/null
   HERDR_WORKSPACE_ID="${WS:-w9}" "$PY" - "$AUTO_ROOT" "$LIB" "$1" "$2" <<'EOF' | prompt_id_of
 import json, os, subprocess, sys
 root, lib, sid, text = sys.argv[1:]

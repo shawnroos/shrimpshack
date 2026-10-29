@@ -91,8 +91,7 @@ def _lease_for(host, opts, sid):
     named = programme_home.lease_driven_by(opts.get("replace"))
     if named:
         return named
-    # The herdr variables still name which lease a session is asking about; membership in it is _in_space, rows only.
-    space = session_registry.space_of_session(sid, os.environ) if sid else None
+    space = session_registry.space_of_session(sid) if sid else None
     if not space:
         raise host.ProgrammeError("this session is not in a space; name the PM by its session id "
                                   "(/auto:programme-takeover --replace <session id>) or pass --run <id>")
@@ -264,7 +263,7 @@ def _h_start(host, argv):
     sid = _caller(host)
     session_host = _session_host(host, sid)
     _require_own_pane(host, sid, session_host)
-    spaces = list(opts["space"]) + positional or [session_registry.space_of_session(sid, os.environ)]
+    spaces = list(opts["space"]) + positional or [session_registry.space_of_session(sid)]
     if not spaces[0]:
         raise host.ProgrammeError("this session is not in a space; start from a pane in a terminal host (herdr, Rex or Ghostty) "
                                   "or pass --space <server.workspace> (herdr) or --space <host>--<server>--<workspace>")
@@ -592,7 +591,7 @@ def _h_become_pm(host, argv):
             _require_own_pane(host, sid, session_host)
         except host.ProgrammeError as exc:
             _become_refused(host, out, str(exc), exc.fix)
-        space = session_registry.space_of_session(sid, os.environ)
+        space = session_registry.space_of_session(sid)
         if not space:
             _become_refused(host, out, "this session is not in a space, so it cannot be a space's PM",
                             "run Claude from a pane in the space, then run `programme.sh become-pm` there")

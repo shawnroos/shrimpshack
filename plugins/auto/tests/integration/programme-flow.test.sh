@@ -130,6 +130,7 @@ json_of() {
 
 typed() {
   local sid="$1" text="$2"
+  register_session "$sid" "${WS:-w2}" >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID="${WS:-w2}" "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$sid" "$text" 2>/dev/null )
 }
 

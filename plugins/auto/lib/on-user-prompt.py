@@ -111,7 +111,7 @@ def _held_context(held) -> dict:
 
 
 def _space_lease(session_id, env):
-    space = session_registry.space_of_session(session_id, env)
+    space = session_registry.space_of_session(session_id)
     if not space:
         return None
     try:

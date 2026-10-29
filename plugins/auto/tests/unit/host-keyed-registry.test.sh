@@ -155,7 +155,7 @@ it "a row with no host reads as herdr and resolves to a two-part space"
 OUT="$(py <<PYEOF
 $HEAD_PY
 row = sr.lookup("sess-old")
-print(sr.host_of_row(row), sr.space_of_session("sess-old", {}))
+print(sr.host_of_row(row), sr.space_of_session("sess-old"))
 PYEOF
 )"
 check "herdr ('default', 'w3')" "$OUT"
@@ -183,7 +183,7 @@ record sess-t2 pane-t2 srv win-t2 Shared /dev/ttys011 >/dev/null
 it "two sessions sharing a tab space name on different tty are two spaces"
 OUT="$(py <<PYEOF
 $HEAD_PY
-a, b = sr.space_of_session("sess-t1", {}), sr.space_of_session("sess-t2", {})
+a, b = sr.space_of_session("sess-t1"), sr.space_of_session("sess-t2")
 print(a, b, a != b)
 PYEOF
 )"
@@ -221,7 +221,7 @@ check "True" "$OUT"
 it "a session with no row and only the tab name in its environment has no space"
 OUT="$(py <<PYEOF
 $HEAD_PY
-print(sr.space_of_session("sess-nobody", {"AUTO_TEST_STUB_TAB": "win-lease"}))
+print(sr.space_of_session("sess-nobody"))
 PYEOF
 )"
 check "None" "$OUT"

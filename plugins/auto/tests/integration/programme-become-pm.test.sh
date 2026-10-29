@@ -110,6 +110,7 @@ as() {
 }
 
 typed() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2" 2>/dev/null )
 }
 
@@ -161,6 +162,7 @@ EOF
 # A picker answered in a session that is not the PM, journaled by the real PostToolUse hook.
 # A fourth argument pre-fills the answer in the tool input.
 pick() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$WORK" "$@" <<'PYEOF'
 import json, os, pathlib, re, subprocess, sys, uuid
 root, work, sid, answer = sys.argv[1:5]

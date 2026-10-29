@@ -111,6 +111,7 @@ as() {
 }
 
 typed() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2" 2>/dev/null )
 }
 
@@ -118,6 +119,7 @@ typed() {
 # event or SDK prompt), or a transcript row from a peer session.
 untyped() {
   local sid="$1" text="$2" kind="$3"
+  register_session "$sid" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$sid" "$text" "$kind" <<'PYEOF'
 import json, os, subprocess, sys
 root, sid, text, kind = sys.argv[1:]
@@ -336,6 +338,7 @@ as_in() {
 }
 
 typed_in() {
+  register_session "$2" "$1" >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID="$1" "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$2" "$3" 2>/dev/null )
 }
 
@@ -368,6 +371,7 @@ has "--replace $CUR" "$(last_entry "$RUN" takeover_request)"
 # A picker answered in a session that is not the PM, journaled by the real PostToolUse hook.
 # A fourth argument pre-fills the answer in the tool input.
 pick() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$WORK" "$@" <<'PYEOF'
 import json, os, pathlib, re, subprocess, sys, uuid
 root, work, sid, answer = sys.argv[1:5]
@@ -514,12 +518,12 @@ has "needs a pick" "$OUT"
 snapshot "w2:p31|scratch|sess-w2|term_p31"
 LABEL_T="Approve takeover --replace sess-t"
 
-it "a session in the space only by HERDR env, with no registry row and no pane herdr can prove, cannot take over a stopped PM"
-P="$(pick sess-n "$LABEL_T")"
+it "a session in the space only by HERDR env, with no registry row, cannot take over a stopped PM"
+P=p000000
 OUT="$(CLAUDE_CODE_SESSION_ID=sess-n HERDR_PANE_ID=w2:pGHOST HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" takeover --prompt "$P" 2>&1)"; CODE=$?
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "cannot identify this session's herdr terminal pane" "$OUT"
-has "fix: run Claude from a pane or window that the terminal host can identify" "$OUT"
+has "this session is not in a space" "$OUT"
+has "fix: programme.sh become-pm" "$OUT"
 
 register sess-k w2:p86 term_p86
 
