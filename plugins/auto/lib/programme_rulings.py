@@ -127,8 +127,8 @@ def check_prompt_unused(rows, prompt_id) -> None:
                               "prompt approves one Ruling change")
 
 
-# Runs on the journal as the approval row lands: a prompt journaled after a timed-out run-lock wait, or a
-# second use, refuses the change before its record is written.
+# Runs on the journal as the approval row lands: a prompt Shawn typed or a use another writer committed
+# after the verb's own check refuses the change before its record is written.
 def recheck_approval(rows, row) -> None:
     if _approval_of(row) is None:
         return
@@ -318,7 +318,7 @@ def _h_record_ruling(host, argv):
         return _record(host, programme, rec, cid, content, prompt)
 
     return host._write(opts, change, "ruling_recorded", prompt_id=opts.get("prompt"), needs_prompt=bool(replies),
-                       verb="record-ruling", target=cid, ruling=True)
+                       verb="record-ruling", target=cid)
 
 
 def _h_close_ruling(host, argv):
@@ -354,7 +354,7 @@ def _h_close_ruling(host, argv):
 
     withdrawn = ending == "withdrawn"
     return host._write(opts, change, "ruling_closed", prompt_id=opts.get("prompt"), needs_prompt=withdrawn,
-                       beat=withdrawn, verb="close-ruling", target=cid, ruling=True)
+                       beat=withdrawn, verb="close-ruling", target=cid)
 
 
 def _h_accept_context(host, argv):
@@ -393,14 +393,12 @@ def _h_accept_context(host, argv):
         return {pc.ID_FIELDS[kind]: cid, "rev": revision["rev"], "state": "accepted",
                 "supersedes": revision["supersedes"], "baseline": revision.get("baseline")}
 
-    # Moving the home would turn its prompts into imported ones, and a requirement may still take a legacy pick.
-    requirement = cid in pc._guarded(record, pc.block, host._locate(opts)[2].get("programme") or {})["requirements"]
-    return host._write(opts, change, "context_accepted", prompt_id=opts.get("prompt"), needs_prompt=True,
-                       ruling=not requirement)
+    return host._write(opts, change, "context_accepted", prompt_id=opts.get("prompt"), needs_prompt=True)
 
 
-MOVE_FIRST = ("On a home still on its old JSON files it first moves the home to programme.db, and refuses, "
-              "changing nothing, when that move cannot run; a prompt typed before the move approves nothing.")
+MOVE_FIRST = ("On a home still on its old JSON files, once every check above passes it moves the home to "
+              "programme.db and runs the change there, checks and all, and refuses, changing nothing, when that "
+              "move cannot run; a prompt typed before the move approves nothing.")
 
 _SPECS = (
     ("record-ruling", _h_record_ruling,

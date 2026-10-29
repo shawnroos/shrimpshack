@@ -132,11 +132,18 @@ session.
   The JSON files never take a Ruling change, because a crash between their
   record and journal writes could hide the change from its approval checks. So
   `record-ruling`, `close-ruling`, `accept-context` on a Ruling, `carry-rulings`
-  with ids, and `set-remit` before acceptance first run the same import on such a
-  home. If it cannot run (a held or locked home, a secrets-file value, inputs that
-  change while it runs, or any other failure), the verb refuses, says why, and
-  changes nothing. A prompt typed before the move approves nothing, so Shawn types
-  it again. `accept-context` on a requirement keeps the JSON files.
+  with ids, and a `set-remit` that carries a Ruling in run every check on the
+  JSON files first, then run the same import on such a home and run again, checks
+  and all, in programme.db. A verb its own checks refuse leaves the home on its
+  JSON files, untouched. If the import cannot run (a held or locked home, a
+  secrets-file value, inputs that change while it runs, or any other failure), the
+  verb refuses, says why, and changes nothing. A prompt typed before the move
+  approves nothing, so Shawn types it again. `accept-context` on a requirement, and
+  a `set-remit` that carries nothing in, keep the JSON files. Any write verb on a
+  home whose move was cut off finishes that move first.
+  Adoptions approved on the JSON files (behaviours, protocol rules, carried
+  Rulings) stay in force after the move: their prompts are read as the JSON home
+  read them, and only the approval rows imported with them count.
   `reconcile-leases` rewrites a run's leases from its committed remit and driving
   session. Every write verb except `claim` and the verbs below takes `--op <id>`:
   a retry with the same id replays the committed result instead of writing

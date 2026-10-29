@@ -60,12 +60,14 @@ def text_hash(text) -> str:
     return "sha256:" + hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
 
-def _approved(rows, prompt_id) -> list:
+# An imported prompt approves nothing new, so only the approval rows imported with it count.
+def _approved(rows, prompt_id, imported=False) -> list:
     out = []
     for row in rows:
         payload = row.get("payload") or {}
         if row.get("kind") not in APPROVAL_KINDS or (row.get("cites") or [None])[0] != prompt_id \
-                or payload.get("prompt_id") != prompt_id or row.get("provenance") == programme_authority.FOREIGN:
+                or payload.get("prompt_id") != prompt_id or row.get("provenance") == programme_authority.FOREIGN \
+                or (imported and row.get("provenance") != programme_authority.LEGACY):
             continue
         if row["kind"] == CARRIED_KIND:
             out.extend(programme_protocol.approval_key(programme_protocol.carryover_target(e.get("key"), e.get("id")),
@@ -91,8 +93,9 @@ def prompt_lookup(run_id, prompt_id, journals=None):
     if row is None or row.get("provenance") == programme_authority.FOREIGN:
         return None
     payload = row.get("payload") or {}
-    return {"origin": programme_journal.prompt_origin(row), "text_hash": text_hash(payload.get("text")),
-            "approved": _approved(rows, prompt_id)}
+    imported = row.get("provenance") == programme_authority.LEGACY
+    return {"origin": programme_journal.adopted_origin(row), "text_hash": text_hash(payload.get("text")),
+            "approved": _approved(rows, prompt_id, imported)}
 
 
 def _parse(argv, *, values=(), flags=(), multi=()):
@@ -143,10 +146,13 @@ def _run_from_leases(sid):
     return runs.pop()
 
 
-def _locate(opts):
+# A write verb finishes a move to programme.db that was cut off, which otherwise holds the home for every verb.
+def _locate(opts, finish_move=False):
     run_id = opts.get("run") or _run_from_leases(driver_session.driving_session_id())
     run_id = programme_home.check_run_id(run_id)
     home = programme_home.home_path(run_id)
+    if finish_move and programme_authority.move_interrupted(home):
+        upgrade_legacy(run_id, home, _OPERATION["verb"] or "this verb")
     record = run_record_core.read_run_record(home, run_id)
     if run_record_core.run_kind(record) != "programme":
         raise ProgrammeError(f"run {run_id!r} is not a programme")
@@ -299,25 +305,35 @@ def _widen_word(opts) -> tuple:
     return (("widen", "widening", "widened"),) if opts.get("widening") else ()
 
 
+# promote finishes or discards a half-done move and reports a home another process moved first, so this runs
+# it whenever it is called rather than reading an import marker as a finished move.
 def upgrade_legacy(run_id, home, verb) -> None:
-    if programme_authority.promoted(home, run_id):
-        return
     try:
         report = load_lib_module("programme_import").promote(run_id)
     except Exception as exc:
         report = {"status": "failed", "reason": str(exc) or type(exc).__name__}
     if report["status"] not in ("promoted", "already_promoted"):
         raise ProgrammeError(
-            f"{verb} can change a Ruling, and programme {run_id} still keeps its old JSON files, which cannot "
-            f"record a Ruling change safely. Moving it to programme.db failed: {report.get('reason')}. Nothing "
-            f"was changed. Fix that, run `programme.py promote --run {run_id}`, then run {verb} again")
+            f"{verb} first moves programme {run_id} from its old JSON files, which cannot record a Ruling change "
+            f"safely, or finishes a move that was cut off. Moving it to programme.db failed: {report.get('reason')}. "
+            f"Nothing was changed. Fix that, run `programme.py promote --run {run_id}`, then run {verb} again")
+
+
+# A legacy home refuses a Ruling change only after every check of the verb passed, so the home moves to
+# programme.db only for a change that would apply, and the retry runs every check again on the moved home.
+def promoting(run_id, home, verb, attempt):
+    try:
+        return attempt()
+    except programme_authority.AuthorityError as exc:
+        if exc.code != programme_authority.LEGACY_RULING:
+            raise
+    upgrade_legacy(run_id, home, verb)
+    return attempt()
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True, names_change=True, ruling=False):
-    run_id, home, _ = _locate(opts)
-    if ruling:
-        upgrade_legacy(run_id, home, _OPERATION["verb"] or verb or kind)
+           journal=True, after=None, verb=None, target=None, beat=True, names_change=True, promote=True):
+    run_id, home, _ = _locate(opts, finish_move=True)
     seen = {}
 
     def mutate(rec):
@@ -344,15 +360,18 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         return programme_journal.entry(seen["kind"], seen["sid"], payload,
                                        cites=[prompt["prompt_id"]] if prompt else None)
 
-    try:
-        out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"],
-                                        recheck=programme_rulings.recheck_approval,
-                                        legacy_refuses=programme_rulings.changes_ruling)
-    except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
-            programme_behaviours.BehaviourError) as exc:
-        if (needs_prompt or prompt_id) and "sid" in seen:
-            _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
-        raise
+    def attempt():
+        try:
+            return programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"],
+                                             recheck=programme_rulings.recheck_approval,
+                                             legacy_refuses=programme_rulings.changes_ruling)
+        except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
+                programme_behaviours.BehaviourError) as exc:
+            if (needs_prompt or prompt_id) and "sid" in seen:
+                _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
+            raise
+
+    out = promoting(run_id, home, _OPERATION["verb"] or verb or kind, attempt) if promote else attempt()
     if out["replayed"]:
         row = out["row"] or {}
         _emit({"ok": True, "run": run_id, "kind": row.get("kind"), "replayed": True,

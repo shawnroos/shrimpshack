@@ -22,6 +22,7 @@ programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 session_registry = load_lib_module("session_registry")
 programme_prompt_source = load_lib_module("programme_prompt_source")
+programme_authority = load_lib_module("programme_authority")
 
 DATA_TAG = "auto-data"
 _REQUEST = re.compile(r"^\s*/auto:programme-(takeover|handover|end)(?=\s|$)")
@@ -58,12 +59,16 @@ def _driving_run(session_id):
 
 def _closing_runs(session_id) -> list:
     # After end the leases are gone, but the driving session (or the one that ended it) still
-    # types the approvals its closure needs; a sealed archive takes nothing.
+    # types the approvals its closure needs; a sealed archive takes nothing. A held home is kept
+    # with its hold, so the prompt it cannot take is reported.
     found = []
     for run in programme_home.closing_runs(session_id):
         record, hold = programme_home.read_programme(run)
+        if hold is not None:
+            found.append((run, dict(hold, run=run)))
+            continue
         programme = (record or {}).get("programme") or {}
-        if hold is not None or not programme.get("ended") or programme_home.sealed(programme):
+        if not programme.get("ended") or programme_home.sealed(programme):
             continue
         if session_id in (record.get("driving_session_id"), (programme.get(programme_home.CLOSURE) or {}).get("ended_by")):
             found.append((run, record))
@@ -73,20 +78,36 @@ def _closing_runs(session_id) -> list:
 def _closing_context(session_id, text, closing, notes, source) -> dict | None:
     journaled = []
     for run, record in closing:
-        origin = classify_origin(text, record)
-        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
+        origin = classify_origin(text, record) if "outcome" not in record else "unknown"
+        entry, held = _append(run, session_id, text, origin, source) if "outcome" not in record else (None, record)
+        if held is not None:
+            notes.append(_held_text(held))
+            continue
         journaled.append({"run": run, "prompt_id": entry["prompt_id"], "origin": origin})
+    if not journaled:
+        return _context("\n".join(notes))
     return _context(
         "auto journaled this prompt into each ended programme this session is closing. Cite the "
         "prompt_id for that run in its closure verbs.\n"
         f"{json.dumps(journaled, sort_keys=True)}" + "".join(f"\n{note}" for note in notes))
 
 
+# A home can become held between reading it and appending: a move to programme.db that starts, or one cut off.
+def _append(run, session_id, text, origin, source):
+    try:
+        return programme_journal.append_prompt(run, session_id, text, origin, source=source), None
+    except programme_authority.AuthorityHold as exc:
+        return None, {"run": run, "outcome": exc.outcome, "detail": exc.detail}
+
+
+def _held_text(held) -> str:
+    return (f"auto did not journal this prompt: programme {held['run']}'s authority is "
+            f"{held['outcome']} ({held['detail']}). Nothing typed here can approve a change "
+            "until it is repaired; once it is, ask Shawn to type it again.")
+
+
 def _held_context(held) -> dict:
-    return _context(
-        f"auto did not journal this prompt: programme {held['run']}'s authority is "
-        f"{held['outcome']} ({held['detail']}). Nothing typed here can approve a change "
-        "until it is repaired.")
+    return _context(_held_text(held))
 
 
 def _space_lease(session_id, env):
@@ -138,7 +159,9 @@ def handle(raw: str, env) -> dict | None:
     origin = "unknown"
     if run:
         origin = classify_origin(text, record)
-        entry = programme_journal.append_prompt(run, session_id, text, origin, source=source)
+        entry, held = _append(run, session_id, text, origin, source)
+        if held is not None:
+            return _held_context(held)
     request = _REQUEST.match(text)
     lost = None
     received = None

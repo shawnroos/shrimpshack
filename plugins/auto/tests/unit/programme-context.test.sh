@@ -261,7 +261,7 @@ prog accept-context d-docs --prompt "$P_BARE" --run "$RUN"
 check "1" "$CODE"
 has "human source unverified" "$OUT"
 
-it "a verified prompt row stamped legacy_import reads unknown to every approval check"
+it "a verified prompt row stamped legacy_import reads unknown to a new approval; a past adoption reads it as the JSON home did, with no approval of its own"
 P_LEGACY_SRC="$(run_py "$RUN" <<'EOF'
 from programme_prompts import fixture
 _, source, path, transcript_row = fixture("accept d-docs widened to linux-probe", "sess-pm")
@@ -277,11 +277,12 @@ def body():
         pa.commit(store, args[0], "test-legacy-src", head["revision"], head["state"], event, pa.LEGACY)
 pa._locked(ph.home_path(args[0]), args[0], body)
 stored = pj.find_prompt(args[0], "plegsrc1")
+looked = load_lib_module("programme").prompt_lookup(args[0], "plegsrc1")
 print(load_lib_module("programme_prompt_source").origin(row), stored.get("provenance"), pj.prompt_origin(stored),
-      load_lib_module("programme").prompt_lookup(args[0], "plegsrc1")["origin"])
+      looked["origin"], looked["approved"])
 EOF
 )"
-check "typed legacy_import unknown unknown" "$P_LEGACY_SRC"
+check "typed legacy_import unknown typed []" "$P_LEGACY_SRC"
 prog accept-context d-docs --prompt plegsrc1 --run "$RUN"
 check "1" "$CODE"
 has "legacy" "$OUT"

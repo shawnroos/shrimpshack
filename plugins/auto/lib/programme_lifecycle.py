@@ -634,8 +634,7 @@ def remit_changes(before, after) -> list:
     return changes
 
 
-def _move_leases(run, sid, home, changes) -> None:
-    stamp = _stamp()
+def _lease_moves(run, changes) -> list:
     moves = []
     for part, how, space in changes:
         if part != "spaces":
@@ -648,6 +647,11 @@ def _move_leases(run, sid, home, changes) -> None:
             if status not in ("free", "ended"):
                 raise programme_home.LeaseHeld(_space_key(space), lease, status)
         moves.append((how, space, path, ours))
+    return moves
+
+
+def _move_leases(run, sid, home, moves) -> None:
+    stamp = _stamp()
     for how, space, path, ours in moves:
         if how == "removed" and ours:
             os.unlink(path)
@@ -667,11 +671,8 @@ def _h_set_remit(host, argv):
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
     # git worktree add is slow: it runs on the remit-to-be before the leases lock, recorded under it.
-    run, home, record = host._locate(opts)
+    run, home, record = host._locate(opts, finish_move=True)
     current = programme_home.normalize_programme(record.get("programme") or {})
-    # Pre-fill can carry Rulings in, and promotion takes the leases lock this verb holds below.
-    if not current["agreement"].get("accepted"):
-        host.upgrade_legacy(run, home, "set-remit")
     try:
         drives = session_registry.caller_drives(record, driver_session.driving_session_id())
         made = _make_worktree(run, dict(current, remit=parse_remit(doc, current["remit"]))) if drives else None
@@ -687,8 +688,7 @@ def _h_set_remit(host, argv):
             raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of a typed prompt")
         if accepted:
             host.require_named(prompt, *[_names(part, entry) for part, _, entry in changes])
-        _move_leases(rec["run_id"], rec.get("driving_session_id"), programme_home.home_path(rec["run_id"]),
-                     changes)
+        moves = _lease_moves(rec["run_id"], changes)
         programme["remit"] = dict(before, **after)
         term = programme["agreement"]["terms"]["remit"]
         term.update(set_by="shawn" if prompt else "proposal", set_at=_stamp())
@@ -700,13 +700,19 @@ def _h_set_remit(host, argv):
         if after["repos"]:
             out.update(_record_worktree(made, programme))
         if not accepted:
-            carried, notices = programme_carryover.prefill(host, programme)
+            # On the JSON files a carried Ruling refuses the write, so neither the store nor a lease may change first.
+            moved = host.programme_authority.promoted(home, run)
+            carried, notices = programme_carryover.prefill(host, programme, write=moved)
+            if carried and not moved:
+                raise host.programme_authority.legacy_refusal(run, "remit_set")
             out.update({"carried_over": carried} if carried else {}, **({"notices": notices} if notices else {}))
+        _move_leases(rec["run_id"], rec.get("driving_session_id"), programme_home.home_path(rec["run_id"]), moves)
         return out
 
-    return programme_home._with_leases_lock(
-        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"),
-                            verb="set-remit", target="remit"))
+    # Promotion takes the leases lock this write holds, so the move runs outside it.
+    return host.promoting(run, home, "set-remit", lambda: programme_home._with_leases_lock(
+        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"), verb="set-remit",
+                            target="remit", promote=False)))
 
 
 _SPECS = (

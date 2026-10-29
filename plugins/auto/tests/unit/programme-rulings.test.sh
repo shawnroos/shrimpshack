@@ -888,14 +888,14 @@ for verb in "record-ruling r-l7 --kind tool_choice --effect restrict --scope l7 
             "close-ruling r-gs --as fulfilled --why done" "accept-context r-up --prompt $P_L7"; do
   # shellcheck disable=SC2086
   set -- $verb
-  it "legacy, promotion declined: $1 refuses, never takes the legacy write path, and leaves the home byte-identical"
+  it "legacy, promotion declined: $1 runs its checks on the JSON files, refuses the move, and leaves the home byte-identical"
   spy_prog none "$@" --run "$L7"
-  check "nonzero skipped $H7" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$L7")"
+  check "nonzero entered $H7" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$L7")"
   has "Moving it to programme.db failed: privacy admission is" "$OUT"
 done
 it "legacy, promotion raising: record-ruling refuses with the cause, no traceback, home byte-identical"
 spy_prog raise record-ruling r-l7 --kind tool_choice --effect restrict --scope l7 --applies-to herdr:b --run "$L7"
-check "nonzero skipped $H7" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$L7")"
+check "nonzero entered $H7" "$([ "$CODE" -ne 0 ] && echo nonzero) $ENTERED $(home_hash "$L7")"
 has "failed: disk unavailable. Nothing was changed" "$OUT"
 # A pending proposal on a legacy home is the change round 8 found a crash could cut from its row.
 for verb in "record-ruling r-l7 --kind tool_choice --effect restrict --scope l7 --applies-to herdr:b|ruling_recorded" \

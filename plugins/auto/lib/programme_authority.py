@@ -40,6 +40,7 @@ WRITE_RESUME = ".test-resume-write"
 HISTORY = "history"
 OUTCOMES = ("absent", "legacy", "supported", "unsupported", "corrupt", "unavailable")
 HOLDS = ("unsupported", "corrupt", "unavailable")
+LEGACY_RULING = "legacy_ruling"
 
 
 class AuthorityError(run_record_core.RunRecordError):
@@ -78,6 +79,10 @@ def _tagged(path) -> bool:
     except (OSError, ValueError):
         return False
     return isinstance(doc, dict) and TAG in doc
+
+
+def move_interrupted(home) -> bool:
+    return os.path.lexists(os.path.join(home, IMPORT_MARKER))
 
 
 def promoted(home, run_id) -> bool:
@@ -241,10 +246,17 @@ def _replayed(store, run_id, operation_id) -> dict:
     return {"result": None, "row": row, "replayed": True, "revision": hits[0]["revision"] if hits else None}
 
 
+def legacy_refusal(run_id, kind) -> AuthorityError:
+    return AuthorityError(f"programme {run_id} still keeps its old JSON files, which never take a {kind} row; "
+                          f"nothing was changed. Run `programme.py promote --run {run_id}`, then retry",
+                          LEGACY_RULING)
+
+
 # A legacy home has no transaction, so a crash between its record and journal writes can leave a Ruling
 # change its approval checks never see. A row ``legacy_refuses`` matches is refused before the record is
-# written; callers move the home to programme.db first. Every other row follows its record under the run
-# lock, so a crash leaves at worst a record change with no row.
+# written, and only after ``change`` ran every check, so a caller that moves the home on this refusal moves
+# it only for a change that would apply. Every other row follows its record under the run lock, so a crash
+# leaves at worst a record change with no row.
 def _legacy_write(home, run_id, change, compose, legacy_refuses, then) -> dict:
     seen = {"row": None}
 
@@ -252,9 +264,7 @@ def _legacy_write(home, run_id, change, compose, legacy_refuses, then) -> dict:
         result = change(record)
         seen["row"] = compose(result, record) if compose else None
         if seen["row"] is not None and legacy_refuses is not None and legacy_refuses(seen["row"]):
-            raise AuthorityError(f"programme {run_id} still keeps its old JSON files, which never take a "
-                                 f"{seen['row']['kind']} row; nothing was changed. Run `programme.py promote "
-                                 f"--run {run_id}`, then retry", "legacy_ruling")
+            raise legacy_refusal(run_id, seen["row"]["kind"])
         return result
 
     def after(result, _):

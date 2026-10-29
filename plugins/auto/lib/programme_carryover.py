@@ -232,8 +232,8 @@ def _missing(doc, entry) -> bool:
 
 # Refills the store from the rulings_carried rows: an entry is written only when it verifies as the store
 # entry would, and only when no entry for its Ruling under that key is as new, so a later carry is never
-# overwritten and a healed entry is never stored twice.
-def _refill(host, keys, journals, notices) -> None:
+# overwritten and a healed entry is never stored twice. Without ``write`` the refill stays in the returned doc.
+def _refill(host, keys, journals, notices, write=True) -> dict:
     def lookup(run, prompt):
         return host.prompt_lookup(run, prompt, journals)
 
@@ -246,16 +246,18 @@ def _refill(host, keys, journals, notices) -> None:
     due = [e for row in _carried_rows(journals, notices) for e in (row.get("payload") or {}).get("adopted") or []
            if isinstance(e, dict) and e.get("key") in keys and _missing(doc, e)
            and _verified(e, e["key"], lookup) is None]
-    if due:
+    if due and write:
         _write(update)
+        return read_store()
+    update(doc)
+    return doc
 
 
 # Never raises on store content: a bad store must not block set-remit.
-def prefill(host, programme) -> tuple:
+def prefill(host, programme, write=True) -> tuple:
     added, notices, journals = [], [], {}
     try:
-        _refill(host, repo_keys(programme), journals, notices)
-        doc = read_store()
+        doc = _refill(host, repo_keys(programme), journals, notices, write)
         ctx = pc._mutable(programme)
     except (OSError, ValueError, pc.ContextError) as exc:
         return [], [programme_sanitize.clean(f"carry-over store unreadable, nothing carried over: {exc}", cap=0)]
@@ -323,8 +325,7 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
 # is also each stored entry's approval and holds the entries it adopted: the store is a cache of those rows,
 # which pre-fill refills, so a carry cut off after its row still arrives and a refused carry stores nothing.
 def _carry(host, opts, ids):
-    run_id, home, _ = host._locate(opts)
-    host.upgrade_legacy(run_id, home, "carry-rulings")
+    run_id, home, _ = host._locate(opts, finish_move=True)
     sid = driver_session.driving_session_id()
     seen = {}
 
@@ -346,10 +347,10 @@ def _carry(host, opts, ids):
                                                                     adopted=seen["adopted"]),
                                        cites=[seen["prompt"]["prompt_id"]])
 
-    out = host.programme_authority.write(home, run_id, mutate, compose, operation_id=host._OPERATION["id"],
-                                         recheck=host.programme_rulings.recheck_approval,
-                                         legacy_refuses=host.programme_rulings.changes_ruling,
-                                         then=lambda _: _put(seen["adopted"]))
+    out = host.promoting(run_id, home, "carry-rulings", lambda: host.programme_authority.write(
+        home, run_id, mutate, compose, operation_id=host._OPERATION["id"],
+        recheck=host.programme_rulings.recheck_approval, legacy_refuses=host.programme_rulings.changes_ruling,
+        then=lambda _: _put(seen["adopted"])))
     if out["replayed"]:
         payload = {k: v for k, v in ((out["row"] or {}).get("payload") or {}).items() if k != "adopted"}
         host._emit(dict(payload, ok=True, run=run_id, kind="rulings_carried", replayed=True, revision=out["revision"]))
@@ -378,8 +379,9 @@ _SPECS = (
      "(or an offer that did not record it), an id that is not an active Ruling, a remit with no repo, an "
      "archived programme; it also runs "
      "after end. Stores each Ruling under every remit repo's key for the next programme on that project. With ids, "
-     "on a home still on its old JSON files it first moves the home to programme.db, and refuses, changing "
-     "nothing, when that move cannot run; a prompt typed before the move approves nothing."),
+     "on a home still on its old JSON files, once every check above passes it moves the home to programme.db and "
+     "runs the carry there, checks and all, and refuses, changing nothing, when that move cannot run; a prompt "
+     "typed before the move approves nothing."),
 )
 
 

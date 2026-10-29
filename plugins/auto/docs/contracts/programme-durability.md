@@ -209,9 +209,15 @@ A programme made before this version keeps its JSON files until
 Imported prompts carry `provenance: legacy_import` and approve nothing new.
 
 A Ruling change runs this import itself: `record-ruling`, `close-ruling`,
-`accept-context` on a Ruling, `carry-rulings` with ids, and `set-remit` before
-the agreement is accepted promote a JSON home first, and refuse with the
-import's reason, changing nothing, when it declines or fails. The JSON files
+`accept-context` on a Ruling, `carry-rulings` with ids, and a `set-remit` that
+carries a Ruling in run every check on the JSON home, then promote it and run
+again in programme.db, and refuse with the import's reason, changing nothing,
+when it declines or fails. A verb its own checks refuse never promotes. Any
+write verb on a home whose import was cut off (its marker left behind) reruns
+the import, which finishes or discards it, before it reads the home. Adoptions
+approved on the JSON home stay verified after the move; imported prompts still
+approve nothing new. A prompt the UserPromptSubmit hook cannot journal because
+a move holds the home is reported in its context, never dropped silently. The JSON files
 never take a Ruling change. A prompt typed before the move approves nothing, so
 the first Ruling approval after it needs a newly typed prompt. Promoting a
 programme before Shawn types an approval avoids that extra prompt.
