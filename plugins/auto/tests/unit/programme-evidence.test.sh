@@ -527,6 +527,78 @@ prog check-deliverable linear:AI-753 merged
 has "\"retained_results\": [\"${DIG}\"]" "$(journal_last evidence_checked)"
 check "1" "$(grep -c '^gh pr view' "$CALLS")"
 
+PEEK="${WORK}/peek-main"
+mkdir -p "${PEEK}/.git" "${PEEK}/.peek/tasks" "${WORK}/peek-wt/.peek/tasks"
+printf 'gitdir: %s/.git/worktrees/wt\n' "$PEEK" > "${WORK}/peek-wt/.git"
+printf -- '---\nname: "Collections"\nid: vw5drr40\nstatus: todo\ncreator: "shawn"\n---\nbody\n' > "${PEEK}/.peek/tasks/collections-vw5drr40.md"
+printf -- '---\nname: "Only in a worktree"\nid: wt000001\nstatus: todo\ncreator: "shawn"\n---\n' > "${WORK}/peek-wt/.peek/tasks/only-wt000001.md"
+printf -- '---\nname: "Renamed"\nid: zz999999\nstatus: todo\ncreator: "shawn"\n---\n' > "${PEEK}/.peek/tasks/collections-vw5drr41.md"
+peek_check() {
+  PEEK_PATHS="${2:-${PEEK}:${PEEK_WT}}" run_py "$1" <<'EOF2'
+pe = load_lib_module("programme_evidence")
+repos = [{"path": p, "github": None} for p in os.environ["PEEK_PATHS"].split(":")]
+v = pe.run_check("r", "herdr:w2-p4", "recorded", args[0], {"remit_repos": repos})
+print(json.dumps({"result": v["result"], "misses": v["misses"], "fields": v["fields"]}, sort_keys=True))
+EOF2
+}
+export PEEK PEEK_WT="${WORK}/peek-wt"
+
+it "recorded: a peek task id found in a remit clone is confirmed whatever its status"
+check '"confirmed"' "$(peek_check vw5drr40 | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["result"]))')"
+
+it "recorded: the peek task read is stored, read by the file"
+has '"read_by": "peek-file"' "$(peek_check vw5drr40)"
+
+it "recorded: a peek id with no task file is refuted, not unknown"
+has '"result": "refuted"' "$(peek_check abcd1234)"
+has "no peek task abcd1234" "$(peek_check abcd1234)"
+
+it "recorded: a task file named for the id whose id prop differs is refuted"
+has '"result": "refuted"' "$(peek_check vw5drr41)"
+
+it "recorded: a task found only in a worktree path is refuted"
+has '"result": "refuted"' "$(peek_check wt000001)"
+
+it "recorded: a ref that is neither a Linear key nor a peek id is refuted"
+has '"result": "refuted"' "$(peek_check not-a-ref)"
+has "peek task id" "$(peek_check not-a-ref)"
+
+OUTSIDE="${WORK}/outside"
+mkdir -p "$OUTSIDE" "${WORK}/peek-link/.git" "${WORK}/peek-link/.peek"
+printf -- '---\nname: "Planted"\nid: sy000001\nstatus: todo\n---\n' > "${OUTSIDE}/planted.md"
+ln -s "${OUTSIDE}/planted.md" "${PEEK}/.peek/tasks/planted-sy000001.md"
+mkdir -p "${OUTSIDE}/tasks"
+printf -- '---\nname: "Via dir"\nid: sy000002\nstatus: todo\n---\n' > "${OUTSIDE}/tasks/via-sy000002.md"
+ln -s "${OUTSIDE}/tasks" "${WORK}/peek-link/.peek/tasks"
+mkfifo "${PEEK}/.peek/tasks/pipe-sy000003.md"
+
+it "recorded: a task file that is a symlink out of the tasks folder is refuted"
+has '"result": "refuted"' "$(peek_check sy000001 "$PEEK")"
+
+it "recorded: a tasks folder that is a symlink is refuted"
+has '"result": "refuted"' "$(peek_check sy000002 "${WORK}/peek-link")"
+
+it "recorded: a named pipe in place of a task file is refuted without blocking"
+has '"result": "refuted"' "$(peek_check sy000003 "$PEEK" 2>&1 | head -1)"
+
+for hostile in '../outside/planted' '../../etc/passwd' 'vw5drr40/../x' '*' 'vw5drr4*' 'VW5DRR40' 'vw5drr40.md'; do
+  it "recorded: hostile ref [${hostile}] is refuted"
+  has '"result": "refuted"' "$(peek_check "$hostile")"
+done
+
+it "recorded: a Linear key still takes the Linear path"
+has '"result": "unknown"' "$(peek_check AI-9)"
+
+it "recorded: a refuted wrong-shaped ref queues no retry watcher"
+edit "prog['remit'] = dict(prog.get('remit') or {}, repos=[{'path': '${PEEK}', 'github': None}])"
+prog check-deliverable herdr:w2-p4 recorded --ref not-a-ref
+prog check-deliverable herdr:w2-p4 recorded --ref not-a-ref
+prog check-deliverable herdr:w2-p4 recorded --ref not-a-ref
+J="$(journal_last evidence_checked)"
+has '"result": "refuted"' "$J"
+lacks "waiting_on" "$J"
+check "0" "$(field "len([q for q in prog['working_model'].get('queue', []) if q.get('action') == 'arm_retry_watcher'])")"
+
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 

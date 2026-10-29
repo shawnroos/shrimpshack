@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SWEEP="${AUTO_ROOT}/skills/programme-sweep/SKILL.md"
 BEHAVIOURS="${AUTO_ROOT}/skills/programme-sweep/references/behaviours.md"
+RULINGS="${AUTO_ROOT}/skills/programme-sweep/references/rulings.md"
 PACKER="${AUTO_ROOT}/agents/programme-sweep-packager.md"
 # SKILL.md is loaded into the PM's context on every activation, so its size is part of the cost. The cap is main's copy.
 SIZE_ON_MAIN=39630
@@ -71,7 +72,14 @@ it "the behaviours rules moved out of the always-loaded skill and still exist"
 lacks "Draft the checks from his words" "$S"
 has "references/behaviours.md" "$S"
 has "Draft the checks from his words" "$B"
-has "Once per programme, offer to move tool preferences" "$B"
+has "Once per programme, offer to move preferred tools" "$B"
+it "the Ruling prompt rules live in references/rulings.md, and the skill points to it"
+if [ -f "$RULINGS" ]; then pass; else fail "missing ${RULINGS}"; fi
+has "[references/rulings.md](references/rulings.md)" "$S"
+it "rulings.md keeps the rule that a prompt approving a Ruling change is fresh and used once"
+R="$(tr -s ' \n' ' ' < "$RULINGS" 2>/dev/null)"
+has "must also be typed after the proposal and used once" "$R"
+has "never one that already approved another Ruling change" "$R"
 it "the always-loaded skill is no larger than main's copy"
 SIZE="$(wc -c < "$SWEEP" | tr -d ' ')"
 if [ "$SIZE" -le "$SIZE_ON_MAIN" ]; then pass; else fail "SKILL.md is ${SIZE} bytes, above ${SIZE_ON_MAIN}"; fi

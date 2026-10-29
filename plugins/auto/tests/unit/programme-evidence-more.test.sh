@@ -422,21 +422,81 @@ has "keychain" "$(last_note linear:AI-2 released)"
 
 it "released: a closed waiver does not count"
 edit 'items["linear:AI-2"]["deliverables"]["released"] = {"result": "unknown"}'
-edit 'prog["instructions"].append({"id": "iaaaaaa", "state": "withdrawn", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p1", "quote": "waive the eval for AI-2", "closed": None})'
+edit 'prog.setdefault("instructions", []).append({"id": "iaaaaaa", "state": "withdrawn", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p1", "quote": "waive the eval for AI-2", "closed": None})'
 prog check-deliverable linear:AI-2 released --repo "$REPO"
 check '"refuted"' "$(result_of linear:AI-2 released)"
 
 it "released: an active waiver for another item does not count"
-edit 'prog["instructions"].append({"id": "ibbbbbb", "state": "active", "at": ago(60), "applies_to": "linear:AI-1", "until": None, "why": None, "prompt_id": "p2", "quote": "waive the eval", "closed": None})'
+edit 'prog.setdefault("instructions", []).append({"id": "ibbbbbb", "state": "active", "at": ago(60), "applies_to": "linear:AI-1", "until": None, "why": None, "prompt_id": "p2", "quote": "waive the eval", "closed": None})'
 prog check-deliverable linear:AI-2 released --repo "$REPO"
 check '"refuted"' "$(result_of linear:AI-2 released)"
 
 it "released: a match with an active waiver instruction naming the item is confirmed"
-edit 'prog["instructions"].append({"id": "icccccc", "state": "active", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p3", "quote": "ship it, waive the eval for this one", "closed": None})'
+edit 'prog.setdefault("instructions", []).append({"id": "icccccc", "state": "active", "at": ago(60), "applies_to": "linear:AI-2", "until": None, "why": None, "prompt_id": "p3", "quote": "ship it, waive the eval for this one", "closed": None})'
 : > "$CALLS"
 prog check-deliverable linear:AI-2 released --repo "$REPO"
 check '"confirmed"' "$(result_of linear:AI-2 released)"
 check '"icccccc"' "$(field "items['linear:AI-2']['deliverables']['released']['fields']['waiver']")"
+
+it "released: close-ruling on the legacy waiver closes it and the waiver stops counting"
+P_CLOSE="$(typed_prompt "withdraw icccccc, the eval runs after all")"
+prog close-ruling icccccc --as withdrawn --prompt "$P_CLOSE"
+CLOSE_CODE="$CODE"
+edit 'items["linear:AI-2"]["deliverables"]["released"] = {"result": "unknown"}'
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '0 "refuted"' "$CLOSE_CODE $(result_of linear:AI-2 released)"
+
+ruling() {
+  edit "prog.setdefault('context', {}).setdefault('decisions', {})['$1'] = [{'rev': 1, 'state': 'accepted', 'at': ago(60), 'kind': '$2', 'effect': '$3', 'applies_to': $4, 'until': $5, 'scope': '$6', 'reason': None, 'quote': '$6', 'limits': [], 'requirements': []}]; items['linear:AI-2']['deliverables']['released'] = {'result': 'unknown'}"
+}
+drop_ruling() { edit "del prog['context']['decisions']['$1']"; }
+
+it "released: a decided eval_waiver Ruling naming the item is a waiver, whatever its text says"
+ruling r-skip-eval eval_waiver decided '["linear:AI-2"]' None "ship AI-2 as is"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '"confirmed" "r-skip-eval"' "$(result_of linear:AI-2 released) $(field "items['linear:AI-2']['deliverables']['released']['fields']['waiver']")"
+drop_ruling r-skip-eval
+
+it "released: a grant eval_waiver Ruling on the item is not a waiver"
+ruling r-grant-eval eval_waiver grant '["linear:AI-2"]' None "waive the eval for AI-2"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '"refuted"' "$(result_of linear:AI-2 released)"
+drop_ruling r-grant-eval
+
+it "released: a restrict eval_waiver Ruling on the item is not a waiver"
+ruling r-hold-eval eval_waiver restrict '["linear:AI-2"]' None "waive the eval for AI-2"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '"refuted"' "$(result_of linear:AI-2 released)"
+drop_ruling r-hold-eval
+
+it "released: a decided Ruling of another kind is not a waiver even when its text says waive"
+ruling r-call product_call decided '["linear:AI-2"]' None "waive the eval for AI-2"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '"refuted"' "$(result_of linear:AI-2 released)"
+drop_ruling r-call
+
+it "released: a programme-wide eval_waiver Ruling does not name the item, so it is not a waiver"
+ruling r-all-eval eval_waiver decided '["programme"]' None "skip evals"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '"refuted"' "$(result_of linear:AI-2 released)"
+drop_ruling r-all-eval
+
+it "released: an expired eval_waiver Ruling is not a waiver"
+ruling r-old-eval eval_waiver decided '["linear:AI-2"]' "ago(30)" "ship AI-2 as is"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '"refuted"' "$(result_of linear:AI-2 released)"
+drop_ruling r-old-eval
+
+it "released: a closed eval_waiver Ruling is not a waiver"
+ruling r-shut-eval eval_waiver decided '["linear:AI-2"]' None "ship AI-2 as is"
+edit "prog['context']['decisions']['r-shut-eval'][0]['state'] = 'closed'"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
+check '"refuted"' "$(result_of linear:AI-2 released)"
+drop_ruling r-shut-eval
+
+ruling r-keep-eval eval_waiver decided '["linear:AI-2"]' None "ship AI-2 as is"
+: > "$CALLS"
+prog check-deliverable linear:AI-2 released --repo "$REPO"
 
 it "released: with no reference the tested package and version are the reference"
 check '"@slateteams/scene-detect@0.2.0-ai-376.0"' "$(field "items['linear:AI-2']['deliverables']['released']['ref']")"

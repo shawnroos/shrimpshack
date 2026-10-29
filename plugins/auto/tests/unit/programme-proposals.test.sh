@@ -191,10 +191,14 @@ EOF
 it "the rules block does not mention the proposal"
 lacks "1800" "$("$PY" "$PROG" rules --run "$RUN" 2>&1)"
 
-it "propose-term autonomy other is refused: the value is not an option"
-prog propose-term autonomy other
+it "propose-term autonomy is refused: the agreement has no autonomy term"
+prog propose-term autonomy protocol
 check 1 "$CODE"
-check 'false' "$(field "\"proposal\" in ${T}[\"autonomy\"]")"
+check 'false' "$(field "\"autonomy\" in ${T}")"
+it "propose-term remit other is refused: the value is not an option"
+prog propose-term remit other
+check 1 "$CODE"
+check 'false' "$(field "\"proposal\" in ${T}[\"remit\"] and ${T}[\"remit\"][\"proposal\"][\"value\"] == \"other\"")"
 it "propose-term on an unknown term is refused"
 prog propose-term nonsense x
 check 1 "$CODE"
@@ -326,24 +330,23 @@ prog propose-term stop_rule only_when_done
 check 0 "$CODE"
 prog clear-proposal stop_rule
 check 0 "$CODE"
-it "close-instruction --as fulfilled is refused while the compact flag is set"
+it "close-ruling --as fulfilled is refused while the compact flag is set"
 rm -f "${HOME_DIR}/.compact-flag"
-P_INSTR="$(prompt typed 'always run the auto suite first')"
-prog record-instruction --prompt "$P_INSTR"
-INSTR="$(field 'prog["instructions"][-1]["id"]' | tr -d '"')"
+P_RULING="$(prompt typed 'r-suite: run the auto suite first, tool choice across the programme is your call')"
+prog record-ruling r-suite --kind tool_choice --effect grant --scope "run the auto suite first" --prompt "$P_RULING"
 touch "${HOME_DIR}/.compact-flag"
-prog close-instruction "$INSTR" --as fulfilled --why "done"
+prog close-ruling r-suite --as fulfilled --why "done"
 check 1 "$CODE"
 has "compacted" "$OUT"
-check '"active"' "$(field 'prog["instructions"][-1]["state"]')"
+check '"accepted"' "$(field 'prog["context"]["decisions"]["r-suite"][-1]["state"]')"
 rm -f "${HOME_DIR}/.compact-flag"
-it "close-instruction --as fulfilled does not move loop.last_beat_at and records its origin"
+it "close-ruling --as fulfilled does not move loop.last_beat_at and records its origin"
 edit 'rec.setdefault("loop", {})["last_beat_at"] = "2026-01-01T00:00:00Z"'
-prog close-instruction "$INSTR" --as fulfilled --why "done" --origin ui
+prog close-ruling r-suite --as fulfilled --why "done" --origin ui
 check 0 "$CODE"
 check '"2026-01-01T00:00:00Z"' "$(raw_field 'rec["loop"]["last_beat_at"]')"
 check '"ui"' "$(run_py "$RUN" <<'PY'
-print(json.dumps([r for r in pj.read(args[0]) if r["kind"] == "instruction_closed"][-1]["payload"].get("origin")))
+print(json.dumps([r for r in pj.read(args[0]) if r["kind"] == "ruling_closed"][-1]["payload"].get("origin")))
 PY
 )"
 

@@ -687,6 +687,111 @@ prog prompt-item herdr:w2/p31 "carry on" --decision no-such-record
 it "a decision id in neither the log nor the decision records refuses"
 check 1 "$CODE"
 has "no accepted decision record" "$OUT"
+
+run_py "$RUN" <<'EOF' >/dev/null
+def ruling(effect, kind, applies_to, scope, state="accepted", legacy=None):
+    return [{"rev": 1, "state": state, "kind": kind, "effect": effect, "legacy": legacy, "applies_to": applies_to,
+             "until": None, "scope": scope, "reason": "Shawn said so", "quote": scope, "limits": [], "requirements": []}]
+def body(rec):
+    decisions = rec["programme"]["context"]["decisions"]
+    decisions["r-grant"] = ruling("grant", "dependency_bump", ["linear:AI-792"], "bump minor deps freely")
+    decisions["r-hold"] = ruling("restrict", "merge_around_gate", ["linear:AI-792"], "never merge around CI")
+    decisions["r-call"] = ruling("decided", "product_call", ["programme"], "PNG export only")
+    decisions["r-other"] = ruling("grant", "dependency_bump", ["linear:AI-790"], "another item's grant")
+    decisions["r-shut"] = ruling("restrict", "prod_deploy", ["linear:AI-792"], "closed hold", state="closed")
+    decisions["i0legacy"] = ruling("decided", None, ["linear:AI-792"], "keep PRs small", legacy="instruction")
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+prog add-item linear:AI-792 --title "Rulings brief"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision "$DEC" -- --name rulings --handoff "$BRIEF"
+it "start-worker's brief lists the item's grant, restrict and decided Rulings beside the decision-log row"
+check 0 "$CODE"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+has "Settled decisions this work carries:" "$COPY"
+has "Export stays PNG only this release" "$COPY"
+has "- ruling:r-grant (dependency_bump, grant): bump minor deps freely; reason: Shawn said so" "$COPY"
+has "- ruling:r-hold (merge_around_gate, restrict): never merge around CI" "$COPY"
+has "- ruling:r-call (product_call, decided): PNG export only" "$COPY"
+has "- ruling:i0legacy (legacy instruction, decided): keep PRs small" "$COPY"
+it "the brief leaves out another item's Ruling and a closed one"
+lacks "another item's grant" "$COPY"
+lacks "closed hold" "$COPY"
+
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision r-hold -- --name rulings2 --handoff "$BRIEF"
+it "a Ruling passed with --decision reads as a Ruling, once"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+check "0 1" "$CODE $(printf '%s\n' "$COPY" | grep -c 'ruling:r-hold')"
+lacks "(decision record)" "$COPY"
+
+run_py "$RUN" <<'EOF' >/dev/null
+def body(rec):
+    decisions = rec["programme"]["context"]["decisions"]
+    for rid in [r for r in decisions if r.startswith("r-") or r == "i0legacy"]:
+        del decisions[rid]
+    decisions["r-narrow"] = [{"rev": 1, "state": "accepted", "kind": "tool_choice", "effect": "grant", "legacy": None,
+                              "applies_to": ["linear:AI-792"], "until": None, "scope": "PM picks tools",
+                              "reason": "Shawn said so", "quote": "tools are yours", "limits": [], "requirements": [],
+                              "baseline": "act"}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+mkdir -p "$(dirname "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+printf '{"autonomy": {"tool_choice": {"level": "propose"}}}' > "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 -- --name narrowed --handoff "$BRIEF"
+it "a grant whose kind Authority now holds narrower than its baseline reaches the brief as conflicted, not settled"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+check 0 "$CODE"
+has "ruling:r-narrow" "$COPY"
+has "conflicted: wait for Shawn" "$COPY"
+lacks "Settled decisions this work carries:" "$COPY"
+lacks "stop and state that evidence" "$COPY"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision r-narrow -- --name narrowed2 --handoff "$BRIEF"
+it "the same grant cited with --decision is conflicted too"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+check "0 1" "$CODE $(printf '%s\n' "$COPY" | grep -c 'ruling:r-narrow')"
+has "conflicted: wait for Shawn" "$COPY"
+lacks "stop and state that evidence" "$COPY"
+
+run_py "$RUN" <<'EOF' >/dev/null
+def body(rec):
+    decisions = rec["programme"]["context"]["decisions"]
+    decisions["r-keep"] = [{"rev": 1, "state": "accepted", "kind": "merge_around_gate", "effect": "restrict",
+                            "legacy": None, "applies_to": ["linear:AI-792"], "until": None, "scope": "never merge around CI",
+                            "reason": "Shawn said so", "quote": "never merge around CI", "limits": [], "requirements": []}]
+    decisions["r-gone"] = [{"rev": 1, "state": "accepted", "kind": "dependency_bump", "effect": "grant", "legacy": None,
+                            "applies_to": ["linear:AI-792"], "until": "2000-01-01T00:00:00Z", "scope": "bump deps until 2000",
+                            "reason": "Shawn said so", "quote": "bump deps", "limits": [], "requirements": [],
+                            "baseline": "act"}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 -- --name mixed --handoff "$BRIEF"
+it "a brief with one settled and one conflicted Ruling lists each under its own heading"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+SETTLED="$(printf '%s\n' "$COPY" | sed -n '/^Settled decisions this work carries:/,/^Rulings Authority now holds narrower/p')"
+CONFLICTED="$(printf '%s\n' "$COPY" | sed -n '/^Rulings Authority now holds narrower/,$p')"
+check "0 1 0 0 1" "$CODE $(printf '%s\n' "$SETTLED" | grep -c 'ruling:r-keep') $(printf '%s\n' "$SETTLED" | grep -c 'ruling:r-narrow') $(printf '%s\n' "$CONFLICTED" | grep -c 'ruling:r-keep') $(printf '%s\n' "$CONFLICTED" | grep -c 'ruling:r-narrow')"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-792 --decision r-gone -- --name expired --handoff "$BRIEF"
+it "start-worker refuses a --decision naming a Ruling past its end date, so it never reaches the brief as settled"
+check "nonzero " "$([ "$CODE" -ne 0 ] && echo nonzero) $(grep -c '^spinoff ' "$CALLS" | sed 's/^0$//')"
+has "r-gone" "$OUT"
+run_py "$RUN" <<'EOF' >/dev/null
+def body(rec):
+    for rid in ("r-keep", "r-gone"):
+        del rec["programme"]["context"]["decisions"][rid]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], body)
+EOF
+rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+
+prog add-item linear:AI-793 --title "No handoff"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-793 -- --name plain --target tab
+it "start-worker with no handoff still starts when programme-wide Rulings exist"
+check 0 "$CODE"
 write_snapshot base
 
 seed_behaviours() {

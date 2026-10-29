@@ -67,9 +67,8 @@ check("a term left at the plugin default recommends it with that source",
       step(p, "cadence"))
 check("each term step carries its group", all(step(p, k)["group"] == k for k in terms), [s["group"] for s in p["steps"]])
 check("per-programme term steps need no typed reply", all(not step(p, k)["needs_typed"] and step(p, k)["reply"] is None
-      for k in terms if k != "autonomy"))
-check("autonomy defers to the shared protocol, so changing it needs a typed reply", step(p, "autonomy")["needs_typed"],
-      step(p, "autonomy"))
+      for k in terms))
+check("the walkthrough has no autonomy step", "autonomy" not in keys(p), keys(p))
 check("the accept is offered as a pick of its terms-bound label",
       not step(p, "accept")["needs_typed"] and step(p, "accept")["reply"] is None
       and step(p, "accept")["label"] == "Approve accept-agreement --terms " + step(p, "accept")["terms_digest"]
@@ -87,10 +86,10 @@ check("a proposed term recommends its value from the PM", step(p, "stop_rule")["
 b = fresh()
 b["agreement"]["terms"]["remit"]["set_by"] = "carried_over"
 b["agreement"]["terms"]["stop_rule"]["set_by"] = "shawn"
-b["setup"] = {"kept": ["autonomy"]}
+b["setup"] = {"kept": ["cadence"]}
 p = setup.build(b)
 check("a carried-over term and a kept term count as done",
-      states(p)["remit"] == "done" and states(p)["autonomy"] == "done" and p["current"] == "cadence", states(p))
+      states(p)["remit"] == "done" and states(p)["cadence"] == "done" and p["current"] == "tools_of_record", states(p))
 
 b = fresh()
 b["agreement"]["terms"]["handover"] = {"key": "handover", "options": ["slack", "linear"], "value": "slack",
@@ -128,6 +127,8 @@ b["agreement"]["project_terms"] = [{"id": "t1", "area": "deploys", "value": "ask
 p = setup.build(b)
 check("a proposed ruling needs a typed reply", step(p, "rulings")["needs_typed"]
       and isinstance(step(p, "rulings")["reply"], str) and step(p, "rulings")["state"] != "done", step(p, "rulings"))
+check("the rulings step names no reserved area: an old reserved flag reads as a legacy Ruling, not a step value",
+      step(p, "rulings")["label"] == "rulings" and "reserved" not in step(p, "rulings")["values"], step(p, "rulings"))
 b["setup"] = {"kept": ["rulings", "shared"]}
 p = setup.build(b)
 check("a typed-reply step listed in kept is done with no reply",

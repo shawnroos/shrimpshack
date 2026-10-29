@@ -229,9 +229,6 @@ def _rewrite_refs(programme, old_ids, new_id) -> None:
     for rule in (programme.get("proposed_rules") or []) + (programme.get("permission_proposals") or []):
         if isinstance(rule, dict) and isinstance(rule.get("items"), list):
             rule["items"] = list(dict.fromkeys(new_id if i in olds else i for i in rule["items"]))
-    for entry in programme.get("instructions") or []:
-        if isinstance(entry, dict) and entry.get("applies_to") in olds:
-            entry["applies_to"] = new_id
 
 
 def _unique(rows) -> list:

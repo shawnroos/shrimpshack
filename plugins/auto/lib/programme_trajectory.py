@@ -36,10 +36,11 @@ class SkipEntry(Exception):
     pass
 
 
-def allowed_clauses(rules) -> set:
+def allowed_clauses(rules, rulings) -> set:
     allowed = {f"term:{key}" for key in (rules["agreement"].get("terms") or {})}
     allowed.update(f"rule:{rule['id']}" for rule in rules["rules"])
-    allowed.update(f"instruction:{entry['id']}" for entry in rules["instructions"] if entry.get("id"))
+    allowed.update(f"ruling:{r['id']}" for r in rulings)
+    allowed.update(f"instruction:{r['id']}" for r in rulings if r["legacy"] == "instruction")
     return allowed
 
 
@@ -148,7 +149,8 @@ def _h_record_trajectories(host, argv):
         return 0
 
     def change(programme, prompt, rec):
-        allowed = allowed_clauses(host.rules_in_force(rec, behaviours=False))
+        allowed = allowed_clauses(host.rules_in_force(rec, changes=False, behaviours=False),
+                                  host.active_rulings(programme, run_record_core.now_iso()))
         at = run_record_core.now_iso()
         stored, changes, skipped = [], [], []
         for entry in rows:
@@ -179,7 +181,7 @@ def _h_record_trajectories(host, argv):
 _SPECS = (
     ("record-trajectories", _h_record_trajectories,
      "[--run <id>] < JSON list of {item, done: [step], current: step|null, planned: [step], finish, "
-     "location?: {tab, pane}} where step is {title, clause: term:<key>|rule:<id>|instruction:<id>|null}",
+     "location?: {tab, pane}} where step is {title, clause: term:<key>|rule:<id>|ruling:<id>|null}",
      "input that is not a JSON list or is over 1 MB. An entry for an unknown, done, handed or dropped "
      "item, or with a step that has no title, is skipped with a reason; the rest are stored. An unknown "
      "clause is stored as null with an unknown_clause note. Only a changed path under the same driving "

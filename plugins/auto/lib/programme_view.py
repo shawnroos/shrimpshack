@@ -26,6 +26,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_tasks = load_lib_module("programme_tasks")
 programme_terms = load_lib_module("programme_terms")
 programme_view_work = load_lib_module("programme_view_work")
+programme_view_agreement = load_lib_module("programme_view_agreement")
 programme_view_setup = load_lib_module("programme_view_setup")
 programme_focus = load_lib_module("programme_focus")
 session_registry = load_lib_module("session_registry")
@@ -37,11 +38,11 @@ JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
 HOOK_KINDS = ("blocked_settings_write",)
-TERM_CHANGES_LIMIT = 20
-TERM_CHANGE_KINDS = (programme_terms.EDITED, programme_terms.AMENDED,
-                     programme_terms.CORRECTED, programme_terms.UNDONE)
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
+
+_section = programme_view_work._section
+_row = programme_view_work._row
 
 
 def _dict(value) -> dict:
@@ -341,62 +342,8 @@ def _rules(block, rules) -> dict:
     return {"agreement": {"accepted": _dict(block.get("agreement")).get("accepted"),
                           "terms": {k: {"value": _dict(t).get("value"), "set_by": _dict(t).get("set_by")}
                                     for k, t in sorted(terms.items())}},
-            "rules": [], "autonomy": [], "rejected_rules": [], "instructions": [],
+            "rules": [], "autonomy": [], "rejected_rules": [], "rulings": [],
             "permission_proposals": []}
-
-
-def _change_text(kind, p) -> tuple:
-    if kind == programme_terms.CORRECTED:
-        return p.get("correction"), f"{p.get('kind')} now decided by {p.get('to')} (was {programme_terms.owner_text(p.get('previous'))})"
-    if kind == programme_terms.UNDONE:
-        return p.get("correction"), f"{p.get('kind')} back to {programme_terms.owner_text(p.get('restored'))}"
-    was = f"{p['previous']} -> " if p.get("previous") else ""
-    return p.get("term_id"), f"{p.get('area')}: {was}{p.get('value')}"
-
-
-def _term_changes(journal_entries) -> list:
-    out = []
-    for row in journal_entries:
-        if not isinstance(row, dict) or row.get("kind") not in TERM_CHANGE_KINDS:
-            continue
-        payload = _dict(row.get("payload"))
-        term, text = _change_text(row["kind"], payload)
-        prompt_id = payload.get("prompt_id")
-        source = payload.get("source") or (f"typed prompt {prompt_id}" if prompt_id else "the PM")
-        quote = programme_journal.redact(payload["quote"]) if payload.get("quote") else None
-        out.append({"at": row.get("at"), "kind": row["kind"], "term": term, "text": text, "source": source,
-                    "prompt_id": prompt_id, "quote": quote})
-    return out[::-1]
-
-
-def _terms(block, journal_entries) -> dict:
-    entries = programme_home.project_terms(block)
-    corrections = programme_terms.active_corrections(block)
-    labels = {e.get("id"): f"{e.get('area')}: {e.get('value')}" for e in entries}
-    labels.update((c.get("id"), f"correction: {c.get('kind')} decided by {c.get('to')}"
-                   + (" (undone)" if c.get("undone") else "")) for c in programme_terms.corrections(block))
-    groups = {}
-    for entry in block.get("decisions") or []:
-        entry = _dict(entry)
-        term = None if entry.get("silent") else entry.get("term")
-        groups.setdefault(term, []).append({k: entry.get(k) for k in ("id", "at", "kind", "by", "item", "ask", "why")})
-    order = [t for t in labels if t in groups] + sorted(t for t in groups if t is not None and t not in labels)
-    by_term = [{"term": t, "label": labels.get(t, "not in the record"), "decisions": groups[t]} for t in order]
-    if None in groups:
-        by_term.append({"term": None, "label": "no term", "decisions": groups[None]})
-    changes = _term_changes(journal_entries)
-    return {
-        "contract_version": _dict(block.get("agreement")).get(programme_decisions.STAMP_KEY),
-        "project_terms": [{k: e.get(k) for k in ("id", "area", "value", "reserved", "source", "set_by")}
-                          for e in entries],
-        "corrections": [{"id": c.get("id"), "kind": c.get("kind"), "to": c.get("to"),
-                         "previous": c.get("previous"), "prompt_id": c.get("prompt_id"),
-                         "quote": programme_journal.redact(c.get("quote")), "pm_reading": c.get("pm_reading")}
-                        for c in corrections],
-        "by_term": by_term,
-        "changes": changes[:TERM_CHANGES_LIMIT],
-        "changes_total": len(changes),
-    }
 
 
 def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, protocol=None, focus=None) -> dict:
@@ -443,12 +390,12 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "just_did": _just_did(journal_entries or []),
         "rules_in_force": _rules(block, rules),
         "items": items,
-        "terms": _terms(block, journal_entries or []),
     }
-    model["terms"]["behaviours"] = model["rules_in_force"].get("behaviours") or []
+    model["agreement"] = programme_view_agreement.build(block, journal_entries, model["rules_in_force"], protocol, now)
+    model["agreement"]["behaviours"] = model["rules_in_force"].get("behaviours") or []
     model = _clean(model)
     parts = _clean(programme_view_work.build(record, block, journal_entries, now,
-                                             model["rules_in_force"].get("instructions"),
+                                             model["rules_in_force"].get("rulings"),
                                              model["rules_in_force"].get("behaviours")))
     view = {"view_format": VIEW_FORMAT, "run": model["programme"]["run"], "generated_at": _iso(now),
             "model": model, **parts, "asks": programme_asks.view_asks(block["items"])}
@@ -508,15 +455,6 @@ def _yes(flag) -> str:
     return "yes" if flag else "no"
 
 
-def _section(out, title, lines, empty) -> None:
-    out.append({"style": "head", "text": title})
-    out.extend(lines or [{"style": "dim", "text": f"  {empty}"}])
-
-
-def _row(text, style="text") -> dict:
-    return {"style": style, "text": text}
-
-
 def _header(p) -> dict:
     stop = f"may stop: {_yes(p['may_stop'])}"
     if p["reasons"]:
@@ -541,11 +479,12 @@ def _term_text(key, term) -> str:
     return f"{key}: {value}" + "".join(f", {e}" for e in extras)
 
 
-def _instruction_text(entry) -> str:
-    scope = f"applies to {entry.get('applies_to') or 'programme'}"
+def _ruling_text(entry) -> str:
+    shown = dict(entry, effect=entry.get("effect") or "decided", quote=entry.get("quote") or entry.get("scope"))
+    scope = f"applies to {', '.join(entry.get('applies_to') or []) or 'programme'}"
     if entry.get("until"):
         scope += f", until {entry['until']}"
-    return f"instruction {entry.get('id')}: \"{entry.get('quote')}\" ({scope})"
+    return f"ruling {entry.get('id')}: {programme_view_agreement.ruling_label(shown)} ({scope})"
 
 
 def _behaviour_row(entry, forced, overriders, deliveries) -> dict:
@@ -621,7 +560,7 @@ def behaviour_texts(r) -> list:
 
 
 def _rule_text(rule) -> str:
-    text = (f"rule {rule.get('id')}: {rule.get('autonomy')}, requires "
+    text = (f"rule {rule.get('id')}: requires "
             f"{', '.join(rule.get('requires') or []) or 'nothing'}{_adopted_on(rule)}")
     return text + (f"; caveat: {rule['caveat']}" if rule.get("caveat") else "")
 
@@ -636,7 +575,8 @@ def agreement_lines(block) -> list:
     agreement = _dict(block.get("agreement"))
     lines = [_term_text(key, _dict(term)) for key, term in sorted(_dict(agreement.get("terms")).items())
              if not programme_home.opt_in_hidden(key, _dict(term))]
-    lines += [_project_term_text(_dict(t)) for t in programme_home.project_terms(block)]
+    lines += [f"preferred tool {t.get('id')} {t.get('area')}: {t.get('value')} "
+              f"(source {t.get('source') or 'none recorded'})" for t in programme_home.project_terms(block)]
     return [programme_sanitize.clean(text, cap=0) for text in lines]
 
 
@@ -646,10 +586,10 @@ def rule_texts(r) -> list:
     out = [("agreement: " + (f"accepted {accepted.get('at')}" if accepted else "not accepted"), "text")]
     out += [(_term_text(key, _dict(term)), "text") for key, term in sorted(_dict(agreement.get("terms")).items())
             if not programme_home.opt_in_hidden(key, _dict(term))]
-    out += [(_instruction_text(_dict(e)), "text") for e in r.get("instructions") or []]
+    out += [(_ruling_text(_dict(e)), "text") for e in r.get("rulings") or []]
     out += behaviour_texts(r)
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
-    out += [(f"autonomy {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
+    out += [(f"authority {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
             for e in r.get("autonomy") or []]
     out += [(_permission_text(_dict(p)), "warn") for p in r.get("permission_proposals") or []]
     rejected = [str(_dict(rule).get("id")) for rule in r.get("rejected_rules") or []]
@@ -662,7 +602,10 @@ def rules_texts(r) -> list:
     out = rule_texts(r)
     if r.get("operating_contract"):
         out += [(text, "text") for text in programme_terms.contract_lines(r["operating_contract"])]
-    return out + [(text, "text") for text in programme_terms.correction_lines(r.get("corrections") or [])]
+    return out + [(programme_sanitize.clean(
+        f"legacy restrict {_dict(e).get('id')} {_dict(e).get('area')} has no decision kind: "
+        f"\"{_dict(e).get('scope')}\"; ask Shawn to record it again as a Ruling with a kind", cap=0), "warn")
+        for e in r.get("legacy_restricts") or []]
 
 
 def _blocker_text(waiting_on) -> str:
@@ -787,37 +730,13 @@ def render_text(view) -> str:
     return "\n".join(r["text"] for r in view["rows"])
 
 
-def _project_term_text(t) -> str:
-    notes = (["reserved for Shawn"] if t.get("reserved") else []) + [f"source {t.get('source') or 'none recorded'}"]
-    return f"  {t.get('id')} {t.get('area')}: {t.get('value')} ({'; '.join(notes)})"
-
-
-def _change_row(c) -> dict:
-    quote = f" · Shawn: \"{c['quote']}\"" if c.get("quote") else ""
-    return _row(f"  {c['at']} {c['kind']} {c['term']}: {c['text']} · source {c['source']}{quote}", "dim")
-
-
-def terms_rows(terms) -> list:
-    out = []
-    version = terms.get("contract_version")
-    _section(out, "Project terms" + (f" (operating contract v{version})" if version else ""),
-             [_row(_project_term_text(t)) for t in terms["project_terms"]]
-             + [_row(f"  {c['id']} {c['kind']} decided by {c['to']} (Shawn: \"{c['quote']}\"; "
-                     f"PM's reading: \"{c['pm_reading']}\")") for c in terms["corrections"]],
-             "no project terms")
-    _section(out, "Decisions by term",
-             [line for g in terms["by_term"] for line in
-              [_row(f"  {g['term'] + ' ' if g['term'] else ''}{g['label']}")]
-              + [_row(f"    {d['id']} {d['kind']} by {d['by']}" + (f" (ask {d['ask']})" if d.get("ask") else "")
-                      + f": {d['why']}", "dim") for d in g["decisions"]]],
-             "none recorded")
-    if terms.get("behaviours"):
-        _section(out, "Behaviours", [_row(f"  {_behaviour_text(_dict(b))}") for b in terms["behaviours"]], "none")
-    hidden = terms["changes_total"] - len(terms["changes"])
-    _section(out, "Recent term changes", [_change_row(c) for c in terms["changes"]]
-             + ([_row(f"  {hidden} older changes not shown", "dim")] if hidden else []), "none")
+def agreement_rows(model) -> list:
+    out = programme_view_agreement.rows(model["agreement"], remit_texts(model.get("remit")))
+    if model["agreement"].get("behaviours"):
+        _section(out, "Behaviours", [_row(f"  {_behaviour_text(_dict(b))}") for b in model["agreement"]["behaviours"]],
+                 "none")
     return out
 
 
-def render_terms(view) -> str:
-    return "\n".join(r["text"] for r in terms_rows(view["model"]["terms"]))
+def render_agreement(view) -> str:
+    return "\n".join(r["text"] for r in agreement_rows(view["model"]))

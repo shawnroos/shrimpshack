@@ -24,8 +24,6 @@ RULINGS, SHARED, ITEMS, ACCEPT = "rulings", "shared", "items", "accept"
 USING_EXISTING = "using existing"
 REPLIES = {RULINGS: "approve the proposed rulings", SHARED: "adopt the proposed shared rules"}
 SEEN_PARTS = ("tabs", "repos", "tracker")
-# Its only option defers to the personal protocol, which every programme shares (`adopt-autonomy`).
-SHARED_TERMS = ("autonomy",)
 
 
 _dict = programme_view_work._dict
@@ -59,7 +57,7 @@ def _term_step(key, term, kept) -> dict:
     done = term.get("set_by") not in UNSET_BY or key in kept or programme_home.is_opt_in(key)
     out = _step(key, guide.get("label") or key.replace("_", " "),
                 term.get("section") or guide.get("section") or key, done,
-                programme_view_work._value_text(term), recommendation, source, needs_typed=key in SHARED_TERMS)
+                programme_view_work._value_text(term), recommendation, source)
     out["options"] = [o["name"] for o in programme_view_work._options(programme_proposals.offered(term), guide)]
     return out
 
@@ -68,10 +66,9 @@ def _rulings_step(block, kept) -> dict:
     entries = programme_home.project_terms(block)
     proposed = [e for e in entries if e.get("set_by") == "proposal"]
     done = RULINGS in kept or (bool(entries) and not proposed)
-    values = "; ".join(f"{e.get('area')}: {e.get('value')}" + (" (reserved)" if e.get("reserved") else "")
-                       for e in entries) or "none"
+    values = "; ".join(f"{e.get('area')}: {e.get('value')}" for e in entries) or "none"
     source = next((e.get("source") for e in proposed if e.get("source")), "PM proposal") if proposed else None
-    return _step(RULINGS, "rulings and reserved areas", RULINGS, done, values,
+    return _step(RULINGS, "rulings", RULINGS, done, values,
                  f"{len(proposed)} proposed" if proposed else "none", source, needs_typed=True, pending=bool(proposed))
 
 

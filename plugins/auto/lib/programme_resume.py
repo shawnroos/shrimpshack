@@ -3,7 +3,7 @@
 
 SessionStart, the compact refusal, `rules`, takeover and handover all print the same
 block: the rules in force plus the recovery packet's decisions, requirements, binding
-pauses and denials, pending questions and holds. An acknowledgement binds to the
+pauses, denials and Rulings, pending questions and holds. An acknowledgement binds to the
 context digest the flag recorded; a newer decision context refuses it.
 """
 
@@ -23,6 +23,7 @@ run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_authority = load_lib_module("programme_authority")
 programme_recovery = load_lib_module("programme_recovery")
+programme_context = load_lib_module("programme_context")
 
 CONTEXT_TAG = "auto-context"
 DIGEST_KEYS = ("pending_decisions", "decisions", "requirements", "blockers", "binding", "assignments")
@@ -80,6 +81,13 @@ def _decision_line(d) -> str:
     return text
 
 
+def _ruling_line(r) -> str:
+    label = programme_context.ruling_kind_label(r)
+    applies = ", ".join(str(a) for a in r.get("applies_to") or []) or "programme"
+    until = f"; until {r['until']}" if r.get("until") else ""
+    return f"binding {r['id']} ({label}, {r.get('effect')}): {_q(r.get('scope'))}{_cut(r)}; applies to {applies}{until}"
+
+
 def _pending_line(p) -> str:
     if p.get("kind") == "context_pending":
         return f"pending: {p.get('id')} revision {p.get('rev')} waits for Shawn's acceptance"
@@ -106,6 +114,7 @@ def context_lines(body) -> list:
     for d in binding.get("denials") or []:
         out.append(f"binding {d['id']}: {d.get('tool')} refused {d.get('action')}"
                    + (f" for {d['item']}" if d.get("item") else "") + f": {_q(d.get('reason'))}{_cut(d)}")
+    out += [_ruling_line(r) for r in binding.get("rulings") or []]
     out += [_pending_line(p) for p in body.get("pending_decisions") or []]
     for item_id, binding_rev in sorted((body.get("assignments") or {}).items()):
         out.append(f"assignment {item_id}: decision {binding_rev.get('decision_id')} "

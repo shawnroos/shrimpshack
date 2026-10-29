@@ -35,8 +35,9 @@ take a worker's word for it.
 
 - **`/auto:programme`** starts a programme in the current space. It claims the
   space first, so only one programme runs there. It then shows the proposed
-  agreement (remit, stop rule, autonomy, cadence) and the rules it loaded. Nothing
-  else happens until you accept the agreement in a typed message.
+  agreement (Scope: remit, stop rule, cadence, sources and preferred tools; and
+  Rulings) and the standing Authority and Done standards it reads. Nothing else
+  happens until you accept the agreement in a typed message.
 - **`/programme-view`** opens a live pane in the PM session. It shows what the PM is
   doing now, its queue, what it watches, who waits on whom, the decisions waiting on
   you, what it just did, and the rules in force.

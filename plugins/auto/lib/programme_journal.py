@@ -62,10 +62,6 @@ KINDS = (
     "proposal_cleared",
     "project_term_edited",
     "project_term_amended",
-    "term_corrected",
-    "correction_undone",
-    "corrections_kept",
-    "correction_promoted",
     "instruction_recorded",
     "instruction_closed",
     "behaviour_recorded",
@@ -137,6 +133,11 @@ KINDS = (
     "pause_raised",
     "pause_lifted",
     "denial_recorded",
+    "ruling_recorded",
+    "ruling_closed",
+    "protocol_acknowledged",
+    "carryover_offered",
+    "rulings_carried",
     "code_captured",
     "code_capture_failed",
     "operation_admitted",
@@ -363,6 +364,14 @@ def prompt_origin(row) -> str:
     if isinstance(row, dict) and row.get("provenance") in _authority().UNVERIFIED:
         return "unknown"
     return programme_prompt_source.origin(row)
+
+
+# Reads a prompt as the JSON home did before the import stamped it, so an adoption Shawn approved there stays
+# verified after the move. Only past approvals read this; a new approval reads prompt_origin and refuses it.
+def adopted_origin(row) -> str:
+    if isinstance(row, dict) and row.get("provenance") == _authority().LEGACY:
+        return programme_prompt_source.origin(row)
+    return prompt_origin(row)
 
 
 def read_path(path: str) -> list:

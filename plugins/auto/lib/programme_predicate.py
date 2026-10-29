@@ -28,8 +28,9 @@ REASON_KINDS = (
     "corrupt_record", "never_stop", "not_done", "until_time", "unproven_done",
     "no_rule_proposed", "undebugged_blocker", "ownerless_item", "open_item",
     "unwatched_wait", "queued_action", "unread_claim", "source_unavailable",
-    "safety_pause", "corrupt_context",
+    "safety_pause", "corrupt_context", "carryover_unoffered",
 )
+OFFER_KEY = "carryover_offer"
 PAUSED_REASONS = ("ownerless_item", "open_item", "unwatched_wait")
 
 
@@ -206,6 +207,21 @@ def _scan(block: dict, now, inbox_size, cadence: int) -> dict:
             "acceptance": acceptance}
 
 
+# Unlike the rules view, this keeps a Ruling whose items are all finished: the next programme may still want it.
+def offerable_rulings(block: dict, now) -> list:
+    return [r for r in programme_context.rulings(block, now) if r["state"] == "active" and r["kind"] is not None]
+
+
+def unoffered_rulings(block: dict, now) -> list:
+    try:
+        active = offerable_rulings(block, now)
+    # A malformed context already holds the stop as corrupt_context.
+    except Exception:
+        return []
+    offered = set(_dict(block.get(OFFER_KEY)).get("offered") or [])
+    return [r["id"] for r in active if r["id"] not in offered]
+
+
 def _stop_decision(rule: str, until, done: bool, floor: list, now):
     if rule == "never_stop" and not _off("NEVER_STOP"):
         return False, [{"kind": "never_stop"}]
@@ -252,6 +268,10 @@ def _compute(record: dict, now, inbox_size) -> dict:
     else:
         may_stop, reasons = _stop_decision(rule, stop_term.get("until"), scan["done"],
                                            scan["floor"], now)
+        # After the stop rule, so it holds a done programme too: the offer must be made before the PM stops.
+        unoffered = unoffered_rulings(block, now)
+        if may_stop and unoffered:
+            may_stop, reasons = False, [{"kind": "carryover_unoffered", "rulings": unoffered}]
     return {
         "done": bool(scan["done"]),
         "may_stop": bool(may_stop),

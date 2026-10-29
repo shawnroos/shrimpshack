@@ -224,10 +224,10 @@ it "the answer on the ask points back to the decision"
 check "true" "$(field 'prog["items"]["linear:AI-4"]["handed"]["answered"]["decision_id"] == prog["decisions"][-1]["id"]')"
 it "the handed_answered journal entry carries the decision id"
 has "$(field 'prog["decisions"][-1]["id"]' | tr -d '"')" "$(journal_last handed_answered)"
-it "status --terms shows the ask an answer replies to"
-prog status --terms --json
+it "status --agreement shows the ask an answer replies to"
+prog status --agreement --json
 has "\"ask\": ${ASK}" "$OUT"
-prog status --terms
+prog status --agreement
 has "(ask $(printf '%s' "$ASK" | tr -d '"'))" "$OUT"
 
 it "accept-agreement writes a Shawn decision of kind agreement"
@@ -252,6 +252,12 @@ check "\"open\" ${BEFORE}" "$(field 'prog["items"]["linear:AI-2"]["state"]') $(d
 it "the unstamped product question still needs hand-item"
 prog hand-item linear:AI-2 --question "Which crop?" --kind product_call
 check '0 "handed"' "$CODE $(field 'prog["items"]["linear:AI-2"]["state"]')"
+for kind in product_call product_scope; do
+  it "on an unstamped programme a programme-level ${kind} is refused and writes no decision"
+  BEFORE="$(decision_count)"
+  prog log-decision programme --kind "$kind" --silent --why "obvious"
+  check "1 hand-item ${BEFORE}" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+done
 
 edit 'rec["programme"]["agreement"]["contract_version"] = 1'
 FIN_BEFORE="$(finished_count)"
@@ -306,6 +312,16 @@ it "an act-level kind still records"
 prog log-decision programme --kind merge_at_gate --silent --why "gate is green"
 check '0 "merge_at_gate"' "$CODE $(field 'prog["decisions"][-1]["kind"]')"
 
+it "a restrict of a kind on one item also stops the PM logging that kind against the programme"
+P_RM="$(prompt typed 'r-merges: I decide merges for linear:AI-1')"
+prog record-ruling r-merges --kind merge_at_gate --effect restrict --scope "Shawn merges AI-1" \
+  --applies-to linear:AI-1 --prompt "$P_RM"
+BEFORE="$(decision_count)"
+prog log-decision programme --kind merge_at_gate --silent --why "gate is green"
+check "1 hand-item ${BEFORE}" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+P_RM2="$(prompt typed 'withdraw r-merges')"
+prog close-ruling r-merges --as withdrawn --prompt "$P_RM2"
+
 edit 'rec["programme"]["agreement"].pop("contract_version")'
 prog add-item linear:AI-7 --title "Unstamped product ask" --kind product_question
 it "on an unstamped programme a non-product kind on a product question records without refusing"
@@ -324,6 +340,218 @@ it "answering an old ask records a decision of kind unknown with no ask id"
 P_SHIP1="$(prompt typed 'ship AI-1')"
 prog answer-handed linear:AI-1 --choice ship --prompt "$P_SHIP1"
 check '0 ["unknown", null]' "$CODE $(field '[prog["decisions"][-1]["kind"], prog["decisions"][-1]["ask"]]')"
+
+for kind in technical_approach work_sequencing worker_coordination tool_choice optimisation_depth product_scope acceptance; do
+  it "the newly listed kind ${kind} is still PM-decidable by default"
+  prog log-decision programme --kind "$kind" --silent --why "default authority"
+  check "0 \"${kind}\"" "$CODE $(field 'prog["decisions"][-1]["kind"]')"
+done
+
+# publish <name> <tool_choice level>: a clone whose default branch carries a project layer for tool_choice.
+publish() {
+  local seed="${WORK}/seed-$1" bare="${WORK}/bare-$1.git" clone="${WORK}/clone-$1"
+  mkdir -p "${seed}/.claude"
+  printf '{"autonomy": {"tool_choice": {"level": "%s"}}}' "$2" > "${seed}/.claude/auto-protocol.json"
+  git -C "$seed" init -q -b main
+  git -C "$seed" add -A
+  git -C "$seed" -c user.name=t -c user.email=t@t commit -q -m seed
+  git clone -q --bare "$seed" "$bare"
+  git clone -q "$bare" "$clone"
+  printf '%s' "$clone"
+}
+REPO_ACT="$(publish act act)"
+REPO_PROPOSE="$(publish propose propose)"
+P_REMIT="$(prompt typed "add repos ${REPO_ACT} and ${REPO_PROPOSE}")"
+OUT="$(printf '{"repos": [{"path": "%s"}, {"path": "%s"}]}' "$REPO_ACT" "$REPO_PROPOSE" \
+  | "$PY" "$PROG" set-remit --prompt "$P_REMIT" 2>&1)"
+it "the remit takes two repos whose project layers set tool_choice to act and to propose"
+check "2" "$(field 'len(prog["remit"]["repos"])')"
+
+prog add-item linear:AI-20 --title "On the propose repo" --kind fix_only --repo "$REPO_PROPOSE"
+prog add-item linear:AI-21 --title "On the act repo" --kind fix_only --repo "$REPO_ACT"
+prog add-item linear:AI-22 --title "No repo" --kind fix_only
+
+it "a project-layer propose on the item's repo refuses a PM decision with no repo flag"
+BEFORE="$(decision_count)"
+prog log-decision linear:AI-20 --kind tool_choice --silent --why "use the helper"
+check "1 hand-item ${BEFORE}" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+it "an item on the act repo reads only its own repo's layer and records"
+prog log-decision linear:AI-21 --kind tool_choice --silent --why "use the helper"
+check '0 "linear:AI-21"' "$CODE $(field 'prog["decisions"][-1]["item"]')"
+it "an item with no recorded repo is refused when one remit repo sets the kind to propose"
+prog log-decision linear:AI-22 --kind tool_choice --silent --why "use the helper"
+check "1 hand-item" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1)"
+it "a programme-level decision uses the narrowest level across remit repos"
+prog log-decision programme --kind tool_choice --silent --why "use the helper"
+check "1 hand-item" "$CODE $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1)"
+it "log-decision no longer takes --repo as the source of the project layer"
+prog log-decision linear:AI-20 --kind tool_choice --silent --why x --repo "$REPO_ACT"
+check "2 unknown option --repo" "$CODE $(printf '%s' "$OUT" | grep -o 'unknown option --repo' | head -1)"
+
+P_GRANT="$(prompt typed 'r-tools: tool choice for linear:AI-21 is yours')"
+prog record-ruling r-tools --kind tool_choice --effect grant --scope "PM picks tools" \
+  --applies-to linear:AI-21 --prompt "$P_GRANT"
+it "a grant Ruling on tool_choice records with the act baseline of the item's repo"
+check "0" "$CODE"
+P_NARROW="$(prompt typed 'set tool_choice to propose')"
+prog adopt-autonomy tool_choice propose --prompt "$P_NARROW"
+it "Covers AE6. with personal Authority narrowed to propose, log-decision on the granted item is refused as a conflict"
+BEFORE="$(decision_count)"
+prog log-decision linear:AI-21 --kind tool_choice --silent --why "use the helper"
+check "1 (conflict) hand-item ${BEFORE}" \
+  "$CODE $(printf '%s' "$OUT" | grep -o '(conflict)' | head -1) $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
+rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
+
+it "the who-decides gate has exactly one caller in shipped code"
+check "1" "$(grep -rnE '(^|[^_a-zA-Z.])who_decides\(|\.who_decides\(' "${AUTO_ROOT}/lib" "${AUTO_ROOT}/hooks" 2>/dev/null \
+  | grep -v 'def who_decides' | wc -l | tr -d ' ')"
+it "programme_decisions reads no autonomy map: the Authority level arrives as plain data"
+check "0" "$(grep -cE '"autonomy"' "${AUTO_ROOT}/lib/programme_decisions.py")"
+it "no other shipped module looks up a kind in the merged autonomy map to gate a decision"
+check "programme_protocol.py" "$(grep -lE '\[\"autonomy\"\]\.get\(kind\)|get\(\"autonomy\"\).*\.get\(kind\)' "${AUTO_ROOT}"/lib/*.py | xargs -n1 basename | sort | tr '\n' ' ' | sed 's/ $//')"
+
+# The who-decides gate, called with plain data. MUTATE patches one branch out in-process.
+gate() {
+  MUTATE="${MUTATE:-}" run_py "$@" <<'EOF'
+pd = load_lib_module("programme_decisions")
+mutate = os.environ.get("MUTATE")
+if mutate == "protected":
+    pd._protected = lambda kind: False
+elif mutate == "restrict":
+    pd._restricting = lambda rulings: []
+NOW = "2026-10-22T12:00:00Z"
+def ruling(effect, kind, until=None, baseline="act", items=("linear:AI-1",), rid="r1"):
+    return {"id": rid, "effect": effect, "kind": kind, "items": list(items), "until": until,
+            "baseline": baseline}
+def scenarios(kind):
+    return {
+        "none": [],
+        "decided": [ruling("decided", kind)],
+        "grant": [ruling("grant", kind)],
+        "restrict": [ruling("restrict", kind)],
+        "expired-grant": [ruling("grant", kind, until="2026-10-01T00:00:00Z")],
+        "grant+restrict": [ruling("grant", kind), ruling("restrict", kind, rid="r2")],
+    }
+mode = args[0]
+if mode == "table":
+    for kind in pd.DECISION_KINDS:
+        for name, rulings in scenarios(kind).items():
+            v = pd.who_decides(kind, "linear:AI-1", level="act", rulings=rulings, now=NOW, accepted=True)
+            print(kind, name, v["decider"], v["reason"])
+else:
+    kind, level, accepted, spec = args[1], args[2], args[3] == "1", json.loads(args[4])
+    v = pd.who_decides(kind, "linear:AI-1", level=None if level == "-" else level,
+                       rulings=[ruling(**r) for r in spec], now=NOW, accepted=accepted)
+    print(v["decider"], v["level"] or "-", v["reason"], v["conflict"])
+EOF
+}
+
+expected_row() {
+  local kind="$1" scenario="$2" protected="$3"
+  if [ "$protected" = 1 ]; then echo "$kind $scenario shawn protected"; return; fi
+  case "$scenario" in
+    restrict|grant+restrict) echo "$kind $scenario shawn restrict" ;;
+    grant) echo "$kind $scenario pm grant" ;;
+    *) echo "$kind $scenario pm authority" ;;
+  esac
+}
+
+KINDS="$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+print(" ".join(pd.DECISION_KINDS))
+EOF
+)"
+PROTECTED=" prod_deploy full_release spend_over_cap merge_around_gate denied_operation "
+SCENARIOS="none decided grant restrict expired-grant grant+restrict"
+
+it "the protected kinds are exactly the five decision kinds no layer or Ruling can hand to the PM"
+check "['denied_operation', 'full_release', 'merge_around_gate', 'prod_deploy', 'spend_over_cap'] True" "$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+print(sorted(pd.PROTECTED_KINDS), set(pd.PROTECTED_KINDS) <= set(pd.DECISION_KINDS))
+EOF
+)"
+
+it "the truth table covers 20 decision kinds"
+check 20 "$(printf '%s\n' $KINDS | wc -l | tr -d ' ')"
+
+table_mismatches() {
+  local got="$1" kind scenario prot
+  for kind in $KINDS; do
+    case "$PROTECTED" in *" $kind "*) prot=1 ;; *) prot=0 ;; esac
+    for scenario in $SCENARIOS; do
+      printf '%s\n' "$got" | grep -F -x -q -- "$(expected_row "$kind" "$scenario" "$prot")" \
+        || printf '%s %s\n' "$kind" "$scenario"
+    done
+  done
+}
+
+TABLE="$(gate table)"
+for kind in $KINDS; do
+  case "$PROTECTED" in *" $kind "*) label="protected" ;; *) label="not protected" ;; esac
+  it "truth table: ${kind} (${label}) under no Ruling, decided, grant, restrict, expired grant, grant plus restrict"
+  check "" "$(table_mismatches "$TABLE" | grep "^${kind} ")"
+done
+
+it "mutation: with the protected check patched out exactly the protected rows fail"
+check "$(for k in $PROTECTED; do for s in $SCENARIOS; do echo "$k $s"; done; done | sort)" \
+  "$(table_mismatches "$(MUTATE=protected gate table)" | sort)"
+it "mutation: with the restrict branch patched out exactly the unprotected restrict rows fail"
+check "$(for k in $KINDS; do case "$PROTECTED" in *" $k "*) ;; *) echo "$k restrict"; echo "$k grant+restrict" ;; esac; done | sort)" \
+  "$(table_mismatches "$(MUTATE=restrict gate table)" | sort)"
+
+for kind in product_call product_scope; do
+  it "${kind} on an unaccepted programme stays with Shawn even with a grant Ruling"
+  check "shawn propose unaccepted False" "$(gate one "$kind" act 0 "[{\"effect\":\"grant\",\"kind\":\"$kind\"}]")"
+  it "${kind} on an accepted programme follows Authority"
+  check "shawn propose authority False" "$(gate one "$kind" propose 1 '[]')"
+done
+it "default Authority (act) on an accepted programme makes product_call PM-decidable"
+check "pm act authority False" "$(gate one product_call act 1 '[]')"
+it "a non-product kind on an unaccepted programme follows Authority"
+check "pm act authority False" "$(gate one tool_choice act 0 '[]')"
+
+it "AE3: an act level on prod_deploy from any Authority layer still returns Shawn decides"
+check "shawn never protected False" "$(gate one prod_deploy act 1 '[]')"
+it "AE4: a grant Ruling on prod_deploy still returns Shawn decides"
+check "shawn never protected False" "$(gate one prod_deploy act 1 '[{"effect":"grant","kind":"prod_deploy"}]')"
+
+it "a grant whose kind Authority now holds at propose returns the narrower level and a conflict"
+check "shawn propose conflict True" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","baseline":"act"}]')"
+it "a grant whose kind Authority now holds at act_and_tell leaves the PM deciding at act_and_tell with a conflict"
+check "pm act_and_tell conflict True" "$(gate one tool_choice act_and_tell 1 '[{"effect":"grant","kind":"tool_choice","baseline":"act"}]')"
+it "a grant made while Authority was already at propose returns PM decides, not a conflict"
+check "pm act grant False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","baseline":"propose"}]')"
+it "an expired grant behaves as no Ruling"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","until":"2026-10-01T00:00:00Z"}]')"
+it "a grant whose end date is the current time has expired"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","until":"2026-10-22T12:00:00Z"}]')"
+it "a grant with a later end date still applies"
+check "pm act grant False" "$(gate one tool_choice act 1 '[{"effect":"grant","kind":"tool_choice","until":"2026-11-01T00:00:00Z"}]')"
+it "an end date the gate cannot read refuses and names the Ruling"
+has "Ruling 'r1' has an end date the gate cannot read" "$(gate one tool_choice act 1 '[{"effect":"restrict","kind":"tool_choice","until":"next week"}]')"
+it "a grant plus a restrict on the same item and kind returns Shawn decides"
+check "shawn propose restrict False" "$(gate one tool_choice act 1 '[{"effect":"grant","kind":"tool_choice"},{"effect":"restrict","kind":"tool_choice","rid":"r2"}]')"
+it "a decided Ruling alone falls through to the Authority level"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"decided","kind":"tool_choice"}]')"
+it "a Ruling for another item does not apply"
+check "shawn propose authority False" "$(gate one tool_choice propose 1 '[{"effect":"grant","kind":"tool_choice","items":["linear:AI-2"]}]')"
+it "a Ruling for another kind does not apply"
+check "pm act authority False" "$(gate one tool_choice act 1 '[{"effect":"restrict","kind":"work_sequencing"}]')"
+it "act_and_tell Authority lets the PM decide at that level"
+check "pm act_and_tell authority False" "$(gate one tool_choice act_and_tell 1 '[]')"
+it "never Authority keeps the kind with Shawn"
+check "shawn never authority False" "$(gate one tool_choice never 1 '[]')"
+it "a kind with no Authority level lets the PM decide, as log-decision does today"
+check "pm - authority False" "$(gate one tool_choice - 1 '[]')"
+it "an unknown kind refuses"
+has "unknown decision kind" "$(gate one no_such_kind act 1 '[]')"
+it "the refusal keeps the hand-item message shape"
+check "kind 'prod_deploy' stays with Shawn (protected); the PM does not record it as its own: use hand-item" "$(run_py <<'EOF'
+pd = load_lib_module("programme_decisions")
+v = pd.who_decides("prod_deploy", "linear:AI-1", level="act", rulings=[], now="2026-10-22T12:00:00Z", accepted=True)
+print(pd.refusal("prod_deploy", v))
+EOF
+)"
 
 echo ""
 echo "programme-decisions.test.sh: ${PASS} passed, ${FAIL} failed"

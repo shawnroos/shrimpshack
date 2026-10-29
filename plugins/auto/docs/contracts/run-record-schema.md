@@ -153,7 +153,7 @@ type are. `<iso>` denotes an ISO-8601 UTC timestamp string (e.g.
 | `advisor_audit` | array | **(v0.6.0 U5, additive — appended by `append_advisor_audit`)** the structured audit trail of every autonomous advisor-gate decision (KTD-5). Each record is `{ "kind": "advisor"\|"action", "subject": str, "classification": str, "resolution": str, "at": <iso> }`: `kind="advisor"` = the driving agent consulted the advisor on a denied `AskUserQuestion` and itself classified it (`subject`=the question, `classification`∈ mechanical·design-fork, `resolution`∈ resolved-autonomously·escalated-via-pause); `kind="action"` = the destructive-action backstop fired (`subject`=the Bash command, `classification`=the destructive-pattern label, `resolution`=blocked-and-paused). **Absent on a run that hit no gate decisions** (the key is created lazily on first append). The append happens INSIDE the locked `mutate` closure, so concurrent fan-out `record_verdict` writes cannot clobber the list. Surfaced in the exit report next to the P3 findings — a wrong autonomous call or a fired backstop is diagnosable (trust earned by visibility). NEVER read by any predicate. |
 | `run_kind` | string/absent | **(programme runs, additive)** `"task"` \| `"programme"` (`RUN_KINDS`). **Absent means `"task"`**; read it with `run_record_core.run_kind(record)`. Set once by `init_run_record(..., run_kind=...)`. See §10. |
 | `programme_format` | int/absent | **(programme runs)** the programme shape version, `1` (`PROGRAMME_FORMAT`). Present only on programme records; a higher value than this code knows makes the lease read as `newer` and every hook hold nothing. |
-| `programme` | object/absent | **(programme runs)** the programme block: remit, agreement, instructions, proposed rules, items, working model, watchers, sources, inbox offset, ended. Shape in §10.5. Passed through `format_compat` verbatim. |
+| `programme` | object/absent | **(programme runs)** the programme block: remit, agreement (Scope terms and preferred tools), context (Rulings and requirements), decision log, proposed rules, items, working model, watchers, sources, inbox offset, ended. Shape in §10.5. Passed through `format_compat` verbatim. |
 | `programme_status` | object/absent | **(programme runs)** the programme predicate's result, written by `_atomic_write` in place of `exit_predicate_result`. A display copy: deciders recompute it (§10.4). |
 | `task_evidence` | object/absent | **(task runs, additive)** evidence a task run's driving session checked: `{<deliverable>: {<ref>: {result, checked_at, confirmed_at, fields, misses, note}}}` (§10.12). Never read by any predicate. |
 
@@ -655,7 +655,10 @@ inbox_size)` again with the real `claims.jsonl` line count; the stored copy has
 Reason kinds (`REASON_KINDS`): `corrupt_record`, `never_stop`, `not_done`,
 `until_time`, `unproven_done`, `no_rule_proposed`, `undebugged_blocker`,
 `ownerless_item`, `open_item`, `unwatched_wait`, `queued_action`, `unread_claim`,
-`source_unavailable`. A source outage holds the stop with `source_unavailable` for
+`source_unavailable`, `safety_pause`, `corrupt_context`, `carryover_unoffered`.
+`carryover_unoffered` holds the stop, after the stop rule and even on a done
+programme, while an active Ruling is missing from the `carryover_offer` marker;
+`carry-rulings` with no ids, or `end`, makes the offer. A source outage holds the stop with `source_unavailable` for
 two cadence periods, then becomes a wait on the system; an outage whose `watcher`
 is live is a watched wait at once and never holds. A source with
 `unsupported_since` set counts as not configured: no reason and no wait. An item is effectively done only when `matched_rule` is set,
@@ -671,14 +674,15 @@ keys and keeps unknown ones.
 |-----|-------|
 | `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
 | `created_at` | `<iso>` |
-| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, autonomy, cadence, tools_of_record, focus_budget}, project_terms?, corrections?}`. `contract_version` is the contract stamp (today `1`), written only by `accept-agreement`; an agreement without it keeps the rule that every product question goes to Shawn |
-| `agreement.project_terms[]` | `{id: "t"+6hex, area, value, source, set_by: proposal\|shawn\|carried_over, at, reserved, history: [{value, set_by, at, source, prompt_id}], prompt_id?, quote?, origin?, carried?}`. A term pre-filled by `set-remit` from the carry-over store has `set_by: carried_over`, `origin` (the store key it came from: a GitHub owner/name, a repo path, or `all`) and `carried` (the store entry id). Free-text terms outside the fixed `terms` map, so `normalize_programme` never back-fills them: a record without the key reads as `[]` and keeps no key. `reserved` marks an area Shawn keeps for himself. `history` holds each value an after-acceptance amendment replaced, oldest first; a before-acceptance edit keeps none |
-| `agreement.corrections[]` | `{id: "c"+6hex, at, kind, anchor, to: pm\|worker\|shawn, previous: pm\|worker\|shawn\|null, prompt_id, quote, pm_reading, choices_before, undone: null \| {at, prompt_id, quote}}`. Written by `correct-term`, oldest first; `undo-correction` fills `undone`. `kind` comes from the anchor (an ask id or a choice id) and is one of the correctable kinds. The owner of a kind is the `to` of the latest entry for it with `undone` null; with none, the contract default applies and `previous` is null. `quote` is the typed prompt's journal text; `pm_reading` is the PM's reading of it. `choices_before` is the length of `decisions[]` at correction time, so undo can list the choices recorded after it. A record without the key reads as `[]` |
-| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `autonomy` adds `overrides: {}`; `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `focus_budget` has the options `unlimited` (default) and `limited` and adds `points` (a whole number or null), `agents` (a whole number or null) and `scale` (size name to points, default `small=1, medium=3, large=5`); a null limit means no limit on that count, and `limited` needs at least one limit. `amend-term`, `propose-term` and `pick-term` take `--points <n|none>`, `--agents <n|none>` and `--scale name=points,...` for this term only. A record without the term reads it as `unlimited`, and an untouched one is left out of the agreement text so it never changes the terms digest; `tools_of_record` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off), and may add `option_descriptions: {<tool>: <text>}` for a tool added through a proposal. A record without the term reads as all three on. A record whose terms still hold the older `sources` term reads it as `tools_of_record`: its `value`, `set_by`, `set_at`, `why`, `prompt_id` and `quote` are copied on the next read or write and `sources` is dropped. Any term may add `term.proposal` and `term.notes` (below). |
+| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, cadence, tools_of_record, focus_budget}, project_terms?}`: the agreement's Scope. Its Rulings live under `context.decisions`. `contract_version` is the accepted marker (today `1`), written only by `accept-agreement`; until it is written, `product_call` and `product_scope` stay with Shawn, and it gates nothing else. A record from before Rulings may also hold the `autonomy` term, which `normalize_programme` drops on read, and `corrections`, which no released version wrote and nothing reads |
+| `agreement.project_terms[]` | `{id: "t"+6hex, area, value, source, set_by: proposal\|shawn\|carried_over, at, reserved, history: [{value, set_by, at, source, prompt_id}], prompt_id?, quote?, origin?, carried?}`. Preferred tools: free text naming a skill or tool for a kind of job, read in place until Behaviours replaces it. Who decides an area is a Ruling, never a project term. Free-text terms outside the fixed `terms` map, so `normalize_programme` never back-fills them: a record without the key reads as `[]` and keeps no key. New terms write `reserved: false`. A term with `reserved: true` comes from an older record: `normalize_programme` copies it into `context.decisions` as a kind-less legacy restrict Ruling under the term's id, with its `area`, and drops it from this list. `set_by: carried_over`, `origin` and `carried` appear only on terms an older carry-over pre-filled. `history` holds each value an after-acceptance amendment replaced, oldest first; a before-acceptance edit keeps none |
+| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `focus_budget` has the options `unlimited` (default) and `limited` and adds `points` (a whole number or null), `agents` (a whole number or null) and `scale` (size name to points, default `small=1, medium=3, large=5`); a null limit means no limit on that count, and `limited` needs at least one limit. `amend-term`, `propose-term` and `pick-term` take `--points <n|none>`, `--agents <n|none>` and `--scale name=points,...` for this term only. A record without the term reads it as `unlimited`, and an untouched one is left out of the agreement text so it never changes the terms digest; `tools_of_record` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off), and may add `option_descriptions: {<tool>: <text>}` for a tool added through a proposal. A record without the term reads as all three on. A record whose terms still hold the older `sources` term reads it as `tools_of_record`: its `value`, `set_by`, `set_at`, `why`, `prompt_id` and `quote` are copied on the next read or write and `sources` is dropped. Any term may add `term.proposal` and `term.notes` (below). |
 | `agreement.terms.<key>.proposal` | `{value, extras, at, origin: pm\|ui, state: pending\|accepted\|superseded, settled_at?}`. At most one per term; `propose-term` replaces it and `clear-proposal` removes it. `extras` holds `seconds`, `until`, `points`, `agents` or `scale`, `add` (a remit space `server.workspace`, or a tool) and `description` (a tool's). `amend-term` and `set-remit` set `state` from `pending` to `accepted` when the new value matches, else `superseded`. A refused approval is journaled, never stored here. The rules in force drop it. |
 | `agreement.terms.<key>.notes` | `[{text, at, origin}]`, at most 20; `note-term` adds one and `note-term --clear` removes the key |
-| `instructions[]` | `{id: "i"+6hex, state: active\|fulfilled\|withdrawn, at, applies_to: "programme"\|<item id>, until, why, prompt_id, quote, closed: null \| {at, why, prompt_id}}` |
-| `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the scoped, revisioned decision records live under `context.decisions` and are written by `record-decision`. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
+| `context` | `{decisions, requirements, assignments, blockers, pauses, denials}` (`programme_context.SECTIONS`). `context.decisions` maps a Ruling id to its revisions, oldest first. A Ruling revision is `{rev, state: pending_acceptance\|accepted\|superseded\|replaced\|closed, at, kind, effect: decided\|grant\|restrict, scope, reason, limits, requirements, applies_to: ["programme" \| <item id>], until, quote, replies_to, baseline, source, delta, supersedes, superseded_by, accepted, closed?, carried?, legacy?, area?}`. `record-ruling` appends a revision, `accept-context` accepts a pending one, and `close-ruling` sets `closed: {at, as: fulfilled\|withdrawn, why, prompt_id}`. `baseline` is the Authority level for the kind when a grant became active; `carried` is `{from, entry, run_id, quote}` on a Ruling that arrived from the carry-over store, pending and with no items. A revision with `kind` null is a legacy entry the gate never reads: an old decision record, or (with `legacy: instruction` or `legacy: project_term` and `area`) the copy `normalize_programme` made of an old instruction or reserved project term |
+| `protocol_ack` | `{at, repos: {<repo key>: <acknowledged state>}}`, written by `ack-protocol`: per remit repo, the Authority levels, the Done standards' content hashes and the rejected entries the rules view compares with to list protocol changes. Absent until the first `ack-protocol` |
+| `carryover_offer` | `{at, offered: [Ruling ids]}`, written by `carry-rulings` with no ids: the offer-made marker the stop predicate reads |
+| `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the Rulings live under `context.decisions` and are written by `record-ruling`. `term` is the Ruling or preferred-tool term id the decision cited. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
 | `behaviours[]` | programme-layer behaviour entries, in every state (`active`, `proposed`, `retired`), with no `adoption`. Written by `record-behaviour`, `propose-behaviour`, `move-behaviour`, `retire-behaviour` and `keep-behaviours`. A moved entry stays with `moved_to` (and `moved_repo_key`) and is never deleted. Entry fields, layers and resolution: programme-behaviours-format.md. A record without the key reads it as `[]` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `permission_proposals[]` | `{id: "perm-"+n, destination, settings_file, operations, rules, reach, exclusions, key: {operations, destination}, items, evidence, state, created_at, changed_at, notified_at, answers, explanation, confirmed, verified?, reservation?, attempts?, pending_answer?, outcome?, covering?, redenied_at?}`. A separate list from `proposed_rules`. `state` is open, postponed, rejected, retrying, resolved, ineffective or retry_unobserved. `propose-permission` adds and folds entries, `answer-permission` and `settle-permissions` move them. Fields, states and rules: programme-permission-proposals.md |
@@ -699,7 +703,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `id` | `[a-z][a-z0-9_-]*:<key>`, max 128 characters, e.g. `linear:AI-753`, `herdr:<ws>/<pane>` |
 | `title`, `joined_at` | string, `<iso>` |
 | `repo` | a `remit.repos[].path`, or null. `add-item --repo` sets it only when the path matches a remit repo; it names where a permission proposal for the item goes |
-| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped`, `decided` (`FINISHED_ITEM_STATES` are the last four; `CLOSED_ITEM_STATES` are `handed`, `dropped` and `decided`, which a verb sets). No verb sets `done`; the predicate derives it. `log-decision` sets `decided` on a product question when the agreement carries the contract stamp |
+| `state` | `ITEM_STATES`: `open`, `waiting`, `done`, `handed`, `dropped`, `decided` (`FINISHED_ITEM_STATES` are the last four; `CLOSED_ITEM_STATES` are `handed`, `dropped` and `decided`, which a verb sets). No verb sets `done`; the predicate derives it. `log-decision` sets `decided` on a product question when the PM may decide its `product_call` or `product_scope`, which needs the accepted marker |
 | `aliases` | other ids that resolve to this item |
 | `owner` | `{pane, terminal_id, session_id}` |
 | `sessions[]` | `{session_id, pane, terminal_id, name, at}` |
@@ -716,7 +720,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
-| `trajectory` | `null \| {done: [step], current: step \| null, planned: [step], finish, location: {tab, pane} \| null, recorded_at, session_id, hash}`, written by `record-trajectories`. A step is `{title, clause, note?}`; `clause` is `term:<key>`, `rule:<id>`, `instruction:<id>` or null, and an unknown clause is stored as null with `note: "unknown_clause"`. `hash` covers the done, current and planned titles in order, trimmed, case-folded and with spaces collapsed. `session_id` is the driving session that recorded it. A record without it reads as null |
+| `trajectory` | `null \| {done: [step], current: step \| null, planned: [step], finish, location: {tab, pane} \| null, recorded_at, session_id, hash}`, written by `record-trajectories`. A step is `{title, clause, note?}`; `clause` is `term:<key>`, `rule:<id>`, `ruling:<id>` (or `instruction:<id>` for a Ruling read from an old instruction) or null, and an unknown clause is stored as null with `note: "unknown_clause"`. `hash` covers the done, current and planned titles in order, trimmed, case-folded and with spaces collapsed. `session_id` is the driving session that recorded it. A record without it reads as null |
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
 | `task_runs[]` | `{repo, run_id}` |
 | `dropped_reason` | string or `null` |
@@ -738,18 +742,32 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 `cites` and `prompt_id` are optional. No line has a `run_id`, `loop` or loop-phase
 key. An unknown kind raises `JournalError`. `KINDS` today:
 
-`prompt`, `takeover_request`, `handover_request`, `end_request`,
-`blocked_driver_send`, `blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`, `prompts_pruned`, `agreement_proposed`, `agreement_accepted`,
-`term_amended`, `term_picked`, `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`, `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`, `project_term_amended`, `term_corrected`, `correction_undone`, `corrections_kept`, `correction_promoted`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`, `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviours_kept`, `rule_proposed`,
-`rule_adopted`, `rules_acked`, `rules_loaded`, `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`, `item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`,
-`item_aliased`, `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`,
-`item_handed`, `handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`, `claim`, `claims_read`, `working_now`,
-`queue_changed`, `tested_build_recorded`, `source_changed`, `evidence_checked`,
-`evidence_refuted`, `validate_pass`, `merge_pinned`, `worker_started`,
-`worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
+`prompt`, `takeover_request`, `handover_request`, `end_request`, `blocked_driver_send`,
+`blocked_tracker_write`, `tracker_synced`, `issues_recorded`, `trajectory_changed`, `remit_set`,
+`prompts_pruned`, `agreement_proposed`, `agreement_accepted`, `term_amended`, `term_picked`,
+`recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`,
+`term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`,
+`project_term_amended`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`,
+`behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`,
+`behaviours_kept`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
+`reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`,
+`item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`, `item_aliased`,
+`item_merged`, `item_dropped`, `item_reopened`, `item_waiting`, `item_handed`,
+`handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`,
+`claim`, `claims_read`, `working_now`, `queue_changed`, `tested_build_recorded`,
+`source_changed`, `evidence_checked`, `evidence_refuted`, `validate_pass`, `merge_pinned`,
+`worker_started`, `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
 `taken_over`, `handed_over`, `programme_ended`, `request_refused`, `approval_refused`,
-`permission_proposed`, `permission_answered`, `permission_verified`,
-`permission_settled`, `blocked_settings_write`.
+`effects_recorded`, `legacy_imported`, `foreign_write_absorbed`, `result_collected`,
+`result_collection_failed`, `source_retained`, `inventory_frozen`, `preservation_checked`,
+`decision_recorded`, `requirement_defined`, `context_accepted`, `item_assigned`,
+`blocker_raised`, `blocker_cleared`, `pause_raised`, `pause_lifted`, `denial_recorded`,
+`ruling_recorded`, `ruling_closed`, `protocol_acknowledged`, `carryover_offered`,
+`rulings_carried`, `code_captured`, `code_capture_failed`, `operation_admitted`,
+`operation_settled`, `operation_uncertain`, `resources_reconciled`, `item_disposed`,
+`uncertainty_accepted`, `archive_check_failed`, `programme_archived`, `successor_created`,
+`permission_proposed`, `permission_answered`, `permission_verified`, `permission_settled`,
+`blocked_settings_write`.
 
 - `item_held {item, reason}` is journaled by `start-worker` each time the focus gate refuses a start (one row per refusal).
   `focus_override_approved {item, next, prompt_id, quote}` is journaled by `override-focus`.
@@ -790,8 +808,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   only because its text names the driver's pane; `target` is then the pane id or
   terminal id it named. `command` is redacted and capped at 2000 characters.
 - `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
-  `adopt-check` (and, for the carry-over store, by `keep-corrections` and `promote-correction`,
-  and for the behaviours store, by `move-behaviour` and `retire-behaviour`; see below): `{entry: rule|autonomy|check, target, hash, personal_path, prompt_id,
+  `adopt-check` (and, for the carry-over store, by `carry-rulings`, and for the behaviours store,
+  by `move-behaviour`, `retire-behaviour` and `keep-behaviours`; see below):
+  `{entry: rule|autonomy|check|carryover, target, hash, personal_path, prompt_id,
   quote}` with `cites: [prompt_id]`, plus `rule` for a rule, `action` and `level` for an
   autonomy entry, and `repo` and `check` for a check. `target` is `rule:<id>`,
   `autonomy:<action>` or `check:<repo>:<check>`, and `hash` is the entry's content hash.
@@ -825,14 +844,22 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   pick fields plus `terms` (key to value set). `path` and `tool_use_id` key a pick's single use.
   `setup_step_set` carries `{step}`, `setup_seen_recorded` `{seen: {tabs, repos, tracker, items}}`
   as counts, and `setup_step_kept` `{kept}`; the values live in `programme.setup`.
-- `term_corrected` carries `{correction, kind, anchor, to, previous, pm_reading, reopened, notice}`
-  (`reopened` is the item moved from handed back to open, or null); `correction_undone` carries
-  `{correction, kind, restored, made_under: [choice ids], notice}`. Both add `prompt_id`, `quote`
-  and `cites: [prompt_id]`.
-- `corrections_kept` carries `{kept: [correction ids], keys, stored: [{id, key, correction, hash}],
-  store_path}`; `correction_promoted` carries `{promoted, kind, stored, store_path}`. Both add the
-  approval fields. Before either line, the verb journals one `rule_adopted` line per stored entry
-  with `entry: carryover|promotion`, `target: carryover:<key>:<entry id>` and the entry's hash.
+- `ruling_recorded` and `ruling_closed` are journaled by `record-ruling` and `close-ruling`;
+  `protocol_acknowledged` by `ack-protocol`.
+- `carryover_offered` carries `{carryover: [{source: "ruling", id, kind, effect, scope, items} |
+  {source: "behaviour", id, when, do, dont, quote}], keys, lines}`: the one offer, Rulings and
+  programme-layer behaviours together. `rulings_carried` carries `{carried: [Ruling ids], keys, stored: [{id, key,
+  ruling, hash}], store_path}` and the approval fields. Before it, `carry-rulings` journals one
+  `rule_adopted` line per stored entry with `entry: carryover`, `target:
+  carryover:<key>:<entry id>` and the entry's hash.
+- `remit_set` adds `carried_over: [{ruling, kind, effect, origin}]` when it brought carried
+  Rulings in as pending, and `notices` naming each store entry it dropped. `accept-agreement`
+  treats a `remit_set` line with `carried_over` like a proposal: a prompt older than it does not
+  accept.
+- `programme_ended` adds `carryover` (the same list as `carryover_offered`) when the programme
+  has active Rulings; it counts as the offer.
+- Old journals keep `instruction_recorded`, `instruction_closed` and `decision_recorded` rows,
+  which still read.
 - `behaviour_recorded` carries `{behaviour, layer, when, checks, overrides, from_proposal, related,
   undo}`; `behaviour_proposed` carries `{behaviour, state, when, checks, from_term}`;
   `behaviour_moved` carries `{behaviour, from, to, repo_key, target, hash, store_path}`;
@@ -848,11 +875,6 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - `behaviours_kept` carries `{kept, not_named, to, repo_key, targets, store_path}` plus the approval
   fields. After it commits, the verb journals one `rule_adopted` line per kept entry with
   `entry: keep`, `target: behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the hash.
-- `remit_set` adds `carried_over: [{id, area, value, origin, carried}]` when it pre-filled project
-  terms, and `notices` naming each store entry it dropped. `accept-agreement` treats a `remit_set`
-  line with `carried_over` like a proposal: a prompt older than it does not accept.
-- `programme_ended` adds `corrections` (one line per active correction) when corrections are on
-  and the programme applied any.
 - `stopped_unwatched` carries `{items: [item ids]}`, appended on each allowed re-fire
   of the Stop hook; readers dedupe by item.
 - `stop_quiet` carries `{stop_rule, reasons: [reason texts]}`, appended when the Stop hook lets the
@@ -909,16 +931,22 @@ unread_claims}` (`reasons` names each may-stop reason kind once; `reason_counts`
 each kind to how many items or sources gave it),
 the seven parts `doing_now`, `queue`, `watching`, `waiting_on_whom`,
 `decisions_for_shawn`, `just_did`, `rules_in_force`, and `items[]`, plus the
-additive `terms`: `contract_version`; `project_terms[] {id, area, value, reserved,
-source, set_by}`; active `corrections[] {id, kind, to, previous, prompt_id, quote,
-pm_reading}` with the quote redacted; `by_term[] {term, label, decisions[]}`, where
-`term` null is "no term"; `changes[] {at, kind, term, text, source, prompt_id,
-quote}`, newest first and at most 20, built from project_term_edited,
-project_term_amended, term_corrected and correction_undone; and `changes_total`.
-`rules_in_force` holds `agreement`, `rules[] {id, layer, autonomy, requires, caveat,
-adopted_on}`, `autonomy[] {action, level, layer, adopted_on}` (entries not from the
-plugin layer), `rejected_rules[]` and `instructions[]`; an `adopted_on` machine shows
-as "adopted on <machine>". `watching` always holds one row each for tracker, tasks
+agreement page `agreement`: `accepted`, `contract_version`, `scope[] {key, label,
+value_text}`, `preferred_tools[] {id, area, value, source}`, `rulings[] {id, state:
+active|pending|carried|expired, effect, kind, legacy, quote, applies_to, until,
+carried, pending_rev}`, `authority[] {kind, level, layer, adopted_on, fixed}` (the
+protected kinds first, as fixed `never` rows from the code tuple),
+`done_standards[] {id, layer, requires, adopted_on}`, `protocol_changes[]` (the
+same lines as the rules block), `decisions_by_ruling[] {ruling, label,
+decisions[]}`, where `ruling` null is "no Ruling applied", `changes[] {at, kind,
+term, text, source, prompt_id, quote}`, newest first and at most 20, built from
+project_term_edited and project_term_amended, and `changes_total`.
+`rules_in_force` holds `agreement`, `rules[] {id, layer, requires, caveat,
+adopted_on}`, `autonomy[] {action, level, layer, adopted_on}` (Authority entries not
+from the plugin layer), `rejected_rules[]`, `rulings[]` (the active Rulings),
+`permission_proposals[]`, and when present `legacy_restricts[]`,
+`protocol_changes` and `operating_contract`; an `adopted_on` machine shows as
+"adopted on <machine>". `watching` always holds one row each for tracker, tasks
 and plans (rows with `source` and `state_only`), plus watchers and outages. Each
 item carries `now`: its owner session's in-progress task and how many tasks are
 done, read from the tasks source while it is on. `rows` is
@@ -943,7 +971,7 @@ no viewed state. `watch` is null for open items; for waiting items it is
 that order, with `interval_seconds` (cron watchers, the cadence) or
 `beat_age_seconds` on a live watcher and `reporter` on `reporter_only`.
 
-`contract` is `{accepted, terms[], instructions[]}`, built from the record so it can
+`contract` is `{accepted, terms[], rulings[]}`, built from the record so it can
 show proposals. Each term is `{key, label, value, value_text, description, binding:
 code|guidance|none, reliant_steps, set_by, set_at, why, notes[], proposal, options[]}`.
 `reliant_steps` counts current and planned steps of `work` entries whose clause is
@@ -952,9 +980,11 @@ code|guidance|none, reliant_steps, set_by, set_at, why, notes[], proposal, optio
 "no description" (also used for a term outside the guide). `proposal` is the stored
 `{value, extras, at, origin, state, settled_at}`; a pending proposal reads
 `state: "refused"` with `reason` and `refused_at` when the newest `approval_refused`
-row whose `target` is the term key is newer than `proposal.at`. Each instruction is
-`{id, quote, applies_to, scope: own|inherited, until, at, reliant_steps}` for the
-active instructions in `rules_in_force`; `own` means it applies to an item.
+row whose `target` is the term key is newer than `proposal.at`. Each Ruling is
+`{id, quote, applies_to, scope: own|inherited, until, effect, kind, legacy, at,
+reliant_steps}` for the active Rulings in `rules_in_force`; `own` means it applies to
+an item, and `reliant_steps` counts steps whose clause is `ruling:<id>` (or
+`instruction:<id>` for a Ruling read from an old instruction).
 
 `reread` is `{last_at, changed_since[], requested, requested_at}`: `last_at` is the
 newest `rules_acked` or `rules_loaded` row, `changed_since` the term keys whose
@@ -989,10 +1019,13 @@ did. The file keeps the last 50 lines per pane.
 - `<auto-rules>…</auto-rules>` wraps readable lines of the rules in force, one per
   line: `programme: <run>`, `agreement: accepted <at>|not accepted`, one
   `<term>: <value>[, until <iso>][, seconds <n>]` per term, one
-  `instruction <id>: "<quote>" (applies to <target>[, until <text>])` per active
-  instruction, one `rule <id>: <autonomy>, requires <deliverables>[; caveat: <text>]`
-  per loaded rule, one `autonomy <action>: <level>` per entry, and
-  `rejected rules: <n> (<ids>)`. `<` is escaped and control text stripped.
+  `ruling <id>: <effect> <kind> "<quote>" (applies to <targets>[, until <iso>])` per
+  active Ruling, one `rule <id>: requires <deliverables>[; caveat: <text>]` per
+  loaded Done standard, one `authority <kind>: <level>` per Authority entry outside
+  the plugin layer, `rejected rules: <n> (<ids>)`, the `operating contract v<n>`
+  lines once the agreement is accepted, one line per old reservation asking Shawn to
+  record it again as a Ruling with a kind, and the `protocol change:`,
+  `protocol not acknowledged` and `Ruling conflict:` lines. `<` is escaped and control text stripped.
   `programme.render_rules(record)` builds it for `rules`, the compaction reload and
   write-verb refusals, from the same lines as the view's "Rules in force" section.
   Both tags carry data, never instructions.
@@ -1011,7 +1044,7 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_DATA_DIR` | `~/.claude/plugins/data/auto-shrimpshack` | every programme module and hook shim |
 | `CLAUDE_AUTO_SECRETS_FILE` | `~/.secrets` | journal redaction and checker tokens; the path and values are never printed |
 | `CLAUDE_AUTO_PERSONAL_PROTOCOL` | `~/.claude/shared/auto/protocol.json` | the protocol loader and the adopt verbs |
-| `CLAUDE_AUTO_CARRYOVER_STORE` | `carryover.json` beside the personal protocol | `keep-corrections`, `promote-correction` and the `set-remit` pre-fill. The file is `{format: 1, keys: {<key>: [{id: "k"+6hex, key, correction, kind, to, area, value, reserved, quote, pm_reading, run_id, at, adoption}]}}`; a new entry replaces an older one of the same kind under its key |
+| `CLAUDE_AUTO_CARRYOVER_STORE` | `carryover.json` beside the personal protocol | `carry-rulings` and the `set-remit` pre-fill. The file is `{format: 1, keys: {<key>: [{id: "k"+6hex, key, ruling, kind, effect, scope, reason, limits, until, quote, run_id, at, adoption}]}}`, where `<key>` is a remit repo's GitHub owner/name or normalised path; a new entry replaces an older one for the same Ruling id under its key |
 | `CLAUDE_AUTO_BEHAVIOURS_STORE` | `behaviours.json` beside the personal protocol | the behaviour resolver, `move-behaviour` and `retire-behaviour`. The file is `{format: 1, personal: [behaviour], repos: {<key>: [behaviour]}}`; each entry carries an adoption block, and a new entry replaces one with the same id |
 | `CLAUDE_AUTO_MACHINE` | the short host name | adoption records |
 | `CLAUDE_AUTO_CHECK_TIMEOUT_SECONDS` | `30` | each evidence checker command |

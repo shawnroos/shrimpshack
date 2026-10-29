@@ -91,8 +91,10 @@
 #   programme_context    → run_record_core, programme_home, programme_sanitize
 #                          (pure over the programme block: the predicate loads it on every
 #                          record write; its verb handlers get programme_record passed in)
-#   programme_protocol   → programme_home                      (never programme_journal:
+#   programme_protocol   → programme_home, programme_decisions (never programme_journal:
 #                          the prompt lookup is passed in by the caller)
+#   programme_decisions  → run_record_core, programme_sanitize  (a leaf over decision data: its
+#                          log-decision handler reaches protocol, Rulings and record through `host`)
 #   programme_journal    → run_record_core, programme_home; programme_authority,
 #                          programme_artifacts [lazy]
 #   programme_store      → run_record_core, programme_home; programme_journal [lazy]
@@ -138,15 +140,18 @@
 #                          programme_record (claim) and programme reach it lazily or after
 #                          their verb table, so it closes no import-time cycle.
 #   programme_resume     → run_record_core, programme_home, programme_authority,
-#                          programme_recovery; programme_journal [lazy]. It takes
+#                          programme_recovery, programme_context; programme_journal [lazy]. It takes
 #                          `programme` as a host argument for the inbox verb and never
 #                          loads it, nor programme_sources or programme_lifecycle.
 #   programme_trajectory → run_record_core, programme_home, programme_journal,
 #                          programme_sanitize, programme_record, driver_session
 #   programme_view       → programme_home, programme_permission_rules, programme_predicate,
 #                          programme_sanitize, programme_tasks, programme_terms, session_registry,
-#                          programme_view_work
+#                          programme_view_work, programme_view_agreement
 #   programme_view_work  → programme_home, programme_predicate
+#   programme_view_agreement → run_record_core, programme_home, programme_context,
+#                          programme_decisions, programme_journal, programme_protocol,
+#                          programme_protocol_changes, programme_terms, programme_view_work
 #   programme_view_setup → programme_approval (the accept step's terms-bound label)
 #   programme_approval   → programme_view [lazy] (the terms digest hashes the rendered terms); a
 #                          module-top load would cycle through programme_view_setup.
@@ -167,15 +172,24 @@
 #                          programme_authority, programme_protocol, session_registry,
 #                          driver_session, verb_cli; programme_resume, programme_store,
 #                          programme_import [lazy];
-#                          then, after its verb table is built: programme_record,
-#                          programme_evidence, programme_sources, programme_terms, programme_proposals,
+#                          then, after its verb table is built: programme_record, programme_rulings,
+#                          programme_protocol_changes, programme_evidence, programme_sources, programme_terms, programme_proposals,
 #                          programme_trajectory, programme_view, programme_lifecycle, programme_archive
 #                          Those eight receive `programme` as a `host` argument and never
 #                          load it back.
 #   programme_proposals  → programme_home, programme_sanitize
+#   programme_rulings    → run_record_core, programme_journal, programme_sanitize,
+#                          programme_decisions, programme_context (never programme_terms or
+#                          programme_record: record is the host's)
 #   programme_naming     → programme_home
+#   programme_protocol_changes → run_record_core, programme_decisions, programme_context, programme_carryover
+#                          (protocol loads and Authority levels reach it through `host`)
+#   programme_carryover  → run_record_core, programme_home, programme_journal, programme_protocol,
+#                          programme_sanitize, programme_context, programme_decisions,
+#                          programme_predicate, session_registry, driver_session;
+#                          programme_behaviours [lazy] (behaviours loads carryover at top)
 #   programme_lifecycle  → run_record_core, programme_home, programme_journal, programme_authority [lazy],
-#                          session_registry, driver_session, programme_sanitize,
+#                          session_registry, driver_session, programme_sanitize, programme_carryover,
 #                          programme_resume [lazy] (handover flags the new driver's restore),
 #                          programme_sources [lazy] (takeover reads herdr)
 #   programme-watch      → run_record_core, programme_home, programme_predicate,
@@ -524,7 +538,8 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_artifacts.py programme_context.py programme_gitio.py programme_preserve.py \
            programme_recovery.py programme_archive.py programme_resume.py \
            programme_terms.py programme_proposals.py programme_trajectory.py programme_view_work.py \
-           programme_naming.py; do
+           programme_naming.py programme_rulings.py programme_protocol_changes.py programme_carryover.py \
+           programme_view_agreement.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -545,7 +560,8 @@ done
 # ─── programme family: forbidden edges ─────────────────────────────────────
 for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
              programme-watch run_record_evidence programme_lifecycle programme_archive \
-             programme_resume programme_terms programme_proposals programme_view_work programme_naming; do
+             programme_resume programme_terms programme_proposals programme_view_work programme_naming \
+             programme_rulings programme_protocol_changes programme_carryover programme_view_agreement; do
   it "${_host}.py does NOT load programme (it receives it as host, or calls the CLI)"
   if loads_sibling "${_host}.py" "programme"; then
     fail "${_host}.py must not load programme — programme loads it, so that closes a cycle"
@@ -628,9 +644,19 @@ else
   pass
 fi
 
-it "programme_predicate.py loads no protocol, journal or task predicate"
+it "programme_decisions.py loads only run_record_core and programme_sanitize (programme_protocol loads it)"
+_extra="$(grep -oE 'load_lib_module\("[a-z_]+"\)|_lazy_load\("[a-z_]+"\)' "$LIB/programme_decisions.py" | grep -vE '"(run_record_core|programme_sanitize)"')"
+if [ -z "$_extra" ] && loads_sibling "programme_decisions.py" "programme_sanitize"; then
+  pass
+else
+  fail "programme_decisions.py must stay a leaf — programme_protocol and programme_rulings load it; extra loads: ${_extra}"
+fi
+
+it "programme_predicate.py loads no protocol, journal, carry-over or task predicate"
 if loads_sibling "programme_predicate.py" "programme_protocol" \
    || loads_sibling "programme_predicate.py" "programme_journal" \
+   || loads_sibling "programme_predicate.py" "programme_carryover" \
+   || loads_sibling "programme_predicate.py" "programme_protocol_changes" \
    || loads_sibling "programme_predicate.py" "run_record_predicate"; then
   fail "programme_predicate.py must stay pure over the record — run_record_predicate loads it, and every record write calls it"
 else
@@ -645,6 +671,26 @@ if loads_sibling "programme_context.py" "programme" || loads_sibling "programme_
   fail "programme_context.py must stay pure — the predicate loads it, and programme_record passes itself in"
 else
   pass
+fi
+
+it "programme_rulings.py loads neither programme_terms nor programme_record (record is the host's)"
+if loads_sibling "programme_rulings.py" "programme_terms" || loads_sibling "programme_rulings.py" "programme_record"; then
+  fail "programme_rulings.py must not load programme_terms or programme_record (reach it as host.programme_record)"
+else
+  pass
+fi
+
+it "programme_protocol_changes.py and programme_carryover.py load neither programme nor a verb module"
+_bad=""
+for _mod in programme_protocol_changes programme_carryover; do
+  for _sib in programme programme_record programme_rulings programme_lifecycle programme_terms; do
+    loads_sibling "${_mod}.py" "$_sib" && _bad="${_bad} ${_mod}->${_sib}"
+  done
+done
+if [ -z "$_bad" ]; then
+  pass
+else
+  fail "these reach a verb module or programme itself, which loads them (use host):${_bad}"
 fi
 
 it "programme_view.py does NOT load programme_record (rules and inbox size are passed in)"

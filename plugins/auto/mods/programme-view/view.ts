@@ -152,7 +152,7 @@ function partsOf(view: Raw): { contract: Contract; reread: Reread; spaces: strin
     spaces: spacesOf(model),
     contract: {
       terms: Array.isArray(contract.terms) ? contract.terms : [],
-      instructions: Array.isArray(contract.instructions) ? contract.instructions : [],
+      rulings: Array.isArray(contract.rulings) ? contract.rulings : [],
     },
     reread: {
       last_at: typeof reread.last_at === 'string' ? reread.last_at : null,

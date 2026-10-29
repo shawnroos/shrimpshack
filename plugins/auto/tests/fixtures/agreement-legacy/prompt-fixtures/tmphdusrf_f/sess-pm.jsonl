@@ -1,0 +1,1 @@
+{"type": "user", "sessionId": "sess-pm", "promptId": "0e64a5b5-6d8d-4b33-bd1d-126c5cd3299b", "promptSource": "typed", "turnOrigin": "human", "origin": {"kind": "human"}, "entrypoint": "cli", "message": {"role": "user", "content": "yes, set prod_deploy to never"}}

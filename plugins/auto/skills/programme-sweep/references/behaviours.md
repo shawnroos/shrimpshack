@@ -3,8 +3,8 @@
 Read this when Shawn gives standing guidance on how the work is done, and before you record, move, retire or propose a behaviour. `P` means `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh"`.
 
 A behaviour is Shawn's standing guidance on how the work is
-done. It carries no authority and no done bar: who decides stays with the
-terms and corrections, and acceptance stays with Done standards.
+done. It carries no authority and no done bar: who decides stays with
+Authority and Rulings, and acceptance stays with Done standards.
 - Before you record one, read the behaviours in force (`P rules`). When the
   new one overlaps or disagrees with one of them, pass `--conflicts-with <id>`.
   The new one wins, because the narrower layer wins (programme over repo over
@@ -30,8 +30,8 @@ terms and corrections, and acceptance stays with Done standards.
 - When Shawn corrects you twice on the same thing, you may draft a behaviour
   from his words with `P propose-behaviour`. Tell him its id. It applies only
   when his typed reply names it (the "Apply a behaviour you proposed" row).
-- Once per programme, offer to move tool preferences out of the project
-  terms. For each term in `P status --terms` that names a preferred tool, run
+- Once per programme, offer to move preferred tools out of the agreement's
+  Scope. For each preferred tool `P status --agreement` lists, run
   `P propose-behaviour --from-term <term-id>`. Show him each term with its
   drafted behaviour id and ask which are tool preferences. Apply the ids his
   typed reply names with `--from-proposal`, and retire the rest with

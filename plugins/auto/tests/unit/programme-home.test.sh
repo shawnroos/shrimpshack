@@ -391,6 +391,52 @@ EOF
 )"
 check "['accepted', 'terms'] [] []" "$OUT"
 
+it "normalize_programme reads an old instruction and a reserved term as legacy Rulings, then drops the old keys"
+OUT="$(run_py <<'EOF'
+old = {"instructions": [{"id": "i1", "state": "withdrawn", "at": "2026-10-01T00:00:00Z", "applies_to": "linear:AI-1",
+                         "until": None, "why": "gone", "prompt_id": "p1", "quote": "skip it",
+                         "closed": {"at": "2026-10-02T00:00:00Z", "why": None, "prompt_id": "p2"}}],
+       "agreement": {"project_terms": [{"id": "t1", "area": "pricing", "value": "Shawn writes prices", "reserved": True},
+                                       {"id": "t2", "area": "tools", "value": "use Amplitude", "reserved": False}]}}
+blk = ph.normalize_programme(old)
+d = blk["context"]["decisions"]
+i1, t1 = d["i1"][0], d["t1"][0]
+print(sorted(d), i1["state"], i1["closed"]["as"], i1["closed"]["prompt_id"], i1["applies_to"], i1["kind"],
+      t1["effect"], t1["area"], t1["scope"], "instructions" in blk, [t["id"] for t in blk["agreement"]["project_terms"]])
+EOF
+)"
+check "['i1', 't1'] closed withdrawn p2 ['linear:AI-1'] None restrict pricing Shawn writes prices False ['t2']" "$OUT"
+
+it "normalize_programme drops the agreement's autonomy term and keeps every other term"
+OUT="$(run_py <<'EOF'
+old = {"agreement": {"terms": {"autonomy": {"key": "autonomy", "value": "protocol", "overrides": {}},
+                               "cadence": {"key": "cadence", "value": "fixed", "seconds": 600}}}}
+blk = ph.normalize_programme(old)
+print(sorted(blk["agreement"]["terms"]), blk["agreement"]["terms"]["cadence"]["seconds"],
+      sorted(ph.default_terms("2026-10-01T00:00:00Z")), "autonomy" in ph.TERM_GUIDE)
+EOF
+)"
+check "['cadence', 'focus_budget', 'remit', 'stop_rule', 'tools_of_record'] 600 ['cadence', 'focus_budget', 'remit', 'stop_rule', 'tools_of_record'] False" "$OUT"
+
+it "a record carrying an old instruction and a new Ruling under the same id keeps the new Ruling"
+OUT="$(run_py <<'EOF'
+ruling = {"rev": 1, "state": "accepted", "kind": "tool_choice", "effect": "grant", "applies_to": ["programme"]}
+old = {"instructions": [{"id": "i1", "state": "active", "quote": "old words", "applies_to": "programme"}],
+       "context": {"decisions": {"i1": [ruling]}}}
+blk = ph.normalize_programme(old)
+print(blk["context"]["decisions"]["i1"] == [ruling], "context" in old and old["context"]["decisions"]["i1"] == [ruling])
+EOF
+)"
+check "True True" "$OUT"
+
+it "normalize_programme leaves a malformed context block for the context reader to report"
+OUT="$(run_py <<'EOF'
+blk = ph.normalize_programme({"instructions": [{"id": "i1", "state": "active"}], "context": {"decisions": "junk"}})
+print(blk["context"], len(blk["instructions"]))
+EOF
+)"
+check "{'decisions': 'junk'} 1" "$OUT"
+
 fresh old
 FAKES="${WORK}/fakes"
 mkdir -p "$FAKES"
@@ -422,13 +468,27 @@ it "an accepted record with no project terms and no stamp survives writes throug
 CODES=""
 "$PY" "$PROGPY" add-item linear:AI-7 --title "Crop" --kind fix_only >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" amend-term stop_rule never_stop --prompt "$(old_prompt 'stop rule never_stop')" >/dev/null 2>&1; CODES="${CODES}$?"
-"$PY" "$PROGPY" record-instruction --prompt "$(old_prompt 'keep PRs small')" >/dev/null 2>&1; CODES="${CODES}$?"
+"$PY" "$PROGPY" record-ruling r-small --kind technical_approach --effect decided --scope "keep PRs small" \
+  --prompt "$(old_prompt 'r-small: keep PRs small, technical approach across the programme')" >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" log-decision linear:AI-7 --kind technical_approach --silent --why "smaller" >/dev/null 2>&1; CODES="${CODES}$?"
 "$PY" "$PROGPY" status --json >/dev/null 2>&1; CODES="${CODES}$?"
 check "00000 ['accepted', 'terms']" "${CODES} $(old_agreement_keys)"
 it "the old accepted record refuses a project-term edit and gains nothing"
 "$PY" "$PROGPY" edit-project-term t000000 "anything" --prompt "$(old_prompt 'anything')" >/dev/null 2>&1
 check "1 ['accepted', 'terms']" "$? $(old_agreement_keys)"
+
+it "no shipped code reads a retired programme key outside normalize_programme"
+retired_leaks() {
+  (cd "$AUTO_ROOT" && grep -rnE \
+    -e '\["instructions"\]' -e 'get\("instructions"' -e '"instructions":' -e '\.instructions\b' \
+    -e 'term\("autonomy"' -e 'terms(\[|\.get\()"autonomy"' -e '\["terms"\]\["autonomy"\]' -e '"autonomy": \{$' \
+    -e 'term:autonomy' -e 'SHARED_TERMS' -e 'reserved for Shawn' \
+    --include='*.py' --include='*.ts' --include='*.tsx' --include='*.sh' \
+    --exclude='*.test.ts' --exclude='test-world.ts' \
+    lib mods .claude/hooks 2>&1)
+}
+LEAKS="$(retired_leaks)"
+check "1 " "$? ${LEAKS}"
 
 echo ""
 echo "programme-home.test.sh: ${PASS} passed, ${FAIL} failed"

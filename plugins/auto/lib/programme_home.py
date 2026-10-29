@@ -56,7 +56,7 @@ ITEM_FIELDS = (
     "focus_override",
 )
 PROGRAMME_FIELDS = (
-    "remit", "created_at", "agreement", "instructions", "decisions", "items",
+    "remit", "created_at", "agreement", "decisions", "items",
     "working_model", "watchers", "inbox_offset", "ended", "permission_proposals", "behaviours",
     "pm_worktree",
 )
@@ -281,7 +281,6 @@ def default_terms(now_iso: str) -> dict:
     return {
         "remit": term("remit", ("space", "tabs", "spaces"), "space"),
         "stop_rule": term("stop_rule", STOP_RULES, "nothing_it_can_act_on", until=None),
-        "autonomy": term("autonomy", ("protocol",), "protocol", overrides={}),
         "cadence": term("cadence", ("on_change", "fixed"), "on_change",
                         seconds=DEFAULT_CADENCE_SECONDS, eval_budget_usd_per_day=25,
                         quiet_hours=None),
@@ -313,14 +312,6 @@ TERM_GUIDE = {
             "only_when_done": "Stop only when every item is done.",
             "until_time": "Keep going until a set time, then stop.",
             "never_stop": "Never stop on its own.",
-        },
-    },
-    "autonomy": {
-        "editor": "choice",
-        "binding": "none",
-        "description": "How far the PM may act without asking Shawn first.",
-        "options": {
-            "protocol": "The protocol rules decide, action by action.",
         },
     },
     "cadence": {
@@ -355,6 +346,8 @@ TERM_GUIDE = {
 }
 
 _OLD_TOOLS_KEY = "sources"
+_OLD_INSTRUCTIONS_KEY = "instructions"
+_OLD_AUTONOMY_TERM = "autonomy"
 _RENAMED_FIELDS = ("value", "set_by", "set_at", "why", "prompt_id", "quote")
 
 
@@ -403,7 +396,6 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         },
         "created_at": now_iso,
         "agreement": {"accepted": None, "terms": default_terms(now_iso)},
-        "instructions": [],
         "decisions": [],
         "items": {},
         "working_model": {"doing": None, "queue": []},
@@ -451,6 +443,63 @@ def session_ids(item) -> list:
     return [s for s in dict.fromkeys(sids) if isinstance(s, str) and s]
 
 
+def _legacy_revision(entry, legacy, effect, scope, applies_to, until) -> dict:
+    at = entry.get("at")
+    prompt_id = entry.get("prompt_id")
+    closed = entry.get("state") not in (None, "active")
+    out = {"rev": 1, "state": "closed" if closed else "accepted", "at": at, "kind": None, "effect": effect,
+           "legacy": legacy, "scope": scope, "reason": entry.get("why"), "limits": [], "requirements": [],
+           "applies_to": applies_to, "until": until, "quote": entry.get("quote"), "replies_to": None,
+           "baseline": None, "delta": None, "supersedes": None, "superseded_by": None,
+           "source": {"class": "human_input" if prompt_id else "derived", "prompt_id": prompt_id,
+                      "origin_label": "typed" if prompt_id else None, "origin_verified": False},
+           "accepted": {"at": at, "prompt_id": prompt_id, "origin_verified": False}}
+    if closed:
+        ended = entry.get("closed") if isinstance(entry.get("closed"), dict) else {}
+        out["closed"] = {"at": ended.get("at"), "as": entry.get("state"), "why": ended.get("why"),
+                         "prompt_id": ended.get("prompt_id")}
+    return out
+
+
+def _legacy_rulings(block) -> dict:
+    out = {}
+    for entry in block.get(_OLD_INSTRUCTIONS_KEY) or []:
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+            out[entry["id"]] = _legacy_revision(entry, "instruction", "decided", entry.get("quote"),
+                                                [entry.get("applies_to") or "programme"], entry.get("until"))
+    for entry in project_terms(block):
+        if entry.get("reserved") and isinstance(entry.get("id"), str):
+            revision = _legacy_revision(dict(entry, why=None), "project_term", "restrict", entry.get("value"),
+                                        ["programme"], None)
+            revision["area"] = entry.get("area")
+            out[entry["id"]] = revision
+    return out
+
+
+def _with_legacy_rulings(block) -> bool:
+    legacy = _legacy_rulings(block)
+    context = block.get("context")
+    if not legacy:
+        return True
+    if not isinstance(context or {}, dict) or not isinstance((context or {}).get("decisions", {}), dict):
+        return False
+    context = dict(context or {})
+    decisions = dict(context.get("decisions") or {})
+    for rid, revision in legacy.items():
+        decisions.setdefault(rid, [revision])
+    context["decisions"] = decisions
+    block["context"] = context
+    return True
+
+
+def _drop_retired(block) -> None:
+    block.pop(_OLD_INSTRUCTIONS_KEY, None)
+    agreement = block["agreement"]
+    if isinstance(agreement.get("project_terms"), list):
+        agreement["project_terms"] = [e for e in agreement["project_terms"]
+                                      if not (isinstance(e, dict) and e.get("reserved"))]
+
+
 def normalize_programme(block: dict) -> dict:
     if not isinstance(block, dict):
         raise ProgrammeHomeError(f"programme block must be a dict: {block!r}")
@@ -466,6 +515,7 @@ def normalize_programme(block: dict) -> dict:
         renamed = dict(base["agreement"]["terms"]["tools_of_record"])
         renamed.update({k: old[k] for k in _RENAMED_FIELDS if k in old})
         terms["tools_of_record"] = renamed
+    terms.pop(_OLD_AUTONOMY_TERM, None)
     for key, term in base["agreement"]["terms"].items():
         terms.setdefault(key, term)
     agreement["terms"] = terms
@@ -481,6 +531,9 @@ def normalize_programme(block: dict) -> dict:
         tracker.setdefault(part, [])
     remit["tracker"] = tracker
     out["remit"] = remit
+    # A malformed context cannot take the legacy copy, so the old keys stay until it is repaired.
+    if _with_legacy_rulings(out):
+        _drop_retired(out)
     return out
 
 

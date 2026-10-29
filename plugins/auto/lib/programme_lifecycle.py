@@ -29,7 +29,6 @@ terminal_host = load_lib_module("terminal_host")
 driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
-programme_terms = load_lib_module("programme_terms")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
@@ -704,9 +703,9 @@ def _h_end(host, argv):
             reason, request = END_REASON, _end_request(run, sid, status)
         record = programme_home._read_record(run) or {}
         out = _watcher_ids(record)
-        corrections = programme_terms.end_lines(record.get("programme") or {})
-        if corrections:
-            out["corrections"] = corrections
+        carryover = programme_carryover.offer(programme_home.normalize_programme(record.get("programme") or {}))
+        if carryover:
+            out["carryover"] = carryover
         out.update(reason=reason, why=opts.get("why"), lease_status=status,
                    request=request and _request_ref(request))
         cites = (request or {}).get("cites")
@@ -720,8 +719,8 @@ def _h_end(host, argv):
         _refuse(host, run, "end", sid, exc)
     _finish(host, run, "programme_ended", sid, out, cites=cites, journal=False)
     sys.stdout.write(f"Programme {run} ended.\n")
-    for line in out.get("corrections") or []:
-        sys.stdout.write(f"Applied {line}\n")
+    for line in programme_carryover.offer_lines(out.get("carryover") or []):
+        sys.stdout.write(line + "\n")
     _cleanup_lines(out, run)
     sys.stdout.write(f"Then record each stop: release-resources --run {run} (add --watcher <watcher id> --stopped "
                      f"after each CronDelete or TaskStop), and check-archive --run {run} before archive.\n")
@@ -867,8 +866,7 @@ def remit_changes(before, after) -> list:
     return changes
 
 
-def _move_leases(run, sid, home, changes) -> None:
-    stamp = _stamp()
+def _lease_moves(run, changes) -> list:
     moves = []
     for part, how, space in changes:
         if part != "spaces":
@@ -881,6 +879,11 @@ def _move_leases(run, sid, home, changes) -> None:
             if status not in ("free", "ended"):
                 raise programme_home.LeaseHeld(_space_key(space), lease, status)
         moves.append((how, space, path, ours))
+    return moves
+
+
+def _move_leases(run, sid, home, moves) -> None:
+    stamp = _stamp()
     for how, space, path, ours in moves:
         if how == "removed" and ours:
             os.unlink(path)
@@ -899,6 +902,8 @@ def _h_set_remit(host, argv):
         doc = json.loads(raw)
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
+    # Before the leases lock: finishing a move cut off mid-way takes that lock itself.
+    run, home, _ = host._locate(opts, finish_move=True)
 
     def change(programme, prompt, rec):
         before = programme["remit"]
@@ -909,8 +914,7 @@ def _h_set_remit(host, argv):
             raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of a typed prompt")
         if accepted:
             host.require_named(prompt, *[_names(part, entry) for part, _, entry in changes])
-        _move_leases(rec["run_id"], rec.get("driving_session_id"), programme_home.home_path(rec["run_id"]),
-                     changes)
+        moves = _lease_moves(rec["run_id"], changes)
         programme["remit"] = dict(before, **after)
         term = programme["agreement"]["terms"]["remit"]
         term.update(set_by="shawn" if prompt else "proposal", set_at=_stamp())
@@ -920,13 +924,20 @@ def _h_set_remit(host, argv):
         out = {"remit": after,
                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
         if not accepted:
-            carried, notices = programme_carryover.prefill(host, programme)
+            # On the JSON files a carried Ruling refuses the write, so neither the store nor a lease may change first.
+            moved = host.programme_authority.promoted(home, run)
+            carried, notices = programme_carryover.prefill(host, programme, write=moved)
+            if carried and not moved:
+                raise host.programme_authority.legacy_refusal(run, "remit_set")
             out.update({"carried_over": carried} if carried else {}, **({"notices": notices} if notices else {}))
+        _move_leases(rec["run_id"], rec.get("driving_session_id"), programme_home.home_path(rec["run_id"]), moves)
         return out
 
-    return programme_home._with_leases_lock(
-        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"),
-                            verb="set-remit", target="remit"))
+    # Promotion takes the leases lock this write holds, so the move runs outside it: the _locate above finishes a
+    # cut-off move, and promote=False also stops _write finishing one, so a later marker refuses as a held home.
+    return host.promoting(run, home, "set-remit", lambda: programme_home._with_leases_lock(
+        lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"), verb="set-remit",
+                            target="remit", promote=False)))
 
 
 _SPECS = (
@@ -966,7 +977,9 @@ _SPECS = (
      "name that is not owner/name; a team key that is not an issue prefix; a list over its cap; no "
      "space; a space another programme holds. Once the agreement is accepted it needs a typed "
      "--prompt that names each space, repo, team, project or initiative added or removed. A "
-     "part left out keeps its value. Adding a space takes its lease; removing one releases it."),
+     "part left out keeps its value. Adding a space takes its lease; removing one releases it. Before "
+     "acceptance it can carry Rulings in, so on a home still on its old JSON files it first moves the home to "
+     "programme.db, and refuses, changing nothing, when that move cannot run."),
     ("beat", _h_beat, "[--run <id>]",
      "a caller that is not the driving session. Stamps the driver beat that keeps the lease live; "
      "exempt from the compact flag; not journaled."),
@@ -974,5 +987,7 @@ _SPECS = (
 
 
 def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
-            for name, handler, args, rejects in _SPECS}
+    verbs = {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+             for name, handler, args, rejects in _SPECS}
+    verbs.update(programme_carryover.build_verbs(host))
+    return verbs
