@@ -58,6 +58,8 @@ Every rule has all eight fields below. A missing field rejects the rule (`missin
 
 Deliverables: `merged`, `flagged`, `verified`, `released`, `recorded`.
 
+`recorded` takes one of two refs. A Linear key such as `AI-123` is read from Linear and needs a done state and a person's root-cause comment. An eight-character peek task id such as `vw5drr40` is read from `.peek/tasks/<slug>-<id>.md` in a remit repo's main clone (a worktree's copy is ignored) and is confirmed when the file's `id` matches. The task's `status` is ignored: `recorded` means tracked, not done. Any other ref, and a peek id with no task file, is `refuted` (never `unknown`), so no retry watcher is queued.
+
 Outcomes: `handed` (the item goes to Shawn) and `debugged` (the PM debugged the blocker at runtime and recorded its trace or job id). An outcome is not a deliverable. The match result lists outcomes in `requires` only, never in `deliverables`.
 
 Change kinds in the plugin layer: `flagged_code`, `fix_only`, `shared_package`, `evals_or_docs`, `product_question`, `shared_blocker`. A more specific layer can name a new kind.
