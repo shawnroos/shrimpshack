@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -297,7 +298,9 @@ def _peek_task_file(task_id, repos):
         if not path or not os.path.isdir(os.path.join(path, ".git")):
             continue
         tasks = os.path.join(path, ".peek", "tasks")
-        if not os.path.isdir(tasks):
+        # A symlinked .peek or tasks folder would read task files from outside the clone.
+        if os.path.realpath(tasks) != os.path.join(os.path.realpath(path), ".peek", "tasks") \
+                or not os.path.isdir(tasks):
             continue
         try:
             names = sorted(os.listdir(tasks))
@@ -306,18 +309,22 @@ def _peek_task_file(task_id, repos):
         for name in names:
             if not name.endswith(f"-{task_id}.md"):
                 continue
+            file = os.path.join(tasks, name)
             try:
-                with open(os.path.join(tasks, name), encoding="utf-8") as handle:
+                # lstat, not open: a symlink can point outside the folder and a named pipe blocks open().
+                if not stat.S_ISREG(os.lstat(file).st_mode):
+                    continue
+                with open(file, encoding="utf-8") as handle:
                     head = handle.read(4096)
             except OSError as exc:
-                raise Unknown(_note("cannot read", os.path.join(tasks, name), str(exc)))
+                raise Unknown(_note("cannot read", file, str(exc)))
             front = head.split("---", 2)[1] if head.startswith("---") else ""
             prop = _PEEK_PROP_ID.search(front)
             if prop and prop.group(1) == task_id:
                 name_prop = re.search(r"^name:\s*\"?(.*?)\"?\s*$", front, re.MULTILINE)
                 status = re.search(r"^status:\s*(\S+)", front, re.MULTILINE)
                 return {"task": task_id, "name": name_prop.group(1) if name_prop else None,
-                        "status": status.group(1) if status else None, "file": os.path.join(tasks, name)}
+                        "status": status.group(1) if status else None, "file": file}
     return None
 
 

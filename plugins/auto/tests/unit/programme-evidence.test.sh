@@ -563,6 +563,36 @@ it "recorded: a ref that is neither a Linear key nor a peek id is refuted"
 has '"result": "refuted"' "$(peek_check not-a-ref)"
 has "peek task id" "$(peek_check not-a-ref)"
 
+OUTSIDE="${WORK}/outside"
+mkdir -p "$OUTSIDE" "${WORK}/peek-link/.git" "${WORK}/peek-link/.peek"
+printf -- '---\nname: "Planted"\nid: sy000001\nstatus: todo\n---\n' > "${OUTSIDE}/planted.md"
+ln -s "${OUTSIDE}/planted.md" "${PEEK}/.peek/tasks/planted-sy000001.md"
+mkdir -p "${OUTSIDE}/tasks"
+printf -- '---\nname: "Via dir"\nid: sy000002\nstatus: todo\n---\n' > "${OUTSIDE}/tasks/via-sy000002.md"
+ln -s "${OUTSIDE}/tasks" "${WORK}/peek-link/.peek/tasks"
+mkfifo "${PEEK}/.peek/tasks/pipe-sy000003.md"
+peek_check_in() {
+  PEEK_ONLY="$2" run_py "$1" <<'EOF2'
+pe = load_lib_module("programme_evidence")
+v = pe.run_check("r", "herdr:w2-p4", "recorded", args[0], {"remit_repos": [{"path": os.environ["PEEK_ONLY"], "github": None}]})
+print(json.dumps({"result": v["result"], "misses": v["misses"]}, sort_keys=True))
+EOF2
+}
+
+it "recorded: a task file that is a symlink out of the tasks folder is refuted"
+has '"result": "refuted"' "$(peek_check_in sy000001 "$PEEK")"
+
+it "recorded: a tasks folder that is a symlink is refuted"
+has '"result": "refuted"' "$(peek_check_in sy000002 "${WORK}/peek-link")"
+
+it "recorded: a named pipe in place of a task file is refuted without blocking"
+has '"result": "refuted"' "$(peek_check_in sy000003 "$PEEK" 2>&1 | head -1)"
+
+for hostile in '../outside/planted' '../../etc/passwd' 'vw5drr40/../x' '*' 'vw5drr4*' 'VW5DRR40' 'vw5drr40.md'; do
+  it "recorded: hostile ref [${hostile}] is refuted"
+  has '"result": "refuted"' "$(peek_check "$hostile")"
+done
+
 it "recorded: a Linear key still takes the Linear path"
 has '"result": "unknown"' "$(peek_check AI-9)"
 
