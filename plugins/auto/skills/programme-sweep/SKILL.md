@@ -103,10 +103,9 @@ re-arming. Changes made
 between the expiry and the re-arm are not reported; the next sweep reads them.
 
 1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
-   Bash call that runs `echo SWEEP-START`, then step 2's `prune` (it finds the run
-   from this session's lease), `P validate`, `P sweep --record-sources`,
-   `P propose-permission`, `P settle-permissions` and last
-   `P sweep-inputs --save`, joined with `;` and ending `2>&1 | tail -c 6000`. If
+   Bash call of the form `{ echo SWEEP-START; <step 2's prune, which finds the run
+   from this session's lease>; P validate; P sweep --record-sources;
+   P propose-permission; P settle-permissions; P sweep-inputs --save; } 2>&1 | tail -c 6000`. If
    `P beat` refuses because the programme ended, stop. `P expire` ends a
    programme whose agreement was never accepted; if it prints `"ended": true`,
    tell Shawn in one line and stop. The last JSON in that output is the verdict of

@@ -203,7 +203,10 @@ def decide(stdin_raw, drives=_drives_programme, homes=_driven_homes):
     elif tool in WRITE_TOOLS:
         driven, programmes_dir = homes(data.get("session_id"))
         packager = str(data.get("agent_type") or "").endswith(PACKAGER_TYPE)
-        reason = write_refusal(tool_input, driven, programmes_dir, only_digest=packager) if driven else None
+        if packager and not driven:
+            reason = f"the sweep packager may write only <home>/{DIGEST_NAME}, and this session drives no programme"
+        else:
+            reason = write_refusal(tool_input, driven, programmes_dir, only_digest=packager) if driven else None
     else:
         return None
     if reason is None:

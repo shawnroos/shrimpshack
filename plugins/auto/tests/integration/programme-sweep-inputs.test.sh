@@ -100,6 +100,18 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     check('a new working_now row resets the comparison point for journal rows and item history',
           ('journal_rows' in again['why'], 'items_changed' in again['why']), (False, False))
 
+    digest = os.path.join(home, 'sweep-digest.md')
+    open(digest, 'w').write('# stale digest')
+    code, resaved = inputs('--save')
+    check('--save removes the digest of an earlier sweep and writes fresh inputs',
+          (code, os.path.exists(digest), os.path.exists(os.path.join(home, 'sweep-inputs.json'))), (0, False, True))
+    code, again_saved = inputs('--save')
+    check('--save with no digest present still succeeds', code, 0)
+    os.mkdir(digest)
+    code, over_dir = inputs('--save')
+    check('--save does not fail when something other than a file sits at the digest path', code, 0)
+    os.rmdir(digest)
+
     bare = subprocess.run(['/usr/bin/python3', os.path.join(lib, 'programme_journal.py'), 'prune'],
                           capture_output=True, text=True, env=env)
     check('prune finds the run from the session lease when --run is omitted', (bare.returncode, bare.stdout.strip()[:11]), (0, '{"removed":'))
@@ -180,12 +192,12 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     readiness = load_lib_module('programme_readiness')
     resume = load_lib_module('programme_resume')
 
-    def why_with(rows=None, claims=None, asks=None, stalled=None):
+    def why_with(rows=None, claims=None, asks=None, stalled=None, claim_offset=0):
         keep = (psi.programme_journal.read, resume.claims_state, host.build_view, psi._stalled)
         base_rows = [{'kind': 'working_now', 'at': '2026-10-29T10:00:00Z', 'payload': {}}]
         psi.programme_journal.read = lambda _r: base_rows + (rows or [])
         if claims is not None:
-            resume.claims_state = lambda _r, _h, _rec=None: (claims, 0, None)
+            resume.claims_state = lambda _r, _h, _rec=None: (claims, claim_offset, None)
         real_view = host.build_view
         if asks is not None:
             host.build_view = lambda *a, **k: dict(real_view(*a, **k), asks=asks)
@@ -200,6 +212,13 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     built = why_with(claims=[claim])
     check('an unread claim is a change and the verb reports where mark-read should go',
           ('unread_claims' in built['why'], built['claims']), (True, {'unread': 1, 'next_offset': 1}))
+    two = [claim, dict(claim, ref='o/r#2')]
+    half = why_with(claims=two, claim_offset=1)
+    check('claims the PM already marked read are not unread: the offset slices them off',
+          (half['claims'], [c['index'] for c in half['unread_claims']]), ({'unread': 1, 'next_offset': 2}, [1]))
+    caught_up = why_with(claims=two, claim_offset=2)
+    check('with every claim marked read there is no unread claim and no change from claims',
+          ('unread_claims' in caught_up['why'], caught_up['claims']['unread']), (False, 0))
     check('an open ask that was never shown is a change',
           'ask_not_shown' in why_with(asks=[{'item': 'k', 'status': 'open', 'shown_current': False, 'fingerprint': 'f1'}])['why'], True)
     check('an open ask that was shown is not a change',
@@ -230,6 +249,14 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
         return {'state': state, 'isDraft': False, 'mergeable': 'UNKNOWN', 'mergeStateStatus': 'UNKNOWN', 'headRefOid': 'abc',
                 'reviewThreads': {'totalCount': 0, 'nodes': []},
                 'commits': {'nodes': [{'commit': {'oid': 'abc', 'statusCheckRollup': {'contexts': {'totalCount': 0, 'nodes': []}}}}]}}
+
+    keep_cm = psi.programme_readiness.check_mergeable
+    refs = [('k', 'd', 'o/r#1')]
+    psi.programme_readiness.check_mergeable = lambda _r, _repos=None: {'result': 'not_ready', 'gates': ['already merged'], 'ended': True}
+    check('the verb reads the ended flag from a merge-readiness verdict', psi._readiness({'remit': {}}, refs)[0]['ends'], True)
+    psi.programme_readiness.check_mergeable = lambda _r, _repos=None: {'result': 'not_ready', 'gates': ['already merged']}
+    check('wording alone no longer marks a PR ended: only the flag does', psi._readiness({'remit': {}}, refs)[0]['ends'], False)
+    psi.programme_readiness.check_mergeable = keep_cm
 
     check('merge readiness marks a merged PR as ended', readiness._bar(pr_facts('MERGED')).get('ended'), True)
     check('merge readiness marks a closed PR as ended', readiness._bar(pr_facts('CLOSED')).get('ended'), True)

@@ -208,7 +208,7 @@ def _save(home, inputs) -> str:
     # creates a fresh file (a Write over an existing file it has not read fails) and the PM cannot read an old one.
     try:
         os.unlink(os.path.join(home, DIGEST_NAME))
-    except FileNotFoundError:
+    except OSError:
         pass
     return path
 
