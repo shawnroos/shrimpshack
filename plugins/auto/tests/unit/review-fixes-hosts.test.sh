@@ -193,6 +193,38 @@ check '{"env_pane": "w7:p1", "host": "herdr", "pane_id": "w7:p1", "resolved": "e
 it "a herdr session with no pane variable records nothing and does not raise"
 check "null" "$(herdr_row "/usr/bin:/bin")"
 
+# ---------------------------------------------------------------- spaces are three long in memory, herdr stays unmarked on disk (round 3)
+echo "review-fixes: Space is always three long and the herdr lease files are unchanged"
+spaces_out() {
+  AUTO_TEST_HOST=stub py <<PYEOF
+$HEAD_PY
+for spec in ("w1", "srvx.w1", ("srvx", "w1"), ("srvx", "w1", "herdr"), {"server": "srvx", "workspace": "w1"}, "rex--s--b", ("s", "b", "rex")):
+    print(len(ph.parse_space(spec)), end=" ")
+print()
+run = ph.create_programme([("sp-srv", "sp-w1"), ("sp-srv", "sp-w1", "herdr"), ("sp-srv", "sp-w2", "rex")], "pm-spaces")["run"]
+print(sorted(f for f in os.listdir(ph.leases_dir()) if f.startswith("sp-srv") or f.startswith("rex--sp-srv")))
+print(json.dumps(json.load(open(os.path.join(ph.leases_dir(), "sp-srv.sp-w1.json"))), sort_keys=True).replace(run, "RUN").replace(ph.home_path(run), "HOME"))
+print(json.load(open(os.path.join(ph.leases_dir(), "rex--sp-srv--sp-w2.json")))["host"])
+lease = json.load(open(os.path.join(ph.leases_dir(), "sp-srv.sp-w1.json")))
+os.unlink(os.path.join(ph.leases_dir(), "sp-srv.sp-w1.json"))
+ph.write_lease(lease, run, lease["home"], "pm-spaces-2", lease["created_at"])
+again = json.load(open(os.path.join(ph.leases_dir(), "sp-srv.sp-w1.json")))
+print(again["session_id"], "host" in again, again["created_at"] == lease["created_at"])
+PYEOF
+}
+OUT="$(spaces_out)"
+it "every spec form parses to three parts"
+check "3 3 3 3 3 3 3" "$(echo "$OUT" | sed -n 1p | sed 's/ $//')"
+it "the herdr spec written two ways is one lease file; rex gets its host-qualified file"
+check "['rex--sp-srv--sp-w2.json', 'sp-srv.sp-w1.json']" "$(echo "$OUT" | sed -n 2p)"
+it "the herdr lease file has no host field and the usual keys"
+has '"server": "sp-srv"' "$(echo "$OUT" | sed -n 3p)"
+lacks '"host"' "$(echo "$OUT" | sed -n 3p)"
+it "the rex lease file names its host"
+check "rex" "$(echo "$OUT" | sed -n 4p)"
+it "write_lease from a lease dict rewrites the same herdr file with no host field"
+check "pm-spaces-2 False True" "$(echo "$OUT" | sed -n 5p)"
+
 # ---------------------------------------------------------------- start and takeover pane gates (findings 2 and 3)
 as_stub() {
   local sid="$1"; shift

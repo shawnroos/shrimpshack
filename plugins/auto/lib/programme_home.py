@@ -17,6 +17,7 @@ import secrets
 import sys
 import tempfile
 import time
+from typing import NamedTuple
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -192,15 +193,18 @@ def space_parts(space) -> tuple:
     return space.get("server"), space.get("workspace"), (space.get("host") or DEFAULT_HOST)
 
 
-def parse_space(spec):
-    """(server, workspace) for herdr, (server, workspace, host) for any other host."""
+class Space(NamedTuple):  # three long in memory; only the key, lease file and stored form omit a herdr host
+    server: str
+    workspace: str
+    host: str = DEFAULT_HOST
+
+
+def parse_space(spec) -> Space:
     host = DEFAULT_HOST
     if isinstance(spec, dict):
         server, workspace, host = spec.get("server") or DEFAULT_SERVER, spec.get("workspace"), spec.get("host") or DEFAULT_HOST
-    elif isinstance(spec, (list, tuple)) and len(spec) == 2:
-        server, workspace = spec
-    elif isinstance(spec, (list, tuple)) and len(spec) == 3:
-        server, workspace, host = spec
+    elif isinstance(spec, (list, tuple)) and len(spec) in (2, 3):
+        server, workspace, host = (tuple(spec) + (DEFAULT_HOST,))[:3]
     elif isinstance(spec, str) and "." in spec:
         server, workspace = spec.split(".", 1)
     elif isinstance(spec, str) and spec.count("--") == 2 and spec.split("--", 1)[0] in load_lib_module("terminal_host").key_hosts():
@@ -208,9 +212,8 @@ def parse_space(spec):
     else:
         server, workspace = DEFAULT_SERVER, spec
     host = check_host(host)
-    if host == DEFAULT_HOST:
-        return check_segment(server), check_segment(workspace)
-    return check_host_id(server), check_host_id(workspace), host
+    check = check_segment if host == DEFAULT_HOST else check_host_id
+    return Space(check(server), check(workspace), host)
 
 
 def remit_entry(spec) -> dict:
@@ -855,12 +858,9 @@ def _claimants(now, stamp) -> dict:
     return found
 
 
-def _republish(claim, server, workspace, stamp, host=None) -> None:
-    lease = claim["lease"]
-    if claim["record"] is None or read_lease(lease_path(server, workspace, host)) is not None:
-        return
-    _write_lease(server, workspace, lease["run"], lease["home"], lease["session_id"],
-                 lease.get("created_at") or stamp, host)
+def write_lease(spec, run_id, home, session_id, now_iso) -> None:
+    space = parse_space(spec)
+    _write_lease(space.server, space.workspace, run_id, home, session_id, now_iso, space.host)
 
 
 def _test_pause(point) -> None:
@@ -881,13 +881,12 @@ def reconcile_run_leases(run_id: str) -> list:
         home, sid = home_path(run_id), record.get("driving_session_id")
         written = []
         for key in _remit_keys(record):
-            server, workspace, host = parse_key(key)
-            lease = read_lease(lease_path(server, workspace, host))
+            space = parse_space(key)
+            lease = read_lease(lease_path(*space))
             if lease and (lease.get("corrupt") or lease.get("run") != run_id):
                 raise LeaseHeld(key, lease, lease_status(lease))
             if lease is None or lease.get("session_id") != sid or lease.get("home") != home:
-                _write_lease(server, workspace, run_id, home, sid,
-                             (lease or {}).get("created_at") or _iso(_now()), host)
+                write_lease(space, run_id, home, sid, (lease or {}).get("created_at") or _iso(_now()))
                 written.append(key)
                 _test_pause("after_write")
         return written
@@ -905,7 +904,6 @@ def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=N
     parsed = []
     for spec in spaces or []:
         space = parse_space(spec)
-        space = space + (DEFAULT_HOST,) if len(space) == 2 else space
         if space not in parsed:
             parsed.append(space)
     if not parsed:
@@ -918,20 +916,22 @@ def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=N
     # _end_locked and init_run_record). Every caller holding both must take them
     # in this order or two writers can deadlock.
     def body():
-        for server, workspace, host in parsed:
-            lease = read_lease(lease_path(server, workspace, host))
+        for space in parsed:
+            lease = read_lease(lease_path(*space))
             if lease_status(lease, now) == "expired":
                 _end_locked(lease["run"], "agreement_unaccepted", stamp)
         claimants = _claimants(now, stamp)
-        for server, workspace, host in parsed:
-            lease = read_lease(lease_path(server, workspace, host))
+        for space in parsed:
+            lease = read_lease(lease_path(*space))
             status = lease_status(lease, now)
             if status not in ("free", "ended"):
-                raise LeaseHeld(space_key(server, workspace, host), lease, status)
-            claim = claimants.get(space_key(server, workspace, host))
+                raise LeaseHeld(space_key(*space), lease, status)
+            claim = claimants.get(space_key(*space))
             if claim is not None:
-                _republish(claim, server, workspace, stamp, host)
-                raise LeaseHeld(space_key(server, workspace, host), claim["lease"], claim["status"])
+                held = claim["lease"]
+                if claim["record"] is not None and read_lease(lease_path(*space)) is None:
+                    write_lease(space, held["run"], held["home"], held["session_id"], held.get("created_at") or stamp)
+                raise LeaseHeld(space_key(*space), claim["lease"], claim["status"])
         home = home_path(run_id)
         if os.path.exists(home):
             raise ProgrammeHomeError(f"programme home already exists: {home}")
@@ -944,9 +944,8 @@ def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=N
             run_kind="programme", programme=block,
             driving_session_id=session_id,
         )
-        for server, workspace, host in parsed:
-            _write_lease(server, workspace, run_id, home, session_id, stamp, host)
-        return {"run": run_id, "home": home,
-                "leases": [space_key(s, w, h) for s, w, h in parsed]}
+        for space in parsed:
+            write_lease(space, run_id, home, session_id, stamp)
+        return {"run": run_id, "home": home, "leases": [space_key(*space) for space in parsed]}
 
     return _with_leases_lock(body)

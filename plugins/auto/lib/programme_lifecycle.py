@@ -194,8 +194,7 @@ def _move(run, new_sid, kind, sid, extra, cites=None) -> dict:
 
     programme_authority().write(home, run, mutate, compose)
     for _, lease in leases:
-        programme_home._write_lease(lease["server"], lease["workspace"], run, lease["home"], new_sid,
-                                    lease.get("created_at") or _stamp(), lease.get("host"))
+        programme_home.write_lease(lease, run, lease["home"], new_sid, lease.get("created_at") or _stamp())
     return seen["moved"]
 
 
@@ -886,7 +885,7 @@ def _move_leases(run, sid, home, changes) -> None:
         if how == "removed" and ours:
             os.unlink(path)
         elif how == "added" and not ours:
-            programme_home._write_lease(space["server"], space["workspace"], run, home, sid, stamp, space.get("host"))
+            programme_home.write_lease(space, run, home, sid, stamp)
 
 
 def _h_set_remit(host, argv):
