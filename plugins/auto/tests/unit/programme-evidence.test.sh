@@ -534,9 +534,9 @@ printf -- '---\nname: "Collections"\nid: vw5drr40\nstatus: todo\ncreator: "shawn
 printf -- '---\nname: "Only in a worktree"\nid: wt000001\nstatus: todo\ncreator: "shawn"\n---\n' > "${WORK}/peek-wt/.peek/tasks/only-wt000001.md"
 printf -- '---\nname: "Renamed"\nid: zz999999\nstatus: todo\ncreator: "shawn"\n---\n' > "${PEEK}/.peek/tasks/collections-vw5drr41.md"
 peek_check() {
-  run_py "$1" <<'EOF2'
+  PEEK_PATHS="${2:-${PEEK}:${PEEK_WT}}" run_py "$1" <<'EOF2'
 pe = load_lib_module("programme_evidence")
-repos = [{"path": os.environ["PEEK"], "github": None}, {"path": os.environ["PEEK_WT"], "github": None}]
+repos = [{"path": p, "github": None} for p in os.environ["PEEK_PATHS"].split(":")]
 v = pe.run_check("r", "herdr:w2-p4", "recorded", args[0], {"remit_repos": repos})
 print(json.dumps({"result": v["result"], "misses": v["misses"], "fields": v["fields"]}, sort_keys=True))
 EOF2
@@ -571,22 +571,15 @@ mkdir -p "${OUTSIDE}/tasks"
 printf -- '---\nname: "Via dir"\nid: sy000002\nstatus: todo\n---\n' > "${OUTSIDE}/tasks/via-sy000002.md"
 ln -s "${OUTSIDE}/tasks" "${WORK}/peek-link/.peek/tasks"
 mkfifo "${PEEK}/.peek/tasks/pipe-sy000003.md"
-peek_check_in() {
-  PEEK_ONLY="$2" run_py "$1" <<'EOF2'
-pe = load_lib_module("programme_evidence")
-v = pe.run_check("r", "herdr:w2-p4", "recorded", args[0], {"remit_repos": [{"path": os.environ["PEEK_ONLY"], "github": None}]})
-print(json.dumps({"result": v["result"], "misses": v["misses"]}, sort_keys=True))
-EOF2
-}
 
 it "recorded: a task file that is a symlink out of the tasks folder is refuted"
-has '"result": "refuted"' "$(peek_check_in sy000001 "$PEEK")"
+has '"result": "refuted"' "$(peek_check sy000001 "$PEEK")"
 
 it "recorded: a tasks folder that is a symlink is refuted"
-has '"result": "refuted"' "$(peek_check_in sy000002 "${WORK}/peek-link")"
+has '"result": "refuted"' "$(peek_check sy000002 "${WORK}/peek-link")"
 
 it "recorded: a named pipe in place of a task file is refuted without blocking"
-has '"result": "refuted"' "$(peek_check_in sy000003 "$PEEK" 2>&1 | head -1)"
+has '"result": "refuted"' "$(peek_check sy000003 "$PEEK" 2>&1 | head -1)"
 
 for hostile in '../outside/planted' '../../etc/passwd' 'vw5drr40/../x' '*' 'vw5drr4*' 'VW5DRR40' 'vw5drr40.md'; do
   it "recorded: hostile ref [${hostile}] is refuted"

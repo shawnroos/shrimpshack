@@ -62,7 +62,6 @@ FLAG_EXCEPTIONS = ("rules", "targets", "contextTargets")
 _PR_REF = re.compile(r"(?:https://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:#|/pull/)([0-9]+)/?")
 _ISSUE_REF = re.compile(r"(?:linear:)?([A-Z][A-Z0-9]*)-([0-9]+)")
 _PEEK_ID = re.compile(r"[a-z0-9]{8}")
-_PEEK_PROP_ID = re.compile(r"^id:\s*\"?([a-z0-9]{8})\"?\s*$", re.MULTILINE)
 _ROOT_CAUSE = re.compile(r"root[ -]cause", re.IGNORECASE)
 _FLAG_REF = re.compile(r"(?:([A-Za-z0-9._-]+)/)?([A-Za-z0-9._-]+)")
 _EXPERIMENT_REF = re.compile(r"bt:([^/\s]+)/(\S+)")
@@ -291,40 +290,50 @@ def parse_issue_ref(ref):
     return match.group(1), int(match.group(2))
 
 
+def _peek_tasks_dir(repo):
+    path = repo.get("path") if isinstance(repo, dict) else None
+    # A worktree has a .git file; its .peek/tasks is a stale copy, not the task store.
+    if not path or not os.path.isdir(os.path.join(path, ".git")):
+        return None
+    tasks = os.path.join(path, ".peek", "tasks")
+    # A symlinked .peek or tasks folder would read task files from outside the clone.
+    if os.path.realpath(tasks) != os.path.join(os.path.realpath(path), ".peek", "tasks"):
+        return None
+    return tasks if os.path.isdir(tasks) else None
+
+
+def _peek_front_matter(file):
+    try:
+        # lstat, not open: a symlink can point outside the folder and a named pipe blocks open().
+        if not stat.S_ISREG(os.lstat(file).st_mode):
+            return ""
+        with open(file, encoding="utf-8") as handle:
+            head = handle.read(4096)
+    except OSError as exc:
+        raise Unknown(_note("cannot read", file, str(exc)))
+    return head.split("---", 2)[1] if head.startswith("---") else ""
+
+
+def _peek_prop(front, key):
+    match = re.search(rf"^{key}:\s*\"?(.*?)\"?\s*$", front, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def _peek_task_file(task_id, repos):
     for repo in repos or []:
-        path = repo.get("path") if isinstance(repo, dict) else None
-        # A worktree has a .git file; its .peek/tasks is a stale copy, not the task store.
-        if not path or not os.path.isdir(os.path.join(path, ".git")):
-            continue
-        tasks = os.path.join(path, ".peek", "tasks")
-        # A symlinked .peek or tasks folder would read task files from outside the clone.
-        if os.path.realpath(tasks) != os.path.join(os.path.realpath(path), ".peek", "tasks") \
-                or not os.path.isdir(tasks):
-            continue
+        tasks = _peek_tasks_dir(repo)
         try:
-            names = sorted(os.listdir(tasks))
+            names = sorted(os.listdir(tasks)) if tasks else []
         except OSError as exc:
             raise Unknown(_note("cannot read", tasks, str(exc)))
         for name in names:
             if not name.endswith(f"-{task_id}.md"):
                 continue
             file = os.path.join(tasks, name)
-            try:
-                # lstat, not open: a symlink can point outside the folder and a named pipe blocks open().
-                if not stat.S_ISREG(os.lstat(file).st_mode):
-                    continue
-                with open(file, encoding="utf-8") as handle:
-                    head = handle.read(4096)
-            except OSError as exc:
-                raise Unknown(_note("cannot read", file, str(exc)))
-            front = head.split("---", 2)[1] if head.startswith("---") else ""
-            prop = _PEEK_PROP_ID.search(front)
-            if prop and prop.group(1) == task_id:
-                name_prop = re.search(r"^name:\s*\"?(.*?)\"?\s*$", front, re.MULTILINE)
-                status = re.search(r"^status:\s*(\S+)", front, re.MULTILINE)
-                return {"task": task_id, "name": name_prop.group(1) if name_prop else None,
-                        "status": status.group(1) if status else None, "file": file}
+            front = _peek_front_matter(file)
+            if _peek_prop(front, "id") == task_id:
+                return {"task": task_id, "name": _peek_prop(front, "name"),
+                        "status": _peek_prop(front, "status"), "file": file}
     return None
 
 
@@ -385,12 +394,16 @@ def _person_root_cause(comments):
 
 
 def check_recorded(ref, repos=None) -> dict:
-    if _ISSUE_REF.fullmatch(ref or "") is None:
-        if _PEEK_ID.fullmatch(ref or ""):
-            return check_peek_recorded(ref, repos)
-        # Refuted, not unknown: a ref of the wrong shape never becomes right, so no retry watcher.
-        return {"result": "refuted", "fields": {}, "misses": [
-            f"recorded needs a Linear key such as AI-123 or an 8-character peek task id, got {ref!r}"]}
+    if _ISSUE_REF.fullmatch(ref or ""):
+        return _check_linear_recorded(ref)
+    if _PEEK_ID.fullmatch(ref or ""):
+        return check_peek_recorded(ref, repos)
+    # Refuted, not unknown: a ref of the wrong shape never becomes right, so no retry watcher.
+    return {"result": "refuted", "fields": {}, "misses": [
+        f"recorded needs a Linear key such as AI-123 or an 8-character peek task id, got {ref!r}"]}
+
+
+def _check_linear_recorded(ref) -> dict:
     team, number = parse_issue_ref(ref)
     key = f"{team}-{number}"
     issue = _issue_from_board(key) or _issue_from_api(team, number)
