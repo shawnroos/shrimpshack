@@ -190,7 +190,7 @@ def record_session(hook_input: dict, env, tty=None) -> dict | None:
             return None
         place = _herdr_entry(env, env_pane)
     else:
-        place = _other_entry(terminal_host.host_named(host).own_pane(env), host)
+        place = _other_entry(terminal_host.host_named(host).own_pane(env, tty=tty), host)
         if place is None:
             return None
         env_pane = place["pane_id"]

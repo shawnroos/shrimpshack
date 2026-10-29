@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import sys
-import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -97,29 +96,12 @@ class RexHost(terminal_host.TerminalHost):
         if missing:
             why = f"{missing.why}; fix: {missing.fix}"
             return refuse(missing.why, fix=missing.fix, value={"run": _not_run(why), "output": why, "pane": None})
-        cmd = list(argv)
-        if "--launcher" not in cmd:
-            cmd += ["--launcher", "rex"]
-        run = programme_exec.bounded(cmd, timeout)
-        output = programme_sanitize.clean(run["stdout"] + "\n" + run["stderr"], 0, keep_newlines=True)
-        found = terminal_host.agent_pane(output, "rex")
-        return native({"run": run, "output": output, "pane": programme_sanitize.token(found) if found else None})
+        return native(terminal_host.spinoff_pane("rex", argv, timeout))
 
     def confirm_started(self, session_id, pane, before, wait, session_of, **_):
-        registry = load_lib_module("session_registry")
-        deadline = time.monotonic() + wait
-        while True:
-            row = registry.lookup(session_id, include_headless=True)
-            if row:
-                if registry.host_of_row(row) != "rex" or (pane and row.get("pane_id") != pane):
-                    return refuse(f"session {session_id} registered in {row.get('pane_id')}, not Rex block {pane}",
-                                  value={"row": None})
-                return degraded("Rex does not list agent sessions, so the worker's own SessionStart row confirms it",
-                                value={"row": row})
-            if time.monotonic() >= deadline:
-                return refuse(f"no SessionStart row for session {session_id} appeared within {wait:g}s",
-                              value={"row": None})
-            time.sleep(POLL_SECONDS)
+        return terminal_host.confirm_via_registry(
+            "rex", "Rex block", "Rex does not list agent sessions, so the worker's own SessionStart row confirms it",
+            session_id, pane, wait, POLL_SECONDS)
 
     def send_prompt(self, pane, text, **_):
         missing = self._needs_rex("send_prompt")

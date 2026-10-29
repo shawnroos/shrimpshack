@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -69,6 +70,34 @@ def refuse(why, fix=None, value=None) -> HostResult:
 def capability_table() -> dict:
     with open(TABLE_PATH) as fh:
         return json.load(fh)["capabilities"]
+
+
+def spinoff_pane(host: str, argv, timeout) -> dict:
+    """Run spinoff with `host`'s launcher named; the pane is the id on its `agent pane: <host> <id>` line, or None."""
+    programme_exec, programme_sanitize = load_lib_module("programme_exec"), load_lib_module("programme_sanitize")
+    cmd = list(argv)
+    if "--launcher" not in cmd:
+        cmd += ["--launcher", host]
+    run = programme_exec.bounded(cmd, timeout)
+    output = programme_sanitize.clean(run["stdout"] + "\n" + run["stderr"], 0, keep_newlines=True)
+    found = agent_pane(output, host)
+    return {"run": run, "output": output, "pane": programme_sanitize.token(found) if found else None}
+
+
+def confirm_via_registry(host: str, place: str, why_degraded: str, session_id, pane, wait, poll=1.0) -> "HostResult":
+    """Degraded confirm for a host that lists no agent sessions: the worker's own SessionStart row is the proof."""
+    registry = load_lib_module("session_registry")
+    deadline = time.monotonic() + wait
+    while True:
+        row = registry.lookup(session_id, include_headless=True)
+        if row:
+            if registry.host_of_row(row) != host or (pane and row.get("pane_id") != pane):
+                return refuse(f"session {session_id} registered in {row.get('pane_id')}, not {place} {pane}",
+                              value={"row": None})
+            return degraded(why_degraded, value={"row": row})
+        if time.monotonic() >= deadline:
+            return refuse(f"no SessionStart row for session {session_id} appeared within {wait:g}s", value={"row": None})
+        time.sleep(poll)
 
 
 class TerminalHost:
