@@ -44,11 +44,16 @@ cat > "${FAKES}/herdr" <<'EOF'
 case "$1 ${2:-}" in
   "status server") if [ -e "$DOWN" ]; then echo "status: stopped"; else echo "status: running"; fi ;;
   "api snapshot") cat "$SNAP" ;;
+  "pane get")
+    pane="$3"
+    printf '{"id":"cli:pane:get","result":{"pane":{"pane_id":"%s","workspace_id":"%s","terminal_id":"term_%s","tab_id":"w2:t1"}},"type":"pane_info"}\n' \
+      "$pane" "${pane%%:*}" "${pane##*:}" ;;
 esac
 exit 0
 EOF
 chmod +x "${FAKES}/herdr"
 export PATH="${FAKES}:${PATH}"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
 
 # panes: "<pane>|<label>|<session or empty>|<terminal>" ...
 snapshot() {
@@ -100,7 +105,7 @@ OUT=""
 CODE=0
 as() {
   local sid="$1"; shift
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" w2 "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
@@ -190,8 +195,9 @@ PYEOF
   )
 }
 
-snapshot "w2:p10|PM|sess-pm|term_p10" "w2:p31|scratch|sess-w2|term_p31"
+snapshot "w2:p10|PM|sess-pm|term_p10" "w2:p31|scratch|sess-w2|term_p31" "w2:p40|PM|sess-b|term_p40"
 register sess-pm w2:p10 term_p10
+register sess-b w2:p40 term_p40
 
 it "no lease in the space: become-pm names start"
 as sess-pm become-pm
@@ -199,11 +205,11 @@ check "0 start" "$CODE $(field step)"
 has "/auto:programme" "$OUT"
 if [ -e "${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json" ]; then fail "become-pm took a lease"; else pass; fi
 
-it "outside a herdr space: become-pm refuses with step refused and a fix"
+it "outside a herdr pane: become-pm refuses with step refused and a fix"
 OUT="$(CLAUDE_CODE_SESSION_ID=sess-nowhere "$PY" "$PROG" become-pm 2>&1)"; CODE=$?
 check "1 refused" "$CODE $(field step)"
-has "not in a space" "$OUT"
-has "fix: run Claude from a pane in the space" "$OUT"
+has "cannot identify this session's herdr terminal pane" "$OUT"
+has "fix: run Claude from a herdr pane" "$OUT"
 
 as sess-pm start
 RUN="$(field run)"

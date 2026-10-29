@@ -750,24 +750,25 @@ def driven_runs(session_id, now=None) -> list:
     return found
 
 
-def _write_lease(server, workspace, run_id, home, session_id, now_iso, host=None):
+def write_lease(spec, run_id, home, session_id, now_iso) -> None:
+    space = parse_space(spec)
     lease = {
         "programme_format": run_record_core.PROGRAMME_FORMAT,
         "run": run_id,
         "home": home,
         "session_id": session_id,
-        "server": server,
-        "workspace": workspace,
+        "server": space.server,
+        "workspace": space.workspace,
         "created_at": now_iso,
     }
-    if check_host(host) != DEFAULT_HOST:
-        lease["host"] = host
+    if space.host != DEFAULT_HOST:
+        lease["host"] = space.host
 
     def write(fh):
         json.dump(lease, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
-    atomic_write(lease_path(server, workspace, host), write, ".lease.")
+    atomic_write(lease_path(*space), write, ".lease.")
 
 
 def atomic_write(path, write, prefix, folder=None) -> None:
@@ -909,11 +910,6 @@ def _claimants(now, stamp) -> dict:
         for key in _remit_keys(record):
             found.setdefault(key, {"lease": synthetic, "status": status, "record": record})
     return found
-
-
-def write_lease(spec, run_id, home, session_id, now_iso) -> None:
-    space = parse_space(spec)
-    _write_lease(space.server, space.workspace, run_id, home, session_id, now_iso, space.host)
 
 
 def _test_pause(point) -> None:

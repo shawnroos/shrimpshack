@@ -44,11 +44,17 @@ cat > "${FAKES}/herdr" <<'EOF'
 case "$1 ${2:-}" in
   "status server") if [ -e "$DOWN" ]; then echo "status: stopped"; else echo "status: running"; fi ;;
   "api snapshot") cat "$SNAP" ;;
+  "pane get")
+    pane="$3"
+    [ "${pane##*:}" = pGHOST ] && exit 1
+    printf '{"id":"cli:pane:get","result":{"pane":{"pane_id":"%s","workspace_id":"%s","terminal_id":"term_%s","tab_id":"w2:t1"}},"type":"pane_info"}\n' \
+      "$pane" "${pane%%:*}" "${pane##*:}" ;;
 esac
 exit 0
 EOF
 chmod +x "${FAKES}/herdr"
 export PATH="${FAKES}:${PATH}"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
 
 # panes: "<pane>|<label>|<session or empty>|<terminal>" ...
 snapshot() {
@@ -100,7 +106,7 @@ OUT=""
 CODE=0
 as() {
   local sid="$1"; shift
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" w2 "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
@@ -313,9 +319,11 @@ typed sess-g '/auto:programme-takeover' >/dev/null
 set_beat "$RUN" 0
 as sess-g takeover
 check "1 sess-e" "$CODE $(driver_of "$RUN")"
+register sess-h w2:p77 term_p77
 typed sess-h '/auto:programme-takeover --replace PM' >/dev/null
 as sess-h takeover
 check "0 sess-h" "$CODE $(driver_of "$RUN")"
+snapshot "w2:p77|PM|sess-h|term_p77" "w2:p31|scratch|sess-w2|term_p31"
 typed sess-g '/auto:programme-takeover' >/dev/null
 set_beat "$RUN" 3
 as sess-g takeover
@@ -323,7 +331,7 @@ check "1 sess-h" "$CODE $(driver_of "$RUN")"
 
 as_in() {
   local ws="$1" sid="$2"; shift 2
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID="$ws" "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" "$ws" "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
@@ -506,12 +514,12 @@ has "needs a pick" "$OUT"
 snapshot "w2:p31|scratch|sess-w2|term_p31"
 LABEL_T="Approve takeover --replace sess-t"
 
-it "a session in the space only by HERDR env, with no registry row, cannot take over a stopped PM"
+it "a session in the space only by HERDR env, with no registry row and no pane herdr can prove, cannot take over a stopped PM"
 P="$(pick sess-n "$LABEL_T")"
-as sess-n takeover --prompt "$P"
+OUT="$(CLAUDE_CODE_SESSION_ID=sess-n HERDR_PANE_ID=w2:pGHOST HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" takeover --prompt "$P" 2>&1)"; CODE=$?
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "not in the programme's space" "$OUT"
-has "fix: run Claude from a pane in the space" "$OUT"
+has "cannot identify this session's herdr terminal pane" "$OUT"
+has "fix: run Claude from a pane or window that the terminal host can identify" "$OUT"
 
 register sess-k w2:p86 term_p86
 

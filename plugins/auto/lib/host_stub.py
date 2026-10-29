@@ -21,6 +21,9 @@ class StubHost(terminal_host.TerminalHost):
     name = "stub"
     binaries = ("stubhost",)
 
+    def installed(self) -> bool:
+        return True
+
     def _unimplemented(self, method):
         return terminal_host.refuse(f"the stub host does not implement {method}", fix="drive it through a real host")
 

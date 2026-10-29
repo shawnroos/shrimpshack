@@ -173,7 +173,7 @@ if [ "$(verdict "$P3")" = block ] && printf '%s' "$P3" | grep -q 'linear:AI-2 is
 it "a new session driving the same programme with the same reasons blocks once"
 prog "$RUN" <<'EOF' >/dev/null
 rec = load(args[0]); rec["driving_session_id"] = "sess-new"; save(args[0], rec)
-ph._write_lease("default", "w2", args[0], ph.home_path(args[0]), "sess-new", iso())
+ph.write_lease(("default", "w2"), args[0], ph.home_path(args[0]), "sess-new", iso())
 EOF
 N1="$(verdict "$(stop_as "$NOREPO" sess-new)")"
 N2="$(verdict "$(stop_as "$NOREPO" sess-new)")"

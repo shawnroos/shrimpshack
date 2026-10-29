@@ -233,24 +233,21 @@ def _session_host(host, sid) -> str:
 def _require_own_pane(host, sid, session_host) -> None:
     """R21: a programme whose PM pane cannot be identified has no send-guard, so it does not start.
 
-    A registry row with a pane is the host's own earlier answer (SessionStart wrote it from own_pane), so it counts.
+    A stored row only counts while the host's command still runs, and the environment alone is never proof of a pane.
     """
-    if session_host == programme_home.DEFAULT_HOST:
-        # herdr names the space from HERDR_WORKSPACE_ID alone, with no pane proof; Rex and Ghostty are gated.
+    terminal, row = terminal_host.host_named(session_host), session_registry.lookup(sid, include_headless=False) if sid else None
+    installed = terminal.installed()
+    if installed and row and row.get("pane_id") and session_registry.host_of_row(row) == session_host:
         return
-    row = session_registry.lookup(sid, include_headless=False) if sid else None
-    if row and row.get("pane_id") and session_registry.host_of_row(row) == session_host:
-        return
-    found = terminal_host.host_named(session_host).own_pane(os.environ)
-    if found.ok and found.value:
-        # Only a row puts the pane under driver_panes(); a live answer alone leaves the programme unguarded.
+    found = terminal.own_pane(os.environ)
+    if installed and found.ok and found.value and found.value.get("resolved", session_host) != "env":
         if session_registry.record_proven_pane(sid, session_host, found, os.environ) is None:
-            raise host.ProgrammeError(
-                f"auto found this session's {session_host} pane but could not record it, so it could not stop other "
-                "sessions typing into the PM's pane", fix="run the command again from a pane the terminal host can identify")
+            raise host.ProgrammeError(f"auto found this session's {session_host} pane but could not record it, so it could "
+                                      "not stop other sessions typing into the PM's pane", fix="run the command again from a pane the host can identify")
         return
+    why = found.why if installed else f"the {session_host} command is not on PATH"
     raise host.ProgrammeError(
-        f"auto cannot identify this session's {session_host} terminal pane ({found.why or 'no pane id'}), "
+        f"auto cannot identify this session's {session_host} terminal pane ({why or 'no pane id'}), "
         "so it could not stop other sessions typing into the PM's pane",
         fix=found.fix or "run Claude from a pane or window that the terminal host can identify")
 
