@@ -57,6 +57,7 @@ def capability_table() -> dict:
 
 class TerminalHost:
     name = ""
+    binaries = ()
 
     def _unimplemented(self, method) -> HostResult:
         cell = capability_table()[CAPABILITY_OF[method]][self.name]
@@ -87,8 +88,20 @@ class TerminalHost:
     def notify(self, *_, **__) -> HostResult:
         return self._unimplemented("notify")
 
-    def is_host_command(self, argv) -> bool:
-        return False
+    def is_host_command(self, argv, pane_ids=()):
+        """(verb, target) when ``argv`` (one simple command) types into a pane, else None.
+
+        The default denies: any call to one of this host's binaries that names a pane id is a send.
+        A host with a real verb list overrides this and still falls back to it.
+        """
+        if not argv or os.path.basename(argv[0]) not in self.binaries:
+            return None
+        for token in argv[1:]:
+            folded = token.casefold()
+            for ident in pane_ids:
+                if ident and ident.casefold() in folded:
+                    return "send", ident
+        return None
 
     def report_session(self, session_id, pane_id, source) -> None:
         return None

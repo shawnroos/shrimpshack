@@ -195,7 +195,8 @@
 #                          programme_journal [lazy], programme [lazy]
 #   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
 #                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy],
-#                          programme_settings_guard [lazy], programme_store [lazy]
+#                          programme_settings_guard [lazy], programme_store [lazy], send_guard [lazy]
+#   send_guard           → terminal_host, session_registry [lazy]
 #   auto-spawn           → driver_session; auto-workspace [lazy]
 #
 # format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`

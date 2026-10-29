@@ -14,3 +14,4 @@ terminal_host = load_lib_module("terminal_host")
 
 class GhosttyHost(terminal_host.TerminalHost):
     name = "ghostty"
+    binaries = ("osascript",)

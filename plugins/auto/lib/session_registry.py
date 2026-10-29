@@ -287,12 +287,18 @@ def host_of_session(session_id, env) -> str:
     return terminal_host.detect(env).name or programme_home.DEFAULT_HOST
 
 
-def space_of_session(session_id, env):
-    """(server, workspace) for a herdr session, (server, workspace, host) for any other host."""
+def space_of_session(session_id, env, *, registry_only=False):
+    """(server, workspace) for a herdr session, (server, workspace, host) for any other host.
+
+    Without a registry row the herdr variables name the space, but a variable is not evidence of
+    membership (KTD3): a gate passes registry_only=True and gets None instead.
+    """
     row = lookup(session_id, include_headless=True)
     if row and row.get("server") and row.get("workspace"):
         host = host_of_row(row)
         return (row["server"], row["workspace"]) + ((host,) if host != programme_home.DEFAULT_HOST else ())
+    if registry_only:
+        return None
     workspace = env.get("HERDR_WORKSPACE_ID")
     if not workspace and ":" in (env.get("HERDR_PANE_ID") or ""):
         workspace = env["HERDR_PANE_ID"].split(":", 1)[0]
@@ -325,8 +331,14 @@ def driver_panes(now=None) -> list:
 
 def driver_presence(session_id, snap, reported, *, current_server) -> dict:
     row = lookup(session_id, include_headless=True)
-    return terminal_host.current().presence(session_id, row, snap, reported, current_server=current_server,
-                                            clean=_clean).value
+    found = terminal_host.current().presence(session_id, row, snap, reported, current_server=current_server,
+                                             clean=_clean)
+    if found.ok and isinstance(found.value, dict):
+        return found.value
+    # A host that cannot answer says unknown, never gone: only host evidence moves a lease.
+    return {"state": "unknown", "session_id": session_id, "herdr_reachable": snap is not None,
+            "registry_pane": (row or {}).get("pane_id"), "pane_in_snapshot": None, "session_reported": None,
+            "pane_id": None, "pane_label": None, "tab_label": None, "why": found.why}
 
 
 def caller_drives(record, session_id=None) -> bool:

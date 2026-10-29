@@ -92,6 +92,7 @@ def _lease_for(host, opts, sid):
     named = programme_home.lease_driven_by(opts.get("replace"))
     if named:
         return named
+    # The herdr variables still name which lease a session is asking about; membership in it is _in_space, rows only.
     space = session_registry.space_of_session(sid, os.environ) if sid else None
     if not space:
         raise host.ProgrammeError("this session is not in a herdr space; name the PM by its session id "
@@ -231,6 +232,27 @@ def _session_host(host, sid) -> str:
     return found.name
 
 
+def _require_own_pane(host, sid, session_host) -> None:
+    """R21: a programme whose PM pane cannot be identified has no send-guard, so it does not start.
+
+    A registry row with a pane is the host's own earlier answer (SessionStart wrote it from own_pane), so it counts.
+    """
+    if session_host == programme_home.DEFAULT_HOST:
+        # herdr keeps its old rule: start and become-pm name the space from HERDR_WORKSPACE_ID alone in the
+        # existing suites (programme-flow, programme-become-pm), which register no pane. Rex and Ghostty are gated.
+        return
+    row = session_registry.lookup(sid, include_headless=False) if sid else None
+    if row and row.get("pane_id") and session_registry.host_of_row(row) == session_host:
+        return
+    found = terminal_host.host_named(session_host).own_pane(os.environ)
+    if found.ok and found.value:
+        return
+    raise host.ProgrammeError(
+        f"auto cannot identify this session's {session_host} terminal pane ({found.why or 'no pane id'}), "
+        "so it could not stop other sessions typing into the PM's pane",
+        fix=found.fix or "run Claude from a pane or window that the terminal host can identify")
+
+
 def _check_host(host, session_host, space, what) -> None:
     try:
         programme_home.refuse_host_mismatch(session_host, space, what)
@@ -242,6 +264,7 @@ def _h_start(host, argv):
     positional, opts = host._parse(_tokens(argv), multi=("space",))
     sid = _caller(host)
     session_host = _session_host(host, sid)
+    _require_own_pane(host, sid, session_host)
     spaces = list(opts["space"]) + positional or [session_registry.space_of_session(sid, os.environ)]
     if not spaces[0]:
         raise host.ProgrammeError("this session is not in a herdr space; start from a herdr pane "
@@ -290,9 +313,15 @@ def _presence(lease, run) -> dict:
     except (TypeError, ValueError, AttributeError) as exc:
         return {"state": "unknown", "session_id": driver, "herdr_reachable": snap is not None,
                 "why": f"the session registry could not be read ({exc})"}
-    if snap is None:
+    if snap is None and found.get("state") == "unknown":
         found["why"] = f"herdr could not be read ({reason}), so auto cannot tell whether it is still running"
     return found
+
+
+def _still_gone(lease, run, seen) -> bool:
+    """The PM was seen gone before the leases lock; a PM that came back while auto waited must not lose the programme."""
+    again = _presence(lease, run)
+    return again["state"] == "gone" and again["session_id"] == seen["session_id"]
 
 
 def _driver_words(presence) -> str:
@@ -389,7 +418,8 @@ def _cited_route(run, sid, prompt_id, status, record, presence, refused):
 
 
 def _prompt_takeover(host, lease, run, sid, prompt_id) -> dict:
-    # herdr reads take seconds; they run before the leases lock and the driver is re-checked under it.
+    # The host read takes seconds, so it runs before the leases lock; under the lock the driver is compared
+    # again and a PM seen gone is re-read (_still_gone).
     status = _fresh_status(lease)
     presence = _presence(lease, run) if status in MOVABLE_STATES else None
 
@@ -403,6 +433,8 @@ def _prompt_takeover(host, lease, run, sid, prompt_id) -> dict:
         def refused(reason):
             return _Refused(reason, status, fix=_pick_fix(presence["session_id"]))
 
+        if status == "live" and presence["state"] == "gone" and not _still_gone(lease, run, presence):
+            raise refused("the PM was seen again while auto was checking it; nothing is taken over")
         reason, approval = _cited_route(run, sid, prompt_id, status, record, presence, refused)
         extra = {"reason": reason, "approval": approval, "request": None}
         if reason != "orphaned":
@@ -429,7 +461,8 @@ def _h_takeover(host, argv):
         return [r for r in _since_driver_changed(run, _requests(run, "takeover", sid))
                 if status == "orphaned" and (r.get("payload") or {}).get("lease_status") == "orphaned"]
 
-    # herdr reads take seconds; they run before the leases lock and the driver is re-checked under it.
+    # The host read takes seconds, so it runs before the leases lock; under the lock the driver is compared
+    # again and a PM seen gone is re-read (_still_gone).
     status = _fresh_status(lease)
     presence = None if orphan_asks(status) or status not in MOVABLE_STATES else _presence(lease, run)
 
@@ -452,6 +485,8 @@ def _h_takeover(host, argv):
         if presence is None or presence["session_id"] != _driver(lease, run):
             raise _Refused("the PM changed while auto was checking it; run the takeover again", status)
         if presence["state"] == "gone":
+            if not _still_gone(lease, run, presence):
+                raise _Refused("the PM was seen again while auto was checking it; nothing is taken over", status)
             return move(asked[-1], "driver_gone", presence)
         named = [(r, n) for r in asked for n in [_replace_name((r.get("payload") or {}).get("text"))]
                  if n and _names_driver(n, presence)]
@@ -552,6 +587,10 @@ def _h_become_pm(host, argv):
     if driven:
         step = dict(out, step="already-pm", run=driven["run"], driver=sid)
     else:
+        try:
+            _require_own_pane(host, sid, session_host)
+        except host.ProgrammeError as exc:
+            _become_refused(host, out, str(exc), exc.fix)
         space = session_registry.space_of_session(sid, os.environ)
         if not space:
             _become_refused(host, out, "this session is not in a herdr space, so it cannot be a space's PM",

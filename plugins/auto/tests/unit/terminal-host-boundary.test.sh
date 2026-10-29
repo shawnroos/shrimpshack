@@ -18,8 +18,6 @@ PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 # path (relative to the scanned root) : why it may name a host binary
 ALLOW=(
-  # U4 moves the send-guard's verb parsing behind each adapter's is_host_command and deletes this entry.
-  "lib/on-pretooluse-action.py:send-guard verb parsing"
   # Agent instructions for the PM in prose; U8 rewrites them host-neutral.
   "commands/programme-resume.md:prose instructions for the agent"
 )
@@ -128,9 +126,6 @@ if [ "${SEEN:-0}" -ge 50 ]; then pass; else fail "saw ${SEEN:-0}"; fi
 it "no host command outside a host adapter"
 BAD="$(printf '%s\n' "$OUT" | grep -E '^(HIT|STALE) ' || true)"
 if [ -z "$BAD" ]; then pass; else fail "$BAD"; fi
-it "the allow-list is exercised (the send-guard still holds the hits U4 removes)"
-NOALLOW="$(scan "$AUTO_ROOT" | grep -c '^HIT lib/on-pretooluse-action.py' || true)"
-if [ "$NOALLOW" -ge 1 ]; then pass; else fail "no hit in the send-guard without the allow-list"; fi
 it "plugins/spinoff and mods/ are outside the scan"
 case "$OUT" in *spinoff*|*mods/*) fail "$OUT" ;; *) pass ;; esac
 

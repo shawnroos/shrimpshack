@@ -14,3 +14,4 @@ terminal_host = load_lib_module("terminal_host")
 
 class RexHost(terminal_host.TerminalHost):
     name = "rex"
+    binaries = ("rex",)

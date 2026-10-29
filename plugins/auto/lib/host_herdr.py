@@ -26,6 +26,12 @@ SERVER_PROBE_TIMEOUT = 1.0
 NOTIFY_TIMEOUT = 5
 POLL_SECONDS = 1.0
 BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
+SEND_VERBS = frozenset({
+    ("agent", "prompt"), ("agent", "send"), ("agent", "send-keys"),
+    ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"),
+})
+GLOBAL_VALUE_OPTS = frozenset({"--session", "--machine", "--remote"})
+VALUE_OPTS = frozenset({"--until", "--timeout", "--seq"})
 _PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
 
 native, refuse = terminal_host.native, terminal_host.refuse
@@ -205,9 +211,23 @@ class HerdrHost(terminal_host.TerminalHost):
             return refuse("herdr notification could not run", value=None)
         return native(done.returncode)
 
-    def is_host_command(self, argv) -> bool:
-        token = argv[0] if argv else ""
-        return token in BIN_TOKENS or os.path.basename(token) == "herdr"
+    def is_host_command(self, argv, pane_ids=()):
+        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "herdr"):
+            return None
+        rest, i = list(argv[1:]), 0
+        while i < len(rest) and rest[i].startswith("-"):
+            i += 2 if rest[i] in GLOBAL_VALUE_OPTS else 1
+        if i + 1 >= len(rest) or (rest[i], rest[i + 1]) not in SEND_VERBS:
+            return None
+        j = i + 2
+        while j < len(rest):
+            if rest[j] in VALUE_OPTS:
+                j += 2
+            elif rest[j].startswith("-"):
+                j += 1
+            else:
+                return f"{rest[i]} {rest[i + 1]}", rest[j]
+        return None
 
 
 def _herdr(args):
