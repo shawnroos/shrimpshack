@@ -61,6 +61,10 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
           fresh['last_sweep'], None)
 
     verb('watcher-beat', 'remit', '--task-id', 't1', '--kind', 'monitor')
+    code, only_stamped = inputs()
+    check('a remit Monitor only the PM stamped (no watcher process beat) does not count as armed',
+          'watcher_missing:remit' in only_stamped['why'], True)
+    verb('watcher-beat', 'remit', '--process-id', str(os.getpid()))
     verb('watcher-beat', 'cron', '--task-id', 'c1', '--kind', 'cron', '--prompt', 'sweep')
     verb('set-now', 'idle')
     code, quiet = inputs()
@@ -260,6 +264,24 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
 
     check('merge readiness marks a merged PR as ended', readiness._bar(pr_facts('MERGED')).get('ended'), True)
     check('merge readiness marks a closed PR as ended', readiness._bar(pr_facts('CLOSED')).get('ended'), True)
+
+    quiet_facts = {'last': 3, 'since': [(4, {'kind': 'stop_quiet', 'payload': {}})], 'reasons': [{'kind': 'never_stop'}],
+                   'asks': [{'status': 'open', 'shown_current': True}], 'claims': [], 'moved': [], 'refs': [], 'prs': [],
+                   'stalled': [], 'armed': {'remit': True, 'cron': True}, 'reread_requested': False}
+    check('a quiet table of facts has no reason to sweep: a stop-rule reason alone is not one', psi._verdict(quiet_facts), [])
+    for name, change, code in (
+            ('no completed sweep', {'last': None}, 'no_prior_sweep'),
+            ('a real actionable reason', {'reasons': [{'kind': 'unread_claim'}]}, 'actionable_reasons'),
+            ('an unread claim', {'claims': [{'index': 0}]}, 'unread_claims'),
+            ('a moved item', {'moved': [{'item': 'k'}]}, 'items_changed'),
+            ('a loud journal row', {'since': [(4, {'kind': 'item_added', 'payload': {}})]}, 'journal_rows'),
+            ('a PR that is ready', {'prs': [{'result': 'ready', 'ends': False}]}, 'pr_ready'),
+            ('a PR that is unreadable', {'prs': [{'result': 'unknown', 'ends': False}]}, 'pr_unknown'),
+            ('a PR that ended', {'prs': [{'result': 'not_ready', 'ends': True}]}, 'pr_closed_or_merged'),
+            ('nine PRs', {'refs': [None] * 9}, 'pr_over_cap'),
+            ('a dead remit watcher', {'armed': {'remit': False, 'cron': True}}, 'watcher_missing:remit'),
+            ('a missing cron', {'armed': {'remit': True, 'cron': False}}, 'watcher_missing:cron')):
+        check('the verdict names ' + name, psi._verdict(dict(quiet_facts, **change)), [code])
 
 print('programme-sweep-inputs.test.sh: {} passed, {} failed'.format(passed, failed))
 sys.exit(1 if failed else 0)

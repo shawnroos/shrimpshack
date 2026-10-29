@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='auto-noop-chain-') as work:
         subprocess.run(['/usr/bin/python3', os.path.join(lib, 'programme_journal.py'), 'prune', '--run', run],
                        capture_output=True, text=True, env=env)
 
-    verb('watcher-beat', 'remit', '--task-id', 't1', '--kind', 'monitor')
+    verb('watcher-beat', 'remit', '--process-id', str(os.getpid()))
     verb('watcher-beat', 'cron', '--task-id', 'c1', '--kind', 'cron', '--prompt', 'sweep')
     chain()
     first = json.loads(verb('sweep-inputs').stdout)
