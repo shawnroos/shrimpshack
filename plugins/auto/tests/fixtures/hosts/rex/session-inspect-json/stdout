@@ -1,0 +1,85 @@
+{
+  "revision": 53,
+  "session_id": "session:01a18693-5b41-787b-af33-87750812e31e",
+  "label": "cosmic-delta",
+  "active_window_id": "window:01a18693-5b76-7572-87d2-ed5ae826f764",
+  "windows": [
+    {
+      "window_id": "window:01a18693-5b76-7572-87d2-ed5ae826f764",
+      "label": "Window e826f764",
+      "focused_block_id": "block:01a18693-5b44-7cdc-a847-3bcbb92a53ab",
+      "layers": [
+        {
+          "layer_id": "layer:01a18693-5b76-7582-aada-5101e0fbe11a",
+          "kind": "tiled",
+          "bounds": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "layout": {
+            "rect": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "block_id": "block:01a18693-5b44-7cdc-a847-3bcbb92a53ab"
+          },
+          "blocks": [
+            {
+              "block_id": "block:01a18693-5b44-7cdc-a847-3bcbb92a53ab",
+              "label": "shell",
+              "creator_name": "com.superlogical.terminal",
+              "flavor": "com.superlogical.terminal.shell",
+              "host_id": "36cd92c4-5843-4f54-8139-52a41012758e",
+              "owner": "client:01a182bd-98b4-7186-b3ef-143e71d10eb4"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "client_id": "client:01a182bd-98b4-7186-b3ef-143e71d10eb4",
+      "principal": {
+        "kind": "peer",
+        "transport": "unix",
+        "display": "uid 501",
+        "uid": 501,
+        "gid": 20,
+        "pid": 90331
+      },
+      "info": {
+        "kind": "app",
+        "platform": "macos",
+        "name": "Rex Beta",
+        "version": "0.1.0 (1541)",
+        "label": "rex-macbook"
+      },
+      "connected_at": "2026-10-29T09:32:46.584009+02:00",
+      "connection_state": "connected"
+    },
+    {
+      "client_id": "client:01a1876c-9e14-705d-b4f8-5aa28d805b22",
+      "principal": {
+        "kind": "peer",
+        "transport": "unix",
+        "display": "uid 501",
+        "uid": 501,
+        "gid": 20,
+        "pid": 25945
+      },
+      "info": {
+        "kind": "cli",
+        "platform": "macos",
+        "name": "rex",
+        "version": "0.0.1793131181-gdd9a20"
+      },
+      "connected_at": "2026-10-29T13:30:04.949408+02:00",
+      "connection_state": "connected"
+    }
+  ]
+}

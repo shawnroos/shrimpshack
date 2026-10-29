@@ -82,18 +82,19 @@ printf '#!/bin/bash\necho "status: stopped"\n' > "${FAKE}/herdr"
 it "Ghostty with the herdr server stopped stays Ghostty"
 check "ghostty True" "$(DETECT_PATH="${FAKE}:/usr/bin:/bin" detect TERM_PROGRAM=ghostty)"
 
-echo "terminal-host-detect: adapters that do not exist yet refuse with a fix line"
-it "rex answers refuse for list_panes with the capability table fix"
+echo "terminal-host-detect: a host that cannot run refuses with its capability-table fix line"
+it "rex with no rex on PATH answers refuse for list_panes with the capability table fix"
 OUT="$(env -i PATH=/usr/bin:/bin REX_SESSION=abc "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 th = load_lib_module("terminal_host")
 r = th.current(dict(os.environ)).list_panes()
-print(r.status, r.fix)
+cell = th.capability_table()["list_panes"]["rex"]
+print(r.status, r.fix == cell["fix"], "install Rex" in r.fix)
 PYEOF
 )"
-check "refuse not yet implemented" "$OUT"
+check "refuse True True" "$OUT"
 it "a refused detection makes every capability refuse with the detection's fix line"
 OUT="$(env -i PATH=/usr/bin:/bin "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
 import os, sys

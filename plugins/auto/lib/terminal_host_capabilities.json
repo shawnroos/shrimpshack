@@ -3,42 +3,42 @@
   "capabilities": {
     "find_own_pane": {
       "herdr": {"status": "native", "how": "HERDR_PANE_ID, resolved with herdr pane get"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "native", "how": "REX_SESSION and REX_BLOCK select the block, then rex session inspect must list that block; if inspect fails the answer is refuse", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     },
     "start_pane": {
       "herdr": {"status": "native", "how": "the spinoff plugin launches the pane"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "native", "how": "the spinoff plugin launches the block with --launcher rex and prints agent pane: rex <block id>", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     },
     "confirm_started": {
       "herdr": {"status": "native", "how": "herdr agent list shows the worker's session"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "degraded", "how": "Rex lists no agent sessions, so auto polls the registry for the worker's own SessionStart row", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     },
     "send_prompt": {
       "herdr": {"status": "native", "how": "herdr agent prompt"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "native", "how": "rex send -b <block> then rex send-key -b <block> enter", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     },
     "list_panes": {
       "herdr": {"status": "native", "how": "herdr api snapshot and herdr agent list"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "native", "how": "rex session ls --json, then rex api call -s <session> session.view for each session", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     },
     "presence": {
       "herdr": {"status": "native", "how": "the snapshot's panes and reported agent sessions"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "native", "how": "rex api call com.superlogical.terminal.process on the recorded block; gone only when the session or block is absent or its program exited, unknown otherwise", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     },
     "change_signal": {
       "herdr": {"status": "native", "how": "state_change_seq per agent pane in the snapshot"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "native", "how": "the revision field of rex api call session.view; it rises by one with every change", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     },
     "notify": {
       "herdr": {"status": "native", "how": "herdr notification show"},
-      "rex": {"status": "refuse", "fix": "not yet implemented"},
+      "rex": {"status": "degraded", "how": "Rex has no notification command, so the ask stays in the programme journal and the tracker", "fix": "install Rex and put its rex command on PATH: the app ships it inside the bundle at Contents/Helpers/Rex Server.rex/Contents/MacOS/rex, so link that file into a PATH directory and check it with rex version; run rex skill setup once so Claude gets Rex's skill and start hook (it does not put rex on PATH)", "version": "0.0.1793131181-gdd9a20 (api revision 7)"},
       "ghostty": {"status": "refuse", "fix": "not yet implemented"}
     }
   }
