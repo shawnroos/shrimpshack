@@ -17,14 +17,12 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
-programme_decisions = load_lib_module("programme_decisions")
 programme_context = load_lib_module("programme_context")
 programme_carryover = load_lib_module("programme_carryover")
 
 ACK_KEY = "protocol_ack"
 NO_REPO = "personal"
 SECTION_NAMES = {"autonomy": "Authority", "rules": "Done standard", "checks": "check command"}
-LEVEL_ORDER = programme_decisions.LEVEL_ORDER
 
 
 def _repos(programme) -> list:
@@ -88,49 +86,26 @@ def _diff(acked, protocol, key, changed, rejected, host) -> None:
                             "section": entry.get("section")}, key)
 
 
-def _level(host, programme, kind, targets, by_path, fallback):
-    paths = host.programme_rulings.target_repos(programme, targets)
-    # The gate's rule (programme_rulings.protocol_for): a programme-wide or repo-less target reads every remit repo.
-    if None in paths:
-        paths = set(by_path)
-    if not paths <= set(by_path):
-        held = frozenset(paths)
-        if held not in fallback:
-            fallback[held] = host.programme_rulings.protocol_for(host, programme, targets)
-        return host.programme_rulings.level_of(fallback[held], kind)
-    levels = [host.programme_rulings.level_of(by_path[p], kind) for p in paths]
-    levels = [lv for lv in levels if lv is not None]
-    return min(levels, key=LEVEL_ORDER.index) if levels else None
-
-
-def _grants(programme, now_iso) -> list:
-    when = run_record_core.parse_iso(now_iso)
-    items = programme.get("items") or {}
-    out = []
-    for rid, revisions, ruling in programme_context.current_revisions(programme_context.block(programme)["decisions"]):
-        if ruling.get("effect") != "grant" or ruling.get("kind") is None \
-                or programme_context.ruling_state(revisions, when) != "active":
-            continue
-        out.append((rid, ruling, sorted(programme_context.canonical_targets(items, ruling))))
-    return out
-
-
 def conflicts(host, programme, grants, loaded) -> list:
-    by_path = {path: protocol for protocol, path in loaded.values()}
-    fallback = {}
+    every = [path for _, path in loaded.values()]
+    levels = host.programme_protocol.AuthorityLevels(host.prompt_lookup, seed={
+        frozenset([path] if path else []): protocol for protocol, path in loaded.values()})
     out = []
-    for rid, ruling, targets in grants:
-        level = _level(host, programme, ruling["kind"], targets, by_path, fallback)
-        if programme_decisions.narrower_than_baseline(level, ruling.get("baseline")):
-            out.append({"ruling": rid, "kind": ruling["kind"], "items": targets,
-                        "baseline": ruling.get("baseline") or "act", "level": level})
+    for ruling in grants:
+        targets = sorted(ruling["targets"])
+        repos = host.programme_rulings.repos_for(programme, targets, every)
+        # A grant with no items covers nothing, so no level can conflict with it.
+        if targets and levels.conflicted(ruling, repos):
+            out.append({"ruling": ruling["id"], "kind": ruling["kind"], "items": targets,
+                        "baseline": ruling["baseline"] or "act", "level": levels.level(ruling["kind"], repos)})
     return out
 
 
 def report(host, programme, journals=None, base=None) -> dict:
     acked = (programme.get(ACK_KEY) or {}).get("repos") or {}
-    grants = _grants(programme, run_record_core.now_iso())
-    # _level reads every loaded repo for a programme-wide grant, so an active grant needs every remit repo loaded.
+    grants = [r for r in programme_context.rulings(programme, run_record_core.now_iso())
+              if r["state"] == "active" and r["effect"] == "grant" and r["kind"] is not None]
+    # A programme-wide grant reads every remit repo, so an active grant loads them all here and seeds the levels.
     loaded = _load(host, programme, journals, base, None if grants else set(acked))
     unacknowledged, changed, rejected = [], [], []
     for key, _ in _repos(programme):

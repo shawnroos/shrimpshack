@@ -528,13 +528,14 @@ P_OE2="$(prompt 'accept r-oe, it is open-ended now')"
 prog accept-context r-oe --prompt "$P_OE2" --run "$RUN"
 check "0 2" "$CODE $(in_force_rev r-oe)"
 
-it "grant_conflicted is false for a restrict and for a grant with no kind"
+it "a Ruling conflict is false for a restrict and for a grant with no kind"
 check "False False" "$(run_py "$RUN" <<'EOF'
 host = load_lib_module("programme")
 programme = ph.normalize_programme(programme_records.load(args[0])["programme"])
-rulings = load_lib_module("programme_rulings")
-print(rulings.grant_conflicted(host, programme, {"effect": "restrict", "kind": "tool_choice", "baseline": "act"}, "herdr:a"),
-      rulings.grant_conflicted(host, programme, {"effect": "grant", "kind": None, "baseline": "act"}, "herdr:a"))
+levels = load_lib_module("programme_protocol").AuthorityLevels(host.prompt_lookup)
+repos = load_lib_module("programme_rulings").repos_for(programme, ["herdr:a"])
+print(levels.conflicted({"effect": "restrict", "kind": "tool_choice", "baseline": "act"}, repos),
+      levels.conflicted({"effect": "grant", "kind": None, "baseline": "act"}, repos))
 EOF
 )"
 

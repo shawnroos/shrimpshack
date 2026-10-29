@@ -46,11 +46,12 @@ from this session's lease.
   step it prints.
 - Never use `/goal`. The programme's stop rule is the only stop rule.
 - Only a checker writes evidence. A worker's "done" is a claim, never evidence.
-- An approval (accept the agreement, amend a term, record, accept, withdraw or
-  carry a Ruling, adopt a rule, an Authority level or a check command, answer a
-  handed item, drop or reopen an issue item, record, move, retire or keep a
-  behaviour) cites the
-  prompt id from the `<auto-data>` tag of Shawn's typed message. Never cite a
+- An approval cites the prompt id from the `<auto-data>` tag of Shawn's message.
+  Ruling changes (record, accept, withdraw or carry a Ruling), new or retired
+  behaviours and requirements cite a typed message. The accept, amends and the
+  other pick-list verbs (adopt a rule, an Authority level or a check command,
+  answer a handed item, drop or reopen an issue item, move or keep a behaviour)
+  cite either a typed message or a pick of their approval label. Never cite a
   cron prompt.
 - Apply the shared judgment rules in
   [references/judgment.md](references/judgment.md) at every step that names

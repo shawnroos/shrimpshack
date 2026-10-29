@@ -530,6 +530,28 @@ def with_project(base, repo_path, prompt_lookup=None) -> dict:
     return state
 
 
+# The Authority level of a kind over a set of repo paths: the narrowest across them, as load merges it. The gate,
+# a grant's baseline, the brief and the conflict report all read levels here, so they cannot disagree.
+class AuthorityLevels:
+    def __init__(self, prompt_lookup=None, seed=None):
+        self._lookup = prompt_lookup
+        self._memo = dict(seed or {})
+
+    def protocol(self, repos) -> dict:
+        key = frozenset(repos)
+        if key not in self._memo:
+            self._memo[key] = load(repos=sorted(key), prompt_lookup=self._lookup)
+        return self._memo[key]
+
+    def level(self, kind, repos):
+        return (self.protocol(repos)["autonomy"].get(kind) or {}).get("level")
+
+    def conflicted(self, ruling, repos) -> bool:
+        if ruling.get("effect") != "grant" or ruling.get("kind") is None:
+            return False
+        return programme_decisions.narrower_than_baseline(self.level(ruling["kind"], repos), ruling.get("baseline"))
+
+
 def match(protocol: dict, change_kinds) -> dict:
     kinds = set(change_kinds or ())
     hits = [

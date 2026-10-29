@@ -156,48 +156,23 @@ def _until(value):
     return value
 
 
-def target_repos(programme, targets) -> set:
+# A programme-wide or repo-less target reads every remit repo. The conflict report passes ``every`` as its
+# loaded set, deduped by repo key, so two checkouts of one GitHub repo count once there as before.
+def repos_for(programme, targets, every=None) -> frozenset:
     items = programme["items"]
-    return {items[t].get("repo") if t in items else None for t in targets}
-
-
-def protocol_for(host, programme, targets) -> dict:
-    repos = target_repos(programme, targets)
+    repos = {items[t].get("repo") if t in items else None for t in targets}
     if None in repos:
-        repos = {r.get("path") for r in (programme.get("remit") or {}).get("repos") or [] if isinstance(r, dict)}
-    return host.programme_protocol.load(repos=sorted(r for r in repos if r), prompt_lookup=host.prompt_lookup)
-
-
-def level_of(protocol, kind):
-    return (protocol["autonomy"].get(kind) or {}).get("level")
-
-
-def authority_level(host, programme, kind, targets):
-    return level_of(protocol_for(host, programme, targets), kind)
-
-
-# Must match the conflict test in programme_decisions.who_decides, or a worker acts where the PM may not.
-def grant_conflicted(host, programme, ruling, item) -> bool:
-    if ruling.get("effect") != "grant" or ruling.get("kind") is None:
-        return False
-    level = authority_level(host, programme, ruling["kind"], [item])
-    return programme_decisions.narrower_than_baseline(level, ruling.get("baseline"))
-
-
-def legacy_restricts(programme) -> list:
-    out = []
-    for rid, _, current in pc.current_revisions(pc.block(programme)["decisions"]):
-        if current.get("legacy") == "project_term":
-            out.append({"id": rid, "area": current.get("area"), "scope": current.get("scope")})
-    return out
+        repos = set(every) if every is not None else {
+            r.get("path") for r in (programme.get("remit") or {}).get("repos") or [] if isinstance(r, dict)}
+    return frozenset(r for r in repos if r)
 
 
 def _activate(host, programme, revision, prompt, baseline=None) -> None:
     if revision.get("quote") is None:
         revision["quote"] = prompt["quote"]
     if revision.get("effect") == "grant":
-        revision["baseline"] = baseline or authority_level(host, programme, revision["kind"],
-                                                           revision.get("applies_to") or [])
+        revision["baseline"] = baseline or host.programme_protocol.AuthorityLevels(host.prompt_lookup).level(
+            revision["kind"], repos_for(programme, revision.get("applies_to") or []))
 
 
 def _check_revisable(cid, revisions, kind, effect, prompt) -> None:

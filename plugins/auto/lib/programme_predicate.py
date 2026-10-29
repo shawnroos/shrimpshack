@@ -207,22 +207,19 @@ def _scan(block: dict, now, inbox_size, cadence: int) -> dict:
             "acceptance": acceptance}
 
 
-def active_rulings(block: dict, now) -> list:
-    out = []
-    for rid, revisions, current in programme_context.current_revisions(programme_context.block(block)["decisions"]):
-        if current.get("kind") is not None and programme_context.ruling_state(revisions, now) == "active":
-            out.append((rid, current))
-    return out
+# Unlike the rules view, this keeps a Ruling whose items are all finished: the next programme may still want it.
+def offerable_rulings(block: dict, now) -> list:
+    return [r for r in programme_context.rulings(block, now) if r["state"] == "active" and r["kind"] is not None]
 
 
 def unoffered_rulings(block: dict, now) -> list:
     try:
-        active = active_rulings(block, now)
+        active = offerable_rulings(block, now)
     # A malformed context already holds the stop as corrupt_context.
     except Exception:
         return []
     offered = set(_dict(block.get(OFFER_KEY)).get("offered") or [])
-    return [rid for rid, _ in active if rid not in offered]
+    return [r["id"] for r in active if r["id"] not in offered]
 
 
 def _stop_decision(rule: str, until, done: bool, floor: list, now):

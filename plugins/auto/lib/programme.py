@@ -132,22 +132,18 @@ def _item_open(programme, item_id) -> bool:
 
 def active_rulings(programme, now=None) -> list:
     pc = programme_rulings.pc
-    when = run_record_core.parse_iso(now) if now else None
-    items = programme.get("items") or {}
     out = []
-    for rid, revisions, current in pc.current_revisions(pc.block(programme)["decisions"]):
-        if not pc.is_ruling(revisions) or pc.ruling_state(revisions, when) != "active":
+    for r in pc.rulings(programme, now):
+        if not r["is_ruling"] or r["state"] != "active":
             continue
         # merge-item leaves a Ruling's targets as written; without this an old id loses its waiver after a merge.
-        # Only a record with no applies_to at all is programme-wide; an empty list covers nothing, as at the gate.
-        default = (pc.PROGRAMME_SCOPE,) if current.get("applies_to") is None else ()
-        targets = pc.canonical_targets(items, current, default)
+        # Only a record with no applies_to at all is programme-wide here; an empty list covers nothing.
+        targets = [pc.PROGRAMME_SCOPE] if r["applies_to"] is None else r["targets"]
         targets = [t for t in targets if t == pc.PROGRAMME_SCOPE or _item_open(programme, t)]
-        if not targets:
-            continue
-        out.append(dict({k: current.get(k) for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
-                                                     "until", "at", "limits", "baseline")},
-                        id=rid, applies_to=targets, prompt_id=(current.get("source") or {}).get("prompt_id")))
+        if targets:
+            out.append(dict({k: r[k] for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
+                                               "until", "at", "limits", "baseline")},
+                            id=r["id"], applies_to=targets, prompt_id=r["prompt_id"]))
     return out
 
 
@@ -190,7 +186,9 @@ def rules_in_force(record, journals=None, protocol=None, changes=True, *, behavi
         "rulings": active_rulings(programme, run_record_core.now_iso()),
         "permission_proposals": programme_permission.in_force(programme),
     }
-    legacy = programme_rulings.legacy_restricts(programme)
+    legacy = [{"id": r["id"], "area": r["area"], "scope": r["scope"]}
+              for r in programme_rulings.pc.rulings(programme, None)
+              if r["state"] == "active" and r["legacy"] == "project_term"]
     if legacy:
         out["legacy_restricts"] = legacy
     report = changes and programme_protocol_changes.report(sys.modules[__name__], programme, journals, protocol)

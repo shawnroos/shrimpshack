@@ -157,14 +157,15 @@ def _decide_product_question(record, protocol, programme, key) -> str:
 
 
 def _check_pm_may_decide(host, programme, kind, target) -> dict:
-    protocol = host.programme_rulings.protocol_for(host, programme, [target])
+    levels = host.programme_protocol.AuthorityLevels(host.prompt_lookup)
+    repos = host.programme_rulings.repos_for(programme, [target])
     now = run_record_core.now_iso()
     active = host.programme_record.programme_context.rulings_for(programme, target, kind, now)
-    verdict = who_decides(kind, target, level=host.programme_rulings.level_of(protocol, kind), rulings=active,
-                          now=now, accepted=stamped(programme))
+    verdict = who_decides(kind, target, level=levels.level(kind, repos), rulings=active, now=now,
+                          accepted=stamped(programme))
     if verdict["decider"] == "shawn":
         raise DecisionError(refusal(kind, verdict))
-    return protocol
+    return levels.protocol(repos)
 
 
 def _h_log_decision(host, argv):

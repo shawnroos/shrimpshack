@@ -11,7 +11,6 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_context = load_lib_module("programme_context")
 programme_decisions = load_lib_module("programme_decisions")
@@ -49,31 +48,15 @@ def _preferred_tools(block) -> list:
     return [{k: e.get(k) for k in ("id", "area", "value", "source")} for e in programme_home.project_terms(block)]
 
 
-def _state(revisions, now) -> str:
-    state = programme_context.ruling_state(revisions, now)
-    last = _dict((revisions or [None])[-1])
-    return "carried" if state == "pending" and last.get("carried") else state
-
-
 def rulings(block, now=None) -> list:
     try:
-        decisions = programme_context.block(block)["decisions"]
+        rows = programme_context.rulings(block, now)
     except programme_context.ContextError:
         return []
-    when = run_record_core.parse_iso(now) if isinstance(now, str) else now
-    out = []
-    for rid, revisions in decisions.items():
-        state = _state(revisions, when)
-        if state not in RULING_STATES:
-            continue
-        shown = programme_context.in_force(revisions) or programme_context.pending(revisions)
-        carried = _dict(_dict((revisions or [None])[-1]).get("carried"))
-        waiting = programme_context.pending(revisions) if state == "active" else None
-        out.append({"id": rid, "state": state, "effect": shown.get("effect") or "decided", "kind": shown.get("kind"),
-                    "legacy": shown.get("legacy"), "quote": shown.get("quote") or shown.get("scope"),
-                    "applies_to": list(shown.get("applies_to") or []), "until": shown.get("until"),
-                    "carried": {k: carried.get(k) for k in ("from", "run_id")} if carried else None,
-                    "pending_rev": _dict(waiting).get("rev")})
+    out = [{"id": r["id"], "state": r["state"], "effect": r["effect"] or "decided", "kind": r["kind"],
+            "legacy": r["legacy"], "quote": r["quote"] or r["scope"], "applies_to": list(r["applies_to"] or []),
+            "until": r["until"], "carried": r["carried"], "pending_rev": r["pending_rev"]}
+           for r in rows if r["state"] in RULING_STATES]
     return sorted(out, key=lambda r: (RULING_STATES.index(r["state"]), r["id"]))
 
 

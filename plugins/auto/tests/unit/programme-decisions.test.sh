@@ -408,7 +408,7 @@ check "1" "$(grep -rnE '(^|[^_a-zA-Z.])who_decides\(|\.who_decides\(' "${AUTO_RO
 it "programme_decisions reads no autonomy map: the Authority level arrives as plain data"
 check "0" "$(grep -cE '"autonomy"' "${AUTO_ROOT}/lib/programme_decisions.py")"
 it "no other shipped module looks up a kind in the merged autonomy map to gate a decision"
-check "programme_rulings.py" "$(grep -lE '\[\"autonomy\"\]\.get\(kind\)|get\(\"autonomy\"\).*\.get\(kind\)' "${AUTO_ROOT}"/lib/*.py | xargs -n1 basename | sort | tr '\n' ' ' | sed 's/ $//')"
+check "programme_protocol.py" "$(grep -lE '\[\"autonomy\"\]\.get\(kind\)|get\(\"autonomy\"\).*\.get\(kind\)' "${AUTO_ROOT}"/lib/*.py | xargs -n1 basename | sort | tr '\n' ' ' | sed 's/ $//')"
 
 # The who-decides gate, called with plain data. MUTATE patches one branch out in-process.
 gate() {

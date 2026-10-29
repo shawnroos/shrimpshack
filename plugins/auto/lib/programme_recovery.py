@@ -356,18 +356,18 @@ def _requirement_rows(ctx) -> list:
     return rows
 
 
-def _binding(ctx) -> dict:
+def _binding(ctx, programme) -> dict:
     pauses = [_capped(dict(p, binding=True), ("reason",), f"pause:{p.get('id')}")
               for p in programme_context.active_pauses(ctx)]
     denials = [_capped(dict(d, binding=True), ("reason",), f"denial:{n}")
                for n, d in enumerate(ctx["denials"]) if isinstance(d, dict)]
     rulings = []
-    for rid, revisions, current in programme_context.current_revisions(ctx["decisions"]):
-        # No clock here: the packet must stay deterministic for one revision, so an expired until still shows.
-        if not programme_context.is_ruling(revisions) or programme_context.ruling_state(revisions, None) != "active":
+    # No clock here: the packet must stay deterministic for one revision, so an expired until still shows.
+    for r in programme_context.rulings(programme, None):
+        if not r["is_ruling"] or r["state"] != "active":
             continue
-        entry = _capped({k: current.get(k) for k in ("kind", "effect", "legacy", "scope", "quote", "applies_to",
-                                                     "until", "rev")}, ("scope", "quote"), f"ruling:{rid}")
+        entry = _capped({k: r[k] for k in ("kind", "effect", "legacy", "scope", "quote", "applies_to", "until",
+                                           "rev")}, ("scope", "quote"), f"ruling:{r['id']}")
         entry.update(binding=True, authorizes=False)
         rulings.append(entry)
     return {"pauses": pauses, "denials": denials, "rulings": rulings}
@@ -432,7 +432,7 @@ def packet(run_id, revision, record, *, objects=True) -> dict:
         "pending_decisions": _pending(programme, status),
         "decisions": _decision_rows(ctx), "requirements": _requirement_rows(ctx),
         "acceptance": status["requirements"], "blockers": status["blockers"],
-        "binding": _binding(ctx), "actions": _actions(programme),
+        "binding": _binding(ctx, programme), "actions": _actions(programme),
         "assignments": ctx["assignments"], "results": _results(programme),
         "evidence_limits": _evidence_limits(status),
         "uncertain_effects": unreconciled_admissions(programme),

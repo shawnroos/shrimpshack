@@ -100,11 +100,9 @@ def _write(update) -> None:
 
 
 def offer(programme, now=None) -> list:
-    when = run_record_core.parse_iso(now or run_record_core.now_iso())
-    return [{"source": "ruling", "id": rid, "rev": ruling.get("rev"), "kind": ruling["kind"],
-             "effect": ruling.get("effect"), "scope": ruling.get("scope"),
-             "items": list(ruling.get("applies_to") or [])}
-            for rid, ruling in programme_predicate.active_rulings(programme, when)]
+    return [{"source": "ruling", "id": r["id"], "rev": r["rev"], "kind": r["kind"], "effect": r["effect"],
+             "scope": r["scope"], "items": list(r["applies_to"] or [])}
+            for r in programme_predicate.offerable_rulings(programme, now or run_record_core.now_iso())]
 
 
 # programme_behaviours loads this module, so it is loaded here only when the offer is made.
@@ -308,7 +306,7 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
     keys = repo_keys(programme)
     if not keys:
         raise host.ProgrammeError("the remit names no repo, so there is no project to carry a Ruling to")
-    active = dict(programme_predicate.active_rulings(programme, run_record_core.parse_iso(run_record_core.now_iso())))
+    active = {r["id"]: r for r in programme_predicate.offerable_rulings(programme, run_record_core.now_iso())}
     missing = [rid for rid in ids if rid not in active]
     if missing:
         raise host.ProgrammeError(f"no active Ruling {', '.join(missing)} in this programme")

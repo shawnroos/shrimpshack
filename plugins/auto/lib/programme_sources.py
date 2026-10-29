@@ -626,8 +626,9 @@ def _brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(),
                if r["id"] not in found and (key in r["applies_to"] or "programme" in r["applies_to"])}
     cited = {d: programme_context.in_force(records.get(d)) for d in decision_ids
              if d not in logged and programme_context.is_ruling(records.get(d))}
-    conflicted = [rid for rid, r in {**cited, **carried}.items()
-                  if host.programme_rulings.grant_conflicted(host, programme, r, key)]
+    levels = host.programme_protocol.AuthorityLevels(host.prompt_lookup)
+    repos = host.programme_rulings.repos_for(programme, [key])
+    conflicted = [rid for rid, r in {**cited, **carried}.items() if levels.conflicted(r, repos)]
     lines = []
     settled = [found[d] for d in decision_ids if d not in conflicted]
     settled += [_ruling_line(r) for rid, r in carried.items() if rid not in conflicted]

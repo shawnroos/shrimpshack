@@ -367,36 +367,51 @@ def canonical_targets(items, revision, default=()) -> list:
     return list(dict.fromkeys(_canonical(items, t) for t in revision.get("applies_to") or default))
 
 
-def current_revisions(decisions):
-    for rid, revisions in sorted(decisions.items()):
-        current = in_force(revisions)
-        if current is not None:
-            yield rid, revisions, current
-
-
 def ruling_kind_label(ruling, default="record") -> str:
     return ruling.get("kind") or f"legacy {str(ruling.get('legacy') or default).replace('_', ' ')}"
 
 
-def rulings_for(programme, item, kind, now) -> list:
-    when = run_record_core.parse_iso(now)
+ROW_KEYS = ("rev", "kind", "effect", "legacy", "scope", "reason", "quote", "until", "at", "limits", "baseline",
+            "area", "applies_to")
+
+
+# One row per decision id in every state, from its in-force revision or else its pending one. applies_to is
+# as written and targets are canonical with no default, so a record with no applies_to covers nothing here.
+# A None now never expires a Ruling, which keeps the recovery packet deterministic for one revision.
+def rulings(programme, now) -> list:
+    when = run_record_core.parse_iso(now) if isinstance(now, str) else now
     items = _dict(programme.get("items"))
     out = []
-    for rid, revisions, current in current_revisions(block(programme)["decisions"]):
-        # A kind-less entry (an old decision record, instruction or reserved term) never reaches the gate.
-        if current.get("kind") is None or current.get("kind") != kind \
-                or ruling_state(revisions, when) != "active":
-            continue
-        targets = set(canonical_targets(items, current))
-        # A programme-wide Ruling covers every item, as programme scope does for assign-item. A restrict on
-        # any item also covers the programme-level call, or logging against programme would bypass it.
-        if PROGRAMME_SCOPE in targets or (item == PROGRAMME_SCOPE and current.get("effect") == "restrict"):
-            targets.add(item)
-        if item in targets:
-            out.append({"id": rid, "rev": current.get("rev"), "kind": kind, "effect": current.get("effect"),
-                        "items": sorted(targets), "until": current.get("until") or "",
-                        "baseline": current.get("baseline")})
+    for rid, revisions in sorted(block(programme)["decisions"].items()):
+        state = ruling_state(revisions, when)
+        shown = _dict(in_force(revisions) or pending(revisions))
+        last = _dict((revisions or [None])[-1])
+        carried = _dict(last.get("carried"))
+        if state == "pending" and last.get("carried"):
+            state = "carried"
+        row = {k: shown.get(k) for k in ROW_KEYS}
+        row.update(id=rid, state=state, is_ruling=is_ruling(revisions),
+                   targets=canonical_targets(items, shown) if shown else [],
+                   prompt_id=_dict(shown.get("source")).get("prompt_id"),
+                   carried={k: carried.get(k) for k in ("from", "run_id")} if carried else None,
+                   pending_rev=_dict(pending(revisions)).get("rev") if state == "active" else None)
+        out.append(row)
     return out
+
+
+# A programme-wide Ruling covers every item, as programme scope does for assign-item. A restrict on any item
+# also covers the programme-level call, or logging against programme would bypass it.
+def covers(row, item) -> bool:
+    targets = row["targets"]
+    return item in targets or PROGRAMME_SCOPE in targets or (item == PROGRAMME_SCOPE and row["effect"] == "restrict")
+
+
+# A kind-less entry (an old decision record, instruction or reserved term) never reaches the gate.
+def rulings_for(programme, item, kind, now) -> list:
+    return [{"id": r["id"], "rev": r["rev"], "kind": kind, "effect": r["effect"],
+             "items": sorted(set(r["targets"]) | {item}), "until": r["until"] or "", "baseline": r["baseline"]}
+            for r in rulings(programme, now)
+            if r["state"] == "active" and r["kind"] is not None and r["kind"] == kind and covers(r, item)]
 
 
 def _record_requirement(host, cid, content, delta, prompt, programme):
