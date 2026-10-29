@@ -60,6 +60,8 @@ FLAG_BAR = (("production", False), ("stage", True), ("development", True))
 FLAG_EXCEPTIONS = ("rules", "targets", "contextTargets")
 _PR_REF = re.compile(r"(?:https://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:#|/pull/)([0-9]+)/?")
 _ISSUE_REF = re.compile(r"(?:linear:)?([A-Z][A-Z0-9]*)-([0-9]+)")
+_PEEK_ID = re.compile(r"[a-z0-9]{8}")
+_PEEK_PROP_ID = re.compile(r"^id:\s*\"?([a-z0-9]{8})\"?\s*$", re.MULTILINE)
 _ROOT_CAUSE = re.compile(r"root[ -]cause", re.IGNORECASE)
 _FLAG_REF = re.compile(r"(?:([A-Za-z0-9._-]+)/)?([A-Za-z0-9._-]+)")
 _EXPERIMENT_REF = re.compile(r"bt:([^/\s]+)/(\S+)")
@@ -288,6 +290,45 @@ def parse_issue_ref(ref):
     return match.group(1), int(match.group(2))
 
 
+def _peek_task_file(task_id, repos):
+    for repo in repos or []:
+        path = repo.get("path") if isinstance(repo, dict) else None
+        # A worktree has a .git file; its .peek/tasks is a stale copy, not the task store.
+        if not path or not os.path.isdir(os.path.join(path, ".git")):
+            continue
+        tasks = os.path.join(path, ".peek", "tasks")
+        if not os.path.isdir(tasks):
+            continue
+        try:
+            names = sorted(os.listdir(tasks))
+        except OSError as exc:
+            raise Unknown(_note("cannot read", tasks, str(exc)))
+        for name in names:
+            if not name.endswith(f"-{task_id}.md"):
+                continue
+            try:
+                with open(os.path.join(tasks, name), encoding="utf-8") as handle:
+                    head = handle.read(4096)
+            except OSError as exc:
+                raise Unknown(_note("cannot read", os.path.join(tasks, name), str(exc)))
+            front = head.split("---", 2)[1] if head.startswith("---") else ""
+            prop = _PEEK_PROP_ID.search(front)
+            if prop and prop.group(1) == task_id:
+                name_prop = re.search(r"^name:\s*\"?(.*?)\"?\s*$", front, re.MULTILINE)
+                status = re.search(r"^status:\s*(\S+)", front, re.MULTILINE)
+                return {"task": task_id, "name": name_prop.group(1) if name_prop else None,
+                        "status": status.group(1) if status else None, "file": os.path.join(tasks, name)}
+    return None
+
+
+def check_peek_recorded(ref, repos) -> dict:
+    found = _peek_task_file(ref, repos)
+    if found is None:
+        return {"result": "refuted", "fields": {"task": ref, "read_by": "peek-file"},
+                "misses": [f"no peek task {ref} in the remit's repos"]}
+    return {"result": "confirmed", "fields": dict(found, read_by="peek-file"), "misses": []}
+
+
 def _comment_nodes(comments) -> list:
     if isinstance(comments, dict):
         comments = comments.get("nodes")
@@ -336,7 +377,13 @@ def _person_root_cause(comments):
     return None
 
 
-def check_recorded(ref) -> dict:
+def check_recorded(ref, repos=None) -> dict:
+    if _ISSUE_REF.fullmatch(ref or "") is None:
+        if _PEEK_ID.fullmatch(ref or ""):
+            return check_peek_recorded(ref, repos)
+        # Refuted, not unknown: a ref of the wrong shape never becomes right, so no retry watcher.
+        return {"result": "refuted", "fields": {}, "misses": [
+            f"recorded needs a Linear key such as AI-123 or an 8-character peek task id, got {ref!r}"]}
     team, number = parse_issue_ref(ref)
     key = f"{team}-{number}"
     issue = _issue_from_board(key) or _issue_from_api(team, number)
@@ -593,7 +640,7 @@ def run_check(run_id, item, deliverable, ref, context=None) -> dict:
             _require_remit_repo(ref, context.get("remit_repos"))
             verdict = check_merged(ref, pin=_pin_for(run_id, item, ref))
         elif deliverable == "recorded":
-            verdict = check_recorded(ref)
+            verdict = check_recorded(ref, context.get("remit_repos"))
         elif deliverable == "flagged":
             verdict = check_flagged(ref)
         elif deliverable == "verified":
@@ -640,7 +687,7 @@ def _claimed_ref(home, key, deliverable):
 
 def _default_ref(key, deliverable, item):
     source, _, rest = key.partition(":")
-    if deliverable == "recorded" and source == "linear":
+    if deliverable == "recorded" and source in ("linear", "peek"):
         return rest
     if deliverable == "merged" and source in ("github", "pr"):
         return rest
