@@ -435,12 +435,9 @@ sleep 1.2
 it "nothing changed across several polls: the watcher prints nothing"
 check "" "$(cat "${WORK}/watch.out")"
 write_list 4344 worker
-wait_for "${WORK}/watch.out" "remit-changed" || true
-it "the worker terminal's foreground pid changed: one remit-changed line names the terminal"
-has "remit-changed" "$(cat "${WORK}/watch.out")"
-has "${T2}" "$(cat "${WORK}/watch.out")"
-it "the wake is exactly one line"
-check 1 "$(wc -l < "${WORK}/watch.out" | tr -d ' ')"
+sleep 1.2
+it "a worker terminal's foreground pid changing alone does not wake the PM: the watcher wakes on a terminal joining or leaving"
+check "" "$(cat "${WORK}/watch.out")"
 kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
 
 echo "host-ghostty: notify is degraded to a journal line"

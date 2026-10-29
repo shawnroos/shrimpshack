@@ -376,12 +376,9 @@ sleep 1.2
 it "revision unchanged across several polls: the watcher prints nothing"
 check "" "$(cat "${WORK}/watch.out")"
 echo 54 > "$REVFILE"
-wait_for "${WORK}/watch.out" "remit-changed" || true
-it "revision 53 to 54: the watcher prints one remit-changed line naming the block and both revisions"
-has "remit-changed" "$(cat "${WORK}/watch.out")"
-has "53->54" "$(cat "${WORK}/watch.out")"
-it "the wake is exactly one line"
-check 1 "$(wc -l < "${WORK}/watch.out" | tr -d ' ')"
+sleep 1.2
+it "revision 53 to 54 alone does not wake the PM: the watcher wakes on a block joining or leaving, not on busy or idle changes"
+check "" "$(cat "${WORK}/watch.out")"
 kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
 
 echo "host-rex: notify is degraded to a journal line"
