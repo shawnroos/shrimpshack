@@ -95,7 +95,7 @@ def _lease_for(host, opts, sid):
     # The herdr variables still name which lease a session is asking about; membership in it is _in_space, rows only.
     space = session_registry.space_of_session(sid, os.environ) if sid else None
     if not space:
-        raise host.ProgrammeError("this session is not in a herdr space; name the PM by its session id "
+        raise host.ProgrammeError("this session is not in a space; name the PM by its session id "
                                   "(/auto:programme-takeover --replace <session id>) or pass --run <id>")
     key = programme_home.space_key(*space)
     lease = programme_home.read_lease(programme_home.lease_path(*space))
@@ -267,8 +267,8 @@ def _h_start(host, argv):
     _require_own_pane(host, sid, session_host)
     spaces = list(opts["space"]) + positional or [session_registry.space_of_session(sid, os.environ)]
     if not spaces[0]:
-        raise host.ProgrammeError("this session is not in a herdr space; start from a herdr pane "
-                                  "or pass --space <server.workspace>")
+        raise host.ProgrammeError("this session is not in a space; start from a pane in a terminal host (herdr, Rex or Ghostty) "
+                                  "or pass --space <server.workspace> (herdr) or --space <host>--<server>--<workspace>")
     for spec in spaces:
         _check_host(host, session_host, programme_home.space_parts_of(spec), "start a programme in")
     made = programme_home.create_programme(spaces, sid)
@@ -409,9 +409,9 @@ def _cited_route(run, sid, prompt_id, status, record, presence, refused):
                        fix=f"`programme.sh status --run {run}` names the fault; repair it, then run "
                            "`programme.sh become-pm` again")
     if not _in_space(run, sid):
-        raise _Refused("this session is not in the programme's herdr space; only a session there can "
+        raise _Refused("this session is not in the programme's space; only a session there can "
                        "take over a PM that stopped", status,
-                       fix="run Claude from a pane in the herdr space the programme leases, then run "
+                       fix="run Claude from a pane in the space the programme leases, then run "
                            "`programme.sh become-pm` there")
     found = approval.takeover_pick(rows, row, prompt_id, sid, driver, refused, stopped=True)
     return ("driver_gone" if status == "live" else "orphaned"), found
@@ -593,8 +593,8 @@ def _h_become_pm(host, argv):
             _become_refused(host, out, str(exc), exc.fix)
         space = session_registry.space_of_session(sid, os.environ)
         if not space:
-            _become_refused(host, out, "this session is not in a herdr space, so it cannot be a space's PM",
-                            "run Claude from a pane in the herdr space, then run `programme.sh become-pm` there")
+            _become_refused(host, out, "this session is not in a space, so it cannot be a space's PM",
+                            "run Claude from a pane in the space, then run `programme.sh become-pm` there")
         out["space"] = programme_home.space_key(*space)
         _check_host(host, session_host, programme_home.space_parts_of(space), "become the PM of")
         step = _become_step(host, out, sid, space)
@@ -809,7 +809,7 @@ def parse_remit(doc, current) -> dict:
             if entry not in spaces:
                 spaces.append(entry)
         if not spaces:
-            raise _remit_error("the remit needs at least one herdr space")
+            raise _remit_error("the remit needs at least one space")
         out["spaces"] = spaces
     if "repos" in doc:
         out["repos"] = [_repo_entry(r) for r in _capped(doc["repos"], "repos", REMIT_CAPS["repos"])]
@@ -926,7 +926,7 @@ def _h_set_remit(host, argv):
 
 _SPECS = (
     ("start", _h_start, "[<server.workspace>|--space <server.workspace>]...",
-     "a session outside a herdr space with no --space; a space whose lease is live, orphaned or "
+     "a session outside a space with no --space; a space whose lease is live, orphaned or "
      "newer (the error names the holding run and session). Takes the lease before anything else."),
     ("takeover", _h_takeover, "[--replace <pane name>] [--prompt <id>] [--run <id>]",
      "no typed /auto:programme-takeover from this session; a request already used; a lease that is "
@@ -936,11 +936,11 @@ _SPECS = (
      "request: anything but this session's unused verified pick of exactly "
      "`approval-label takeover --replace <driver session id>` (a typed or suggested prompt never "
      "counts); for an orphaned lease herdr does not show present, or a driver herdr shows gone, also "
-     "a session with no session-registry row in the lease's herdr space, or an unreadable run record; "
+     "a session with no session-registry row in the lease's space, or an unreadable run record; "
      "any prompt from before the current PM took the programme. Journals taken_over with request null "
      "and the prompt id. Refusals are journaled as request_refused."),
     ("become-pm", _h_become_pm, "",
-     "nothing it can route: a session outside a herdr space, an unreadable lease or run record, and a "
+     "nothing it can route: a session outside a space, an unreadable lease or run record, and a "
      "newer programme print step refused with a fix. Reads the space lease, its status, herdr presence "
      "and this session's driver history, and prints one step as JSON plus a line: start, ask-shawn (with "
      "the exact takeover label and command, for a live or a stopped PM), already-pm, or stand-down (a "

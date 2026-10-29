@@ -213,11 +213,17 @@ GLOBAL_PATH_WHITELIST=(
 #       and the canonical permanent whitelist in U1/U10/Verification-Contract-item-2.
 #     If a FOURTH archive dir is ever added under docs/, it is IN scope until
 #     someone adds it here on purpose — which is the correct default.
+#
+#   * docs/field-notes- — dated run debriefs, added on purpose. The 2026-07-21 debrief says
+#     "unit" for the plan units (U1..U7) a ce-work run implemented, which is the plan's own word
+#     and not the retired workflow term; rewording the record would change what it says. Only
+#     files that start with `docs/field-notes-` are exempt, so a live doc stays scanned.
 GLOBAL_PATH_PREFIX_WHITELIST=(
   'tests/fixtures/format-v1/'
   'docs/plans/'
   'docs/brainstorms/'
   'docs/research/'
+  'docs/field-notes-'
 )
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto unit test: terminal host detection (KTD2), the SessionStart gate, and the process-chain tty (KTD12).
 #
-# detect() only SELECTS an adapter from the environment; AUTO_TEST_HOST=stub is the one test-only
+# detect() only SELECTS a host module from the environment; AUTO_TEST_HOST=stub is the one test-only
 # selector and nothing in production sets it.
 
 set -uo pipefail
@@ -133,7 +133,7 @@ it "cmux: the hook records nothing"
 if [ -z "$(rows)" ]; then pass; else fail "$(rows)"; fi
 
 hook REX_SESSION=abc
-it "rex has no adapter yet: the hook records nothing and does not fail"
+it "rex has no host module yet: the hook records nothing and does not fail"
 if [ -z "$(rows)" ]; then pass; else fail "$(rows)"; fi
 
 echo "terminal-host-detect: the process-chain tty"

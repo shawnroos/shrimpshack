@@ -246,7 +246,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
 4. **Validate.** `P validate` re-checks confirmed evidence that has gone stale.
    A refuted re-check reopens its item; treat it as open work in this sweep.
-5. **Read the remit.** `P sweep --record-sources`. It reads herdr and the
+5. **Read the remit.** `P sweep --record-sources`. It reads the terminal host and the
    three sources the agreement's `tools_of_record` term leaves on: the tracker (the
    issue tracker; `sources.tracker.provider` names the provider that answered),
    tasks (each remit session's Claude Code task list) and plans (plan docs
@@ -507,7 +507,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
       `instruction:<id>` from the rules in force. Use `null` when nothing does;
       the step is still recorded and shows a warning.
     - `finish` is the deliverable that closes the item.
-    - `location` is `{tab, pane}`: the herdr tab and pane names from this
+    - `location` is `{tab, pane}`: the terminal-host tab and pane names from this
       sweep's remit read, never ids. Leave it out when you do not know them.
 15. **Update the tracker.** For each issue item whose state changed in this
     sweep (worker started, PR opened or merged, blocked, handed, unblocked),

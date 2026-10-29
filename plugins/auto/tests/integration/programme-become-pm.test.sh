@@ -202,8 +202,8 @@ if [ -e "${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json" ]; then fail
 it "outside a herdr space: become-pm refuses with step refused and a fix"
 OUT="$(CLAUDE_CODE_SESSION_ID=sess-nowhere "$PY" "$PROG" become-pm 2>&1)"; CODE=$?
 check "1 refused" "$CODE $(field step)"
-has "not in a herdr space" "$OUT"
-has "fix: run Claude from a pane in the herdr space" "$OUT"
+has "not in a space" "$OUT"
+has "fix: run Claude from a pane in the space" "$OUT"
 
 as sess-pm start
 RUN="$(field run)"

@@ -75,7 +75,7 @@ rc = load_lib_module("run_record_core")
 gh = th.host_named("ghostty")
 args = sys.argv[2:]
 '
-# py <VAR=value ...>: Python with the Ghostty adapter loaded, PATH holding the osascript fake.
+# py <VAR=value ...>: Python with the Ghostty host module loaded, PATH holding the osascript fake.
 py() { env PATH="$GPATH" "$@" "$PY" - "$AUTO_ROOT" 2>&1; }
 pyargs() { env PATH="$GPATH" HOST_FAKE_OVERLAY="${OVERLAY:-}" "$PY" - "$AUTO_ROOT" "$@" 2>&1; }
 
@@ -124,7 +124,7 @@ PYEOF
 )"
 check "refuse None" "$OUT"
 
-it "KTD3: with no tty argument the adapter walks the process chain, so a faked environment still finds nothing"
+it "KTD3: with no tty argument the host module walks the process chain, so a faked environment still finds nothing"
 OUT="$(env PATH="$GPATH" HOST_FAKE_OVERLAY=terminal-list-pm GHOSTTY_SURFACE_ID=$T1 TERM_PROGRAM=ghostty "$PY" - "$AUTO_ROOT" <<PYEOF
 $HEAD_PY
 sr.process_tty = lambda *a, **k: None
@@ -611,8 +611,8 @@ PYEOF
 it "the item is still open and has no done time"
 check "open None" "$STATE"
 
-echo "host-ghostty: the adapter does not depend on the working-directory quirk"
-it "a terminal's working directory reads empty after command:, so no adapter code reads it"
+echo "host-ghostty: the host module does not depend on the working-directory quirk"
+it "a terminal's working directory reads empty after command:, so no host module code reads it"
 check "0" "$(grep -ci 'working directory' "${AUTO_ROOT}/lib/host_ghostty.py" | tr -d ' ')"
 
 echo "host-ghostty.test.sh: ${PASS} passed, ${FAIL} failed"

@@ -669,7 +669,7 @@ session.
   and recorded issues that no pane names and no item holds as unstaffed (at
   most 20, never adopted). Plans are read in every remit repo. The merged check
   is unknown for a PR whose repo is not a remit repo's GitHub name.
-- **Lifecycle**: `start` takes the remit lease for the caller's herdr space (or
+- **Lifecycle**: `start` takes the remit lease for the caller's space (or
   each `--space`) before anything else, creates the programme home and journals
   programme_started. It is refused while a space's lease is live, orphaned or
   newer, and the error names the holding run and session. `takeover`, `handover
@@ -699,7 +699,7 @@ session.
     live lease whose driver herdr shows gone): the same pick as the pick route,
     of the same label. A typed prompt or an accepted suggestion never counts,
     because any instruction Shawn gives a worker would otherwise hand it the PM
-    role. The caller also has a session-registry row in a herdr space the run
+    role. The caller also has a session-registry row in a space the run
     leases; HERDR_* env alone is not proof. The status comes from a readable run
     record; a record that fails to load refuses. The journaled reason is
     orphaned or driver_gone.
@@ -726,7 +726,7 @@ session.
   drove the run before when its successor stopped: **label** is the exact
   `approval-label takeover --replace <driver>` text to offer as the recommended
   option of one AskUserQuestion picker with a decline option, and **command** is
-  `programme.sh takeover --prompt <pick id>`); **refused** (outside a herdr space,
+  `programme.sh takeover --prompt <pick id>`); **refused** (outside a space,
   an unreadable lease or run record, or a newer programme), which exits 1 with a
   `fix:` line. It uses the same stopped-PM rule as the takeover routes.
   `handover` runs in the driving session and needs a typed handover request that

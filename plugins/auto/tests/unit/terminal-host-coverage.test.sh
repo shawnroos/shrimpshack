@@ -6,8 +6,8 @@
 # in the HOSTS enum missing from terminal_host_capabilities.json, and a host fake with no
 # recorded fixture behind it (KTD10).
 #
-# Adapter-internal methods carry no row: is_host_command (its per-host test is required in
-# the send-guard unit), installed and report_session (herdr's SessionStart plumbing).
+# Host-module-internal methods carry no row: is_host_command (its per-host test is required in
+# the send-guard test), installed and report_session (herdr's SessionStart plumbing).
 # The validator runs on synthetic tables too, so a green result proves it can fail.
 
 set -uo pipefail

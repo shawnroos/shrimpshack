@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# auto unit test: no herdr, rex or osascript command is called outside a host adapter (R1, R5).
+# auto unit test: no herdr, rex or osascript command is called outside a host module (R1, R5).
 #
 # Scans auto's own lib/, .claude/hooks/ and commands/ (not plugins/spinoff, not mods/*.ts) for
 # an invocation of a host binary anywhere except lib/host_*.py:
@@ -123,7 +123,7 @@ OUT="$(scan "$AUTO_ROOT" "$ALLOW_FILE")"
 SEEN="$(printf '%s\n' "$OUT" | sed -n 's/^SEEN //p')"
 it "anti-vacuity: the scan saw at least 50 files"
 if [ "${SEEN:-0}" -ge 50 ]; then pass; else fail "saw ${SEEN:-0}"; fi
-it "no host command outside a host adapter"
+it "no host command outside a host module"
 BAD="$(printf '%s\n' "$OUT" | grep -E '^(HIT|STALE) ' || true)"
 if [ -z "$BAD" ]; then pass; else fail "$BAD"; fi
 it "plugins/spinoff and mods/ are outside the scan"
@@ -143,7 +143,7 @@ cat > "$T/lib/host_fake.py" <<'PYEOF'
 import subprocess
 subprocess.run(["rex", "send", "x"])
 PYEOF
-it "an adapter file may call its host, and prose mentions are not hits"
+it "a host module file may call its host, and prose mentions are not hits"
 check_eq "" "$(scan "$T" | grep -E '^(HIT|STALE)' || true)"
 
 it "a stray subprocess rex call in lib names the file"
@@ -186,7 +186,7 @@ it "anti-vacuity: an empty tree is reported as zero files seen"
 mkdir -p "$WORK/empty"
 check_eq "SEEN 0" "$(scan "$WORK/empty" | head -1)"
 
-echo "terminal-host-boundary: a running programme reaches the host only through the adapter"
+echo "terminal-host-boundary: a running programme reaches the host only through the host module"
 SPY="${AUTO_ROOT}/tests/helpers/host-spy.py"
 . "${AUTO_ROOT}/tests/helpers/host-fakes.sh"
 host_fake_install herdr "$WORK/bin"
@@ -204,10 +204,10 @@ done
 it "anti-vacuity: the spy recorded herdr spawns from the programme verbs"
 N=$(grep -c '^run herdr' "$WORK/spy.log" || true)
 if [ "$N" -ge 2 ]; then pass; else fail "recorded ${N}: $(cat "$WORK/spy.log")"; fi
-it "every recorded spawn went through a host adapter frame"
+it "every recorded spawn went through a host module frame"
 D="$(grep ' direct$' "$WORK/spy.log" || true)"
 if [ -z "$D" ]; then pass; else fail "direct spawns: $D"; fi
-it "control: a direct herdr spawn outside an adapter is recorded as direct"
+it "control: a direct herdr spawn outside a host module is recorded as direct"
 printf 'import subprocess\nsubprocess.run(["herdr", "status", "server"])\n' > "$WORK/stray_call.py"
 : > "$WORK/spy2.log"
 "${RUNENV[@]}" "$PY" "$SPY" "$WORK/spy2.log" "$WORK/stray_call.py" >/dev/null 2>&1

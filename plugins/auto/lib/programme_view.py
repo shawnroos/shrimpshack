@@ -708,7 +708,7 @@ def _scope_names(entries) -> str:
 
 def remit_texts(remit) -> list:
     remit = _dict(remit)
-    spaces = ", ".join(f"{_dict(s).get('server')}.{_dict(s).get('workspace')}" for s in remit.get("spaces") or [])
+    spaces = ", ".join(programme_home.space_label(_dict(s)) for s in remit.get("spaces") or [])
     repos = ", ".join(_dict(r).get("github") or os.path.basename(str(_dict(r).get("path") or ""))
                       for r in remit.get("repos") or [])
     tracker = _dict(remit.get("tracker"))

@@ -181,7 +181,7 @@ def _herdr_server_up() -> bool:
 
 
 def detect(env=None) -> Detection:
-    """Environment variables only SELECT an adapter (KTD3); the adapter then proves the pane from its own host."""
+    """Environment variables only SELECT a host module (KTD3); the host module then proves the pane from its own host."""
     env = os.environ if env is None else env
     if env.get(TEST_HOST_ENV) == "stub":
         return Detection("stub", True)

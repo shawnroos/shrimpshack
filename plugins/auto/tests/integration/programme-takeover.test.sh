@@ -510,8 +510,8 @@ it "a session in the space only by HERDR env, with no registry row, cannot take 
 P="$(pick sess-n "$LABEL_T")"
 as sess-n takeover --prompt "$P"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "not in the programme's herdr space" "$OUT"
-has "fix: run Claude from a pane in the herdr space" "$OUT"
+has "not in the programme's space" "$OUT"
+has "fix: run Claude from a pane in the space" "$OUT"
 
 register sess-k w2:p86 term_p86
 
@@ -551,7 +551,7 @@ it "an ask from a session outside the lease's space is refused"
 A="$(ask sess-w9 "be the PM" 0)"
 as_in w9 sess-w9 takeover --prompt "$A" --run "$RUN"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "not in the programme's herdr space" "$OUT"
+has "not in the programme's space" "$OUT"
 
 P="$(pick sess-k "$LABEL_T")"
 

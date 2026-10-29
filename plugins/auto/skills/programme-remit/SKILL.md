@@ -1,7 +1,7 @@
 ---
 name: programme-remit
 description: >
-  Work out an auto programme's remit: the herdr spaces, the git repos and the
+  Work out an auto programme's remit: the spaces, the git repos and the
   issue-tracker scope (teams, projects, initiatives) the PM looks after. Use at
   /auto:programme start, and whenever Shawn asks to change the remit ("only the
   Cue jobs project", "add repo ai-chat-backend").
@@ -11,7 +11,7 @@ description: >
 
 The remit says what the PM looks after. It has three parts:
 
-- **spaces**: the herdr spaces. `start` already holds the lease for the first one.
+- **spaces**: the spaces. `start` already holds the lease for the first one.
 - **repos**: the git repos, each as an absolute top-level path plus its GitHub
   `owner/name` when the origin is GitHub.
 - **tracker**: the issue-tracker scope: `teams` (issue key prefixes such as

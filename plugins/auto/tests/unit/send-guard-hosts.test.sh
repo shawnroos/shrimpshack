@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auto unit test: the send-guard, the start gate and typed takeover hold on every terminal host (R12, R13, R21).
 #
-# The guard asks each host adapter what a send looks like (KTD8) and reads the PM's pane from registry rows,
+# The guard asks each host module what a send looks like (KTD8) and reads the PM's pane from registry rows,
 # never from a host variable (KTD3). The stub host stands in for Rex and Ghostty where a real binary is absent.
 
 set -uo pipefail
@@ -197,7 +197,7 @@ check "deny" "$(verdict "$(hook sess-peer 'herdr agent prompt p31 go' HERDR_WORK
 it "a bare pane suffix from a session the registry puts in another workspace is allowed"
 row herdr default w3 sess-far w3:p60 term_far
 check "allow" "$(verdict "$(hook sess-far 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
-it "a stub driver is guarded only while AUTO_TEST_HOST selects the stub adapter, and a lookalike variable does not select it"
+it "a stub driver is guarded only while AUTO_TEST_HOST selects the stub host module, and a lookalike variable does not select it"
 check "allow" "$(verdict "$(hook pm-stub "$STUB_SEND" CLAUDE_AUTO_TEST_HOST=stub)")"
 
 echo "send-guard-hosts: R21, start and become-pm refuse when the host cannot find the session's pane"

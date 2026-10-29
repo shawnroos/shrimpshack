@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PostToolUse AskUserQuestion: journal a picker answer given in a programme's driving session,
-or in any session of a herdr space a programme leases.
+or in any session of a space a programme leases.
 
 The row is stored with origin unknown and a pick source record; it reads as picked only
 after programme_pick_source verifies the transcript. A row from a session that does not

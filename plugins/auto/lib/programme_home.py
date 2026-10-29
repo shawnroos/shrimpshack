@@ -3,7 +3,7 @@
 
 A programme lives in ``<data dir>/programmes/<run-id>/``, outside every repo. The
 home holds a ``.claude/auto/`` folder, so the run-record primitives work with the
-home as their ``repo_root``. One lease file per herdr space,
+home as their ``repo_root``. One lease file per space,
 ``programmes/leases/<server>.<workspace>.json``, names the run that holds it.
 """
 
@@ -229,6 +229,14 @@ def space_key(server: str, workspace: str, host=None) -> str:
     return f"{host}--{check_host_id(server)}--{check_host_id(workspace)}"
 
 
+def space_label(space) -> str:
+    """How a remit entry reads on screen: server.workspace for herdr, host--server--workspace for any other host.
+
+    Unlike space_key it does not validate, so a hand-edited record still renders."""
+    server, workspace, host = space_parts(space if isinstance(space, dict) else {})
+    return f"{server}.{workspace}" if host == DEFAULT_HOST else f"{host}--{server}--{workspace}"
+
+
 def parse_key(key: str) -> tuple:
     """Inverse of space_key: (server, workspace, host)."""
     if "." in key:
@@ -287,11 +295,11 @@ TERM_GUIDE = {
     "remit": {
         "editor": "space",
         "binding": "code",
-        "description": "Which herdr spaces, repos and tracker scope the PM looks after.",
+        "description": "Which spaces, repos and tracker scope the PM looks after.",
         "options": {
-            "space": "One herdr space.",
-            "tabs": "Only some tabs inside a herdr space.",
-            "spaces": "Several herdr spaces.",
+            "space": "One space.",
+            "tabs": "Only some tabs inside a space.",
+            "spaces": "Several spaces.",
         },
     },
     "stop_rule": {
@@ -902,7 +910,7 @@ def create_programme(spaces, session_id, *, run_id=None, now=None, predecessor=N
         if space not in parsed:
             parsed.append(space)
     if not parsed:
-        raise ProgrammeHomeError("a programme needs at least one herdr space")
+        raise ProgrammeHomeError("a programme needs at least one space")
     now = _now(now)
     stamp = _iso(now)
     run_id = check_run_id(run_id or _mint_run_id(now))

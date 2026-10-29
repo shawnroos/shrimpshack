@@ -11,7 +11,7 @@ topics:
 
 # Programme: features and operating model
 
-Programme directs work across coding agents in a Herdr space. One Claude Code session acts as the product manager, or PM.
+Programme directs work across coding agents in a space. One Claude Code session acts as the product manager, or PM.
 
 The PM maintains the work list, directs workers, examines evidence, and requests human decisions. Workers perform the individual tasks.
 
@@ -66,7 +66,7 @@ The remit separates three types of scope:
 
 | Scope | What it names |
 |---|---|
-| Spaces | The Herdr spaces under the programme. |
+| Spaces | The spaces under the programme. |
 | Repositories | The repositories inside the remit. |
 | Tracker | The teams, projects, and initiatives inside the remit. |
 

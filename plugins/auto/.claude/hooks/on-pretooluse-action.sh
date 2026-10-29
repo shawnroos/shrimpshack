@@ -38,7 +38,7 @@ __cd_find_repo() {
 }
 
 # Programme gate (runs in every session, repo or not): a lease file means a
-# programme holds a herdr space, and Bash commands naming its driver's pane are checked.
+# programme holds a space, and Bash commands naming its driver's pane are checked.
 __cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
 __cd_any_lease=0
 for __cd_f in "${__cd_leases}"/*.json; do

@@ -3,7 +3,7 @@
 
 A request typed in a driving session is journaled into the run it drives, citing
 the prompt. Takeover, handover and end requests from any other session go into
-the home of the lease for that session's herdr space. Always exits 0.
+the home of the lease for that session's space. Always exits 0.
 """
 
 from __future__ import annotations

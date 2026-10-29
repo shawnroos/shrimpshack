@@ -123,7 +123,7 @@ def _remit_proposal(host, term, value, opts):
     try:
         space = programme_home.parse_space(opts["add"])
     except programme_home.ProgrammeHomeError as exc:
-        raise host.ProgrammeError(f"--add needs a herdr space: {exc}") from None
+        raise host.ProgrammeError(f"--add needs a space: {exc}") from None
     return term.get("value"), {"add": programme_home.space_key(*space)}
 
 

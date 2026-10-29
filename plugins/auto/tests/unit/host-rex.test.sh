@@ -76,7 +76,7 @@ args = sys.argv[2:]
 def show(res, *keys):
     print(res.status, *[json.dumps(res.value.get(k) if isinstance(res.value, dict) else None) for k in keys])
 '
-# py: Python with the rex adapter loaded, PATH holding the rex fake. Extra VAR=value words set the environment.
+# py: Python with the rex host module loaded, PATH holding the rex fake. Extra VAR=value words set the environment.
 py() { env PATH="$WITHREX_PATH" "$@" "$PY" - "$AUTO_ROOT" 2>&1; }
 pyargs() { local first="$1"; shift; env PATH="$WITHREX_PATH" "$PY" - "$AUTO_ROOT" "$@" 2>&1; }
 

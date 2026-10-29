@@ -51,12 +51,12 @@ export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
   },
   space: {
     field: 'space',
-    label: 'Add a herdr space (server.workspace): ',
+    label: 'Add a space (server.workspace, or host--server--workspace on Rex or Ghostty): ',
     placeholder: spaces => spaces[0] ?? 'default.w2',
     parse: text => text.trim(),
     argv: space => ['--add', space],
     proposed: (term, space) => ({ value: term.value, extras: { add: space } }),
-    text: space => `add herdr space ${space}`,
+    text: space => `add space ${space}`,
   },
   until: {
     field: 'until',
@@ -143,7 +143,7 @@ function reply(term: Term, { value, extras }: Proposed): string {
     const drop = dropped.length > 0 ? ` and drop ${dropped.join(', ')}` : ''
     return `${verb} ${label} to ${after.join(', ') || 'none'}${drop}`
   }
-  if (typeof extras.add === 'string') return `widen ${label} to add herdr space ${extras.add}`
+  if (typeof extras.add === 'string') return `widen ${label} to add space ${extras.add}`
   const parts = [`amend ${label} to ${words(String(value))}`]
   if (typeof extras.seconds === 'number') parts.push(interval(extras.seconds))
   if (typeof extras.until === 'string') parts.push(`until ${extras.until}`)

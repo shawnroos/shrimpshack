@@ -1,5 +1,5 @@
 ---
-description: Bring a herdr space's auto programme back after a crash, a quit or a login reset — re-arm the PM, then restart every worker pane in the remit
+description: Bring a space's auto programme back after a crash, a quit or a login reset — re-arm the PM, then restart every worker pane in the remit
 allowed-tools: Bash, Skill, Monitor, CronCreate, CronList, CronDelete, TaskStop, AskUserQuestion, SendMessage
 ---
 
@@ -10,6 +10,17 @@ means `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh"`.
 
 Never run `pgrep -fl`, `ps -f` or `ps -E`: they print other sessions' environments,
 secrets included. Never `git add -A`.
+
+## 0. Terminal host
+
+Sections 1.3, 1.4, 2 to 4 use herdr commands (`herdr pane read`, `herdr pane
+run`, `herdr tab create`). Resume restarts worker panes in herdr only today. If
+`HERDR_PANE_ID` is empty, the session runs in Rex or Ghostty: do steps 1.1, 1.2
+and 1.5, then stop and tell Shawn:
+
+> resume cannot restart worker panes in Rex or Ghostty yet.
+> fix: in each worker's tab run `cd <worktree> && claude --resume <session id>`,
+> then run `P add-item <item> --pane <pane> --session <session id>` from the PM.
 
 ## 1. The PM first
 
@@ -67,9 +78,9 @@ For each item to resume:
    item and list it for Shawn.
 3. Resume in place:
    `herdr pane run <pane> "cd <worktree> && claude --resume <session id>"`
-4. Or resume in a new tab, named `<ticket> <max 3 words>`:
+4. Or resume in a new tab, named `<issue> <max 3 words>`:
    ```
-   herdr tab create --workspace <ws> --cwd <worktree> --label "<ticket> <words>" --no-focus
+   herdr tab create --workspace <ws> --cwd <worktree> --label "<issue> <words>" --no-focus
    herdr pane run <new pane> "claude --resume <session id>"
    ```
    Add the launch flags the programme's rules name (a model, for example);
@@ -106,4 +117,4 @@ with the exact `! <command>` to type in that session's pane.
 2. Report to Shawn with one table, then anything waiting on him:
    | Item | Tab / pane | Result |
    | --- | --- | --- |
-   | `<ticket> "<title>"` | `<tab label>` | resumed in place / new tab / skipped (why) |
+   | `<issue> "<title>"` | `<tab label>` | resumed in place / new tab / skipped (why) |

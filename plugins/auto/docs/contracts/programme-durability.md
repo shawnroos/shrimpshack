@@ -14,7 +14,7 @@ another one.
 | --- | --- | --- |
 | Programme database | `<home>/programme.db` | The only authority. It holds the record, the journal rows, the claims, the decisions, the requirements, the operations and the archive seal. Each write is one SQLite transaction with a new revision. |
 | Retained objects | `<home>/artifacts/objects/` | Worker results, source extracts and code bundles, named by their sha256. The database refers to an object only after the object is written. |
-| Leases | `<data>/programmes/leases/*.json` | An index of which programme holds which herdr space. It is not a second record. `reconcile-leases` rebuilds it from the database. |
+| Leases | `<data>/programmes/leases/*.json` | An index of which programme holds which space. It is not a second record. `reconcile-leases` rebuilds it from the database. |
 | Exports | `<home>/.claude/auto/<run>.json`, `journal.jsonl`, `claims.jsonl` | Copies rebuilt after each commit and tagged with their revision. No reader takes them as state. |
 | View | `<home>/views/view.json` | A copy of the working model for the programme-view mod. `status` writes it again when it is missing and the programme is active. |
 | Archive manifest | a retained object named by the seal | The final record of outcomes, dispositions and retained objects. |
