@@ -162,11 +162,11 @@ it "that commit touches only the two manifest files, not the unrelated working-t
 check_eq ".claude-plugin/marketplace.json plugins/demo/.claude-plugin/plugin.json" \
   "$(git -C "$R" show --name-only --format= HEAD | sort | tr '\n' ' ' | sed 's/ $//')"
 
-it "its subject and both trailers are the publish format"
+it "its subject is the publish format and it carries no attribution trailers"
 MSG="$(git -C "$R" log -1 --format=%B)"
 has "publish: demo 1.0.0 → 1.0.1" "$MSG"
-has "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>" "$MSG"
-has "Claude-Session: https://claude.ai/code/session_019Hz29ksX8uTHc3wn1y9o8x" "$MSG"
+lacks "Co-Authored-By" "$MSG"
+lacks "Claude-Session" "$MSG"
 
 it "the unrelated file is still untracked afterwards"
 has "?? unrelated.txt" "$(git -C "$R" status --porcelain)"

@@ -107,6 +107,6 @@ fi
 
 msg="$(mktemp)" || die "cannot make a temp file"
 trap 'rm -f "$msg"' EXIT
-printf '%s\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_019Hz29ksX8uTHc3wn1y9o8x\n' "$SUBJECT" > "$msg"
+printf '%s\n' "$SUBJECT" > "$msg"
 git commit -q -F "$msg" || die "git commit failed"
 echo "committed: $SUBJECT (not pushed)"
