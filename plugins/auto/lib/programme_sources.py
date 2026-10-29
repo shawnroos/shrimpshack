@@ -286,9 +286,19 @@ def unstaffed(programme, info, issues_found, scope) -> list:
     return out[:UNSTAFFED_CAP]
 
 
+def _pane_item_id(pane, host) -> str:
+    """herdr:<ws>/<pane> (the herdr pane id already carries its workspace), rex:<session>/<block>, ghostty:<window>/<terminal>."""
+    host = pane.get("host") or host
+    ident = pane["pane_id"].replace(":", "/")
+    if host != programme_home.DEFAULT_HOST and pane.get("workspace_id"):
+        ident = f"{pane['workspace_id']}/{ident}"
+    return f"{host}:{ident}"
+
+
 def propose(programme, panes, drivers, issues_found, verified, scope=None, info=None) -> dict:
     proposals, skipped = [], []
     scope, info, cache = scope or {}, info or {}, {}
+    host = terminal_host.current().name or programme_home.DEFAULT_HOST
     for pane in panes:
         why = role(pane, drivers)
         if why != "worker":
@@ -299,8 +309,7 @@ def propose(programme, panes, drivers, issues_found, verified, scope=None, info=
             skipped.append({"pane": pane["pane_id"], "why": why})
             continue
         ident, signals = _choose(found, verified)
-        item_id = (f"{programme_record.ISSUE_SOURCE}:{ident}" if ident
-                   else f"{programme_home.DEFAULT_HOST}:" + pane["pane_id"].replace(":", "/"))
+        item_id = (f"{programme_record.ISSUE_SOURCE}:{ident}" if ident else _pane_item_id(pane, host))
         action, existing = _existing(programme, item_id, pane["pane_id"])
         entry = {"item": item_id, "action": action, "pane": pane["pane_id"], "issue": ident,
                  "signals": signals, "terminal_id": pane["terminal_id"],
