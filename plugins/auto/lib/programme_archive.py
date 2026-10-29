@@ -681,7 +681,7 @@ def _h_successor(host, argv):
                            "not_sealed")
     info = _seal_view(source)
     body = _read_manifest(source, info)
-    spaces = opts["space"] or [programme_home.space_key(*programme_home.space_parts(s))
+    spaces = opts["space"] or [programme_home.space_key_of(s)
                                for s in (programme.get("remit") or {}).get("spaces") or []]
     link = {"run": source, "manifest": info["manifest"]["digest"], "sealed_revision": info["sealed_revision"],
             "sealed_at": info["sealed_at"],

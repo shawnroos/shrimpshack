@@ -177,13 +177,17 @@ def _names_pane(command: str, driver: dict):
     return None
 
 
-def _driver_hit(command: str, session_id, driver: dict):
+def _driver_hit(command: str, session_id, driver: dict, sender=None):
     ids = [driver.get("pane_id"), driver.get("terminal_id")]
     sends = host_sends(command, ids)
-    workspace = _sender_workspace(session_id)
-    for host, verb, target in sends:
-        if _targets_pane(target, driver, workspace):
-            return host, verb, target
+    if sends:
+        # One session sends, so every driver shares one workspace lookup, made only when a send was found.
+        sender = sender if sender is not None else {}
+        if "workspace" not in sender:
+            sender["workspace"] = _sender_workspace(session_id)
+        for host, verb, target in sends:
+            if _targets_pane(target, driver, sender["workspace"]):
+                return host, verb, target
     if session_id == driver.get("session_id"):
         return None
     named = _names_pane(command, driver)
@@ -192,8 +196,9 @@ def _driver_hit(command: str, session_id, driver: dict):
 
 def denial(session_id, command):
     drivers = load_lib_module("session_registry").driver_panes()
+    sender = {}
     for driver in drivers:
-        hit = _driver_hit(command, session_id, driver)
+        hit = _driver_hit(command, session_id, driver, sender)
         if hit is None:
             continue
         host, verb, target = hit

@@ -238,8 +238,7 @@ def _require_own_pane(host, sid, session_host) -> None:
     A registry row with a pane is the host's own earlier answer (SessionStart wrote it from own_pane), so it counts.
     """
     if session_host == programme_home.DEFAULT_HOST:
-        # herdr keeps its old rule: start and become-pm name the space from HERDR_WORKSPACE_ID alone in the
-        # existing suites (programme-flow, programme-become-pm), which register no pane. Rex and Ghostty are gated.
+        # herdr names the space from HERDR_WORKSPACE_ID alone, with no pane proof; Rex and Ghostty are gated.
         return
     row = session_registry.lookup(sid, include_headless=False) if sid else None
     if row and row.get("pane_id") and session_registry.host_of_row(row) == session_host:
@@ -270,7 +269,7 @@ def _h_start(host, argv):
         raise host.ProgrammeError("this session is not in a space; start from a pane in a terminal host (herdr, Rex or Ghostty) "
                                   "or pass --space <server.workspace> (herdr) or --space <host>--<server>--<workspace>")
     for spec in spaces:
-        _check_host(host, session_host, programme_home.space_parts_of(spec), "start a programme in")
+        _check_host(host, session_host, programme_home.remit_entry(spec), "start a programme in")
     made = programme_home.create_programme(spaces, sid)
     _finish(host, made["run"], "programme_started", sid,
             {"home": made["home"], "leases": made["leases"], "session": sid})
@@ -340,7 +339,7 @@ def _live_driver(lease, presence, name) -> str:
         and label[-1] not in "'\""
     reply = presence.get("session_id") or (label if typable else None) or presence.get("pane_id")
     wrong = f"--replace {name} does not name the current PM. " if name else ""
-    space = programme_home.space_key(*programme_home.space_parts(lease))
+    space = programme_home.space_key_of(lease)
     return (f"{wrong}{_driver_words(presence)} is still the live PM for space {space}: "
             f"{presence.get('why')}. To replace it, type: /auto:programme-takeover --replace {reply}  "
             "This session then drives the programme, and that PM's next programme write is refused. "
@@ -596,7 +595,7 @@ def _h_become_pm(host, argv):
             _become_refused(host, out, "this session is not in a space, so it cannot be a space's PM",
                             "run Claude from a pane in the space, then run `programme.sh become-pm` there")
         out["space"] = programme_home.space_key(*space)
-        _check_host(host, session_host, programme_home.space_parts_of(space), "become the PM of")
+        _check_host(host, session_host, programme_home.remit_entry(space), "become the PM of")
         step = _become_step(host, out, sid, space)
     host._emit(step)
     if step["step"] == "ask-shawn":
@@ -825,7 +824,7 @@ def parse_remit(doc, current) -> dict:
 
 
 def _space_key(space) -> str:
-    return programme_home.space_key(*programme_home.space_parts(space))
+    return programme_home.space_key_of(space)
 
 
 def _identity(part, entry) -> str:

@@ -50,8 +50,6 @@ class StubHost(terminal_host.TerminalHost):
             state = (lines[0] or "unknown") if lines else "unknown"
             with open(path, "w") as fh:
                 fh.write("\n".join(lines[1:]))
-        return terminal_host.native({
-            "state": state, "session_id": session_id, "herdr_reachable": False,
-            "registry_pane": (row or {}).get("pane_id"), "pane_in_snapshot": None, "session_reported": None,
-            "pane_id": (row or {}).get("pane_id"), "pane_label": None, "tab_label": None,
-            "why": f"the stub host reports the session {state}"})
+        pane = (row or {}).get("pane_id")
+        return terminal_host.native(terminal_host.presence_facts(
+            session_id, pane, state=state, pane_id=pane, why=f"the stub host reports the session {state}"))

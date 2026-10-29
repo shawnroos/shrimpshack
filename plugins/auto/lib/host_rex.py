@@ -95,7 +95,7 @@ class RexHost(terminal_host.TerminalHost):
         missing = self._needs_rex("start_pane")
         if missing:
             why = f"{missing.why}; fix: {missing.fix}"
-            return refuse(missing.why, fix=missing.fix, value={"run": _not_run(why), "output": why, "pane": None})
+            return refuse(missing.why, fix=missing.fix, value={"run": programme_exec.not_run(why), "output": why, "pane": None})
         return native(terminal_host.spinoff_pane("rex", argv, timeout))
 
     def confirm_started(self, session_id, pane, before, wait, session_of, **_):
@@ -106,7 +106,7 @@ class RexHost(terminal_host.TerminalHost):
     def send_prompt(self, pane, text, **_):
         missing = self._needs_rex("send_prompt")
         if missing:
-            return refuse(missing.why, fix=missing.fix, value=_not_run(f"{missing.why}; fix: {missing.fix}"))
+            return refuse(missing.why, fix=missing.fix, value=programme_exec.not_run(f"{missing.why}; fix: {missing.fix}"))
         # The text goes after "--" so a prompt that starts with a dash is not read as a flag.
         sent = programme_exec.bounded(["rex", "send", "-b", pane, NO_AUTOSTART, "--", text], REX_TIMEOUT)
         if sent["ran"] and sent["code"] == 0:
@@ -116,9 +116,7 @@ class RexHost(terminal_host.TerminalHost):
         return refuse(programme_exec.failure(sent, "rex send"), value=sent)
 
     def presence(self, session_id, row, snap, reported, **_):
-        out = {"state": "unknown", "session_id": session_id, "herdr_reachable": False,
-               "registry_pane": (row or {}).get("pane_id"), "pane_in_snapshot": None, "session_reported": None,
-               "pane_id": None, "pane_label": None, "tab_label": None, "why": None}
+        out = terminal_host.presence_facts(session_id, (row or {}).get("pane_id"))
         out.update(_probe(row, self.installed()))
         return native(out)
 
@@ -147,10 +145,6 @@ class RexHost(terminal_host.TerminalHost):
                 if ident and _names_block(token, ident):
                     return " ".join(verb[:2] if verb[:1] == ["api"] else verb[:1]) or "rex", ident
         return None
-
-
-def _not_run(why) -> dict:
-    return {"ran": False, "code": None, "stdout": "", "stderr": "", "timed_out": False, "error": why, "missing": True}
 
 
 def _rex(args, timeout) -> dict:

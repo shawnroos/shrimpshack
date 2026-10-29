@@ -213,11 +213,6 @@ def parse_space(spec):
     return check_host_id(server), check_host_id(workspace), host
 
 
-def space_parts_of(spec) -> dict:
-    """The remit-entry form of any space spec, for host checks and key building."""
-    return remit_entry(spec)
-
-
 def remit_entry(spec) -> dict:
     return _remit_entry(*parse_space(spec))
 
@@ -248,6 +243,10 @@ def parse_key(key: str) -> tuple:
 
 def lease_path(server: str, workspace: str, host=None) -> str:
     return _contained(os.path.join(leases_dir(), space_key(server, workspace, host) + ".json"))
+
+
+def space_key_of(space: dict) -> str:
+    return space_key(*space_parts(space))
 
 
 def lease_path_of(lease: dict) -> str:

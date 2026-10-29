@@ -43,6 +43,7 @@ BROADCAST = re.compile(r"\b(every terminal|terminals|focused terminal|front wind
 OSASCRIPT_TOKENS = frozenset({"$OSASCRIPT", "${OSASCRIPT}"})
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _NO_TTY = ("", "??", "?", "-")
+_OWN_PANE = {}
 
 # Scripts are constants and every value arrives in argv after "--" (a leading dash is not an option), so no text
 # is ever interpolated into AppleScript. The first line is a marker the test fakes match on. pgrep guards the
@@ -155,7 +156,7 @@ class GhosttyHost(terminal_host.TerminalHost):
     def send_prompt(self, pane, text, **_):
         if not self.installed() or not pane:
             return refuse("osascript is not on PATH, or no terminal was named", fix=self._fix("send_prompt"),
-                          value=_not_run("no osascript or no terminal id"))
+                          value=programme_exec.not_run("no osascript or no terminal id"))
         sent = programme_exec.bounded(["osascript", "-e", SEND_SCRIPT, "--", pane, text], SEND_TIMEOUT)
         if sent["ran"] and sent["code"] == 0 and sent["stdout"].strip() == "sent":
             return native(sent)
@@ -166,9 +167,7 @@ class GhosttyHost(terminal_host.TerminalHost):
         return self._refusal("send_prompt", failure, value=sent)
 
     def presence(self, session_id, row, snap, reported, **_):
-        out = {"state": "unknown", "session_id": session_id, "herdr_reachable": False,
-               "registry_pane": (row or {}).get("pane_id"), "pane_in_snapshot": None, "session_reported": None,
-               "pane_id": None, "pane_label": None, "tab_label": None, "why": None}
+        out = terminal_host.presence_facts(session_id, (row or {}).get("pane_id"))
         if not self.installed():
             out["why"] = "osascript is not on PATH, so auto cannot read Ghostty"
             return native(out)
@@ -179,9 +178,7 @@ class GhosttyHost(terminal_host.TerminalHost):
         found, failure = _terminals(LIST_TIMEOUT)
         if found is None:
             return self._refusal("change_token", failure)
-        row = load_lib_module("session_registry").lookup(os.environ.get("CLAUDE_CODE_SESSION_ID"), include_headless=True)
-        # The PM's own title changes every turn; counting it would wake the PM on its own output.
-        own = (row or {}).get("pane_id") if (row or {}).get("host") == "ghostty" else None
+        own = _own_pane_id(os.environ.get("CLAUDE_CODE_SESSION_ID"))
         return degraded("Ghostty has no change feed, so the terminal list is polled", value=_snapshot(found, with_seq=True, own=own))
 
     def notify(self, title, body, **_):
@@ -203,8 +200,13 @@ class GhosttyHost(terminal_host.TerminalHost):
         return None
 
 
-def _not_run(why) -> dict:
-    return {"ran": False, "code": None, "stdout": "", "stderr": "", "timed_out": False, "error": why, "missing": True}
+def _own_pane_id(session_id):
+    """The PM's own title changes every turn; counting it would wake the PM on its own output. A watcher's row never
+    changes while it runs, so the registry is read once per session instead of once per poll."""
+    if session_id not in _OWN_PANE:
+        row = load_lib_module("session_registry").lookup(session_id, include_headless=True)
+        _OWN_PANE[session_id] = (row or {}).get("pane_id") if (row or {}).get("host") == "ghostty" else None
+    return _OWN_PANE[session_id]
 
 
 def _denied(text) -> bool:

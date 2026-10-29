@@ -43,6 +43,10 @@ def _kill(proc) -> None:
         pass
 
 
+def not_run(why) -> dict:
+    return {"ran": False, "code": None, "stdout": "", "stderr": "", "timed_out": False, "error": why, "missing": True}
+
+
 def bounded(argv, timeout, stdin_text=None) -> dict:
     out = {"ran": False, "code": None, "stdout": "", "stderr": "", "timed_out": False, "error": None,
            "missing": False}

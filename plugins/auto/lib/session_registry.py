@@ -279,14 +279,6 @@ def host_of_row(row) -> str:
     return (row or {}).get("host") or programme_home.DEFAULT_HOST
 
 
-def host_of_session(session_id, env) -> str:
-    """The host the registry recorded for the session; the environment only picks one for a session with no row (KTD3)."""
-    row = lookup(session_id, include_headless=True) if session_id else None
-    if row:
-        return host_of_row(row)
-    return terminal_host.detect(env).name or programme_home.DEFAULT_HOST
-
-
 def space_of_session(session_id, env, *, registry_only=False):
     """(server, workspace) for a herdr session, (server, workspace, host) for any other host.
 
@@ -336,9 +328,8 @@ def driver_presence(session_id, snap, reported, *, current_server) -> dict:
     if found.ok and isinstance(found.value, dict):
         return found.value
     # A host that cannot answer says unknown, never gone: only host evidence moves a lease.
-    return {"state": "unknown", "session_id": session_id, "herdr_reachable": snap is not None,
-            "registry_pane": (row or {}).get("pane_id"), "pane_in_snapshot": None, "session_reported": None,
-            "pane_id": None, "pane_label": None, "tab_label": None, "why": found.why}
+    return terminal_host.presence_facts(session_id, (row or {}).get("pane_id"), reachable=snap is not None,
+                                        why=found.why)
 
 
 def caller_drives(record, session_id=None) -> bool:
@@ -355,7 +346,9 @@ def _cli(argv) -> int:
         raw = sys.stdin.read() if not sys.stdin.isatty() else ""
         data = json.loads(raw) if raw else {}
         if isinstance(data, dict):
-            record_session(data, os.environ, process_tty())
+            # Only Ghostty matches a session to its terminal by tty, so only Ghostty pays for the ps walk.
+            tty = process_tty() if terminal_host.detect(os.environ).name == "ghostty" else None
+            record_session(data, os.environ, tty)
     except Exception:
         pass
     return 0

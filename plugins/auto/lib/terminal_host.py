@@ -18,8 +18,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 HOSTS = ("herdr", "rex", "ghostty")
 STATUSES = ("native", "degraded", "refuse")
-METHODS = ("own_pane", "list_panes", "start_pane", "confirm_started", "send_prompt", "presence",
-           "change_token", "notify", "is_host_command")
 # is_host_command has no row: its per-host coverage is a required test, not a table cell.
 CAPABILITY_OF = {"own_pane": "find_own_pane", "list_panes": "list_panes", "start_pane": "start_pane",
                  "confirm_started": "confirm_started", "send_prompt": "send_prompt",
@@ -72,16 +70,27 @@ def capability_table() -> dict:
         return json.load(fh)["capabilities"]
 
 
-def spinoff_pane(host: str, argv, timeout) -> dict:
-    """Run spinoff with `host`'s launcher named; the pane is the id on its `agent pane: <host> <id>` line, or None."""
-    programme_exec, programme_sanitize = load_lib_module("programme_exec"), load_lib_module("programme_sanitize")
-    cmd = list(argv)
-    if "--launcher" not in cmd:
-        cmd += ["--launcher", host]
-    run = programme_exec.bounded(cmd, timeout)
+def presence_facts(session_id, registry_pane=None, reachable=False, **over) -> dict:
+    """The one shape every host's presence() answers in; a host fills in only what it proved."""
+    return dict({"state": "unknown", "session_id": session_id, "herdr_reachable": reachable,
+                 "registry_pane": registry_pane, "pane_in_snapshot": None, "session_reported": None,
+                 "pane_id": None, "pane_label": None, "tab_label": None, "why": None}, **over)
+
+
+def pane_result(run: dict, host: str) -> dict:
+    """A finished spinoff run as {run, output, pane}; the pane is the id on its `agent pane: <host> <id>` line, or None."""
+    programme_sanitize = load_lib_module("programme_sanitize")
     output = programme_sanitize.clean(run["stdout"] + "\n" + run["stderr"], 0, keep_newlines=True)
     found = agent_pane(output, host)
     return {"run": run, "output": output, "pane": programme_sanitize.token(found) if found else None}
+
+
+def spinoff_pane(host: str, argv, timeout) -> dict:
+    """Run spinoff with `host`'s launcher named."""
+    cmd = list(argv)
+    if "--launcher" not in cmd:
+        cmd += ["--launcher", host]
+    return pane_result(load_lib_module("programme_exec").bounded(cmd, timeout), host)
 
 
 def confirm_via_registry(host: str, place: str, why_degraded: str, session_id, pane, wait, poll=1.0) -> "HostResult":
@@ -211,8 +220,7 @@ class RefusedHost(TerminalHost):
 
 
 def _build(name) -> TerminalHost:
-    module = {"herdr": "host_herdr", "rex": "host_rex", "ghostty": "host_ghostty", "stub": "host_stub"}[name]
-    return getattr(load_lib_module(module), name.capitalize() + "Host")()
+    return getattr(load_lib_module(f"host_{name}"), name.capitalize() + "Host")()
 
 
 def host_named(name) -> TerminalHost:

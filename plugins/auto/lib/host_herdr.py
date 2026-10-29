@@ -15,7 +15,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 terminal_host = load_lib_module("terminal_host")
 programme_exec = load_lib_module("programme_exec")
-programme_sanitize = load_lib_module("programme_sanitize")
 
 HERDR_TIMEOUT = 5.0
 # SessionStart's hook timeout is 5s; both herdr calls together must stay well under it.
@@ -80,7 +79,7 @@ class HerdrHost(terminal_host.TerminalHost):
         result = _herdr(["status", "server"])
         if not result["ran"] or result["code"] != 0:
             return refuse(programme_exec.failure(result, "herdr status server"))
-        if not any(line.strip() == "status: running" for line in result["stdout"].splitlines()):
+        if not _running(result["stdout"]):
             return refuse("herdr server is not running")
         result = _herdr(["api", "snapshot"])
         if not result["ran"] or result["code"] != 0:
@@ -91,11 +90,7 @@ class HerdrHost(terminal_host.TerminalHost):
         return native(snap)
 
     def start_pane(self, argv, timeout, **_):
-        run = programme_exec.bounded(argv, timeout)
-        output = programme_sanitize.clean(run["stdout"] + "\n" + run["stderr"], 0, keep_newlines=True)
-        found = terminal_host.agent_pane(output, "herdr")
-        pane = programme_sanitize.token(found) if found else None
-        return native({"run": run, "output": output, "pane": pane})
+        return native(terminal_host.pane_result(programme_exec.bounded(argv, timeout), "herdr"))
 
     def confirm_started(self, session_id, pane, before, wait, session_of, **_):
         deadline = time.monotonic() + wait
@@ -128,11 +123,7 @@ class HerdrHost(terminal_host.TerminalHost):
         return refuse(programme_exec.failure(sent, "herdr agent prompt"), value=sent)
 
     def presence(self, session_id, row, snap, reported, *, current_server, clean, **_):
-        out = {"state": "unknown", "session_id": session_id, "herdr_reachable": snap is not None,
-               "registry_pane": None, "pane_in_snapshot": None, "session_reported": None,
-               "pane_id": None, "pane_label": None, "tab_label": None, "why": None}
-        if row:
-            out["registry_pane"] = row.get("pane_id")
+        out = terminal_host.presence_facts(session_id, (row or {}).get("pane_id"), reachable=snap is not None)
         if snap is None:
             out["why"] = "herdr could not be read"
             return native(out)
@@ -232,6 +223,10 @@ def _herdr(args):
     return programme_exec.bounded(["herdr"] + list(args), programme_exec.source_timeout(HERDR_TIMEOUT))
 
 
+def _running(stdout) -> bool:
+    return any(line.strip() == "status: running" for line in stdout.splitlines())
+
+
 def server_running() -> bool:
     binary = shutil.which("herdr")
     if not binary:
@@ -241,4 +236,4 @@ def server_running() -> bool:
                               timeout=SERVER_PROBE_TIMEOUT, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return False
-    return any(line.strip() == "status: running" for line in done.stdout.splitlines())
+    return _running(done.stdout)

@@ -88,7 +88,7 @@ def settle_remit(term, changes) -> None:
     if not proposal:
         return
     add = (proposal.get("extras") or {}).get("add")
-    added = {programme_home.space_key(*programme_home.space_parts(e)) for part, how, e in changes if part == "spaces" and how == "added"}
+    added = {programme_home.space_key_of(e) for part, how, e in changes if part == "spaces" and how == "added"}
     _settle(term, bool(add) and add in added)
 
 
