@@ -70,7 +70,7 @@ def agent_rows():
 
 
 def current_server() -> str:
-    return (session_registry.server_from_socket(os.environ.get("HERDR_SOCKET_PATH"))
+    return (load_lib_module("host_herdr").server_from_socket(os.environ.get("HERDR_SOCKET_PATH"))
             or programme_home.DEFAULT_SERVER)
 
 

@@ -168,6 +168,31 @@ check allow "$(verdict "$(hook pm-ghostty "osascript -e 'tell application \"Ghos
 it "a send to one other literal terminal id stays allowed for a worker"
 check allow "$(verdict "$(hook sess-worker "osascript -e 'tell application \"Ghostty\" to input text \"x\" to terminal id \"OTHER-ID\"'")")"
 
+# ---------------------------------------------------------------- one own_pane shape on every host (round 3)
+echo "review-fixes: the herdr session row is built from herdr's own_pane answer"
+HFAKE="${WORK}/hfake"
+mkdir -p "$HFAKE"
+cat > "${HFAKE}/herdr" <<'EOF'
+#!/bin/bash
+[ "$1 $2" = "pane get" ] && echo '{"result":{"pane":{"pane_id":"w9:p3","workspace_id":"w9","terminal_id":"term-3","tab_id":"tab-1"}}}'
+exit 0
+EOF
+chmod +x "${HFAKE}/herdr"
+herdr_row() { # herdr_row <PATH> <extra env...>
+  local path="$1"; shift
+  env PATH="$path" HERDR_ENV=1 "$@" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+e = sr.record_session({"session_id": "sess-h", "source": "startup", "cwd": "/x"}, dict(os.environ))
+print(json.dumps(e and {k: e.get(k) for k in ("pane_id", "env_pane", "terminal_id", "tab_id", "server", "workspace", "host", "resolved")}, sort_keys=True))
+PYEOF
+}
+it "a moved pane: herdr's answer wins over the stale HERDR_PANE_ID"
+check '{"env_pane": "w9:p0", "host": "herdr", "pane_id": "w9:p3", "resolved": "herdr", "server": "default", "tab_id": "tab-1", "terminal_id": "term-3", "workspace": "w9"}' "$(herdr_row "${HFAKE}:/usr/bin:/bin" HERDR_PANE_ID=w9:p0)"
+it "herdr unreachable: the environment is the fallback and the workspace comes from the pane id"
+check '{"env_pane": "w7:p1", "host": "herdr", "pane_id": "w7:p1", "resolved": "env", "server": "default", "tab_id": null, "terminal_id": null, "workspace": "w7"}' "$(herdr_row "/usr/bin:/bin" HERDR_PANE_ID=w7:p1)"
+it "a herdr session with no pane variable records nothing and does not raise"
+check "null" "$(herdr_row "/usr/bin:/bin")"
+
 # ---------------------------------------------------------------- start and takeover pane gates (findings 2 and 3)
 as_stub() {
   local sid="$1"; shift

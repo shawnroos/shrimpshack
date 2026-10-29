@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +33,9 @@ LIST_TIMEOUT = 1.0
 SEND_TIMEOUT = 3.0
 # SessionStart allows 5s and own_pane is its only osascript call; the first call after Ghostty idles measured 1.26s.
 OWN_PANE_TIMEOUT = 3.0
+# SessionStart's hook timeout is 5s; the whole ps walk (a few calls) must stay far under it.
+PS_TIMEOUT = 0.5
+CHAIN_DEPTH = 8
 SPACE_SERVER = "local"
 RS, US = "\x1e", "\x1f"
 MAX_TERMINALS = 256
@@ -112,6 +116,8 @@ end run"""
 
 _READ_ONLY = re.compile(re.escape(re.sub(r"\s+", " ", LIST_SCRIPT.casefold())))
 
+
+
 native, degraded, refuse = terminal_host.native, terminal_host.degraded, terminal_host.refuse
 _UNSET = object()
 
@@ -119,6 +125,7 @@ _UNSET = object()
 class GhosttyHost(terminal_host.TerminalHost):
     name = "ghostty"
     binaries = ("osascript",)
+    needs_tty = True
 
     def installed(self) -> bool:
         return shutil.which("osascript") is not None
@@ -133,7 +140,7 @@ class GhosttyHost(terminal_host.TerminalHost):
         if not self.installed():
             return refuse("osascript is not on PATH, so auto cannot read Ghostty", fix=self._fix("own_pane"))
         if tty is _UNSET:
-            tty = load_lib_module("session_registry").process_tty()
+            tty = process_tty()
         if not tty or tty in _NO_TTY:
             return refuse("this session's claude process has no tty to match against a Ghostty terminal",
                           fix="run Claude interactively inside a Ghostty window or tab, not headless or through a remote shell")
@@ -148,7 +155,7 @@ class GhosttyHost(terminal_host.TerminalHost):
         if workspace is None:
             return refuse(f"Ghostty window id {mine['window']!r} cannot name a space", fix=self._fix("own_pane"))
         return degraded("matched by tty, never by GHOSTTY_* variables",
-                        value={"pane_id": mine["id"], "terminal_id": mine["tty"], "server": SPACE_SERVER,
+                        value={"pane_id": mine["id"], "terminal_id": mine["tty"], "tty": mine["tty"], "server": SPACE_SERVER,
                                "workspace": workspace, "tab_space_name": mine["name"] or None})
 
     def list_panes(self, agents=False, **_):
@@ -291,6 +298,36 @@ def _hits_driver(ident, folded, pane_ids) -> bool:
         if low and (ident in low or low in ident or _names(folded, driver)):
             return True
     return False
+
+
+
+def _ps(pid, fields):
+    try:
+        done = subprocess.run(["ps", "-o", fields, "-p", str(pid)], capture_output=True, text=True,
+                              timeout=PS_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.split() if done.returncode == 0 else None
+
+
+def process_tty(pid=None):
+    """The tty of the claude process above this one, or None.
+
+    A hook has no controlling tty, so its own tty reads "??"; only the claude ancestor's tty means
+    anything. The claude process is found by argv, not comm (comm hides launcher-run processes). "??" from claude itself (headless) is None too, never a path.
+    """
+    pid = pid or os.getppid()
+    for _ in range(CHAIN_DEPTH):
+        row = _ps(pid, "ppid=,tty=,args=")
+        if not row or len(row) < 3:
+            return None
+        parent, tty, argv0 = row[0], row[1], row[2]
+        if os.path.basename(argv0) == "claude":
+            return None if tty in ("", "?", "??") else (tty if tty.startswith("/dev/") else "/dev/" + tty)
+        if not parent.isdigit() or int(parent) <= 1:
+            return None
+        pid = int(parent)
+    return None
 
 
 def _own_pane_id(session_id):

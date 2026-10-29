@@ -113,6 +113,8 @@ def confirm_via_registry(host: str, place: str, why_degraded: str, session_id, p
 class TerminalHost:
     name = ""
     binaries = ()
+    # Only a host that matches a session to its terminal by tty makes the SessionStart hook walk ps.
+    needs_tty = False
 
     def _unimplemented(self, method) -> HostResult:
         cell = capability_table()[CAPABILITY_OF[method]][self.name]

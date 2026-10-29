@@ -53,7 +53,16 @@ class HerdrHost(terminal_host.TerminalHost):
                 pane = json.loads(done.stdout)["result"]["pane"]
             except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
                 pane = None
-        return native({"env_pane": env_pane, "pane": pane if isinstance(pane, dict) else None})
+        # A moved pane keeps a stale HERDR_PANE_ID, so herdr's own answer wins and the environment is the fallback.
+        pane = pane if isinstance(pane, dict) else {}
+        pane_id = pane.get("pane_id") or env_pane
+        workspace = (pane.get("workspace_id") if pane else None) or env.get("HERDR_WORKSPACE_ID")
+        if not workspace and ":" in pane_id:
+            workspace = pane_id.split(":", 1)[0]
+        server = server_from_socket(env.get("HERDR_SOCKET_PATH")) or load_lib_module("programme_home").DEFAULT_SERVER
+        return native({"pane_id": pane_id, "server": server, "workspace": workspace, "env_pane": env_pane,
+                       "terminal_id": pane.get("terminal_id"), "tab_id": pane.get("tab_id"),
+                       "resolved": "herdr" if pane else "env"})
 
     def report_session(self, session_id, pane_id, source) -> None:
         binary = shutil.which("herdr")
@@ -218,6 +227,18 @@ class HerdrHost(terminal_host.TerminalHost):
                 return f"{rest[i]} {rest[i + 1]}", rest[j]
         return None
 
+
+def server_from_socket(sock) -> str | None:
+    programme_home = load_lib_module("programme_home")
+    if not isinstance(sock, str) or not sock.endswith("/herdr.sock"):
+        return None
+    folder = os.path.dirname(sock)
+    if os.path.basename(os.path.dirname(folder)) == "sessions":
+        try:
+            return programme_home.check_segment(os.path.basename(folder))
+        except programme_home.ProgrammeHomeError:
+            return None
+    return programme_home.DEFAULT_SERVER
 
 def _herdr(args):
     return programme_exec.bounded(["herdr"] + list(args), programme_exec.source_timeout(HERDR_TIMEOUT))

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Which Claude session runs in which herdr pane.
+"""Which Claude session runs in which terminal pane.
 
 SessionStart appends one line per session to
 ``<data dir>/sessions/<server>.<workspace>.jsonl``, resolving the pane through
-herdr because a moved pane keeps a stale ``HERDR_PANE_ID``. Interactive sessions
+the session's terminal host (herdr, because a moved pane keeps a stale ``HERDR_PANE_ID``). Interactive sessions
 are also reported to herdr, so its snapshot carries the owner.
 """
 
@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,10 +25,6 @@ driver_session = load_lib_module("driver_session")
 terminal_host = load_lib_module("terminal_host")
 
 LINES_PER_PANE = 50
-# SessionStart's hook timeout is 5s; the whole walk (a few ps calls) must stay far under it.
-PS_TIMEOUT = 0.5
-CHAIN_DEPTH = 8
-_NO_TTY = {"", "?", "??"}
 FIELD_CAP = 512
 # "unavailable": a programme whose store is held still has a driver pane to protect.
 DRIVER_LEASE_STATES = ("live", "orphaned", "expired", "unavailable")
@@ -58,46 +53,8 @@ def registry_path(server: str, workspace: str, host=None) -> str:
     return os.path.join(sessions_dir(), programme_home.space_key(server, workspace, host) + ".jsonl")
 
 
-def server_from_socket(sock) -> str | None:
-    if not isinstance(sock, str) or not sock.endswith("/herdr.sock"):
-        return None
-    folder = os.path.dirname(sock)
-    if os.path.basename(os.path.dirname(folder)) == "sessions":
-        name = os.path.basename(folder)
-        try:
-            return programme_home.check_segment(name)
-        except programme_home.ProgrammeHomeError:
-            return None
-    return programme_home.DEFAULT_SERVER
-
-
-def _ps(pid, fields):
-    try:
-        done = subprocess.run(["ps", "-o", fields, "-p", str(pid)], capture_output=True, text=True,
-                              timeout=PS_TIMEOUT, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout.split() if done.returncode == 0 else None
-
-
 def process_tty(pid=None):
-    """The tty of the claude process above this one, or None.
-
-    A hook has no controlling tty, so its own tty reads "??"; only the claude ancestor's tty means
-    anything. The claude process is found by argv, not comm (comm hides launcher-run processes). "??" from claude itself (headless) is None too, never a path.
-    """
-    pid = pid or os.getppid()
-    for _ in range(CHAIN_DEPTH):
-        row = _ps(pid, "ppid=,tty=,args=")
-        if not row or len(row) < 3:
-            return None
-        parent, tty, argv0 = row[0], row[1], row[2]
-        if os.path.basename(argv0) == "claude":
-            return None if tty in _NO_TTY else (tty if tty.startswith("/dev/") else "/dev/" + tty)
-        if not parent.isdigit() or int(parent) <= 1:
-            return None
-        pid = int(parent)
-    return None
+    return load_lib_module("host_ghostty").process_tty(pid)
 
 
 def is_headless(env) -> bool:
@@ -150,32 +107,18 @@ def _append(path: str, entry: dict) -> None:
     run_record_core._flock_run(os.path.join(folder, ".registry.lock"), body)
 
 
-def _herdr_entry(env, env_pane):
-    server = server_from_socket(env.get("HERDR_SOCKET_PATH")) or programme_home.DEFAULT_SERVER
-    pane = terminal_host.host_named("herdr").own_pane(env).value["pane"]
-    if pane:
-        pane_id = pane.get("pane_id") or env_pane
-        workspace = pane.get("workspace_id") or env.get("HERDR_WORKSPACE_ID")
-        resolved = "herdr"
-    else:
-        pane, pane_id, workspace, resolved = {}, env_pane, env.get("HERDR_WORKSPACE_ID"), "env"
-    if not workspace and ":" in pane_id:
-        workspace = pane_id.split(":", 1)[0]
-    return {"pane_id": pane_id, "terminal_id": pane.get("terminal_id"), "tab_id": pane.get("tab_id"),
-            "server": server, "workspace": workspace, "resolved": resolved, "tab_space_name": None}
-
-
-def _other_entry(found, host):
-    """A non-herdr host proves the pane itself; a host that cannot (refuse) records nothing."""
+def _entry(found, host):
+    """The place a host proved for this session; a host that cannot (refuse) records nothing."""
     if not found.ok or not isinstance(found.value, dict):
         return None
     pane = found.value
     ids = (pane.get("pane_id"), pane.get("server"), pane.get("workspace"))
     if not all(isinstance(i, str) and i for i in ids):
         return None
-    return {"pane_id": pane["pane_id"], "terminal_id": pane.get("terminal_id"), "tab_id": None,
-            "server": pane["server"], "workspace": pane["workspace"], "resolved": host,
-            "tab_space_name": pane.get("tab_space_name")}
+    return {"pane_id": pane["pane_id"], "terminal_id": pane.get("terminal_id"), "tab_id": pane.get("tab_id"),
+            "server": pane["server"], "workspace": pane["workspace"], "resolved": pane.get("resolved") or host,
+            "env_pane": pane.get("env_pane") or pane["pane_id"], "tab_space_name": pane.get("tab_space_name"),
+            "tty": pane.get("tty")}
 
 
 def record_session(hook_input: dict, env, tty=None) -> dict | None:
@@ -183,18 +126,8 @@ def record_session(hook_input: dict, env, tty=None) -> dict | None:
     found = terminal_host.detect(env)
     if found.name is None or not isinstance(session_id, str) or not session_id:
         return None
-    host = found.name
-    env_pane = env.get("HERDR_PANE_ID")
-    if host == programme_home.DEFAULT_HOST:
-        if not env_pane:
-            return None
-        place = _herdr_entry(env, env_pane)
-    else:
-        place = _other_entry(terminal_host.host_named(host).own_pane(env, tty=tty), host)
-        if place is None:
-            return None
-        env_pane = place["pane_id"]
-    return _store(hook_input, env, host, place, env_pane, tty)
+    place = _entry(terminal_host.host_named(found.name).own_pane(env, tty=tty), found.name)
+    return _store(hook_input, env, found.name, place, tty) if place else None
 
 
 def record_proven_pane(session_id, host, found, env) -> dict | None:
@@ -202,14 +135,13 @@ def record_proven_pane(session_id, host, found, env) -> dict | None:
 
     Without a row driver_panes() drops the programme's lease and the send-guard never covers the PM.
     """
-    place = _other_entry(found, host)
+    place = _entry(found, host)
     if place is None or not isinstance(session_id, str) or not session_id:
         return None
-    return _store({"session_id": session_id}, env, host, place, place["pane_id"],
-                  place["terminal_id"] if host == "ghostty" else None)
+    return _store({"session_id": session_id}, env, host, place, place["tty"])
 
 
-def _store(hook_input, env, host, place, env_pane, tty) -> dict:
+def _store(hook_input, env, host, place, tty) -> dict:
     session_id = hook_input["session_id"]
     headless = is_headless(env)
     source = _clean(hook_input.get("source"))
@@ -217,7 +149,7 @@ def _store(hook_input, env, host, place, env_pane, tty) -> dict:
         "at": run_record_core.now_iso(),
         "session_id": _clean(session_id),
         "pane_id": _clean(place["pane_id"]),
-        "env_pane": _clean(env_pane),
+        "env_pane": _clean(place["env_pane"]),
         "terminal_id": _clean(place["terminal_id"]),
         "tab_id": _clean(place["tab_id"]),
         "server": place["server"],
@@ -313,7 +245,7 @@ def space_of_session(session_id, env, *, registry_only=False):
         workspace = env["HERDR_PANE_ID"].split(":", 1)[0]
     if not workspace:
         return None
-    server = server_from_socket(env.get("HERDR_SOCKET_PATH")) or programme_home.DEFAULT_SERVER
+    server = load_lib_module("host_herdr").server_from_socket(env.get("HERDR_SOCKET_PATH")) or programme_home.DEFAULT_SERVER
     return server, workspace
 
 
@@ -363,8 +295,8 @@ def _cli(argv) -> int:
         raw = sys.stdin.read() if not sys.stdin.isatty() else ""
         data = json.loads(raw) if raw else {}
         if isinstance(data, dict):
-            # Only Ghostty matches a session to its terminal by tty, so only Ghostty pays for the ps walk.
-            tty = process_tty() if terminal_host.detect(os.environ).name == "ghostty" else None
+            host = terminal_host.current()
+            tty = load_lib_module("host_" + host.name).process_tty() if host.needs_tty else None
             record_session(data, os.environ, tty)
     except Exception:
         pass
