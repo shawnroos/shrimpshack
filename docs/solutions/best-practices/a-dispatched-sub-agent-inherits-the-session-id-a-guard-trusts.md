@@ -122,7 +122,9 @@ The sweep packager is the one agent that writes, and it has no shell at all: its
 gathers everything a sweep reads and computes the quiet-or-changed verdict from the store, and
 the packager digests that saved file into `<home>/sweep-digest.md`. The hook checks `Write`,
 `Edit`, `MultiEdit` and `NotebookEdit` by path: inside a programme home only
-`<home>/sweep-digest.md` is allowed, with symlinks, `..` and letter case resolved first.
+`<home>/sweep-digest.md` is allowed, with symlinks, `..` and letter case resolved first. The packager
+(matched by its `agent_type`) may write that one file and nothing else anywhere; other sub-agents are
+only kept out of the rest of the programmes folder.
 
 For every other sub-agent the Bash side of the hook is a best-effort filter. From Bash, a
 command naming programme code may not redirect output except to `/dev/null`, a newline starts a

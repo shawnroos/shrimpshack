@@ -56,9 +56,16 @@ with tempfile.TemporaryDirectory(prefix='auto-noop-chain-') as work:
     check('the first pass records the sources, so a sweep that records a source change is not quiet',
           first['verdict'], 'changed')
     verb('set-now', 'idle')
+    verb('focus-note', '--agents', '0')
+    subprocess.run(['bash', os.path.join(lib, 'programme.sh'), 'record-trajectories', '--run', run], input='[]',
+                   capture_output=True, text=True, env=env)
     chain()
+    subprocess.run(['/usr/bin/python3', '-c',
+                    'import sys; sys.path.insert(0, sys.argv[2]); from _bootstrap import load_lib_module; '
+                    'load_lib_module("programme_journal").append_prompt(sys.argv[1], "sess-pm", "Run the programme sweep", "cron")',
+                    run, lib], capture_output=True, text=True, env=env)
     second = json.loads(verb('sweep-inputs').stdout)
-    check('a second chained pass on a quiet programme leaves nothing that reads as a change',
+    check('a second chained pass on a quiet programme, in the order the skill prescribes and after a cron wake, reads unchanged',
           (second['verdict'], second['why']), ('unchanged', []))
     rows = [r for r in second['journal_since'] if not r['quiet']]
     check('every row that pass wrote is one the verb classes as bookkeeping', rows, [])

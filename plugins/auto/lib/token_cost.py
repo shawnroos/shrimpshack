@@ -121,7 +121,7 @@ def read_transcript(path):
                     found = COMMAND_NAME.search(content)
                     if found:
                         skills[entry.get("uuid")] = (stamp, found.group(1))
-    rows = sorted(turns[key] for key in order)
+    rows = sorted((turns[key] for key in order), key=lambda row: row[0])
     return rows, sizes, sorted(skills.values()), skipped
 
 

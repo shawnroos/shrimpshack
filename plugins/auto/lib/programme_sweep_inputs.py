@@ -11,6 +11,7 @@ import datetime
 import json
 import os
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -19,26 +20,28 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
-programme_authority = load_lib_module("programme_authority")
+programme_resume = load_lib_module("programme_resume")
 programme_readiness = load_lib_module("programme_readiness")
 programme_sources = load_lib_module("programme_sources")
 programme_predicate = load_lib_module("programme_predicate")
-run_record_core = load_lib_module("run_record_core")
 
 INPUTS_NAME = "sweep-inputs.json"
+DIGEST_NAME = "sweep-digest.md"
 STOP_RULE_REASONS = ("never_stop", "not_done", "until_time")
 WATCHERS = ("remit", "cron")
 ROW_CAP = 300
 PR_CAP = 8
 TEXT_CAP = 240
 # The sweep's own bookkeeping, written on every pass; a row of one of these kinds changes nothing.
-BOOKKEEPING_KINDS = ("stop_quiet", "prompts_pruned", "working_now")
+BOOKKEEPING_KINDS = ("stop_quiet", "prompts_pruned", "working_now", "focus_noted")
 
 
 def _quiet_row(row) -> bool:
     kind, payload = row.get("kind"), row.get("payload") or {}
     if kind in BOOKKEEPING_KINDS:
         return True
+    if kind == "prompt":
+        return programme_journal.prompt_origin(row) == "cron"
     if kind == "validate_pass":
         return not payload.get("refuted")
     if kind == "permission_proposed":
@@ -67,16 +70,6 @@ def _last_index(rows, kinds):
     return None
 
 
-def _unread_claims(run_id, home, record):
-    if programme_authority.promoted(home, run_id):
-        snap = programme_authority.snapshot(run_id)
-        record, claims = snap["record"], snap["claims"]
-    else:
-        claims = programme_journal.claims(run_id)
-    offset = ((record.get("programme") or {}).get("inbox_offset")) or 0
-    return [dict(row, index=n) for n, row in enumerate(claims) if n >= offset]
-
-
 def _open_prs(programme):
     refs = []
     for key, item in sorted((programme.get("items") or {}).items()):
@@ -97,8 +90,7 @@ def _readiness(programme, refs):
     for key, name, ref in refs[:PR_CAP]:
         verdict = programme_readiness.check_mergeable(ref, repos)
         gates = verdict.get("gates") or []
-        merged_or_closed = verdict["result"] == "not_ready" and any(
-            g == "already merged" or str(g).startswith("PR is ") for g in gates)
+        merged_or_closed = bool(verdict.get("ended"))
         checked.append({"item": key, "deliverable": name, "pr": ref, "result": verdict["result"],
                         "ends": merged_or_closed, "note": _clip(verdict.get("note") or "; ".join(map(str, gates)))})
     return checked
@@ -127,7 +119,8 @@ def build(host, run_id, home, record):
     since = [(n + 1, row) for n, row in enumerate(rows)][(last + 1) if last is not None else 0:]
     every = [r for r in (view["model"]["programme"].get("actionable_reasons") or []) if isinstance(r, dict)]
     reasons = [r for r in every if r.get("kind") not in STOP_RULE_REASONS]
-    claims = _unread_claims(run_id, home, record)
+    claim_rows, claim_offset, _ = programme_resume.claims_state(run_id, home, record)
+    claims = [dict(row, index=n) for n, row in enumerate(claim_rows) if n >= claim_offset]
     asks = view.get("asks") or []
     why = []
     if last is None:
@@ -179,32 +172,44 @@ def build(host, run_id, home, record):
     why = list(dict.fromkeys(why))
     rules = (host.rules_in_force(record).get("rules") or [])
     return {
-        "ok": True, "run": run_id, "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ok": True, "run": run_id, "home": home,
+        "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "verdict": "changed" if why else "unchanged", "why": why,
+        "claims": {"unread": len(claims), "next_offset": len(claim_rows)},
         "last_sweep": None if last is None else {"line": last + 1, "at": rows[last].get("at")},
         "actionable_reasons": every,
         "decisions_for_shawn": [{"item": d.get("item") or d.get("id"), "text": _clip(d.get("question") or d.get("text") or d)}
                                 for d in (view["model"].get("decisions_for_shawn") or [])],
-        "asks": [{"item": a.get("item"), "status": a.get("status"), "shown_current": a.get("shown_current")} for a in asks],
+        "asks": [{"item": a.get("item"), "status": a.get("status"), "shown_current": a.get("shown_current"),
+                  "fingerprint": a.get("fingerprint")} for a in asks],
         "unread_claims": [{"index": c["index"], "item": c.get("item"), "deliverable": c.get("deliverable"),
                            "ref": c.get("ref"), "text": _clip(c.get("text") or c.get("note"))} for c in claims],
         "items_changed": moved, "stalled": stalled,
         "prs": prs, "prs_unchecked": [ref for _, _, ref in refs[PR_CAP:]],
-        "journal_since": [{"line": n, "kind": row.get("kind"), "at": row.get("at"),
-                           "quiet": _quiet_row(row)} for n, row in since[:ROW_CAP]],
         "watchers_armed": armed,
         "rules": {"count": len(rules), "ids": [r.get("id") for r in rules if isinstance(r, dict)],
                   "reread_requested": reread_requested},
+        "journal_since": [{"line": n, "kind": row.get("kind"), "at": row.get("at"),
+                           "quiet": _quiet_row(row)} for n, row in since[:ROW_CAP]],
     }
 
 
 def _save(home, inputs) -> str:
     path = os.path.join(home, INPUTS_NAME)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(inputs, handle, indent=1, sort_keys=True)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix=INPUTS_NAME + ".", dir=home)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(inputs, handle, indent=1)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    # A digest from an earlier sweep is stale the moment new inputs exist: remove it so the packager
+    # creates a fresh file (a Write over an existing file it has not read fails) and the PM cannot read an old one.
+    try:
+        os.unlink(os.path.join(home, DIGEST_NAME))
+    except FileNotFoundError:
+        pass
     return path
 
 
@@ -219,8 +224,9 @@ def verb(host, argv) -> int:
         return 0
     if opts.get("save"):
         path = _save(home, inputs)
-        host._emit({"ok": True, "run": run_id, "verdict": inputs["verdict"], "why": inputs["why"],
-                    "generated": inputs["generated"], "inputs": path})
+        host._emit({"ok": True, "run": run_id, "home": home, "verdict": inputs["verdict"], "why": inputs["why"],
+                    "generated": inputs["generated"], "inputs": path, "unread_claims": inputs["claims"]["unread"],
+                    "next_offset": inputs["claims"]["next_offset"]})
         return 0
     host._emit(inputs)
     return 0

@@ -51,15 +51,15 @@ EOF
 )"
 
 tool_decision() {
-  local agent="$1" tool="$2" path="$3" sid="${4:-sess-pm}"
-  "$PY" - "$agent" "$tool" "$path" "$sid" <<'EOF' | CLAUDE_PLUGIN_ROOT="$AUTO_ROOT" bash "$HOOK" | "$PY" -c 'import json,sys; t=sys.stdin.read().strip(); print(json.loads(t)["hookSpecificOutput"]["permissionDecision"] if t else "allow")'
+  local agent="$1" tool="$2" path="$3" sid="${4:-sess-pm}" kind="${5:-auto:programme-status-reader}"
+  "$PY" - "$agent" "$tool" "$path" "$sid" "$kind" <<'EOF' | CLAUDE_PLUGIN_ROOT="$AUTO_ROOT" bash "$HOOK" | "$PY" -c 'import json,sys; t=sys.stdin.read().strip(); print(json.loads(t)["hookSpecificOutput"]["permissionDecision"] if t else "allow")'
 import json, sys
-agent, tool, path, sid = sys.argv[1:5]
+agent, tool, path, sid, kind = sys.argv[1:6]
 key = "notebook_path" if tool == "NotebookEdit" else "file_path"
 d = {"session_id": sid, "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {key: path, "content": "x"}}
 if agent:
     d["agent_id"] = agent
-    d["agent_type"] = "auto:programme-sweep-packager"
+    d["agent_type"] = kind
 print(json.dumps(d))
 EOF
 }
@@ -251,6 +251,29 @@ check allow "$(tool_decision a1 Write "${HOME_DIR}/journal.jsonl" sess-other)"
 it "a different-case spelling of the programmes folder is the same folder on macOS and is denied"
 UPPER_HOME="$(printf '%s' "${HOME_DIR}" | sed 's#/programmes/#/PROGRAMMES/#')"
 check deny "$(tool_decision a1 Write "${UPPER_HOME}/journal.jsonl")"
+
+PACKER=auto:programme-sweep-packager
+it "the packager writing its digest is allowed"
+check allow "$(tool_decision a1 Write "${HOME_DIR}/sweep-digest.md" sess-pm "$PACKER")"
+it "the packager writing a file outside any programme home is denied, its only write is the digest"
+check deny "$(tool_decision a1 Write "${WORK}/scratch.txt" sess-pm "$PACKER")"
+it "the packager writing the journal is denied"
+check deny "$(tool_decision a1 Write "${HOME_DIR}/journal.jsonl" sess-pm "$PACKER")"
+it "the packager editing the digest with Edit is denied unless it is the digest path"
+check deny "$(tool_decision a1 Edit "${WORK}/scratch.txt" sess-pm "$PACKER")"
+it "a packager-typed agent of a session that drives no programme is not this hook's business"
+check allow "$(tool_decision a1 Write "${WORK}/scratch.txt" sess-other "$PACKER")"
+it "a plugin-namespaced packager type is still matched by its name"
+check deny "$(tool_decision a1 Write "${WORK}/x.txt" sess-pm "programme-sweep-packager")"
+it "hooks.json runs the guard for Bash, Write, Edit, MultiEdit and NotebookEdit and not for Read"
+check "ok" "$("$PY" - "$AUTO_ROOT" <<'EOF'
+import json, re, sys
+hooks = json.load(open(sys.argv[1] + "/.claude/hooks/hooks.json"))["hooks"]["PreToolUse"]
+entry = next(e for e in hooks if any("on-pretooluse-subagent.sh" in h["command"] for h in e["hooks"]))
+hit = lambda tool: re.fullmatch(entry["matcher"], tool) is not None
+print("ok" if all(hit(t) for t in ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit")) and not hit("Read") else "bad matcher: " + entry["matcher"])
+EOF
+)"
 
 echo "pretooluse-subagent.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

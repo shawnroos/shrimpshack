@@ -103,31 +103,36 @@ re-arming. Changes made
 between the expiry and the re-arm are not reported; the next sweep reads them.
 
 1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
-   Bash call that chains steps 2, 4, 5 and 9's `prune`, `P validate`,
-   `P sweep --record-sources`, `P propose-permission` and `P settle-permissions`,
-   then `P sweep-inputs --save`, with `;`, ending `2>&1 | tail -c 6000`. If
+   Bash call that runs `echo SWEEP-START`, then step 2's `prune` (it finds the run
+   from this session's lease), `P validate`, `P sweep --record-sources`,
+   `P propose-permission`, `P settle-permissions` and last
+   `P sweep-inputs --save`, joined with `;` and ending `2>&1 | tail -c 6000`. If
    `P beat` refuses because the programme ended, stop. `P expire` ends a
    programme whose agreement was never accepted; if it prints `"ended": true`,
-   tell Shawn in one line and stop. The last JSON in that output is the verdict
-   of `sweep-inputs`: `unchanged` or `changed`, with the reasons.
+   tell Shawn in one line and stop. The last JSON in that output is the verdict of
+   `sweep-inputs`: `unchanged` or `changed`, with `why`, `home`, `unread_claims`
+   and `next_offset`. No `SWEEP-START` line (the cap cut the head) or no verdict
+   JSON (a verb crashed) means unknown: take the changed path with the fallback
+   reads below. If `why` has `rules_reread_requested`, run `P rules --ack` and
+   read the rules it prints.
    **Quiet sweep.** End the turn, steps 2 to 17 done, only when all of these
    hold: the wake carried no watcher line (a watcher line is step 6 work);
    `sweep-inputs` said `unchanged`, which already covers actionable reasons,
    unread claims, open asks, items that moved (so a due tracker write, step 15),
    merge readiness, a worker whose pane is not working (step 11) and both
    wake-ups armed (step 16); and the chained call printed no refusal, no `fix:`
-   line, no adopt or alias proposal, no new permission proposal, and
-   `"refuted": []` from `P validate`. That is two PM turns.
+   line, no adopt or alias proposal, no new permission proposal, no `pending`
+   line from `settle-permissions`, and `"refuted": []` from `P validate`. That is
+   two PM turns.
    **Changed sweep.** Dispatch `auto:programme-sweep-packager` with `home`. It has
    no shell: it digests `<home>/sweep-inputs.json` into `<home>/sweep-digest.md`
    and returns the path. Read the digest, not the sources behind it: every line
    names its source. It is usable only when the agent returned `ok`, the file
-   ends `DIGEST-DONE` and its `generated` matches the verdict's. Otherwise it is
-   unknown: run `P status --json | head -c 6000`, `P inbox | head -c 6000` and
-   `P rules` (never cut the rules) yourself, and say so in one line. If the
-   digest shows a re-read requested, run `P rules --ack` and read the rules it
-   prints. Take steps 2, 4, 5 and 9's chained verbs as run, and read their output
-   from that call.
+   ends `DIGEST-DONE`, its `generated` matches the verdict's and it lists
+   `unread_claims` claims. Otherwise it is unknown: dispatch
+   `auto:programme-status-reader` and `auto:programme-inbox-reader`, and run
+   `P rules` (never cut the rules) yourself, and say so in one line. Take steps 2,
+   4, 5 and 9's chained verbs as run, and read their output from that call.
 2. **Prune prompts.** `"${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}" "${CLAUDE_PLUGIN_ROOT}/lib/programme_journal.py" prune --run <run>`.
    The run id is the `run` field of `P status --json`.
 3. **Apply Shawn's answers.** For each message Shawn typed since the last
@@ -296,9 +301,9 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      tracker` line is expected: the watcher cannot read through the MCP. Do not
      record it; record the issues through the MCP again instead.
    The sweep records the changes it saw itself, including unsupported sources.
-7. **Read the inbox.** The digest lists the unread claims with their index
-   (`P inbox` prints them from the store). Act on them, then
-   `P mark-read --offset <n>` with the offset it names. Never read `claims.jsonl`: it is an export and can be stale.
+7. **Read the inbox.** The digest lists the unread claims with their index, each
+   cut to one line; read the ones you act on in full with `P inbox`. Act on them,
+   then `P mark-read --offset <n>` with `next_offset` from the verdict. Never read `claims.jsonl`: it is an export and can be stale.
 8. **Check claims.** First send back work that skips a behaviour. For each
    claim, take each worker behaviour in force for the item that names evidence
    and whose checks held for this work. Look for that evidence in the claim's

@@ -68,9 +68,9 @@ def _bar(pr) -> dict:
              "unresolved_threads": unresolved, "checks": checks}
     facts["fingerprint"] = fingerprint(facts)
     if facts["state"] == "MERGED":
-        return dict(facts, result="not_ready", gates=["already merged"])
+        return dict(facts, result="not_ready", gates=["already merged"], ended=True)
     if facts["state"] != "OPEN":
-        return dict(facts, result="not_ready", gates=[f"PR is {facts['state']}"])
+        return dict(facts, result="not_ready", gates=[f"PR is {facts['state']}"], ended=True)
     if facts["mergeable"] in _NOT_COMPUTED or facts["merge_state"] in _NOT_COMPUTED:
         raise Unknown("GitHub has not computed the merge state yet")
     if not checks:

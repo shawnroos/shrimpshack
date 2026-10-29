@@ -228,17 +228,21 @@ def unleased_lines(session_id) -> list:
             for run in unleased_runs(session_id)]
 
 
+def claims_state(run_id, home, record=None):
+    """(claim rows, inbox offset, store revision): the committed claims and how many were marked read."""
+    if programme_authority.promoted(home, run_id):
+        snap = programme_authority.snapshot(run_id)
+        return snap["claims"], ((snap["record"].get("programme") or {}).get("inbox_offset")) or 0, snap["revision"]
+    record = record or run_record_core.read_run_record(home, run_id)
+    rows = load_lib_module("programme_journal").claims(run_id)
+    return rows, ((record.get("programme") or {}).get("inbox_offset")) or 0, None
+
+
 def inbox_verb(host, argv) -> int:
     _, opts = host._parse(argv, values=("run",), flags=("all",))
     run_id = programme_recovery.run_of(host, opts)
     home = programme_home.home_path(run_id)
-    if programme_authority.promoted(home, run_id):
-        snap = programme_authority.snapshot(run_id)
-        record, revision, rows = snap["record"], snap["revision"], snap["claims"]
-    else:
-        record, revision = run_record_core.read_run_record(home, run_id), None
-        rows = load_lib_module("programme_journal").claims(run_id)
-    offset = ((record.get("programme") or {}).get("inbox_offset")) or 0
+    rows, offset, revision = claims_state(run_id, home)
     start = 0 if opts.get("all") else offset
     host._emit({"ok": True, "run": run_id, "revision": revision, "inbox_offset": offset, "total": len(rows),
                 "claims": [dict(row, index=n) for n, row in enumerate(rows) if n >= start],

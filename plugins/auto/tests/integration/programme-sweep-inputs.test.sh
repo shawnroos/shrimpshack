@@ -100,6 +100,13 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     check('a new working_now row resets the comparison point for journal rows and item history',
           ('journal_rows' in again['why'], 'items_changed' in again['why']), (False, False))
 
+    bare = subprocess.run(['/usr/bin/python3', os.path.join(lib, 'programme_journal.py'), 'prune'],
+                          capture_output=True, text=True, env=env)
+    check('prune finds the run from the session lease when --run is omitted', (bare.returncode, bare.stdout.strip()[:11]), (0, '{"removed":'))
+    other = subprocess.run(['/usr/bin/python3', os.path.join(lib, 'programme_journal.py'), 'prune'],
+                           capture_output=True, text=True, env=dict(env, CLAUDE_CODE_SESSION_ID='sess-nobody'))
+    check('prune with no --run and a session that drives nothing refuses', other.returncode != 0, True)
+
     junk = subprocess.run(['bash', os.path.join(lib, 'programme.sh'), 'sweep-inputs', 'extra', '--run', run],
                           capture_output=True, text=True, env=env)
     check('a stray positional argument is refused', junk.returncode != 0, True)
@@ -169,6 +176,63 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
                                  ('source_changed', {}, False), ('prompt', {}, False)):
         check('journal row %s %s is %s' % (kind, json.dumps(payload), 'quiet' if quiet else 'a change'),
               psi._quiet_row({'kind': kind, 'payload': payload}), quiet)
+
+    readiness = load_lib_module('programme_readiness')
+    resume = load_lib_module('programme_resume')
+
+    def why_with(rows=None, claims=None, asks=None, stalled=None):
+        keep = (psi.programme_journal.read, resume.claims_state, host.build_view, psi._stalled)
+        base_rows = [{'kind': 'working_now', 'at': '2026-10-29T10:00:00Z', 'payload': {}}]
+        psi.programme_journal.read = lambda _r: base_rows + (rows or [])
+        if claims is not None:
+            resume.claims_state = lambda _r, _h, _rec=None: (claims, 0, None)
+        real_view = host.build_view
+        if asks is not None:
+            host.build_view = lambda *a, **k: dict(real_view(*a, **k), asks=asks)
+        if stalled is not None:
+            psi._stalled = lambda _p: stalled
+        try:
+            return psi.build(host, run_id, home_dir, record)
+        finally:
+            psi.programme_journal.read, resume.claims_state, host.build_view, psi._stalled = keep
+
+    claim = {'item': 'test:one', 'deliverable': 'merged', 'ref': 'o/r#1', 'text': 'done'}
+    built = why_with(claims=[claim])
+    check('an unread claim is a change and the verb reports where mark-read should go',
+          ('unread_claims' in built['why'], built['claims']), (True, {'unread': 1, 'next_offset': 1}))
+    check('an open ask that was never shown is a change',
+          'ask_not_shown' in why_with(asks=[{'item': 'k', 'status': 'open', 'shown_current': False, 'fingerprint': 'f1'}])['why'], True)
+    check('an open ask that was shown is not a change',
+          'ask_not_shown' in why_with(asks=[{'item': 'k', 'status': 'open', 'shown_current': True, 'fingerprint': 'f1'}])['why'], False)
+    check('an answered ask not yet relayed is a change',
+          'ask_answered_unrelayed' in why_with(asks=[{'item': 'k', 'status': 'answered', 'shown_current': True}])['why'], True)
+    check('the ask fingerprint reaches the inputs, the PM needs it to mark an ask shown',
+          why_with(asks=[{'item': 'k', 'status': 'open', 'shown_current': True, 'fingerprint': 'f1'}])['asks'][0]['fingerprint'], 'f1')
+    reread = [{'kind': 'rules_acked', 'at': '2026-10-29T10:01:00Z', 'payload': {}},
+              {'kind': 'reread_requested', 'at': '2026-10-29T10:02:00Z', 'payload': {}}]
+    check('a re-read request newer than the last acknowledgement is a change',
+          'rules_reread_requested' in why_with(rows=reread)['why'], True)
+    check('a re-read request already acknowledged is not a change',
+          'rules_reread_requested' in why_with(rows=list(reversed(reread)))['why'], False)
+    many = [{'kind': 'stop_quiet', 'at': '2026-10-29T10:03:00Z', 'payload': {}}] * (psi.ROW_CAP + 1)
+    check('more than 300 quiet rows since the last sweep is a change: the list is cut, the verdict is not blind',
+          'journal_overflow' in why_with(rows=many)['why'], True)
+    check('a worker-owned item whose pane is not working is a change',
+          'worker_not_working' in why_with(stalled=[{'item': 'w:1', 'pane': 'w2:p1', 'agent_status': 'idle'}])['why'], True)
+    cron = {'kind': 'prompt', 'at': '2026-10-29T10:04:00Z', 'payload': {'origin': 'cron'}}
+    typed = {'kind': 'prompt', 'at': '2026-10-29T10:04:00Z', 'payload': {'origin': 'typed'}}
+    check('the cron fallback prompt is a quiet row, a cron wake can be quiet', psi._quiet_row(cron), True)
+    check('a typed prompt is a change, Shawn said something', psi._quiet_row(typed), False)
+    check('a focus note, written after working_now every sweep, is a quiet row',
+          psi._quiet_row({'kind': 'focus_noted', 'payload': {'subagents': 2}}), True)
+
+    def pr_facts(state):
+        return {'state': state, 'isDraft': False, 'mergeable': 'UNKNOWN', 'mergeStateStatus': 'UNKNOWN', 'headRefOid': 'abc',
+                'reviewThreads': {'totalCount': 0, 'nodes': []},
+                'commits': {'nodes': [{'commit': {'oid': 'abc', 'statusCheckRollup': {'contexts': {'totalCount': 0, 'nodes': []}}}}]}}
+
+    check('merge readiness marks a merged PR as ended', readiness._bar(pr_facts('MERGED')).get('ended'), True)
+    check('merge readiness marks a closed PR as ended', readiness._bar(pr_facts('CLOSED')).get('ended'), True)
 
 print('programme-sweep-inputs.test.sh: {} passed, {} failed'.format(passed, failed))
 sys.exit(1 if failed else 0)

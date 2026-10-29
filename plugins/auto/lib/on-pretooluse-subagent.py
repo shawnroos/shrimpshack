@@ -25,6 +25,7 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PR_MERGE = re.compile(r"\bgh\b.*\bpr\b.*\bmerge\b|/pulls/\d+/merge|mergePullRequest", re.S)
 DIGEST_NAME = "sweep-digest.md"
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+PACKAGER_TYPE = "programme-sweep-packager"
 # A viewer that runs a command or writes a file is a write verb in disguise.
 _VIEWER_WRITE_FLAGS = frozenset({"--pre", "--pre-glob", "--output", "-O", "--open-files-in-pager"})
 # ${CLAUDE_PLUGIN_ROOT} is how every agent file names programme.sh; any other expansion runs before the guard's verb.
@@ -157,14 +158,6 @@ def refusal(command):
     return None
 
 
-def _drives_programme(session_id) -> bool:
-    lib = os.path.dirname(os.path.abspath(__file__))
-    if lib not in sys.path:
-        sys.path.insert(0, lib)
-    from _bootstrap import load_lib_module
-    return bool(load_lib_module("programme_home").driven_runs(session_id))
-
-
 def _driven_homes(session_id):
     lib = os.path.dirname(os.path.abspath(__file__))
     if lib not in sys.path:
@@ -174,7 +167,7 @@ def _driven_homes(session_id):
     return [hold["home"] for hold in programme_home.driven_runs(session_id)], programme_home.programmes_dir()
 
 
-def write_refusal(tool_input, homes, programmes_dir):
+def write_refusal(tool_input, homes, programmes_dir, only_digest=False):
     """Deny a programme-home write by path, not by shell text: only the packager's digest file is allowed.
 
     Paths compare case-folded because the macOS filesystem treats PROGRAMMES and programmes as one folder."""
@@ -183,11 +176,15 @@ def write_refusal(tool_input, homes, programmes_dir):
         return None
     real = os.path.realpath(target).casefold()
     protected = os.path.realpath(programmes_dir).casefold()
-    if real != protected and not real.startswith(protected + os.sep):
-        return None
     if real in {os.path.join(os.path.realpath(home), DIGEST_NAME).casefold() for home in homes}:
         return None
+    if not only_digest and real != protected and not real.startswith(protected + os.sep):
+        return None
     return f"a sub-agent may write only <home>/{DIGEST_NAME} inside a programme's home folder"
+
+
+def _drives_programme(session_id) -> bool:
+    return bool(_driven_homes(session_id)[0])
 
 
 def decide(stdin_raw, drives=_drives_programme, homes=_driven_homes):
@@ -205,7 +202,8 @@ def decide(stdin_raw, drives=_drives_programme, homes=_driven_homes):
         reason = refusal(command)
     elif tool in WRITE_TOOLS:
         driven, programmes_dir = homes(data.get("session_id"))
-        reason = write_refusal(tool_input, driven, programmes_dir) if driven else None
+        packager = str(data.get("agent_type") or "").endswith(PACKAGER_TYPE)
+        reason = write_refusal(tool_input, driven, programmes_dir, only_digest=packager) if driven else None
     else:
         return None
     if reason is None:

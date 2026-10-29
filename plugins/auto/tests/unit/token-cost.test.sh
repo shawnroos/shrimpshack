@@ -151,6 +151,14 @@ with tempfile.TemporaryDirectory(prefix='token-cost-') as work:
     check('--ce counts invocations', {k: v['invocations'] for k, v in groups.items()},
           {'(none)': 0, 'ce-plan': 1, 'ce-doc-review': 1})
 
+    tie = os.path.join(work, 'tie.jsonl')
+    with open(tie, 'w') as handle:
+        handle.write('\n'.join([
+            assistant('t1', '2026-10-20T10:00:00Z', usage(100)),
+            assistant('t2', '2026-10-20T10:00:00Z', usage(200))]) + '\n')
+    code, out, err = run('--json', tie)
+    check('two turns with the same timestamp are both counted, no sort error', (code, json.loads(out)['total']['turns'] if out else None), (0, 2))
+
     missing = os.path.join(work, 'nope.jsonl')
     code, out, err = run('--json', missing)
     check('a missing transcript exits non-zero, never a zero-cost report', (code != 0, out.strip()), (True, ''))

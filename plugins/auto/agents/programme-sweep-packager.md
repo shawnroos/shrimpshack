@@ -39,7 +39,7 @@ why: <the inputs' why codes, copied exactly>
 
 ## Actionable reasons          (source: actionable_reasons)
 ## Open decisions for Shawn    (source: decisions_for_shawn, asks)
-## Unread claims               (source: unread_claims)
+## Unread claims               (source: unread_claims; list every one, the PM checks the count against claims.unread)
 - claim <index> | item <id> | <deliverable> | <ref> | <one line>
 ## Items that moved            (source: items_changed, stalled)
 - item <id> | <kind> at <time>
