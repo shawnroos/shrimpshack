@@ -123,8 +123,14 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     a_sid = 'setup-a'
     run = programme(a_sid, 'setup-a')
     proposed = verb(a_sid, run, 'propose-agreement', '--project-term', 'naming=use kebab case',
-                    '--reserved-term', 'deploys=only Shawn deploys', '--source', 'test brief')
-    check('propose-agreement adds a ruling and a reserved area', proposed.returncode == 0, proposed.stderr)
+                    '--source', 'test brief')
+    check('propose-agreement adds a project term', proposed.returncode == 0, proposed.stderr)
+
+    def seed_reserved(rec):
+        rec['programme']['agreement']['project_terms'].append(
+            {'id': 'tdeploy', 'area': 'deploys', 'value': 'only Shawn deploys', 'source': 'an older plugin',
+             'set_by': 'proposal', 'at': '2026-10-01T00:00:00Z', 'reserved': True, 'history': []})
+    core._with_locked_run_record(ph.home_path(run), run, seed_reserved)
     entries = record(run)['programme']['agreement']['project_terms']
     ruling = next(e['id'] for e in entries if not e['reserved'])
     reserved = next(e['id'] for e in entries if e['reserved'])
@@ -240,10 +246,22 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
         check(f'{label} accepts a pick of its exact approval label past the origin and label checks',
               'is not typed' not in out and 'needs a typed prompt' not in out and 'already used' not in out
               and 'approval label' not in out, out)
-    for args in (('record-instruction',), ('close-instruction', 'i1', '--as', 'withdrawn')):
-        result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{args[0]}?': 'No'}))
-        check(f'{args[0]} refuses a pick: it records the prompt words as content',
+    for args in (('record-ruling', 'r8', '--effect', 'restrict', '--kind', 'tool_choice', '--scope', 'mine'),
+                 ('close-ruling', 'tdeploy', '--as', 'withdrawn'), ('carry-rulings', 'tdeploy')):
+        result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{args[0]}?': 'Approve ' + ' '.join(args)}))
+        check(f'{args[0]} refuses a pick of its exact label: a Ruling binds only on typed words',
               refused(result, f'{args[0]} needs a typed prompt'), result.stdout + result.stderr)
+    result = verb(a_sid, run, 'record-ruling', 'r8', '--effect', 'restrict', '--kind', 'tool_choice', '--scope', 'mine')
+    check('record-ruling with no prompt leaves the Ruling pending', result.returncode == 0, result.stdout + result.stderr)
+    result = verb(a_sid, run, 'accept-context', 'r8', '--prompt',
+                  pick(a_sid, run, {'accept-context?': 'Approve accept-context r8'}))
+    check('accept-context refuses a pick of its exact label for a Ruling',
+          refused(result, "accepting Ruling 'r8' needs a typed prompt"), result.stdout + result.stderr)
+    suggested = typed_prompt(run, a_sid, 'accept r8, tool choice is mine',
+                             prompt_source='suggestion_accepted')['prompt_id']
+    result = verb(a_sid, run, 'accept-context', 'r8', '--prompt', suggested)
+    check('accept-context refuses an accepted suggestion for a Ruling, even one naming it',
+          refused(result, "is an accepted suggestion"), result.stdout + result.stderr)
     gate_pick = pick(a_sid, run, {'Cadence: on change?': 'on change'})
 
     lifecycle = load_lib_module('programme_lifecycle')
@@ -346,7 +364,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(a_sid, run, 'amend-term', 'cadence', 'on_change', '--why', '--run', run)
     check('an option value that looks like an option is refused', result.returncode == 2 and 'needs a value' in result.stderr,
           result.stdout + result.stderr)
-    result = verb(a_sid, run, 'approval-label', 'record-instruction')
+    result = verb(a_sid, run, 'approval-label', 'record-ruling')
     check('approval-label refuses a verb a pick cannot approve', refused(result, 'needs a typed prompt'),
           result.stdout + result.stderr)
     early = pick(a_sid, run, {'Adopt which rule?': printed.stdout.strip()}, driving=False)
@@ -380,8 +398,8 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(a_sid, run, 'adopt-rule', 'negated-rule', '--prompt', suggested)
     check('adopt-rule refuses an accepted suggestion that negates the rule',
           refused(result, 'not a plain yes') and 'negated-rule' in proposed_ids(), result.stdout + result.stderr)
-    for name in ('retire-behaviour', 'correct-term', 'undo-correction', 'promote-correction', 'record-behaviour',
-                 'record-decision', 'define-requirement'):
+    for name in ('retire-behaviour', 'record-ruling', 'close-ruling', 'carry-rulings', 'record-behaviour',
+                 'define-requirement'):
         check(f'{name} is not on the pick list: it does not bind its target', name not in approval_mod.PICK_VERBS)
     check('every pick-list verb is a real CLI verb', approval_mod.PICK_VERBS <= set(programme_mod._VERBS),
           approval_mod.PICK_VERBS - set(programme_mod._VERBS))
@@ -442,9 +460,9 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           and after['cadence']['value'] == 'fixed' and after['cadence']['seconds'] == 600
           and after['stop_rule']['proposal']['state'] == 'accepted', (result.stdout + result.stderr, after))
     check('take-recommendations leaves the shared, ruling and protocol settings alone',
-          after['autonomy']['set_by'] == 'default'
+          'autonomy' not in after
           and all(e['set_by'] == 'proposal' for e in record(run)['programme']['agreement']['project_terms'])
-          and not personal.exists(), after['autonomy'])
+          and not personal.exists(), sorted(after))
     check('take-recommendations journals one row citing the pick',
           [r['payload'].get('prompt_id') for r in kinds(run, 'recommendations_taken')] == [take],
           kinds(run, 'recommendations_taken'))

@@ -36,28 +36,34 @@ session's own space.
    Then work out the remit: load the `auto:programme-remit` skill, find the
    repos and the tracker scope with your own tools, and store them with
    `programme.sh set-remit`. Accepting the agreement in step 6 approves it.
-   Its output lists `carried_over`: project terms kept from an earlier
-   programme on the same repos, already added to this agreement. `notices`
-   names any carried-over entry it dropped.
-   Then pre-fill the project terms from evidence, not from questions to Shawn. Each
-   term is one area and one short text: who decides that area (Shawn, the PM or
-   a worker), the existing skills or tools to prefer for a kind of job
-   (ideation, options, requirements, implementation, optimisation,
-   acceptance), or what acceptance means for this project. Read the evidence
-   yourself:
+   Its output lists `carried_over`: Rulings Shawn chose to carry from an
+   earlier programme on the same repos. Each arrives pending, with no items,
+   and binds only when his typed prompt names it and the items it now applies
+   to (step 5). `notices` names any carried-over entry it dropped.
+
+   The agreement holds two things for this programme: Scope (the remit, stop
+   rule, cadence and budget, the sources watched, and preferred tools) and
+   Rulings (Shawn's dated, scoped orders and decisions). Who decides each kind
+   of choice (Authority) and what done means for each kind of change (Done
+   standards) are not part of it: they are standing settings in the protocol,
+   set once for every programme, and this programme reads them live.
+
+   Pre-fill the preferred tools from evidence, not from questions to Shawn.
+   Each one is an area and one short text naming the existing skill or tool to
+   prefer for a kind of job (ideation, options, requirements, implementation,
+   optimisation, acceptance). A preferred tool is a preference, never a say
+   over who decides: an order about who decides goes in as a Ruling. Read the
+   evidence yourself:
    - the remit repos: their README, CLAUDE.md or AGENTS.md, plan docs and test
      commands;
-   - prior runs: the `carried_over` terms, and plans and run records under each
-     repo's `.claude/auto/`;
+   - prior runs: plans and run records under each repo's `.claude/auto/`;
    - Shawn's installed skills: name only skills in your own skill list. Never
      name one you cannot see there.
    Add them with `programme.sh propose-agreement --project-term "<area>=<text>"
    --source "<where it came from>"`. One call takes one `--source`, so make one
-   call per source. An area Shawn keeps for himself goes in as
-   `--reserved-term "<area>=<text>"`. An area that already has a term
-   (carried over or earlier) refuses; leave it. An area about deploys,
-   releases, spend, permissions, risk or cost limits, or settled decisions is
-   refused unless it is reserved for Shawn.
+   call per source. An area that already has one refuses; leave it. An area or
+   text about deploys, releases, spend, permissions, risk or cost limits, or
+   settled decisions is refused.
 4. Record what the probe saw, so the pane can show what is in and what is out:
    `programme.sh setup-seen --json -` with `{"tabs": [...], "repos": [...],
    "tracker": [...], "items": [{"item", "title", "pane", "session"}]}` on
@@ -90,11 +96,20 @@ session's own space.
        `programme.sh pick-term <key> <value> --pick <id>`.
      - Never put answers into the AskUserQuestion call yourself; a pre-filled
        picker is refused and approves nothing.
-   - Steps with `needs_typed` (rulings and reserved areas, shared settings):
-     during setup these take a typed reply. Ask in a picker
-     whether to keep it as is or change it. Keep: `programme.sh setup-keep
-     <key>`. Change: show the step's `reply` as "Type this:" and wait for his
-     typed line; then apply it as in step 6.
+   - Steps with `needs_typed` (Rulings, shared settings): during setup these
+     take a typed reply. Ask in a picker whether to keep it as is
+     or change it. Keep: `programme.sh setup-keep <key>`. Change: show the
+     step's `reply` as "Type this:" and wait for his typed line; then apply it
+     as in step 6.
+   - Rulings: walk each pending Ruling (the carried ones from step 3 and any
+     order Shawn gave in chat), with its effect (decided, grant or restrict),
+     decision kind and items. A Ruling binds only on a typed reply that names
+     its id, and for a grant every item it gives the PM: ask him to type one
+     that does, and apply it as in step 6. A pick never binds a Ruling.
+   - Shared settings are the standing Authority levels and Done standards. Do
+     not walk them level by level: they are set once for every programme. Keep
+     them unless Shawn wants a change, and point him at
+     `/auto:programme-status agreement`, which shows both.
    - When a verb refuses a pick, say why in one line and ask that step again.
    - Shawn can change an earlier answer before the accept by naming the step;
      ask that step again.
@@ -117,14 +132,26 @@ session's own space.
    prompt id.
    - Acceptance: `programme.sh accept-agreement --prompt <id>`, plus
      `--terms <digest>` when the prompt is a pick.
-   - A term change: `programme.sh amend-term <key> <value> --prompt <id>`.
-   - A project term change: `programme.sh edit-project-term <term-id> "<text>"
-     [--reserved|--unreserved]`, or a new one with `propose-agreement
-     --project-term "<area>=<text>" --source "Shawn at startup"`.
      `accept-agreement` refuses a prompt older than the last proposal, pick,
      term amend or project-term edit, and a `--terms` digest that no longer
      matches the terms, so ask for the accept again after any change. It
      refuses an accepted suggestion.
+   - A term change: `programme.sh amend-term <key> <value> --prompt <id>`.
+   - A preferred tool: a programme-layer behaviour, `programme.sh
+     record-behaviour --prompt <id> --when "<the kind of job>" --tool <name>
+     --do "use <name> for <the job>"`. A preferred tool still held as a project
+     term moves with `programme.sh propose-behaviour --from-term <term-id>`,
+     then applies when his typed reply names the drafted behaviour.
+   - A Ruling: `programme.sh record-ruling <id> --effect decided|grant|restrict
+     --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>]
+     --prompt <id>` for a new one, or `programme.sh accept-context <id> --prompt <id>`
+     for a pending one. A carried Ruling binds through `record-ruling <id>` with
+     its own effect and kind and one `--applies-to` per item, citing a prompt
+     that names the id and each item.
+   - A shared setting: `programme.sh adopt-autonomy <decision-kind> <level>
+     --prompt <id>` for Authority, `programme.sh adopt-rule <rule-id> --prompt <id>`
+     for a proposed Done standard. These change every programme, not only this
+     one.
    - Turning sources off or on by a typed reply: `programme.sh amend-term
      tools_of_record <list> --prompt <id>`, where the list holds the sources
      that stay on, comma separated (`tracker,tasks`), or `none`. His reply must

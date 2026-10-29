@@ -133,7 +133,7 @@ if want commit; then
   prog add-item linear:AI-1 --title "browser" --kind fix_only --run "$RUN"
   ack "$RUN"
   # verb args per write path: an ordinary record write, a decision, a journal row.
-  PATHS=("set-now|doing A|--run" "record-decision|d-1|--scope|browser only|--reason|first|--run" "beat|--run")
+  PATHS=("set-now|doing A|--run" "record-ruling|d-1|--effect|decided|--kind|technical_approach|--scope|browser only|--reason|first|--run" "beat|--run")
   for spec in "${PATHS[@]}"; do
     IFS='|' read -r -a ARGS <<< "$spec"
     NAME="commit ${ARGS[0]}"

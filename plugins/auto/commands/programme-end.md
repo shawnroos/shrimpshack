@@ -12,38 +12,31 @@ the way `expire` does, with reason agreement_unaccepted: there is no accepted
 agreement to protect. A `--why` of several words must be in single quotes
 (`--why 'nothing left to do'`): the dispatch line wraps the arguments in double quotes.
 
-First make one carry-over offer: the corrections still applied and the
-programme-layer behaviours. `end` releases the lease, and every verb refuses an
-ended programme, so this comes before it.
+First make one carry-over offer: the active Rulings and the programme-layer
+behaviours. `end` releases the lease, so the offer comes before it.
 
-1. Read two lists:
-   - From `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --terms --json`,
-     `terms.corrections` (the corrections still applied). While corrections are
-     switched off this list is always empty.
-   - From `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" status --json`,
-     `contract.behaviours`, keeping only the rows with `layer` "programme" and
-     `state` "active". These are the behaviours that end with this programme
-     unless Shawn keeps them.
-2. Both lists empty: go straight to the dispatch line.
-3. Otherwise, show both in one message. Each correction gets one line (its id,
-   the kind of choice, who decides it now, and Shawn's quote). Each behaviour
-   gets one line (its id, its "when", its do and don't lines, and Shawn's
-   quote). Then ask through AskUserQuestion pickers, never a typed reply: one
-   picker for the corrections to keep, and one for the behaviours, which also
-   asks whether each goes to the repo (every programme on this repo) or global
-   (every project). Each option that keeps something is the exact output of
-   `programme.sh approval-label keep-corrections <correction-id>...` or
-   `programme.sh approval-label keep-behaviours <behaviour-id>... --to repo|personal`;
-   add a "Keep none" option. If Shawn answers with a set no option offered, ask
-   again with a picker whose option is that set's label.
-4. When he picks corrections to keep, run
-   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-corrections --prompt <pick id> <correction-id>...`
-   with the ids the picked label names. Keep none when he picks "Keep none".
-   - It refuses with "corrections are not on yet": tell him so in one line and
-     go on.
-   - It refuses because this session does not drive the programme (an
-     orphaned lease): tell him in one line that corrections can be kept only
-     from the driving session, and go on.
+1. Run `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" carry-rulings`. It lists
+   each active Ruling and each active programme-layer behaviour on a
+   `carry-over offer:` line, and records that the offer was made. If it refuses
+   because this session does not drive the programme (an orphaned lease), tell
+   Shawn in one line that Rulings and behaviours can be kept only from the
+   driving session, and go straight to the dispatch line.
+2. No `carry-over offer:` lines: go straight to the dispatch line.
+3. Otherwise, show Shawn those lines in one message.
+   - Rulings: ask which to carry to the next programme on this project, and
+     wait for his typed reply. A pick never carries a Ruling.
+   - Behaviours: ask through one AskUserQuestion picker, never a typed reply,
+     which to keep and whether each goes to the repo (every programme on this
+     repo) or global (every project). Each option that keeps something is the
+     exact output of
+     `programme.sh approval-label keep-behaviours <behaviour-id>... --to repo|personal`;
+     add a "Keep none" option. If Shawn answers with a set no option offered,
+     ask again with a picker whose option is that set's label.
+4. When he names Rulings to carry, run
+   `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" carry-rulings --prompt <id> <ruling-id>...`,
+   citing his typed reply's prompt id. Carry none when he says none.
+   - Carried Rulings arrive in the next programme pending, with no items, and
+     bind only when his typed prompt there names the items.
 5. When he picks behaviours to keep, run one `keep-behaviours` call per picked
    label, citing that pick's id:
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-behaviours <behaviour-id>... --to repo|personal --prompt <pick id>`.

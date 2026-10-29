@@ -11,7 +11,7 @@ export const LEASE = `${LEASES}/default__w2.json`
 export type Pane = Mounted<'terminal', 'Pane'>
 type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
 
-export const step = (kind: string, title: string, clause: string | null = 'term:autonomy') => ({
+export const step = (kind: string, title: string, clause: string | null = 'term:remit') => ({
   kind,
   title,
   clause,
@@ -54,7 +54,6 @@ const option = (name: string, active = false) => ({ name, description: `what ${n
 const EDITORS: Record<string, string> = {
   remit: 'space',
   stop_rule: 'until',
-  autonomy: 'choice',
   cadence: 'interval',
   tools_of_record: 'checklist',
 }
@@ -83,8 +82,29 @@ export function contractPart(terms: Record<string, unknown>[] = defaultTerms()) 
   return {
     accepted: { at: '2026-10-12T09:00:00Z' },
     terms,
-    instructions: [
-      { id: 'i1', quote: 'ask before closing', applies_to: 'programme', scope: 'inherited', reliant_steps: 1 },
+    rulings: [
+      {
+        id: 'i1',
+        quote: 'ask before closing',
+        applies_to: ['programme'],
+        scope: 'inherited',
+        effect: 'decided',
+        kind: null,
+        legacy: 'instruction',
+        until: null,
+        reliant_steps: 1,
+      },
+      {
+        id: 'g1',
+        quote: 'pick the test runner yourself',
+        applies_to: ['programme'],
+        scope: 'inherited',
+        effect: 'grant',
+        kind: 'tool_choice',
+        legacy: null,
+        until: null,
+        reliant_steps: 0,
+      },
     ],
   }
 }
@@ -92,8 +112,7 @@ export function contractPart(terms: Record<string, unknown>[] = defaultTerms()) 
 export function defaultTerms() {
   return [
     term('remit'),
-    term('stop_rule'),
-    term('autonomy', { binding: 'guidance' }),
+    term('stop_rule', { binding: 'guidance' }),
     term('cadence', {
       value: 'fixed',
       value_text: 'fixed, seconds 900',
@@ -209,7 +228,7 @@ export function setupPart() {
       setupStep('where', 'scope', 'done', { values: 'AI-Editor' }),
       setupStep('sources', 'scope', 'current', { recommendation: 'tracker, tasks, plans', recommendation_source: 'plugin default' }),
       setupStep('cadence', 'pacing', 'upcoming'),
-      setupStep('rulings', 'rulings', 'upcoming', { label: 'rulings and reserved areas', needs_typed: true, reply: 'approve the proposed rulings' }),
+      setupStep('rulings', 'rulings', 'upcoming', { label: 'rulings', needs_typed: true, reply: 'approve the proposed rulings' }),
       setupStep('shared', 'shared', 'upcoming', { label: 'shared settings', values: 'using existing', needs_typed: true }),
       setupStep('items', 'items', 'upcoming', {
         label: 'items to adopt',

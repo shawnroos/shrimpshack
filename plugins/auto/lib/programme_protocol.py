@@ -2,13 +2,16 @@
 """Programme protocol: the rules that map a kind of change to its deliverables.
 
 Three JSON layers load in order, fail-closed: the plugin defaults, Shawn's
-personal layer and the project layer of one repo. A rule, autonomy entry or check
-that fails validation or adoption goes to ``rejected`` with a reason; it never
-loads. The format is in ``docs/contracts/programme-protocol-format.md``.
+personal layer and the project layer of each named repo, narrowest autonomy wins
+across repos. A rule, autonomy entry or check that fails validation or adoption
+goes to ``rejected`` with a reason; it never loads, except an unverified autonomy
+entry no wider than the layer below. The format is in
+``docs/contracts/programme-protocol-format.md``.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -23,6 +26,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+programme_decisions = load_lib_module("programme_decisions")
 
 # Origins whose human source is verified; programme_approval reads this too, so both gates agree.
 HUMAN_ORIGINS = ("typed", "picked", "suggested")
@@ -40,15 +44,19 @@ DELIVERABLES = programme_home.DELIVERABLES
 OUTCOMES = ("handed", "debugged")
 REQUIREMENTS = DELIVERABLES + OUTCOMES
 AUTONOMY_LEVELS = programme_home.AUTONOMY_LEVELS
-AUTONOMY_WIDTH = {"never": 0, "propose": 1, "act_and_tell": 2, "act": 3}
+AUTONOMY_WIDTH = {level: width for width, level in enumerate(programme_decisions.LEVEL_ORDER)}
 CHANGE_KINDS = (
     "flagged_code", "fix_only", "shared_package", "evals_or_docs",
     "product_question", "shared_blocker",
 )
 RULE_FIELDS = (
-    "id", "applies_when", "requires", "evidence_bar", "caveat", "autonomy",
+    "id", "applies_when", "requires", "evidence_bar", "caveat",
     "added_by", "added_at", "why",
 )
+LEGACY_RULE_FIELD = "autonomy"
+LEGACY_NEW_RULE_LEVEL = "propose"
+PROTECTED_KINDS = programme_decisions.PROTECTED_KINDS
+_UNVERIFIED_REASONS = ("not_adopted", "adoption_malformed", "adoption_unverified", "not_adopted_here")
 ADOPTION_FIELDS = ("machine", "run_id", "prompt_id", "quote", "prompt_hash", "hash")
 LAYER_KEYS = ("protocol_format", "rules", "autonomy", "checks")
 CHECK_KEYS = ("verified.lookup", "verified.deployed_sha")
@@ -89,6 +97,10 @@ def content_hash(entry: dict) -> str:
 
 def approval_key(target: str, digest: str) -> str:
     return "%s@%s" % (target, digest)
+
+
+def carryover_target(key, entry_id) -> str:
+    return f"carryover:{key}:{entry_id}"
 
 
 def target_of(section: str, name: str, repo=None) -> str:
@@ -145,13 +157,14 @@ def _check_level(level) -> None:
 
 
 def _validate_rule(rule, *, allow_adoption=True) -> None:
-    _keys(rule, RULE_FIELDS, ("adoption",) if allow_adoption else ())
+    _keys(rule, RULE_FIELDS, (LEGACY_RULE_FIELD,) + (("adoption",) if allow_adoption else ()))
     if not isinstance(rule["id"], str) or not _RULE_ID_RE.match(rule["id"]):
         raise _Reject("bad_value", "id")
     _check_applies_when(rule["applies_when"])
     _check_requires(rule)
     _text(rule["caveat"], "caveat", allow_empty=True)
-    _check_level(rule["autonomy"])
+    if LEGACY_RULE_FIELD in rule:
+        _check_level(rule[LEGACY_RULE_FIELD])
     _text(rule["added_by"], "added_by")
     if programme_home.run_record_core.parse_iso(rule["added_at"]) is None:
         raise _Reject("bad_value", "added_at")
@@ -177,8 +190,14 @@ def _validate_autonomy(action, entry) -> None:
     _check_level(entry["level"])
 
 
+def _validate_layer_autonomy(action, entry) -> None:
+    _validate_autonomy(action, entry)
+    if action in PROTECTED_KINDS:
+        raise _Reject("protected_kind", action)
+
+
 def validate_autonomy(action, entry) -> dict:
-    return _verdict(_validate_autonomy, action, entry)
+    return _verdict(_validate_layer_autonomy, action, entry)
 
 
 def _validate_bare_check(key, entry) -> None:
@@ -239,15 +258,18 @@ def _new_state() -> dict:
     return {"rules": {}, "autonomy": {}, "checks": {}, "rejected": [], "notices": [], "layers": []}
 
 
-def _reject(state, layer, entry_id, reason, detail=None) -> None:
-    state["rejected"].append({"layer": layer, "id": entry_id, "reason": reason, "detail": detail})
+def _reject(state, layer, entry_id, reason, detail=None, section=None) -> None:
+    state["rejected"].append({"layer": layer, "id": entry_id, "reason": reason, "detail": detail, "section": section})
 
 
-def _adopt(layer, entry, lookup, prior_level, level, target):
+def _adopt(layer, entry, lookup, target):
     if layer == "plugin":
         return None
-    adopted_on = _verify_adoption(entry, lookup, target, local_only=(layer == "project"),
-                                  elsewhere="not_adopted_here")
+    return _verify_adoption(entry, lookup, target, local_only=(layer == "project"),
+                            elsewhere="not_adopted_here")
+
+
+def _check_width(entry, adopted_on, prior_level, level) -> None:
     widening = entry["adoption"].get("widening") is True
     wider = prior_level is not None and _wider(level, prior_level)
     # Another machine's adoption is checked only by its own hash, which any writer of the
@@ -256,7 +278,19 @@ def _adopt(layer, entry, lookup, prior_level, level, target):
         raise _Reject("widening_not_adopted_here", adopted_on)
     if wider and not widening:
         raise _Reject("widening_unmarked", "%s over %s" % (level, prior_level))
-    return adopted_on
+
+
+def legacy_autonomy(rule_id, plugin_path=None) -> str:
+    try:
+        doc = json.loads(_read_plugin(plugin_path or PLUGIN_PATH))
+    except (_Reject, ValueError):
+        return LEGACY_NEW_RULE_LEVEL
+    rules = doc.get("rules") if isinstance(doc, dict) else None
+    for rule in rules if isinstance(rules, list) else ():
+        if isinstance(rule, dict) and rule.get("id") == rule_id \
+                and rule.get(LEGACY_RULE_FIELD) in AUTONOMY_LEVELS:
+            return rule[LEGACY_RULE_FIELD]
+    return LEGACY_NEW_RULE_LEVEL
 
 
 def _merge_rules(state, layer, rules, lookup) -> None:
@@ -265,33 +299,45 @@ def _merge_rules(state, layer, rules, lookup) -> None:
         rid = ids[index] if isinstance(ids[index], str) else None
         label = rid or "#%d" % index
         if rid is not None and ids.count(rid) > 1:
-            _reject(state, layer, label, "duplicate_id")
+            _reject(state, layer, label, "duplicate_id", section="rules")
             continue
         try:
             _validate_rule(raw)
-            prior = state["rules"].get(rid)
-            adopted_on = _adopt(layer, raw, lookup, prior and prior["autonomy"], raw["autonomy"],
-                                target_of("rules", rid))
+            adopted_on = _adopt(layer, raw, lookup, target_of("rules", rid))
         except _Reject as exc:
-            _reject(state, layer, label, exc.reason, exc.detail)
+            _reject(state, layer, label, exc.reason, exc.detail, "rules")
             continue
         rule = {k: raw[k] for k in RULE_FIELDS}
         rule.update(layer=layer, adopted_on=adopted_on, adoption=raw.get("adoption"))
         state["rules"][rid] = rule
 
 
+def _autonomy_entry(state, layer, action, raw, lookup) -> dict:
+    check = _validate_autonomy if layer == "plugin" else _validate_layer_autonomy
+    check(action, {k: v for k, v in raw.items() if k != "adoption"} if isinstance(raw, dict) else raw)
+    prior = state["autonomy"].get(action)
+    level = raw["level"]
+    try:
+        adopted_on = _adopt(layer, raw, lookup, target_of("autonomy", action))
+    except _Reject as exc:
+        if exc.reason not in _UNVERIFIED_REASONS or prior is None or _wider(level, prior["level"]):
+            raise
+        state["notices"].append({"layer": layer, "kind": "unverified_narrowing", "id": action,
+                                 "reason": exc.reason})
+        return {"level": level, "layer": layer, "adopted_on": None, "verified": False}
+    if layer != "plugin":
+        _check_width(raw, adopted_on, prior and prior["level"], level)
+    return {"level": level, "layer": layer, "adopted_on": adopted_on, "verified": True}
+
+
 def _merge_autonomy(state, layer, entries, lookup) -> None:
     for action, raw in entries.items():
         try:
-            _validate_autonomy(action, {k: v for k, v in raw.items() if k != "adoption"}
-                               if isinstance(raw, dict) else raw)
-            prior = state["autonomy"].get(action)
-            adopted_on = _adopt(layer, raw, lookup, prior and prior["level"], raw["level"],
-                                target_of("autonomy", action))
+            entry = _autonomy_entry(state, layer, action, raw, lookup)
         except _Reject as exc:
-            _reject(state, layer, action, exc.reason, exc.detail)
+            _reject(state, layer, action, exc.reason, exc.detail, "autonomy")
             continue
-        state["autonomy"][action] = {"level": raw["level"], "layer": layer, "adopted_on": adopted_on}
+        state["autonomy"][action] = entry
 
 
 def _validate_check_block(block) -> None:
@@ -315,7 +361,7 @@ def _merge_check_block(state, layer, repo, block, lookup) -> None:
     try:
         _validate_check_block(block)
     except _Reject as exc:
-        _reject(state, layer, repo, exc.reason, exc.detail)
+        _reject(state, layer, repo, exc.reason, exc.detail, "checks")
         return
     for key, entry in block.items():
         try:
@@ -323,7 +369,7 @@ def _merge_check_block(state, layer, repo, block, lookup) -> None:
                 _verify_adoption(entry, lookup, target_of("checks", key, repo), local_only=True,
                                  missing="check_not_adopted")
         except _Reject as exc:
-            _reject(state, layer, "%s:%s" % (repo, key), exc.reason, exc.detail)
+            _reject(state, layer, "%s:%s" % (repo, key), exc.reason, exc.detail, "checks")
             continue
         state["checks"].setdefault(repo, {})[key] = {"argv": list(entry["argv"]), "layer": layer}
 
@@ -443,7 +489,29 @@ def plugin_layer(plugin_path=None) -> dict:
     return state
 
 
-def load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None) -> dict:
+def _repo_pairs(repo_path, repo_key, repos) -> list:
+    pairs = []
+    if repo_path:
+        pairs.append((repo_path, repo_key))
+    for repo in repos or ():
+        pairs.append(tuple(repo) if isinstance(repo, (list, tuple)) else (repo, None))
+    return [(path, key or os.path.realpath(path)) for path, key in pairs]
+
+
+def _load_projects(state, pairs, lookup) -> None:
+    base = dict(state["autonomy"])
+    narrowest = {}
+    for path, key in pairs:
+        overlay = dict(state, autonomy=dict(base))
+        _load_layer(overlay, "project", path, lambda: _read_project(path), lookup, key)
+        for action, entry in overlay["autonomy"].items():
+            held = narrowest.get(action)
+            if held is None or _wider(held["level"], entry["level"]):
+                narrowest[action] = entry
+    state["autonomy"] = narrowest or base
+
+
+def load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None, repos=None) -> dict:
     state = plugin_layer(plugin_path)
 
     personal = personal_path()
@@ -452,11 +520,36 @@ def load(repo_path=None, repo_key=None, prompt_lookup=None, plugin_path=None) ->
     _load_layer(state, "personal", personal,
                 lambda: (_read_file(personal), personal), prompt_lookup, None)
 
-    if repo_path:
-        project_repo = repo_key or os.path.realpath(repo_path)
-        _load_layer(state, "project", repo_path,
-                    lambda: _read_project(repo_path), prompt_lookup, project_repo)
+    _load_projects(state, _repo_pairs(repo_path, repo_key, repos), prompt_lookup)
     return state
+
+
+def with_project(base, repo_path, prompt_lookup=None) -> dict:
+    state = copy.deepcopy(base)
+    _load_projects(state, _repo_pairs(repo_path, None, None), prompt_lookup)
+    return state
+
+
+# The Authority level of a kind over a set of repo paths: the narrowest across them, as load merges it. The gate,
+# a grant's baseline, the brief and the conflict report all read levels here, so they cannot disagree.
+class AuthorityLevels:
+    def __init__(self, prompt_lookup=None, seed=None):
+        self._lookup = prompt_lookup
+        self._memo = dict(seed or {})
+
+    def protocol(self, repos) -> dict:
+        key = frozenset(repos)
+        if key not in self._memo:
+            self._memo[key] = load(repos=sorted(key), prompt_lookup=self._lookup)
+        return self._memo[key]
+
+    def level(self, kind, repos):
+        return (self.protocol(repos)["autonomy"].get(kind) or {}).get("level")
+
+    def conflicted(self, ruling, repos) -> bool:
+        if ruling.get("effect") != "grant" or ruling.get("kind") is None:
+            return False
+        return programme_decisions.narrower_than_baseline(self.level(ruling["kind"], repos), ruling.get("baseline"))
 
 
 def match(protocol: dict, change_kinds) -> dict:
@@ -466,15 +559,12 @@ def match(protocol: dict, change_kinds) -> dict:
         if kinds & set(rule["applies_when"]["change_kinds"])
     ]
     if not hits:
-        return {"matched_rule": None, "requires": [], "deliverables": [],
-                "autonomy": None, "reason": "no_matching_rule"}
+        return {"matched_rule": None, "requires": [], "deliverables": [], "reason": "no_matching_rule"}
     requires = [name for name in REQUIREMENTS if any(name in r["requires"] for r in hits)]
-    autonomy = min((r["autonomy"] for r in hits), key=lambda level: AUTONOMY_WIDTH[level])
     return {
         "matched_rule": [r["id"] for r in hits],
         "requires": requires,
         "deliverables": [name for name in requires if name in DELIVERABLES],
-        "autonomy": autonomy,
         "reason": None,
     }
 
@@ -499,8 +589,7 @@ def summary(protocol: dict, record=None) -> list:
     rows = []
     for rid, rule in sorted(protocol["rules"].items()):
         rows.append({"id": rid, "status": "loaded", "layer": rule["layer"],
-                     "adopted_on": rule["adopted_on"], "autonomy": rule["autonomy"],
-                     "requires": list(rule["requires"])})
+                     "adopted_on": rule["adopted_on"], "requires": list(rule["requires"])})
     for entry in protocol["rejected"]:
         rows.append({"id": entry["id"], "status": "rejected", "layer": entry["layer"],
                      "reason": entry["reason"]})

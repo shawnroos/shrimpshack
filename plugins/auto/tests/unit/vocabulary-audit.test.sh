@@ -1375,10 +1375,15 @@ while IFS= read -r hit; do
   # plan"), so policing it word-boundary-wide across lib/ + docs/ would false-positive
   # everywhere and the whitelist needed to silence that would swallow the tree. So it
   # is documented but not swept — and a row naming it is legitimately legacy.
+  # The retired Programme names (instructions, the correction verbs, record-decision,
+  # the autonomy term and rule field, reserved and who-decides project terms, the
+  # contract stamp, status --terms) are documented-but-not-swept for the same reason:
+  # `autonomy`, `instruction` and `project term` stay live words elsewhere (the
+  # protocol's on-disk `autonomy` section, preferred-tool project terms).
   # This list is about which rows may CLAIM the exemption; it can never weaken the
   # main audit, which is driven by TERM_STATUS alone.
   if ! printf '%s' "$n1" \
-       | grep -qiE '(\b|_)(orchestrator|emitter|adapter|tick|seam|unit|recipe|ledger|content)'; then
+       | grep -qiE '(\b|_)(orchestrator|emitter|adapter|tick|seam|unit|recipe|ledger|content|instruction|correction|correct-term|record-decision|autonomy|reserved|project term|contract stamp|status --terms)'; then
     legacy_bad="${legacy_bad}
     ${file}:${lineno}: legacy row's v1 cell names NO retired term: '${n1}'"
   fi

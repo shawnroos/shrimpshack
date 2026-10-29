@@ -1,0 +1,1 @@
+{"type": "user", "sessionId": "sess-pm", "promptId": "be2fbb79-5db1-4201-8d17-fecb3395d217", "promptSource": "typed", "turnOrigin": "human", "origin": {"kind": "human"}, "entrypoint": "cli", "message": {"role": "user", "content": "requirement r-browser: the browser flow passes its runtime check"}}

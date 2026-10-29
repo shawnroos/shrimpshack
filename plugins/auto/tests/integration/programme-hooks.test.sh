@@ -217,10 +217,8 @@ EOF
 )"
 check "cron" "$OUT"
 
-verb_on() {
+verb_pm() {
   CLAUDE_CODE_SESSION_ID=sess-pm run_py "$@" <<'EOF'
-pt = load_lib_module("programme_terms")
-pt.CORRECTIONS_ON = True
 sys.exit(load_lib_module("programme")._cli(args))
 EOF
 }
@@ -243,22 +241,22 @@ def mutate(rec):
 core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
 EOF
 }
-verb_on add-item linear:AI-7 --title "Crop approach" --kind fix_only --run "$RUN" >/dev/null
-verb_on hand-item linear:AI-7 --question "Crop on the client or the server?" --kind technical_approach --run "$RUN" >/dev/null
+verb_pm add-item linear:AI-7 --title "Crop approach" --kind fix_only --run "$RUN" >/dev/null
+verb_pm hand-item linear:AI-7 --question "Crop on the client or the server?" --kind technical_approach --run "$RUN" >/dev/null
 ASK="$(programme_field 'prog["items"]["linear:AI-7"]["handed"]["id"]')"
 
-it "the same correction text journaled as cron does not change the terms"
+it "the same correction text journaled as cron records no Ruling"
 set_cadence_prompt "that didn't need me"
 prompt_hook sess-pm "that didn't need me" >/dev/null
-OUT="$(verb_on correct-term --prompt "$(latest_prompt)" --replies-to "$ASK" --to pm --reading "mine to decide" --run "$RUN")"
-check "0 is not typed" "$(programme_field 'len(prog["agreement"].get("corrections") or [])') $(printf '%s' "$OUT" | grep -o 'is not typed' | head -1)"
+OUT="$(verb_pm record-ruling r-crop --effect grant --scope "crop approach is the PM's" --replies-to "$ASK" --prompt "$(latest_prompt)" --run "$RUN")"
+check "False is not typed" "$(programme_field '"r-crop" in ((prog.get("context") or {}).get("decisions") or {})') $(printf '%s' "$OUT" | grep -o 'is not typed' | head -1)"
 set_cadence_prompt "sweep the programme now"
 
-it "a typed prompt fed through the prompt hook lets correct-term change the term"
+it "a typed prompt fed through the prompt hook lets a correcting Ruling hand the kind to the PM"
 prompt_hook sess-pm "that didn't need me" >/dev/null
-verb_on correct-term --prompt "$(latest_prompt)" --replies-to "$ASK" --to pm --reading "mine to decide" --run "$RUN" >/dev/null
-check "1 technical_approach pm that didn't need me" \
-  "$(programme_field '" ".join(str(x) for x in [len(prog["agreement"]["corrections"])] + [prog["agreement"]["corrections"][-1][k] for k in ("kind", "to", "quote")])')"
+verb_pm record-ruling r-crop --effect grant --scope "crop approach is the PM's" --replies-to "$ASK" --prompt "$(latest_prompt)" --run "$RUN" >/dev/null
+check "technical_approach grant accepted that didn't need me" \
+  "$(programme_field '" ".join(str(prog["context"]["decisions"]["r-crop"][-1][k]) for k in ("kind", "effect", "state", "quote"))')"
 
 it "/auto:programme-takeover typed in a new session in w2 is journaled as a takeover request in w2's home"
 FAKE_HERDR_PANE="w2:p40" session_start sess-new "w2:p40" >/dev/null
@@ -857,6 +855,34 @@ print(*out)
 EOF
 )"
 check "True True True" "$OUT"
+
+# ── carry-over offer before the stop ──────────────────────────────────────
+stop_hook() {
+  ( cd "$NOREPO" && bash "${HOOKS}/on-stop.sh" <<< "{\"session_id\":\"$1\",\"stop_hook_active\":false}" 2>/dev/null )
+}
+CARRY_RUN="$(run_py <<'EOF'
+print(ph.create_programme(["w8"], "sess-carry")["run"])
+EOF
+)"
+it "with nothing to act on and no Ruling, the Stop hook lets the PM stop"
+check "" "$(stop_hook sess-carry)"
+prompt_hook sess-carry "pw: worker coordination across the programme is yours" >/dev/null
+P_CARRY="$(run_py "$CARRY_RUN" <<'EOF'
+print([x for x in pj.read(args[0]) if x["kind"] == "prompt"][-1]["prompt_id"])
+EOF
+)"
+CLAUDE_CODE_SESSION_ID=sess-carry run_py record-ruling pw --kind worker_coordination --effect grant \
+  --scope "PM coordinates workers" --prompt "$P_CARRY" --run "$CARRY_RUN" <<'EOF' >/dev/null
+sys.exit(load_lib_module("programme")._cli(args))
+EOF
+it "an active Ruling never offered for carry-over holds the stop and names the verb that makes the offer"
+OUT="$(stop_hook sess-carry)"
+case "$OUT" in *'"decision": "block"'*carry-rulings*|*'"decision":"block"'*carry-rulings*) pass ;; *) fail "got [$OUT]" ;; esac
+it "once carry-rulings makes the offer, the Stop hook lets the PM stop with no answer from Shawn"
+CLAUDE_CODE_SESSION_ID=sess-carry run_py carry-rulings --run "$CARRY_RUN" <<'EOF' >/dev/null
+sys.exit(load_lib_module("programme")._cli(args))
+EOF
+check "" "$(stop_hook sess-carry)"
 
 echo ""
 echo "programme-hooks.test.sh: ${PASS} passed, ${FAIL} failed"

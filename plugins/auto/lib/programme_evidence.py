@@ -661,6 +661,15 @@ def _repo_arg(value):
     return os.path.realpath(value)
 
 
+def _waives(ruling) -> bool:
+    if ruling["kind"] == "eval_waiver":
+        return ruling["effect"] == "decided"
+    # Only instructions recorded before Rulings had kinds keep the old text match, over the quote and the
+    # PM's why (now the reason) as before, so a release that passed then still passes.
+    return ruling["kind"] is None and ruling["legacy"] == "instruction" \
+        and bool(_WAIVER.search(f"{ruling.get('quote') or ''} {ruling.get('reason') or ''}"))
+
+
 def _context(host, programme, key, deliverable, repo, cache=None) -> dict:
     item = programme["items"][key]
     context = {"item": item, "repo": repo, "checks": {}, "waivers": [],
@@ -674,8 +683,8 @@ def _context(host, programme, key, deliverable, repo, cache=None) -> dict:
                                                   prompt_lookup=host.prompt_lookup)["checks"]
         context["checks"] = cache[mark]
     if deliverable == "released":
-        context["waivers"] = [e for e in host.active_instructions(programme) if e.get("applies_to") == key
-                              and _WAIVER.search(f"{e.get('quote') or ''} {e.get('why') or ''}")]
+        context["waivers"] = [r for r in host.active_rulings(programme, run_record_core.now_iso())
+                              if key in r["applies_to"] and _waives(r)]
     return context
 
 

@@ -27,8 +27,7 @@ programme_authority = load_lib_module("programme_authority")
 LEGACY = programme_authority.LEGACY
 APPROVAL_KINDS = ("agreement_accepted", "term_amended", "instruction_recorded", "instruction_closed",
                   "rule_adopted", "item_reopened", "handed_answered", "remit_set", "item_dropped",
-                  "project_term_amended", "term_corrected", "correction_undone", "corrections_kept",
-                  "correction_promoted")
+                  "project_term_amended", "rulings_carried")
 RESUME_FILE = ".test-resume-import"
 
 
@@ -122,12 +121,21 @@ def _record_only(record, rows) -> list:
     for item_id in sorted(((record.get("programme") or {}).get("items") or {})):
         if item_id not in mentioned:
             gaps.append({"kind": "record_only_update", "item": item_id})
+    raised = {(r.get("payload") or {}).get("blocker") for r in rows}
+    for blocker in sorted(_context(record).get("blockers") or {}):
+        if blocker not in raised:
+            gaps.append({"kind": "record_only_update", "blocker": blocker})
     terms = (((record.get("programme") or {}).get("agreement") or {}).get("terms") or {})
     for key, term in sorted(terms.items()):
         if isinstance(term, dict) and term.get("set_by") not in (None, "default") \
                 and not _term_explained(rows, key, term.get("value")):
             gaps.append({"kind": "record_only_update", "term": key})
     return gaps
+
+
+def _context(record) -> dict:
+    context = (record.get("programme") or {}).get("context")
+    return context if isinstance(context, dict) else {}
 
 
 def _label_conflicts(rows) -> list:

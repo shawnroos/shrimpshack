@@ -40,6 +40,8 @@ DECISION_KINDS = AUTONOMY_ACTIONS + (
     "technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
     "optimisation_depth", "product_scope", "acceptance", "denied_operation",
 )
+PROTECTED_KINDS = ("prod_deploy", "full_release", "spend_over_cap", "merge_around_gate", DENIED_KIND)
+LEVEL_ORDER = ("never", "propose", "act_and_tell", "act")
 
 
 class DecisionError(Exception):
@@ -89,12 +91,60 @@ def shawn_decision(programme, *, kind, item, prompt, **extra) -> dict:
                         prompt_id=prompt["prompt_id"], **extra)
 
 
+def _protected(kind) -> bool:
+    return kind in PROTECTED_KINDS
+
+
+def _in_force(ruling, now) -> bool:
+    until = ruling.get("until")
+    if not until:
+        return True
+    end = run_record_core.parse_iso(until)
+    if end is None:
+        raise DecisionError(f"Ruling {ruling.get('id')!r} has an end date the gate cannot read: {until!r}")
+    return now < end
+
+
+def _restricting(rulings) -> list:
+    return [r for r in rulings if r.get("effect") == "restrict"]
+
+
+def narrower_than_baseline(level, baseline) -> bool:
+    # A grant with no recorded baseline is compared as if it was made at act, so it never outranks Authority.
+    return level is not None and LEVEL_ORDER.index(level) < LEVEL_ORDER.index(baseline or "act")
+
+
+def _verdict(level, reason, conflict=False) -> dict:
+    decider = "shawn" if level in SHAWN_LEVELS else "pm"
+    return {"decider": decider, "level": level, "reason": reason, "conflict": conflict}
+
+
+def who_decides(kind, item, *, level, rulings, now, accepted) -> dict:
+    check_kind(kind)
+    if _protected(kind):
+        return _verdict("never", "protected")
+    if kind in PRODUCT_DECISION_KINDS and not accepted:
+        return _verdict("propose", "unaccepted")
+    when = run_record_core.parse_iso(now)
+    applying = [r for r in rulings if r.get("kind") == kind and item in (r.get("items") or ())
+                and _in_force(r, when)]
+    if _restricting(applying):
+        return _verdict("propose", "restrict")
+    grants = [r for r in applying if r.get("effect") == "grant"]
+    if not grants:
+        return _verdict(level, "authority")
+    if any(narrower_than_baseline(level, g.get("baseline")) for g in grants):
+        return _verdict(level, "conflict", conflict=True)
+    return _verdict("act", "grant")
+
+
+def refusal(kind, verdict) -> str:
+    return (f"kind {kind!r} stays with Shawn ({verdict['reason']}); the PM does not record it as its own: "
+            "use hand-item")
+
+
 def _decide_product_question(record, protocol, programme, key) -> str:
     item = programme["items"][key]
-    if not stamped(programme):
-        raise DecisionError(
-            f"item {key!r} matched the {PRODUCT_RULE} rule and this programme's agreement has no "
-            "contract stamp, so product questions go to Shawn: use hand-item")
     if item["state"] not in record.WAITABLE_STATES:
         raise DecisionError(f"item {key!r} is {item['state']}; only an open or waiting product question "
                             "is decided")
@@ -106,18 +156,20 @@ def _decide_product_question(record, protocol, programme, key) -> str:
     return DECIDED
 
 
-def _check_pm_may_decide(protocol, programme, kind) -> None:
-    level = ((protocol.get("autonomy") or {}).get(kind) or {}).get("level")
-    # A stamped contract hands product calls to the PM (KTD4); the protocol still says propose.
-    if kind == "product_call" and stamped(programme):
-        return
-    if kind == DENIED_KIND or level in SHAWN_LEVELS:
-        raise DecisionError(f"kind {kind!r} stays with Shawn ({level or 'refused permission'}); the PM "
-                            "does not record it as its own: use hand-item")
+def _check_pm_may_decide(host, programme, kind, target) -> dict:
+    levels = host.programme_protocol.AuthorityLevels(host.prompt_lookup)
+    repos = host.programme_rulings.repos_for(programme, [target])
+    now = run_record_core.now_iso()
+    active = host.programme_record.programme_context.rulings_for(programme, target, kind, now)
+    verdict = who_decides(kind, target, level=levels.level(kind, repos), rulings=active, now=now,
+                          accepted=stamped(programme))
+    if verdict["decider"] == "shawn":
+        raise DecisionError(refusal(kind, verdict))
+    return levels.protocol(repos)
 
 
 def _h_log_decision(host, argv):
-    positional, opts = host._parse(argv, values=("run", "kind", "term", "why", "repo"), flags=("silent",))
+    positional, opts = host._parse(argv, values=("run", "kind", "term", "why"), flags=("silent",))
     if len(positional) != 1:
         raise ValueError("usage: log-decision <item|programme> --kind <kind> (--term <id> | --silent) "
                          "--why <text>")
@@ -132,18 +184,17 @@ def _h_log_decision(host, argv):
         term = programme_sanitize.token(opts["term"])
         if term is None:
             raise DecisionError(f"--term must be one term id with no spaces: {opts['term']!r}")
-    protocol = record._load_protocol(host, opts.get("repo"))
 
     def change(programme, prompt, rec):
         key = None if target == PROGRAMME_TARGET else record._resolve(programme, target)
-        state = None
         if key is not None and programme["items"][key]["state"] == "handed":
             raise DecisionError(f"item {key!r} is handed and waits on Shawn's answer; answer-handed or a "
                                 "correction reopens it")
+        protocol = _check_pm_may_decide(host, programme, kind, key or PROGRAMME_TARGET)
+        state = None
         if (key is not None and kind in PRODUCT_DECISION_KINDS
                 and PRODUCT_RULE in (programme["items"][key].get("matched_rule") or [])):
             state = _decide_product_question(record, protocol, programme, key)
-        _check_pm_may_decide(protocol, programme, kind)
         entry = add_decision(programme, kind=kind, by="pm", item=key or PROGRAMME_TARGET, why=why,
                              term=term, silent=term is None, outcome=DECIDED if state else None)
         if key is not None:
@@ -157,14 +208,16 @@ def _h_log_decision(host, argv):
 
 _SPECS = (
     ("log-decision", _h_log_decision,
-     "<item-id|programme> --kind <decision-kind> (--term <id> | --silent) --why <text> [--repo <path>] "
-     "[--run <id>]",
-     "an unknown decision kind; denied_operation, or a kind whose autonomy level is propose or never "
-     "(hand the item instead; product_call is allowed on a stamped agreement); both or neither of "
-     "--term and --silent; no --why; an unknown item; a handed item. A product_call or product_scope on an item that "
-     "matched the product-question rule also rejects an unstamped agreement (hand the item instead) "
-     "and a finished item; on a stamped agreement it closes the item as decided, or re-matches its "
-     "other change kinds and leaves it open. Other kinds leave the item alone."),
+     "<item-id|programme> --kind <decision-kind> (--term <id> | --silent) --why <text> [--run <id>]",
+     "an unknown decision kind; a kind that stays with Shawn: a protected kind, product_call or "
+     "product_scope before the agreement is stamped, a kind an active restrict Ruling covers for the "
+     "item, a grant whose kind Authority now holds narrower (a conflict), or an Authority level of "
+     "propose or never, read from the item's repo or, for the programme or an item with no repo, the "
+     "narrowest across remit repos (hand the item instead); both or neither of --term and --silent; "
+     "no --why; an unknown item; a handed item. A product_call or product_scope on an item that "
+     "matched the product-question rule also rejects a finished item; on a stamped agreement it "
+     "closes the item as decided, or re-matches its other change kinds and leaves it open. Other "
+     "kinds leave the item alone."),
 )
 
 

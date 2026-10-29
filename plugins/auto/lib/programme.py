@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Programme agreement, instruction and rule verbs.
+"""Programme agreement and rule verbs.
 
 Every write verb runs in the programme's driving session, refuses while the compact
 flag is set, and journals. Approval verbs cite a typed prompt from the journal and
@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,9 +39,7 @@ _Verb = run_record._Verb
 PROG = "programme.py"
 RULES_TAG = "auto-rules"
 SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep."
-INSTRUCTION_ENDINGS = ("fulfilled", "withdrawn")
 PERSONAL_LOCK = ".personal-protocol.lock"
-APPROVAL_KINDS = ("rule_adopted",)
 _OPERATION = {"id": None, "verb": None, "argv": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
@@ -61,37 +58,8 @@ class ProgrammeError(Exception):
         self.fix = fix
 
 
-def text_hash(text) -> str:
-    return "sha256:" + hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
-
-
-def _approved(rows, prompt_id) -> list:
-    out = []
-    for row in rows:
-        payload = row.get("payload") or {}
-        if row.get("kind") in APPROVAL_KINDS and (row.get("cites") or [None])[0] == prompt_id \
-                and payload.get("prompt_id") == prompt_id and row.get("provenance") != programme_authority.FOREIGN:
-            out.append(programme_protocol.approval_key(payload.get("target"), payload.get("hash")))
-    return out
-
-
-def prompt_lookup(run_id, prompt_id, journals=None):
-    try:
-        run_id = programme_home.check_run_id(run_id)
-        if journals is None:
-            rows = programme_journal.read(run_id)
-        else:
-            if run_id not in journals:
-                journals[run_id] = programme_journal.read(run_id)
-            rows = journals[run_id]
-        row = programme_journal.find_prompt(run_id, prompt_id, rows)
-    except programme_home.ProgrammeHomeError:
-        return None
-    if row is None or row.get("provenance") == programme_authority.FOREIGN:
-        return None
-    payload = row.get("payload") or {}
-    return {"origin": programme_journal.prompt_origin(row), "text_hash": text_hash(payload.get("text")),
-            "approved": _approved(rows, prompt_id)}
+text_hash = programme_approval.text_hash
+prompt_lookup = programme_approval.prompt_lookup
 
 
 def _parse(argv, *, values=(), flags=(), multi=()):
@@ -138,10 +106,13 @@ def _run_from_leases(sid):
     return runs.pop()
 
 
-def _locate(opts):
+# A write verb finishes a move to programme.db that was cut off, which otherwise holds the home for every verb.
+def _locate(opts, finish_move=False):
     run_id = opts.get("run") or _run_from_leases(driver_session.driving_session_id())
     run_id = programme_home.check_run_id(run_id)
     home = programme_home.home_path(run_id)
+    if finish_move and programme_authority.move_interrupted(home):
+        upgrade_legacy(run_id, home, _OPERATION["verb"] or "this verb")
     record = run_record_core.read_run_record(home, run_id)
     if run_record_core.run_kind(record) != "programme":
         raise ProgrammeError(f"run {run_id!r} is not a programme")
@@ -159,15 +130,20 @@ def _item_open(programme, item_id) -> bool:
     return item is None or item.get("state") not in programme_home.FINISHED_ITEM_STATES
 
 
-def active_instructions(programme) -> list:
+def active_rulings(programme, now=None) -> list:
+    pc = programme_rulings.pc
     out = []
-    for entry in programme.get("instructions") or []:
-        if entry.get("state") != "active":
+    for r in pc.rulings(programme, now):
+        if not r["is_ruling"] or r["state"] != "active":
             continue
-        target = entry.get("applies_to") or "programme"
-        if target != "programme" and not _item_open(programme, target):
-            continue
-        out.append({k: entry.get(k) for k in ("id", "quote", "applies_to", "until", "at", "prompt_id")})
+        # merge-item leaves a Ruling's targets as written; without this an old id loses its waiver after a merge.
+        # Only a record with no applies_to at all is programme-wide here; an empty list covers nothing.
+        targets = [pc.PROGRAMME_SCOPE] if r["applies_to"] is None else r["targets"]
+        targets = [t for t in targets if t == pc.PROGRAMME_SCOPE or _item_open(programme, t)]
+        if targets:
+            out.append(dict({k: r[k] for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
+                                               "until", "at", "limits", "baseline")},
+                            id=r["id"], applies_to=targets, prompt_id=r["prompt_id"]))
     return out
 
 
@@ -183,13 +159,13 @@ def _protocol(journals) -> dict:
     return programme_protocol.load(prompt_lookup=lambda run_id, prompt_id: prompt_lookup(run_id, prompt_id, journals))
 
 
-def rules_in_force(record, journals=None, protocol=None, *, behaviours=True) -> dict:
+def rules_in_force(record, journals=None, protocol=None, changes=True, *, behaviours=True) -> dict:
     programme = programme_home.normalize_programme(record.get("programme") or {})
     journals = {} if journals is None else journals
     def lookup(run_id, prompt_id):
         return prompt_lookup(run_id, prompt_id, journals)
     protocol = programme_protocol.load(prompt_lookup=lookup) if protocol is None else protocol
-    rules = [{"id": rid, "layer": rule["layer"], "autonomy": rule["autonomy"],
+    rules = [{"id": rid, "layer": rule["layer"],
               "requires": list(rule["requires"]), "caveat": rule["caveat"],
               "adopted_on": rule["adopted_on"]}
              for rid, rule in sorted(protocol["rules"].items())]
@@ -207,14 +183,19 @@ def rules_in_force(record, journals=None, protocol=None, *, behaviours=True) -> 
         "autonomy": autonomy,
         "rejected_rules": [{"id": r["id"], "layer": r["layer"], "reason": r["reason"]}
                            for r in protocol["rejected"]],
-        "instructions": active_instructions(programme),
+        "rulings": active_rulings(programme, run_record_core.now_iso()),
         "permission_proposals": programme_permission.in_force(programme),
     }
+    legacy = [{"id": r["id"], "area": r["area"], "scope": r["scope"]}
+              for r in programme_rulings.pc.rulings(programme, None)
+              if r["state"] == "active" and r["legacy"] == "project_term"]
+    if legacy:
+        out["legacy_restricts"] = legacy
+    report = changes and programme_protocol_changes.report(sys.modules[__name__], programme, journals, protocol)
+    if report:
+        out["protocol_changes"] = report
     if behaviours:
         out.update(programme_view.behaviours_view(record, lookup))
-    corrections = programme_terms.active_corrections(programme)
-    if corrections:
-        out["corrections"] = corrections
     if contract:
         out["operating_contract"] = contract
     return out
@@ -223,6 +204,7 @@ def rules_in_force(record, journals=None, protocol=None, *, behaviours=True) -> 
 def render_rules(record, revision=None) -> str:
     rules = rules_in_force(record)
     lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rules_texts(rules)]
+    lines += programme_protocol_changes.lines(rules.get("protocol_changes"))
     body = "\n".join(lines).replace("<", "\\u003c")
     accepted = (((record.get("programme") or {}).get("agreement")) or {}).get("accepted")
     return (
@@ -280,9 +262,35 @@ def _widen_word(opts) -> tuple:
     return (("widen", "widening", "widened"),) if opts.get("widening") else ()
 
 
+# promote finishes or discards a half-done move and reports a home another process moved first, so this runs
+# it whenever it is called rather than reading an import marker as a finished move.
+def upgrade_legacy(run_id, home, verb) -> None:
+    try:
+        report = load_lib_module("programme_import").promote(run_id)
+    except Exception as exc:
+        report = {"status": "failed", "reason": str(exc) or type(exc).__name__}
+    if report["status"] not in ("promoted", "already_promoted"):
+        raise ProgrammeError(
+            f"{verb} first moves programme {run_id} from its old JSON files, which cannot record a Ruling change "
+            f"safely, or finishes a move that was cut off. Moving it to programme.db failed: {report.get('reason')}. "
+            f"Nothing was changed. Fix that, run `programme.py promote --run {run_id}`, then run {verb} again")
+
+
+# A legacy home refuses a Ruling change only after every check of the verb passed, so the home moves to
+# programme.db only for a change that would apply, and the retry runs every check again on the moved home.
+def promoting(run_id, home, verb, attempt):
+    try:
+        return attempt()
+    except programme_authority.AuthorityError as exc:
+        if exc.code != programme_authority.LEGACY_RULING:
+            raise
+    upgrade_legacy(run_id, home, verb)
+    return attempt()
+
+
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True, names_change=True):
-    run_id, home, _ = _locate(opts)
+           journal=True, after=None, verb=None, target=None, beat=True, names_change=True, promote=True):
+    run_id, home, _ = _locate(opts, finish_move=promote)
     seen = {}
 
     def mutate(rec):
@@ -309,13 +317,18 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         return programme_journal.entry(seen["kind"], seen["sid"], payload,
                                        cites=[prompt["prompt_id"]] if prompt else None)
 
-    try:
-        out = programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"])
-    except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
-            programme_behaviours.BehaviourError) as exc:
-        if (needs_prompt or prompt_id) and "sid" in seen:
-            _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
-        raise
+    def attempt():
+        try:
+            return programme_authority.write(home, run_id, mutate, compose, operation_id=_OPERATION["id"],
+                                             recheck=programme_rulings.recheck_approval,
+                                             legacy_refuses=programme_rulings.changes_ruling)
+        except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
+                programme_behaviours.BehaviourError) as exc:
+            if (needs_prompt or prompt_id) and "sid" in seen:
+                _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
+            raise
+
+    out = promoting(run_id, home, _OPERATION["verb"] or verb or kind, attempt) if promote else attempt()
     if out["replayed"]:
         row = out["row"] or {}
         _emit({"ok": True, "run": run_id, "kind": row.get("kind"), "replayed": True,
@@ -374,7 +387,7 @@ def _check_value(term, value, extra):
     if value not in (term.get("options") or []):
         raise ProgrammeError(
             f"{value!r} is not an option of {term.get('key')!r} (options: {term.get('options')}); "
-            "wording that fits no option is an instruction: use `record-instruction`"
+            "wording that fits no option is a Ruling: use `record-ruling`"
         )
     if value == "until_time":
         if run_record_core.parse_iso(extra.get("until")) is None:
@@ -457,7 +470,7 @@ def _h_rules(argv):
 
 def _h_propose_agreement(argv):
     _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source") + programme_home.TERM_EXTRAS,
-                     multi=("term", "project-term", "reserved-term"))
+                     multi=("term", "project-term"))
     host = sys.modules[__name__]
     parsed, source = programme_terms.parse_specs(host, opts)
 
@@ -524,46 +537,6 @@ def _h_amend_term(argv):
                   verb="amend-term", target=key)
 
 
-def _h_record_instruction(argv):
-    _, opts = _parse(argv, values=("run", "prompt", "applies-to", "until", "why"))
-    target = opts.get("applies-to") or "programme"
-    if target != "programme" and not programme_home._ITEM_ID_RE.match(target):
-        raise ValueError(f"--applies-to must be 'programme' or an item id source:key, got {target!r}")
-
-    def change(programme, prompt, rec):
-        entry = {"id": "i" + secrets.token_hex(3), "state": "active", "at": _now(),
-                 "applies_to": target, "until": opts.get("until"), "why": opts.get("why"),
-                 "prompt_id": prompt["prompt_id"], "quote": prompt["quote"], "closed": None}
-        programme["instructions"].append(entry)
-        return {"instruction": entry["id"], "applies_to": target, "until": entry["until"]}
-
-    return _write(opts, change, "instruction_recorded", prompt_id=opts.get("prompt"), needs_prompt=True,
-                  verb="record-instruction", target="instruction")
-
-
-def _h_close_instruction(argv):
-    positional, opts = _parse(argv, values=("run", "prompt", "as", "why", "origin"))
-    if len(positional) != 1 or opts.get("as") not in INSTRUCTION_ENDINGS:
-        raise ValueError("usage: close-instruction <id> --as fulfilled|withdrawn")
-    withdrawn = opts["as"] == "withdrawn"
-    origin = programme_proposals.origin_of(opts)
-    if not withdrawn and not opts.get("why"):
-        raise ValueError("close-instruction --as fulfilled needs --why")
-
-    def change(programme, prompt, rec):
-        hits = [e for e in programme["instructions"] if e.get("id") == positional[0]]
-        if not hits or hits[0].get("state") != "active":
-            raise ProgrammeError(f"no active instruction {positional[0]!r}")
-        hits[0]["state"] = opts["as"]
-        hits[0]["closed"] = {"at": _now(), "why": opts.get("why"),
-                             "prompt_id": prompt and prompt["prompt_id"]}
-        return {"instruction": positional[0], "as": opts["as"], "why": opts.get("why"),
-                "origin": origin}
-
-    return _write(opts, change, "instruction_closed", prompt_id=opts.get("prompt"),
-                  needs_prompt=withdrawn, beat=withdrawn, verb="close-instruction", target=positional[0])
-
-
 def _h_propose_rule(argv):
     positional, opts = _parse(argv, values=("run",), multi=("item",))
     if len(positional) != 1:
@@ -627,15 +600,14 @@ def _write_personal(update) -> None:
     run_record_core._flock_run(lock, body)
 
 
-def _check_widening(section, name, level, widening) -> None:
+def _check_widening(name, level, widening) -> None:
     # The loader judges a personal entry against the plugin layer alone, so the verb must too.
-    prior = programme_protocol.plugin_layer()[section].get(name)
-    field = "autonomy" if section == "rules" else "level"
+    prior = programme_protocol.plugin_layer()["autonomy"].get(name)
     if prior is None or widening:
         return
-    if programme_protocol._wider(level, prior[field]):
+    if programme_protocol._wider(level, prior["level"]):
         raise ProgrammeError(
-            f"{name!r} widens autonomy {prior[field]} to {level}; "
+            f"{name!r} widens autonomy {prior['level']} to {level}; "
             "rerun with --widening only if the cited prompt approves the widening"
         )
 
@@ -651,7 +623,7 @@ def _adoption(entry, prompt, rec, widening) -> dict:
 
 
 def _h_adopt_rule(argv):
-    positional, opts = _parse(argv, values=("run", "prompt"), flags=("widening",))
+    positional, opts = _parse(argv, values=("run", "prompt"))
     if len(positional) != 1:
         raise ValueError("usage: adopt-rule <rule-id> --prompt <id>")
     rule_id = positional[0]
@@ -666,9 +638,10 @@ def _h_adopt_rule(argv):
         verdict = programme_protocol.validate_proposal(rule)
         if not verdict["ok"]:
             raise ProgrammeError(f"rule refused: {verdict['reason']} ({verdict['detail']})")
-        _check_widening("rules", rule["id"], rule["autonomy"], opts.get("widening"))
-        require_named(prompt, rule_id, *_widen_word(opts))
-        adoption = _adoption(rule, prompt, rec, opts.get("widening"))
+        # An older plugin reading the synced personal file requires this field and rejects a widening.
+        rule[programme_protocol.LEGACY_RULE_FIELD] = programme_protocol.legacy_autonomy(rule_id)
+        require_named(prompt, rule_id)
+        adoption = _adoption(rule, prompt, rec, False)
         _write_personal(_put_rule(dict(rule, adoption=adoption)))
         programme["proposed_rules"] = [r for r in proposals if r is not hits[0]]
         return {"rule": rule_id, "entry": "rule", "target": programme_protocol.target_of("rules", rule_id),
@@ -687,7 +660,7 @@ def _h_adopt_autonomy(argv):
     verdict = programme_protocol.validate_autonomy(action, entry)
     if not verdict["ok"]:
         raise ProgrammeError(f"autonomy entry refused: {verdict['reason']} ({verdict['detail']})")
-    _check_widening("autonomy", action, level, opts.get("widening"))
+    _check_widening(action, level, opts.get("widening"))
 
     def change(programme, prompt, rec):
         require_named(prompt, action, level, *_widen_word(opts))
@@ -737,11 +710,11 @@ _VERBS = {
     "propose-agreement": _Verb(
         _h_propose_agreement,
         "[--run <id>] [--term <key>=<value>]... [--project-term <area>=<text>]... "
-        "[--reserved-term <area>=<text>]... [--source <evidence>] [--why <text>] [--until <iso>] "
+        "[--source <evidence>] [--why <text>] [--until <iso>] "
         "[--seconds <n>]",
         rejects="an accepted agreement; a value outside the term's options; a project term without "
         "--source, without <area>=<text>, for an area that already has one, or whose area or text names a "
-        "protected escalation without being reserved for Shawn.",
+        "protected escalation.",
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,
@@ -752,20 +725,10 @@ _VERBS = {
     "amend-term": _Verb(
         _h_amend_term,
         "<key> <value> --prompt <id> [--why <text>] [--until <iso>] [--seconds <n>] [--run <id>]",
-        rejects="a value outside the term's options (use record-instruction); a prompt that is "
+        rejects="a value outside the term's options (use record-ruling); a prompt that is "
         "not typed or does not name the term key and the value; until_time without --until. "
         "The tools_of_record term takes a comma list of its tools, or none; its prompt must name each tool "
         "it turns on or off. Settles a pending proposal: accepted when the value matches it, else superseded.",
-    ),
-    "record-instruction": _Verb(
-        _h_record_instruction,
-        "--prompt <id> [--applies-to programme|<item-id>] [--until <text>] [--why <text>] [--run <id>]",
-        rejects="a prompt that is unknown or not typed.",
-    ),
-    "close-instruction": _Verb(
-        _h_close_instruction,
-        "<id> --as fulfilled|withdrawn [--prompt <id>] [--why <text>] [--origin pm|ui] [--run <id>]",
-        rejects="withdrawn without a typed --prompt; fulfilled without --why; an inactive id.",
     ),
     "propose-rule": _Verb(
         _h_propose_rule,
@@ -774,9 +737,9 @@ _VERBS = {
     ),
     "adopt-rule": _Verb(
         _h_adopt_rule,
-        "<rule-id> --prompt <id> [--widening] [--run <id>]",
-        rejects="no proposal with that id; a prompt that is not typed or does not name the rule id "
-        "(and the word widen with --widening); a widening without --widening.",
+        "<rule-id> --prompt <id> [--run <id>]",
+        rejects="no proposal with that id; a rule that fails the protocol rule format; a prompt that is "
+        "not typed or does not name the rule id.",
     ),
     "adopt-autonomy": _Verb(
         _h_adopt_autonomy,
@@ -864,26 +827,25 @@ def _rebuild_missing_view(run_id, home, record) -> None:
 
 
 def _h_status(argv):
-    positional, opts = _parse(argv, values=("run",), flags=("json", "terms"))
-    # The slash command passes its arguments as one quoted string, so `terms` arrives as a word.
+    positional, opts = _parse(argv, values=("run",), flags=("json", "agreement"))
+    # The slash command passes its arguments as one quoted string, so `agreement` arrives as a word.
     words = [w for p in positional for w in p.split()]
-    if "terms" in words:
-        opts["terms"] = True
-        words.remove("terms")
+    if "agreement" in words:
+        opts["agreement"] = True
+        words.remove("agreement")
     if len(words) > 1 or (words and opts.get("run")):
-        raise ValueError("usage: status [<run>|--run <id>] [--terms] [--json]")
+        raise ValueError("usage: status [<run>|--run <id>] [--agreement] [--json]")
     if words:
         opts["run"] = words[0]
     run_id, home, record = _locate(opts)
     _rebuild_missing_view(run_id, home, record)
     view = build_view(run_id, home, record)
-    if opts.get("terms"):
-        terms = view["model"]["terms"]
+    if opts.get("agreement"):
         if opts.get("json"):
-            _emit({"run": view["run"], "generated_at": view["generated_at"], "terms": terms,
-                   "rows": programme_view.terms_rows(terms)})
+            _emit({"run": view["run"], "generated_at": view["generated_at"], "agreement": view["model"]["agreement"],
+                   "rows": programme_view.agreement_rows(view["model"])})
         else:
-            sys.stdout.write(programme_view.render_terms(view) + "\n")
+            sys.stdout.write(programme_view.render_agreement(view) + "\n")
     elif opts.get("json"):
         _emit(view)
     else:
@@ -935,10 +897,11 @@ _VERBS["sweep-inputs"] = _Verb(
 )
 _VERBS["status"] = _Verb(
     _h_status,
-    "[<run>|--run <id>] [--terms] [--json]  (prints the working model: doing now, queue, watching, "
+    "[<run>|--run <id>] [--agreement] [--json]  (prints the working model: doing now, queue, watching, "
     "who waits on whom, decisions for Shawn, just did, acceptance, end and archive state, rules in "
-    "force, items; rebuilds a missing view for an active programme; --terms prints only the project "
-    "terms, decision-log entries by term and recent term changes)",
+    "force, items; rebuilds a missing view for an active programme; --agreement prints only the "
+    "agreement page: Scope, Rulings, Authority, Done standards, protocol changes, decision-log entries "
+    "by Ruling and recent preferred-tool changes)",
     reads=True,
 )
 
@@ -989,6 +952,10 @@ programme_lifecycle = load_lib_module("programme_lifecycle")
 _VERBS.update(programme_lifecycle.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_archive").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name__]))
+programme_rulings = load_lib_module("programme_rulings")
+_VERBS.update(programme_rulings.build_verbs(sys.modules[__name__]))
+programme_protocol_changes = load_lib_module("programme_protocol_changes")
+_VERBS.update(programme_protocol_changes.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))

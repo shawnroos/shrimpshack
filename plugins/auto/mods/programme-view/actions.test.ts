@@ -86,11 +86,11 @@ test('proposing a picked option runs propose-term with that option', async ($, o
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const calls = verbs(on)
   const pane = await contractPane($)
-  await press(pane, 'term:autonomy')
-  await press(pane, 'option:autonomy:b')
+  await press(pane, 'term:stop_rule')
+  await press(pane, 'option:stop_rule:b')
   await press(pane, 'act:propose')
-  expect(calls.map(call => call.argv.slice(1))).toEqual([['propose-term', 'autonomy', 'b', '--origin', 'ui']])
-  expect(await has(pane, 'proposed autonomy: b')).toBe(true)
+  expect(calls.map(call => call.argv.slice(1))).toEqual([['propose-term', 'stop_rule', 'b', '--origin', 'ui']])
+  expect(await has(pane, 'proposed stop rule: b')).toBe(true)
 })
 
 test('a verb that exits non-zero shows its error and the pane keeps the old state', async ($, on) => {
@@ -117,13 +117,13 @@ test('an engine refusal shows as an error, not as success', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   verbs(on, () => ({ deny: 'commands are off in this session' }))
   const pane = await contractPane($)
-  await press(pane, 'term:autonomy')
-  await press(pane, 'option:autonomy:b')
+  await press(pane, 'term:stop_rule')
+  await press(pane, 'option:stop_rule:b')
   await press(pane, 'act:propose')
   const error = await lineWith(pane, 'commands are off in this session')
   expect(error).toContain('✗')
   expect(error).toContain('not run')
-  expect(await has(pane, 'proposed autonomy')).toBe(false)
+  expect(await has(pane, 'proposed stop rule')).toBe(false)
 })
 
 test('x clears the proposal on the open term', async ($, on) => {
@@ -165,32 +165,43 @@ test('e asks the PM to re-read and the pane shows "re-read requested"', async ($
   expect(await has(pane, 're-read requested')).toBe(true)
 })
 
-test('f on an instruction closes it as fulfilled with the why typed into the field', async ($, on) => {
+test('f on a Ruling closes it as fulfilled through close-ruling with the why typed into the field', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const calls = verbs(on)
   const pane = await contractPane($)
   expect(await pane.find({ key: 'act:fulfil' })).toBeUndefined()
-  await personFocus($, 'instruction:i1')
+  await personFocus($, 'ruling:g1')
   await settle()
   await press(pane, 'act:fulfil')
-  await type(pane, 'why:i1', 'closed in PR 12')
+  await type(pane, 'why:g1', 'closed in PR 12')
   expect(calls.map(call => call.argv.slice(1))).toEqual([
-    ['close-instruction', 'i1', '--as', 'fulfilled', '--why', 'closed in PR 12', '--origin', 'ui'],
+    ['close-ruling', 'g1', '--as', 'fulfilled', '--why', 'closed in PR 12', '--origin', 'ui'],
   ])
-  expect(await has(pane, 'instruction closed as fulfilled')).toBe(true)
+  expect(await has(pane, 'Ruling closed as fulfilled')).toBe(true)
 })
 
-test('while the compact flag is set, close as fulfilled shows the compaction error and keeps the instruction', async ($, on) => {
+test('a decided or restrict Ruling offers no close as fulfilled: closing it needs the typed reply', async ($, on) => {
+  world(on, { [LEASE]: lease(), [VIEW]: viewText() })
+  const calls = verbs(on)
+  const pane = await contractPane($)
+  await personFocus($, 'ruling:i1')
+  await settle()
+  expect(await pane.find({ key: 'act:fulfil' })).toBeUndefined()
+  expect(await lineAfter(pane, 'Type this:')).toBe('Withdraw ruling i1 "ask before closing"')
+  expect(calls).toEqual([])
+})
+
+test('while the compact flag is set, close as fulfilled shows the compaction error and keeps the Ruling', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   verbs(on, () => ({ exitCode: 1, stdout: 'Rules in force:\n  cadence: fixed\n', stderr: `${COMPACTED}\n` }))
   const pane = await contractPane($)
-  await personFocus($, 'instruction:i1')
+  await personFocus($, 'ruling:g1')
   await settle()
   await press(pane, 'act:fulfil')
-  await type(pane, 'why:i1', 'done')
+  await type(pane, 'why:g1', 'done')
   expect(await has(pane, 'context was compacted')).toBe(true)
   expect(await has(pane, 'Rules in force')).toBe(false)
-  expect(await has(pane, '"ask before closing"')).toBe(true)
+  expect(await has(pane, '"pick the test runner yourself"')).toBe(true)
 })
 
 test('ticking two tools and adding "sentry" with a description, then p, runs one propose-term call with all three', async ($, on) => {
@@ -262,7 +273,7 @@ test('the action keys are drawn only while the pane is focused, with their hotke
   expect(await hotkey('act:clear')).toBe('x')
   expect(await hotkey('act:note')).toBe('n')
   expect(await hotkey('act:reread')).toBe('e')
-  await personFocus($, 'instruction:i1')
+  await personFocus($, 'ruling:g1')
   await settle()
   expect(await hotkey('act:fulfil')).toBe('f')
 
@@ -287,7 +298,7 @@ test('covers AE4: accept on a pending proposal shows the exact reply and sends n
 
 test('the accept reply names the interval of a fixed cadence', async ($, on) => {
   const terms = defaultTerms()
-  terms[3] = term('cadence', {
+  terms[2] = term('cadence', {
     value: 'on_change',
     proposal: { value: 'fixed', extras: { seconds: 900 }, at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'pending' },
   })
@@ -299,18 +310,18 @@ test('the accept reply names the interval of a fixed cadence', async ($, on) => 
 
 test('a refused proposal still shows the reply so it can be typed again', async ($, on) => {
   const terms = defaultTerms()
-  terms[2] = term('autonomy', {
+  terms[1] = term('stop_rule', {
     proposal: { value: 'b', at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'refused', reason: 'not typed' },
   })
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
   const pane = await contractPane($)
-  await press(pane, 'term:autonomy')
-  expect(await lineAfter(pane, 'Type this:')).toBe('amend autonomy to b')
+  await press(pane, 'term:stop_rule')
+  expect(await lineAfter(pane, 'Type this:')).toBe('amend stop rule to b')
 })
 
 test('widening the tools of record names every tool that changes, the dropped ones too', async ($, on) => {
   const terms = defaultTerms()
-  terms[4] = term('tools_of_record', {
+  terms[3] = term('tools_of_record', {
     value: ['tracker', 'tasks'],
     options: [{ name: 'tracker', description: 'd', active: true }, { name: 'tasks', description: 'd', active: true }, { name: 'plans', description: 'd', active: false }],
     proposal: {
@@ -342,37 +353,37 @@ test('picking another option on a term with no proposal shows the amend reply', 
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const sent = prompts(on)
   const pane = await contractPane($)
-  await press(pane, 'term:autonomy')
+  await press(pane, 'term:stop_rule')
   expect(await has(pane, 'Type this:')).toBe(false)
-  await press(pane, 'option:autonomy:b')
-  expect(await lineAfter(pane, 'Type this:')).toBe('amend autonomy to b')
+  await press(pane, 'option:stop_rule:b')
+  expect(await lineAfter(pane, 'Type this:')).toBe('amend stop rule to b')
   expect(sent).toEqual([])
 })
 
-test('the open-instruction template names the selected task', async ($, on) => {
+test('the new-Ruling template names the selected task', async ($, on) => {
   const work = [workEntry('linear:ENG-1', 'Owner history')]
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ work }) })
   const pane = await openPane($)
   await personFocus($, 'item:linear:ENG-1')
   await settle()
   await press(pane, 'view:contract')
-  expect(await lineAfter(pane, 'To add an instruction, type this:')).toBe('Instruction for Owner history:')
+  expect(await lineAfter(pane, 'To add a Ruling, type this:')).toBe('Ruling for Owner history:')
   const drawn = await lines(pane)
-  expect(drawn.some(line => line.endsWith('Instruction for Owner history: '))).toBe(true)
+  expect(drawn.some(line => line.endsWith('Ruling for Owner history: '))).toBe(true)
 })
 
 test('with no task selected the template is for the whole programme', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const pane = await contractPane($)
-  expect(await lineAfter(pane, 'To add an instruction, type this:')).toBe('Instruction for the whole programme:')
+  expect(await lineAfter(pane, 'To add a Ruling, type this:')).toBe('Ruling for the whole programme:')
 })
 
-test('a focused instruction shows the withdraw reply', async ($, on) => {
+test('a focused Ruling shows the withdraw reply naming its id', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const sent = prompts(on)
   const pane = await contractPane($)
-  await personFocus($, 'instruction:i1')
+  await personFocus($, 'ruling:i1')
   await settle()
-  expect(await lineAfter(pane, 'Type this:')).toBe('Withdraw instruction "ask before closing"')
+  expect(await lineAfter(pane, 'Type this:')).toBe('Withdraw ruling i1 "ask before closing"')
   expect(sent).toEqual([])
 })

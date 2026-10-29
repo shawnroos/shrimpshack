@@ -94,7 +94,7 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement accept-context add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed answer-permission approval-label archive ask-relayed ask-shown assign-item beat become-pm check-archive check-deliverable check-mergeable claim clear-blocker clear-proposal close-instruction collect-result context correct-term create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire focus-note focus-recheck hand-item handover inbox keep-behaviours keep-corrections lift-pause log-decision mark-read merge-item move-behaviour note-term override-focus pause pick-term preserve-code promote promote-correction prompt-item propose-agreement propose-behaviour propose-permission propose-rule propose-term queue raise-blocker reconcile-leases reconcile-operations record-behaviour record-decision record-denial record-instruction record-issues record-tested-build record-trajectories recover release-resources remind-behaviour reopen-item request-reread retire-behaviour rules set-now set-remit set-source set-waiting settle-permissions setup-keep setup-seen setup-step size-item start start-worker status swap-item sweep sweep-inputs take-recommendations takeover tracker-synced undo-correction update-ask validate watcher-beat" "$VERBS"
+check "accept-agreement accept-context ack-protocol add-item adopt-autonomy adopt-check adopt-rule alias-item amend-term answer-handed answer-permission approval-label archive ask-relayed ask-shown assign-item beat become-pm carry-rulings check-archive check-deliverable check-mergeable claim clear-blocker clear-proposal close-ruling collect-result context create-successor define-requirement describe dispose-action dispose-item drop-item edit-project-term end expire focus-note focus-recheck hand-item handover inbox keep-behaviours lift-pause log-decision mark-read merge-item move-behaviour note-term override-focus pause pick-term preserve-code promote prompt-item propose-agreement propose-behaviour propose-permission propose-rule propose-term queue raise-blocker reconcile-leases reconcile-operations record-behaviour record-denial record-issues record-ruling record-tested-build record-trajectories recover release-resources remind-behaviour reopen-item request-reread retire-behaviour rules set-now set-remit set-source set-waiting settle-permissions setup-keep setup-seen setup-step size-item start start-worker status swap-item sweep sweep-inputs take-recommendations takeover tracker-synced update-ask validate watcher-beat" "$VERBS"
 
 
 # _VERBS.update lets a later module silently replace a verb another module registered under the same name.
@@ -182,7 +182,7 @@ P_BACK="$(prompt typed 'until Shawn is back, keep merging')"
 it "amend-term with wording that is not an option is refused"
 prog amend-term stop_rule "until Shawn is back" --prompt "$P_BACK"
 check 1 "$CODE"
-has "record-instruction" "$OUT"
+has "record-ruling" "$OUT"
 
 it "until_time needs an --until time"
 prog amend-term stop_rule until_time --prompt "$P_BACK"
@@ -192,22 +192,21 @@ it "a cadence value outside its options is refused"
 prog amend-term cadence hourly --prompt "$P_BACK"
 check 1 "$CODE"
 
-it "record-instruction with that wording and a typed prompt is accepted"
-prog record-instruction --prompt "$P_BACK"
-check 0 "$CODE"
-INSTR_BACK="$(field '[i["id"] for i in prog["instructions"]][-1]')"
-check '"until Shawn is back, keep merging"' "$(field 'prog["instructions"][-1]["quote"]')"
-
-it "record-instruction citing a cron prompt is refused"
-prog record-instruction --prompt "$P_CRON"
-check 1 "$CODE"
+for verb in record-instruction close-instruction record-decision; do
+  it "${verb} is gone: the CLI refuses it as an unknown verb"
+  prog "$verb" --prompt "$P_BACK"
+  check 2 "$CODE"
+done
 
 P_ITEM="$(prompt typed 'skip the full eval for AI-753')"
-it "record-instruction for one item, until merged, is accepted"
-prog record-instruction --prompt "$P_ITEM" --applies-to linear:AI-753 --until merged
-check 0 "$CODE"
+edit 'rec["programme"]["instructions"] = [
+    {"id": "iback01", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "programme", "until": None,
+     "why": None, "prompt_id": "'"$P_BACK"'", "quote": "until Shawn is back, keep merging", "closed": None},
+    {"id": "iitem01", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "linear:AI-753",
+     "until": "merged", "why": None, "prompt_id": "'"$P_ITEM"'", "quote": "skip the full eval for AI-753",
+     "closed": None}]'
 
-it "rules in force list the item instruction while the item is open"
+it "rules in force list an old item instruction while the item is open"
 edit 'rec["programme"]["items"]["linear:AI-753"] = {"id": "linear:AI-753", "title": "fix", "state": "open"}'
 prog rules
 check 0 "$CODE"
@@ -220,22 +219,38 @@ it "rules in force are readable lines, not a JSON dump"
 lacks '{"' "$OUT"
 check 0 "$(printf '%s\n' "$OUT" | sed -n '/<auto-rules>/,/<\/auto-rules>/p' | awk 'length > 300' | wc -l | tr -d ' ')"
 
-it "rules in force drop the item instruction once the item is done"
+it "rules in force drop the old item instruction once the item is done"
 edit 'rec["programme"]["items"]["linear:AI-753"]["state"] = "done"'
 prog rules
-lacks "skip the full eval for AI-753" "$OUT"
-has "until Shawn is back" "$OUT"
+RULES_BLOCK="$(printf '%s\n' "$OUT" | sed -n '/<auto-rules>/,/<\/auto-rules>/p')"
+lacks "skip the full eval for AI-753" "$RULES_BLOCK"
+has "until Shawn is back" "$RULES_BLOCK"
 
-it "close-instruction withdrawn without a prompt is refused"
-prog close-instruction "${INSTR_BACK//\"/}" --as withdrawn
+it "an old item instruction follows its item through a merge, read by canonical id"
+prog add-item linear:AI-799 --title "old half"
+prog add-item linear:AI-800 --title "new half"
+edit 'rec["programme"].setdefault("instructions", []).append(
+    {"id": "imerge1", "state": "active", "at": "2026-10-01T00:00:00Z", "applies_to": "linear:AI-799",
+     "until": None, "why": None, "prompt_id": "'"$P_ITEM"'", "quote": "keep AI-799 behind a flag", "closed": None})'
+prog merge-item linear:AI-799 linear:AI-800
+prog rules
+has "\"keep AI-799 behind a flag\" (applies to linear:AI-800)" "$OUT"
+check '"linear:AI-799"' "$(field 'prog["context"]["decisions"]["imerge1"][0]["applies_to"][0]')"
+
+it "an old instruction is a kind-less Ruling: record-ruling refuses to revise it"
+prog record-ruling iback01 --effect decided --kind work_sequencing --scope "keep merging" --prompt "$P_BACK"
+check 1 "$CODE"
+has "old instruction with no decision kind" "$OUT"
+
+it "close-ruling withdrawn on an old instruction without a prompt is refused"
+prog close-ruling iback01 --as withdrawn
 check 1 "$CODE"
 
-P_WITHDRAW="$(prompt typed 'forget the until-I-am-back thing')"
-it "close-instruction withdrawn with a typed prompt closes it"
-prog close-instruction "${INSTR_BACK//\"/}" --as withdrawn --prompt "$P_WITHDRAW"
+P_WITHDRAW="$(prompt typed 'forget iback01, the until-I-am-back thing')"
+it "close-ruling withdrawn with a typed prompt naming it closes the old instruction's Ruling"
+prog close-ruling iback01 --as withdrawn --prompt "$P_WITHDRAW"
 check 0 "$CODE"
-prog rules
-lacks "until Shawn is back" "$OUT"
+check '"closed"' "$(field 'prog["context"]["decisions"]["iback01"][-1]["state"]')"
 
 it "accept-agreement with no prompt is refused"
 prog accept-agreement
@@ -328,10 +343,19 @@ with open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]) as fh:
 rule = [r for r in doc["rules"] if r["id"] == "docs-verified"][0]
 a = rule["adoption"]
 print("hunter2" in a["quote"], "[redacted]" in a["quote"], a["machine"], a["hash"] == pp.content_hash(rule), a["prompt_id"] == pid, a["run_id"] == run,
-      "items" not in rule, a["hash"] == pp.content_hash(json.loads(args[2])))
+      "items" not in rule, a["hash"] == pp.content_hash(dict(json.loads(args[2]), autonomy=rule["autonomy"])))
 EOF
 )"
 check "False True studio True True True True True" "$GOT"
+
+it "adopt-rule writes the legacy autonomy of a new rule id as propose, not the proposal's level, and no widening mark"
+check '"propose" false' "$(run_py <<'EOF'
+with open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]) as fh:
+    doc = json.load(fh)
+rule = [r for r in doc["rules"] if r["id"] == "docs-verified"][0]
+print(json.dumps(rule["autonomy"]), json.dumps("widening" in rule["adoption"]))
+EOF
+)"
 
 it "the personal file write left no temp file behind"
 check "protocol.json" "$(ls -A "$(dirname "$CLAUDE_AUTO_PERSONAL_PROTOCOL")" | tr '\n' ' ' | sed 's/ $//')"
@@ -378,31 +402,38 @@ EOF
 
 it "adopt-autonomy without a typed prompt is refused and writes nothing"
 BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
-prog adopt-autonomy prod_deploy never --prompt "$P_CRON"
+prog adopt-autonomy prod_off_flag never --prompt "$P_CRON"
 check "1" "$CODE"
 check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
-prog adopt-autonomy prod_deploy never
+prog adopt-autonomy prod_off_flag never
 check "1" "$CODE"
 
 it "adopt-autonomy refuses an unknown level and a bad action"
-P_AUTO="$(prompt typed 'yes, set prod deploy to never')"
-prog adopt-autonomy prod_deploy sometimes --prompt "$P_AUTO"
+P_AUTO="$(prompt typed 'yes, set prod off flag to never')"
+prog adopt-autonomy prod_off_flag sometimes --prompt "$P_AUTO"
 check "1" "$CODE"
 prog adopt-autonomy 'Bad Action' never --prompt "$P_AUTO"
 check "1" "$CODE"
 
 it "adopt-autonomy citing a typed prompt that does not name the action and level is refused"
-prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, never deploy prod')"
+prog adopt-autonomy prod_off_flag never --prompt "$(prompt typed 'yes, never flag prod')"
 check 1 "$CODE"
-has "prod_deploy" "$OUT"
-prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, prod_deploy')"
+has "prod_off_flag" "$OUT"
+prog adopt-autonomy prod_off_flag never --prompt "$(prompt typed 'yes, prod_off_flag')"
 check 1 "$CODE"
 has "never" "$OUT"
 
 it "adopt-autonomy narrowing a level loads from the personal layer"
-prog adopt-autonomy prod_deploy never --prompt "$P_AUTO"
+prog adopt-autonomy prod_off_flag never --prompt "$P_AUTO"
 check "0" "$CODE"
-check '["never", "personal", []]' "$(load_personal '[loaded["autonomy"]["prod_deploy"]["level"], loaded["autonomy"]["prod_deploy"]["layer"], [r["id"] for r in loaded["rejected"]]]')"
+check '["never", "personal", []]' "$(load_personal '[loaded["autonomy"]["prod_off_flag"]["level"], loaded["autonomy"]["prod_off_flag"]["layer"], [r["id"] for r in loaded["rejected"]]]')"
+
+it "adopt-autonomy on a protected kind is refused and writes nothing"
+BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+prog adopt-autonomy prod_deploy never --prompt "$(prompt typed 'yes, set prod_deploy to never')"
+check "1" "$CODE"
+has "protected_kind" "$OUT"
+check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
 it "adopt-autonomy journals an approval record with entry kind and hash"
 GOT="$(run_py "$RUN" "$P_AUTO" <<'EOF'
@@ -410,42 +441,42 @@ run, pid = args
 pp = load_lib_module("programme_protocol")
 row = [r for r in pj.read(run) if r["kind"] == "rule_adopted"][-1]
 doc = json.load(open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]))
-entry = doc["autonomy"]["prod_deploy"]
+entry = doc["autonomy"]["prod_off_flag"]
 p = row["payload"]
 print(p["entry"], p["action"], p["level"], p["hash"] == entry["adoption"]["hash"] == pp.content_hash(entry), row["cites"] == [pid], p["prompt_id"] == pid)
 EOF
 )"
-check "autonomy prod_deploy never True True True" "$GOT"
+check "autonomy prod_off_flag never True True True" "$GOT"
 
 it "adopt-autonomy widening a level without --widening is refused and writes nothing"
 BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
-prog adopt-autonomy merge_around_gate act --prompt "$(prompt typed 'widen merge around gate to act')"
+prog adopt-autonomy fix_other_team_code act --prompt "$(prompt typed 'widen fix other team code to act')"
 check "1" "$CODE"
 has "--widening" "$OUT"
 check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
 it "adopt-autonomy --widening citing a prompt without the word widen is refused"
-prog adopt-autonomy merge_around_gate act --widening --prompt "$(prompt typed 'merge around gate: act')"
+prog adopt-autonomy fix_other_team_code act --widening --prompt "$(prompt typed 'fix other team code: act')"
 check 1 "$CODE"
 has "widen" "$OUT"
 
 it "adopt-autonomy widening with --widening loads"
-prog adopt-autonomy merge_around_gate act --widening --prompt "$(prompt typed 'yes, widen merge_around_gate to act')"
+prog adopt-autonomy fix_other_team_code act --widening --prompt "$(prompt typed 'yes, widen fix_other_team_code to act')"
 check "0" "$CODE"
-check '["act", "personal"]' "$(load_personal '[loaded["autonomy"]["merge_around_gate"][k] for k in ("level", "layer")]')"
+check '["act", "personal"]' "$(load_personal '[loaded["autonomy"]["fix_other_team_code"][k] for k in ("level", "layer")]')"
 
 it "an autonomy entry written by hand with a recomputed hash does not load"
 personal_doc '
 pp = load_lib_module("programme_protocol")
 forged = {"level": "act"}
-adoption = dict(doc["autonomy"]["prod_deploy"]["adoption"])
+adoption = dict(doc["autonomy"]["prod_off_flag"]["adoption"])
 adoption["hash"] = pp.content_hash(forged)
 adoption["widening"] = True
 forged["adoption"] = adoption
-doc["autonomy"]["full_release"] = forged
+doc["autonomy"]["eval_waiver"] = forged
 '
-check '["propose", "plugin", [["full_release", "adoption_unverified"]]]' "$(load_personal '[loaded["autonomy"]["full_release"]["level"], loaded["autonomy"]["full_release"]["layer"], [[r["id"], r["reason"]] for r in loaded["rejected"]]]')"
-personal_doc 'del doc["autonomy"]["full_release"]'
+check '["propose", "plugin", [["eval_waiver", "adoption_unverified"]]]' "$(load_personal '[loaded["autonomy"]["eval_waiver"]["level"], loaded["autonomy"]["eval_waiver"]["layer"], [[r["id"], r["reason"]] for r in loaded["rejected"]]]')"
+personal_doc 'del doc["autonomy"]["eval_waiver"]'
 
 LOOKUP_ARGV='["trace-cli","show","{id}"]'
 it "adopt-check without a typed prompt is refused"
@@ -506,16 +537,16 @@ check '[false, [["acme/api:verified.lookup", "adoption_unverified"]]]' "$(load_p
 personal_doc 'del doc["checks"]["acme/api"]'
 
 it "the personal file keeps the adopted rule, autonomy entries and check together"
-check '[["docs-verified"], ["merge_around_gate", "prod_deploy"], ["acme/web"]]' "$(load_personal '[sorted(r for r, v in loaded["rules"].items() if v["layer"] == "personal"), sorted(a for a, v in loaded["autonomy"].items() if v["layer"] == "personal"), sorted(loaded["checks"])]')"
+check '[["docs-verified"], ["fix_other_team_code", "prod_off_flag"], ["acme/web"]]' "$(load_personal '[sorted(r for r, v in loaded["rules"].items() if v["layer"] == "personal"), sorted(a for a, v in loaded["autonomy"].items() if v["layer"] == "personal"), sorted(loaded["checks"])]')"
 
 it "each approval journals its own kind"
 GOT="$(journal_kinds)"
-for kind in term_amended instruction_recorded instruction_closed agreement_proposed agreement_accepted rule_proposed rule_adopted rules_acked; do
+for kind in term_amended ruling_closed agreement_proposed agreement_accepted rule_proposed rule_adopted rules_acked; do
   case "$GOT" in *"$kind"*) : ;; *) GOT="missing:${kind}" ;; esac
 done
 lacks "missing:" "$GOT"
 
-it "status shows a personal rule and autonomy entry adopted on another machine as adopted there"
+it "status shows a personal rule and Authority entry adopted on another machine as adopted there"
 personal_doc '
 pp = load_lib_module("programme_protocol")
 rule = dict(doc["rules"][0])
@@ -528,9 +559,9 @@ doc["rules"].append(rule)
 doc["autonomy"]["merge_at_gate"] = gate
 '
 prog status
-has "rule laptop-docs: propose, requires merged, adopted on laptop" "$OUT"
-has "autonomy merge_at_gate: propose, adopted on laptop" "$OUT"
-lacks "docs-verified: act_and_tell, requires merged, adopted on" "$OUT"
+has "rule laptop-docs: requires merged, adopted on laptop" "$OUT"
+has "authority merge_at_gate: propose, adopted on laptop" "$OUT"
+lacks "adopted on studio" "$OUT"
 personal_doc 'doc["rules"] = [r for r in doc["rules"] if r["id"] != "laptop-docs"]; del doc["autonomy"]["merge_at_gate"]'
 
 it "rules without --run and with no lease for the session is refused"
@@ -567,10 +598,10 @@ CLAUDE_CODE_SESSION_ID="sess-stranger" prog amend-term cadence fixed --seconds 9
 check 1 "$CODE"
 check "$COUNT_BEFORE" "$(refusals)"
 
-it "record-instruction citing a cron prompt journals a refusal for the instruction"
-prog record-instruction --prompt "$P_CRON"
+it "close-ruling citing a cron prompt journals a refusal for the Ruling"
+prog close-ruling iitem01 --as withdrawn --prompt "$P_CRON"
 check 1 "$CODE"
-has '"record-instruction", "instruction"' "$(refusals)"
+has '"close-ruling", "iitem01"' "$(refusals)"
 
 it "accept-agreement citing an unknown prompt journals a not-found refusal"
 prog accept-agreement --prompt p0f0f0f

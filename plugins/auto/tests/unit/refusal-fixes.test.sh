@@ -136,7 +136,7 @@ check 1 "$CODE"
 has "programme.sh approval-label adopt-rule docs-verified" "$(last_line)"
 
 it "a verb a pick cannot approve gets a typed-prompt fix, not approval-label"
-prog approval-label record-instruction
+prog approval-label record-ruling
 check 1 "$CODE"
 has "fix: " "$(last_line)"
 lacks "approval-label" "$(last_line)"

@@ -1,0 +1,1 @@
+{"type": "user", "sessionId": "sess-pm", "promptId": "e6ad4fa3-e21f-4ba7-b40d-8a1753adafa9", "promptSource": "typed", "turnOrigin": "human", "origin": {"kind": "human"}, "entrypoint": "cli", "message": {"role": "user", "content": "waive the full eval for herdr:docs-page"}}

@@ -122,7 +122,7 @@ run_brief() {
 import types
 ps = load_lib_module("programme_sources")
 try:
-    ps._brief_tail(types.SimpleNamespace(ProgrammeError=RuntimeError), record(args[0])["programme"], [args[1]], [])
+    ps._brief_tail(types.SimpleNamespace(ProgrammeError=RuntimeError), record(args[0])["programme"], None, [args[1]], [])
     print("listed")
 except RuntimeError as exc:
     print("refused " + ("voided" if "voided" in str(exc) else str(exc)))

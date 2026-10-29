@@ -1,0 +1,1 @@
+{"type": "user", "sessionId": "sess-pm", "promptId": "ab0612a8-23fe-447c-be80-4480ed755bea", "promptSource": "typed", "turnOrigin": "human", "origin": {"kind": "human"}, "entrypoint": "cli", "message": {"role": "user", "content": "yes adopt docs-verified"}}

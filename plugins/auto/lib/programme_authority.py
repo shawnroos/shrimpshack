@@ -36,9 +36,11 @@ FOREIGN_KIND = "foreign_write_absorbed"
 LEGACY = "legacy_import"
 FOREIGN = "foreign_write"
 UNVERIFIED = (LEGACY, FOREIGN)
+WRITE_RESUME = ".test-resume-write"
 HISTORY = "history"
 OUTCOMES = ("absent", "legacy", "supported", "unsupported", "corrupt", "unavailable")
 HOLDS = ("unsupported", "corrupt", "unavailable")
+LEGACY_RULING = "legacy_ruling"
 
 
 class AuthorityError(run_record_core.RunRecordError):
@@ -77,6 +79,10 @@ def _tagged(path) -> bool:
     except (OSError, ValueError):
         return False
     return isinstance(doc, dict) and TAG in doc
+
+
+def move_interrupted(home) -> bool:
+    return os.path.lexists(os.path.join(home, IMPORT_MARKER))
 
 
 def promoted(home, run_id) -> bool:
@@ -247,25 +253,42 @@ def _replayed(store, run_id, operation_id) -> dict:
     return {"result": None, "row": row, "replayed": True, "revision": hits[0]["revision"] if hits else None}
 
 
-def _legacy_write(home, run_id, change, compose) -> dict:
-    seen = {}
+def legacy_refusal(run_id, kind) -> AuthorityError:
+    return AuthorityError(f"programme {run_id} still keeps its old JSON files, which never take a {kind} row; "
+                          f"nothing was changed. Run `programme.py promote --run {run_id}`, then retry",
+                          LEGACY_RULING)
 
-    def tracked(record):
-        seen["record"] = record
-        return change(record)
 
-    result = run_record_core._with_locked_run_record(home, run_id, tracked, reroute=False)
-    row = compose(result, seen["record"]) if compose else None
-    if row is not None:
-        _journal().append_row(run_id, row)
-    return {"result": result, "row": row, "replayed": False, "revision": None}
+# A legacy home has no transaction, so a crash between its record and journal writes can leave a Ruling
+# change its approval checks never see. A row ``legacy_refuses`` matches is refused before the record is
+# written, and only after ``change`` ran every check, so a caller that moves the home on this refusal moves
+# it only for a change that would apply. Every other row follows its record under the run lock, so a crash
+# leaves at worst a record change with no row.
+def _legacy_write(home, run_id, change, compose, legacy_refuses, then) -> dict:
+    seen = {"row": None}
+
+    def staged(record):
+        result = change(record)
+        seen["row"] = compose(result, record) if compose else None
+        if seen["row"] is not None and legacy_refuses is not None and legacy_refuses(seen["row"]):
+            raise legacy_refusal(run_id, seen["row"]["kind"])
+        return result
+
+    def after(result, _):
+        if seen["row"] is not None:
+            _journal().append_row(run_id, seen["row"])
+        if then is not None:
+            then(result)
+
+    result = run_record_core._with_locked_run_record(home, run_id, staged, reroute=False, after=after)
+    return {"result": result, "row": seen["row"], "replayed": False, "revision": None}
 
 
 def write(home, run_id, change, compose=None, *, operation_id=None, provenance="derived",
-          payload_refs=(), base_revision=None, seal=None) -> dict:
+          payload_refs=(), base_revision=None, seal=None, recheck=None, legacy_refuses=None, then=None) -> dict:
     if not promoted(home, run_id):
         try:
-            return _legacy_write(home, run_id, change, compose)
+            return _legacy_write(home, run_id, change, compose, legacy_refuses, then)
         except run_record_core.RoutedToAuthority:
             pass
 
@@ -280,6 +303,9 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             result = change(record)
             row = compose(result, record) if compose else None
             run_record_core._prepare_for_write(record)
+            _approval_pause(home)
+            if recheck is not None and row is not None:
+                recheck(rows_of(_guarded(run_id, store.read)["events"])[0], row)
             event = _row_event(row, "journal") if row is not None else \
                 {"kind": RECORD_KIND, "payload": {"channel": "none"}}
             if _REQUESTS.get(operation_id) is not None:
@@ -287,6 +313,8 @@ def write(home, run_id, change, compose=None, *, operation_id=None, provenance="
             base = head["revision"] if base_revision is None else base_revision
             receipt = commit(store, run_id, operation_id or _new_op("w"), base, record,
                              event, provenance, payload_refs, seal)
+            if then is not None and not receipt["replayed"]:
+                then(result)
         export(home, run_id, final=seal is not None)
         return {"result": result, "row": row, "replayed": receipt["replayed"],
                 "revision": receipt["revision"]}
@@ -368,6 +396,11 @@ def _file_meta(path):
     except OSError:
         return None
     return {"digest": _sha(data), "size": len(data)}
+
+
+def _approval_pause(home) -> None:
+    if run_record_core._test_hatch_enabled("CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL"):
+        run_record_core.test_pause("write_before_journal", os.path.join(home, WRITE_RESUME), consume=True)
 
 
 def _test_pause(point) -> None:

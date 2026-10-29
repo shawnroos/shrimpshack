@@ -26,6 +26,15 @@ def _dict(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _section(out, title, lines, empty) -> None:
+    out.append({"style": "head", "text": title})
+    out.extend(lines or [{"style": "dim", "text": f"  {empty}"}])
+
+
+def _row(text, style="text") -> dict:
+    return {"style": style, "text": text}
+
+
 def _time(value):
     if isinstance(value, datetime.datetime):
         return value
@@ -228,20 +237,23 @@ def _ordered_terms(terms) -> list:
     return known + sorted(k for k in terms if k not in programme_home.TERM_GUIDE)
 
 
-def contract(block, journal_entries, entries, instructions, behaviours=None) -> dict:
+def contract(block, journal_entries, entries, rulings, behaviours=None) -> dict:
     counts = reliant_counts(entries)
     terms = _dict(_dict(block.get("agreement")).get("terms"))
     out_terms = [_term(key, _dict(terms[key]), counts, journal_entries) for key in _ordered_terms(terms)]
-    out_instructions = []
-    for entry in instructions or []:
+    out_rulings = []
+    for entry in rulings or []:
         entry = _dict(entry)
-        applies_to = entry.get("applies_to") or "programme"
-        out_instructions.append({
-            "id": entry.get("id"), "quote": entry.get("quote"), "applies_to": applies_to,
-            "scope": "inherited" if applies_to == "programme" else "own", "until": entry.get("until"),
-            "at": entry.get("at"), "reliant_steps": counts.get(f"instruction:{entry.get('id')}", 0)})
+        rid = entry.get("id")
+        applies_to = list(entry.get("applies_to") or ["programme"])
+        reliant = counts.get(f"ruling:{rid}", 0) + counts.get(f"instruction:{rid}", 0)
+        out_rulings.append({
+            "id": rid, "quote": entry.get("quote") or entry.get("scope"), "applies_to": applies_to,
+            "scope": "inherited" if applies_to == ["programme"] else "own", "until": entry.get("until"),
+            "effect": entry.get("effect") or "decided", "kind": entry.get("kind"), "legacy": entry.get("legacy"),
+            "at": entry.get("at"), "reliant_steps": reliant})
     return {"accepted": _dict(block.get("agreement")).get("accepted"), "terms": out_terms,
-            "instructions": out_instructions, "behaviours": [_dict(b) for b in behaviours or []]}
+            "rulings": out_rulings, "behaviours": [_dict(b) for b in behaviours or []]}
 
 
 def reread(block, journal_entries) -> dict:
@@ -259,10 +271,10 @@ def reread(block, journal_entries) -> dict:
             "requested_at": requested_at if requested else None}
 
 
-def build(record, block, journal_entries, now, instructions, behaviours=None) -> dict:
+def build(record, block, journal_entries, now, rulings, behaviours=None) -> dict:
     journal_entries = list(journal_entries or [])
     entries = work(block, journal_entries, now, programme_home.cadence_seconds(record))
-    return {"work": entries, "contract": contract(block, journal_entries, entries, instructions, behaviours),
+    return {"work": entries, "contract": contract(block, journal_entries, entries, rulings, behaviours),
             "reread": reread(block, journal_entries)}
 
 

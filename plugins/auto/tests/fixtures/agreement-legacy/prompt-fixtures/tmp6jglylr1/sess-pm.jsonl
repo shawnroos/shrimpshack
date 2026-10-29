@@ -1,0 +1,1 @@
+{"type": "user", "sessionId": "sess-pm", "promptId": "84e7a153-ed03-4bea-ac26-b88f81542a79", "promptSource": "typed", "turnOrigin": "human", "origin": {"kind": "human"}, "entrypoint": "cli", "message": {"role": "user", "content": "yes, I accept the agreement"}}

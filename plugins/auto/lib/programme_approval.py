@@ -18,12 +18,12 @@ programme_naming = load_lib_module("programme_naming")
 programme_home = load_lib_module("programme_home")
 
 # Default-deny: a pick or an accepted suggestion approves only these verbs, each of which checks that the
-# approval names its target. Verbs that record the prompt's words as content stay typed-only.
+# approval names its target. Verbs that record the prompt's words as content stay typed-only, and so do
+# Rulings: record-ruling, close-ruling and carry-rulings are absent, and accept-context refuses a pick for one.
 PICK_VERBS = frozenset((
-    "adopt-rule", "adopt-autonomy", "adopt-check", "set-remit", "amend-term", "keep-corrections",
-    "move-behaviour", "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context",
-    "lift-pause", "answer-permission", "dispose-action", "accept-agreement", "swap-item",
-    "override-focus"))
+    "adopt-rule", "adopt-autonomy", "adopt-check", "set-remit", "amend-term", "move-behaviour",
+    "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context", "lift-pause",
+    "answer-permission", "dispose-action", "accept-agreement", "swap-item", "override-focus"))
 ACCEPT_VERB = "accept-agreement"
 # The accept is the moment the PM gains authority: a pick must name the terms digest Shawn saw, and an
 # accepted suggestion shows him no terms at all, so it never approves the accept.
@@ -35,6 +35,50 @@ ACCEPT_FIX = (f"run `programme.sh approval-label {ACCEPT_VERB}`, offer its outpu
 _STDIN_VERBS = frozenset(("set-remit",))
 _NOT_APPROVED = ("--prompt", "--run")
 _RECOMMENDED = " (recommended)"
+CARRIED_KIND = "rulings_carried"
+APPROVAL_KINDS = ("rule_adopted", CARRIED_KIND)
+
+
+def text_hash(text) -> str:
+    return "sha256:" + hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
+
+
+# An imported prompt approves nothing new, so only the approval rows imported with it count.
+def _approved(rows, prompt_id, imported=False) -> list:
+    out = []
+    for row in rows:
+        payload = row.get("payload") or {}
+        if row.get("kind") not in APPROVAL_KINDS or (row.get("cites") or [None])[0] != prompt_id \
+                or payload.get("prompt_id") != prompt_id or row.get("provenance") == programme_authority.FOREIGN \
+                or (imported and row.get("provenance") != programme_authority.LEGACY):
+            continue
+        if row["kind"] == CARRIED_KIND:
+            out.extend(programme_protocol.approval_key(programme_protocol.carryover_target(e.get("key"), e.get("id")),
+                                                       e.get("hash"))
+                       for e in payload.get("stored") or [] if isinstance(e, dict))
+        else:
+            out.append(programme_protocol.approval_key(payload.get("target"), payload.get("hash")))
+    return out
+
+
+def prompt_lookup(run_id, prompt_id, journals=None):
+    try:
+        run_id = programme_home.check_run_id(run_id)
+        if journals is None:
+            rows = programme_journal.read(run_id)
+        else:
+            if run_id not in journals:
+                journals[run_id] = programme_journal.read(run_id)
+            rows = journals[run_id]
+        row = programme_journal.find_prompt(run_id, prompt_id, rows)
+    except programme_home.ProgrammeHomeError:
+        return None
+    if row is None or row.get("provenance") == programme_authority.FOREIGN:
+        return None
+    payload = row.get("payload") or {}
+    imported = row.get("provenance") == programme_authority.LEGACY
+    return {"origin": programme_journal.adopted_origin(row), "text_hash": text_hash(payload.get("text")),
+            "approved": _approved(rows, prompt_id, imported)}
 
 
 def label(argv) -> str:

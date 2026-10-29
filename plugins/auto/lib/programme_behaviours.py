@@ -649,7 +649,7 @@ def _check_layer_named(host, prompt, bid, to) -> None:
     options = LAYER_WORDS[to]
     host.require_named(prompt, options, *([bid] if bid else []))
     # require_named looks only at the word just before the name, so "not the repo" would
-    # pass it; any negation earlier in the prompt refuses, as for promote-correction.
+    # pass it; any negation earlier in the prompt refuses.
     words = host._name_words(programme_journal.named_text(prompt))
     start = min(s for option in options for s, _ in host._runs(words, host._squash(option)))
     if set(words[:start]) & set(host._NEGATIONS):

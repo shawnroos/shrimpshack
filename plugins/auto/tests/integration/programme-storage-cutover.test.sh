@@ -914,7 +914,7 @@ run_py "$RUN7" "$P7A" >/dev/null <<'EOF'
 run, pid = args
 path = export_path(run)
 rec = json.load(open(path))
-rec["programme"]["instructions"].append({"id": "i000001", "state": "active", "at": "2026-01-01T00:00:00Z",
+rec["programme"].setdefault("instructions", []).append({"id": "i000001", "state": "active", "at": "2026-01-01T00:00:00Z",
     "applies_to": "programme", "until": None, "why": None, "prompt_id": "p999999", "quote": "be careful",
     "closed": None})
 json.dump(rec, open(path, "w"))
@@ -923,6 +923,8 @@ rows = [json.loads(l) for l in open(jp)]
 first = [r for r in rows if r.get("prompt_id") == pid][0]
 with open(jp, "a") as fh:
     fh.write(json.dumps(dict(first, payload=dict(first["payload"], origin="cron"))) + "\n")
+    fh.write(json.dumps({"kind": "rulings_carried", "at": "2026-01-01T00:00:00Z", "session_id": "sess-k",
+                         "cites": [pid], "payload": {"prompt_id": pid, "carried": ["r1"], "stored": []}}) + "\n")
     fh.write('{"kind": "item_added", "at": "2026-01-0')
 EOF
 it "an import exposes record-only updates, truncated lines and conflicting approval labels"
@@ -930,6 +932,12 @@ as sess-k promote --run "$RUN7"
 check "0 promoted conflicting_approval_label,record_only_update,unparseable_line" "$CODE $(json_field 'd["status"]') $(run_py "$RUN7" <<'EOF'
 ev = [e for e in auth.snapshot(args[0])["events"] if e["kind"] == "legacy_import"][0]
 print(",".join(sorted({g["kind"] for g in ev["payload"]["gaps"]})))
+EOF
+)"
+it "a carry citing the conflicting prompt is listed as a conflicting approval"
+check "True" "$(run_py "$RUN7" "$P7A" <<'EOF'
+ev = [e for e in auth.snapshot(args[0])["events"] if e["kind"] == "legacy_import"][0]
+print({"kind": "conflicting_approval_label", "prompt_id": args[1], "approval": "rulings_carried"} in ev["payload"]["gaps"])
 EOF
 )"
 it "the conflicting prompt approves nothing new"

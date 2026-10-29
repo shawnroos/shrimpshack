@@ -95,7 +95,7 @@ prog add-item linear:AI-1 --title "View test"
 prog add-item linear:AI-2 --title "Docs pass"
 prog add-item linear:AI-3 --title "Finished one"
 edit 'rec["programme"]["items"]["linear:AI-3"]["state"] = "done"'
-edit 'rec["programme"]["instructions"].append({"id": "i0a1b2c", "state": "active", "applies_to": "programme", "at": "2026-10-19T00:00:00Z", "quote": "keep PRs small", "prompt_id": "p0000001", "until": None, "why": None, "closed": None})'
+edit 'rec["programme"].setdefault("instructions", []).append({"id": "i0a1b2c", "state": "active", "applies_to": "programme", "at": "2026-10-19T00:00:00Z", "quote": "keep PRs small", "prompt_id": "p0000001", "until": None, "why": None, "closed": None})'
 RULE_ID="$(run_py "$RUN" <<'EOF'
 prog = load_lib_module("programme")
 print(prog.rules_in_force(record(args[0]))["rules"][0]["id"])
@@ -271,6 +271,31 @@ prog add-item linear:AI-4 --title "Stale"
 edit 'rec["programme"]["items"]["linear:AI-4"]["trajectory"] = {"done": [], "current": {"title": "Old", "clause": None}, "planned": [], "finish": None, "location": None, "recorded_at": "2000-01-01T00:00:00Z", "session_id": "sess-pm", "hash": "x"}'
 prog merge-item linear:AI-4 linear:AI-1
 check '"Other path"' "$(field 'prog["items"]["linear:AI-1"]["trajectory"]["current"]["title"]')"
+
+edit 'rec["programme"].setdefault("context", {}).setdefault("decisions", {})["r-small-prs"] = [{"rev": 1, "state": "accepted", "at": "2026-10-20T00:00:00Z", "kind": "merge_strategy", "effect": "restrict", "applies_to": ["linear:AI-1"], "until": None, "scope": "PRs under 300 lines", "reason": None, "quote": "keep PRs small", "limits": [], "requirements": []}]'
+edit 'rec["programme"]["context"]["decisions"]["r-gone"] = [{"rev": 1, "state": "closed", "at": "2026-10-20T00:00:00Z", "kind": "merge_strategy", "effect": "grant", "applies_to": ["linear:AI-1"], "until": None, "scope": "x", "reason": None, "quote": "x", "limits": [], "requirements": []}]'
+record_traj '[{"item": "linear:AI-1", "done": [], "current": {"title": "Split the PR", "clause": "ruling:r-small-prs"},
+  "planned": [{"title": "Old cite", "clause": "instruction:i0a1b2c"}, {"title": "Legacy as Ruling", "clause": "ruling:i0a1b2c"},
+              {"title": "Closed", "clause": "ruling:r-gone"}, {"title": "Not legacy", "clause": "instruction:r-small-prs"}],
+  "finish": "PR"}]'
+it "a step cites an active Ruling as ruling:<id>, and a legacy instruction both as ruling:<id> and instruction:<id>"
+check '["ruling:r-small-prs", "instruction:i0a1b2c", "ruling:i0a1b2c", null, null]' "$(field '[s["clause"] for s in [prog["items"]["linear:AI-1"]["trajectory"]["current"]] + prog["items"]["linear:AI-1"]["trajectory"]["planned"]]')"
+it "a closed Ruling and instruction:<id> naming a non-legacy Ruling are unknown clauses"
+check '["unknown_clause", "unknown_clause"]' "$(field '[s.get("note") for s in prog["items"]["linear:AI-1"]["trajectory"]["planned"][2:]]')"
+it "a stored instruction:<id> step still counts as reliant on that instruction"
+check "1 1" "$(run_py "$RUN" <<'EOF'
+pvw = load_lib_module("programme_view_work")
+steps = [pvw._step(s, "planned") for s in record(args[0])["programme"]["items"]["linear:AI-1"]["trajectory"]["planned"]]
+counts = pvw.reliant_counts([{"steps": steps}])
+print(counts.get("instruction:i0a1b2c"), counts.get("ruling:i0a1b2c"))
+EOF
+)"
+
+edit 'rec["programme"]["context"]["decisions"]["r-past"] = [{"rev": 1, "state": "accepted", "at": "2026-10-20T00:00:00Z", "kind": "merge_strategy", "effect": "grant", "applies_to": ["linear:AI-1"], "until": "2000-01-01T00:00:00Z", "scope": "x", "reason": None, "quote": "x", "limits": [], "requirements": []}]'
+record_traj '[{"item": "linear:AI-1", "done": [], "current": {"title": "Split the PR", "clause": "ruling:r-small-prs"},
+  "planned": [{"title": "Expired", "clause": "ruling:r-past"}], "finish": "PR"}]'
+it "a Ruling past its end date is an unknown clause"
+check '[null, "unknown_clause"]' "$(field '[prog["items"]["linear:AI-1"]["trajectory"]["planned"][0].get(k) for k in ("clause", "note")]')"
 
 echo ""
 echo "programme-trajectory.test.sh: ${PASS} passed, ${FAIL} failed"

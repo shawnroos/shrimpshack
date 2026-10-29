@@ -24,12 +24,12 @@ EOF
 prog add-item linear:AI-1 --title "browser acceptance" --kind fix_only --pane w2:p30 --terminal-id term_p30 --session sess-w1
 prog add-item linear:AI-2 --title "linux investigation"
 prog add-item linear:AI-3 --title "spare worker slot"
-P1="$(typed "record decision d-browser")"
-prog record-decision d-browser --scope "browser acceptance only" --reason "Shawn wants the browser path first" \
+P1="$(typed "record decision d-browser: technical approach for AI-1")"
+prog record-ruling d-browser --effect decided --kind technical_approach --scope "browser acceptance only" --reason "Shawn wants the browser path first" \
   --limit "never touch production data" --applies-to linear:AI-1 --prompt "$P1"
 it "a decision with a typed prompt is recorded"
 check 0 "$CODE"
-prog record-decision d-linux --scope "linux follow-up" --reason "parked until browser lands" --applies-to linear:AI-2
+prog record-ruling d-linux --effect decided --kind technical_approach --scope "linux follow-up" --reason "parked until browser lands" --applies-to linear:AI-2
 it "a decision without a prompt is recorded as pending"
 check 0 "$CODE"
 P2="$(typed "define requirement r-browser")"
@@ -99,6 +99,15 @@ it "AE2: the uncertain launch is an uncertain effect"
 check "[\"${ATTEMPT_U}\"]" "$(pyget "$OUT1" '[u["attempt"] for u in d["uncertain_effects"]]')"
 it "AE2: the requirement and its acceptance state are included"
 check "unsatisfied" "$(pyget "$OUT1" '[r["state"] for r in d["acceptance"] if r["id"] == "r-browser"][0]')"
+it "the binding section lists each active Ruling with its kind and effect, and no instructions list"
+check '[[["ruling:d-browser", "technical_approach", "decided", true, false]], false]' "$(pyget "$OUT1" '[[[r["id"], r["kind"], r["effect"], r["binding"], r["authorizes"]] for r in d["binding"]["rulings"]], "instructions" in d["binding"]]')"
+it "a pending Ruling waits in pending_decisions and is not binding"
+lacks "d-linux" "$(pyget "$OUT1" 'd["binding"]')"
+it "each decision row carries its Ruling kind and effect"
+check '{"d-browser": ["technical_approach", "decided"], "d-linux": ["technical_approach", "decided"]}' "$(pyget "$OUT1" '{x["decision_id"]: [x["kind"], x["effect"]] for x in d["decisions"]}')"
+it "recover --get ruling:<id> returns the Ruling's revision in force"
+prog recover --run "$RUN" --get ruling:d-browser
+check "0 browser acceptance only" "$CODE $(pyget "$OUT" 'd["entry"]["scope"]')"
 it "the packet is deterministic for one revision (two sessions, same bytes)"
 check "$OUT1" "$OUT2"
 it "a decision source claims origin verification only when a verified prompt accepted it"
@@ -139,8 +148,8 @@ check 1 "$CODE"
 # Scenario 10: oversized text stays retrievable by id; the binding limit is never dropped.
 TAIL="never-delete-the-staging-bucket"
 LONG="$("$PY" -c 'import sys; print(("context " * 55) + sys.argv[1])' "$TAIL")"
-P3="$(typed "record decision d-big")"
-prog record-decision d-big --scope "big" --reason "$LONG" --limit "$LONG" --applies-to linear:AI-3 --prompt "$P3"
+P3="$(typed "record decision d-big: technical approach for AI-3")"
+prog record-ruling d-big --effect decided --kind technical_approach --scope "big" --reason "$LONG" --limit "$LONG" --applies-to linear:AI-3 --prompt "$P3"
 prog recover --run "$RUN"
 PKT="$OUT"
 LIMIT_ID="$(pyget "$PKT" '[l["id"] for r in d["decisions"] if r["decision_id"] == "d-big" for l in r["limits"]][0]')"

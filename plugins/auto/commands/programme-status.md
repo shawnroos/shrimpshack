@@ -1,6 +1,6 @@
 ---
 description: Show an auto programme's working model, items and rules in force
-argument-hint: "[<run>] [terms]"
+argument-hint: "[<run>] [agreement]"
 allowed-tools: Bash
 ---
 
@@ -15,11 +15,15 @@ With no argument it shows the programme this session drives. Pass a run id to sh
 another programme. It reads only; for an active programme whose live view file is
 missing, it writes the view again.
 
-Pass `terms` (`/auto:programme-status terms`, or `<run> terms`) to show only the
-terms page: the project terms in force and the corrections, each decision under the
-term it used (decisions made where the terms are silent sit under "no term"), and
-the 20 most recent term changes with their source and Shawn's quote in redacted
-form. Viewing the page never counts as approval and writes nothing.
+Pass `agreement` (`/auto:programme-status agreement`, or `<run> agreement`) to show
+only the agreement page: Scope (remit, stop rule, cadence and budget, the sources
+watched, and any preferred-tool text), the Rulings (active, pending, carried over and
+expired, old instructions and decision records among them), the Authority table with
+the protected kinds marked fixed in code, the Done standards, any protocol change or
+Ruling conflict to report, each decision under the Ruling it cited (decisions where
+nothing applied sit under "no Ruling applied"), and the 20 most recent preferred-tool
+changes with their source and Shawn's quote in redacted form. Viewing the page never
+counts as approval and writes nothing.
 
 Run the dispatch line below and print its output as it is:
 

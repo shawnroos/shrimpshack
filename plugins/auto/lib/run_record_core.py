@@ -470,7 +470,7 @@ def _acquire(lock_file, lpath, timeout) -> None:
             time.sleep(0.05)
 
 
-def _with_locked_run_record(repo_root: str, run_id: str, mutate, *, reroute=True):
+def _with_locked_run_record(repo_root: str, run_id: str, mutate, *, reroute=True, after=None):
     """Acquire flock, read the run-record, run ``mutate(run-record)``, atomic-write, release.
 
     The lock spans the WHOLE read-modify-write (the lost-update guard). The
@@ -500,6 +500,8 @@ def _with_locked_run_record(repo_root: str, run_id: str, mutate, *, reroute=True
         run_record = _read_json(path)
         result = mutate(run_record)
         _atomic_write(path, run_record)
+        if after is not None:
+            after(result, run_record)
         return result
 
     try:
