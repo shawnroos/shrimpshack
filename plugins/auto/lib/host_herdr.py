@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -32,7 +31,6 @@ SEND_VERBS = frozenset({
 })
 GLOBAL_VALUE_OPTS = frozenset({"--session", "--machine", "--remote"})
 VALUE_OPTS = frozenset({"--until", "--timeout", "--seq"})
-_PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
 
 native, refuse = terminal_host.native, terminal_host.refuse
 
@@ -95,8 +93,8 @@ class HerdrHost(terminal_host.TerminalHost):
     def start_pane(self, argv, timeout, **_):
         run = programme_exec.bounded(argv, timeout)
         output = programme_sanitize.clean(run["stdout"] + "\n" + run["stderr"], 0, keep_newlines=True)
-        match = _PANE_LINE.search(output)
-        pane = programme_sanitize.token(match.group(1)) if match else None
+        found = terminal_host.agent_pane(output, "herdr")
+        pane = programme_sanitize.token(found) if found else None
         return native({"run": run, "output": output, "pane": pane})
 
     def confirm_started(self, session_id, pane, before, wait, session_of, **_):

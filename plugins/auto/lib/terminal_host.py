@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +23,21 @@ METHODS = ("own_pane", "list_panes", "start_pane", "confirm_started", "send_prom
 CAPABILITY_OF = {"own_pane": "find_own_pane", "list_panes": "list_panes", "start_pane": "start_pane",
                  "confirm_started": "confirm_started", "send_prompt": "send_prompt",
                  "presence": "presence", "change_token": "change_signal", "notify": "notify"}
+_NEW_PANE_LINE = re.compile(r"^[ \t]*(?:\u25b8[ \t]+)?agent pane: ([a-z]+) (\S+)", re.MULTILINE)
+_OLD_PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
+
+
+def agent_pane(output: str, host: str):
+    """The pane id spinoff reported for `host`, from the new `agent pane: <host> <id>` line or herdr's older line."""
+    for found_host, pane in _NEW_PANE_LINE.findall(output):
+        if found_host == host:
+            return pane
+    if host == "herdr":
+        old = _OLD_PANE_LINE.search(output)
+        return old.group(1) if old else None
+    return None
+
+
 TABLE_PATH = os.path.join(_LIB_DIR, "terminal_host_capabilities.json")
 
 
