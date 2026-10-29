@@ -86,6 +86,13 @@ def promoted(home, run_id) -> bool:
     return _tagged(run_record_core.run_record_path(home, run_id))
 
 
+def has_outcome(home, run_id, operation_id) -> bool:
+    if operation_id is None or not promoted(home, run_id):
+        return False
+    with _open(run_id) as store:
+        return bool(_guarded(run_id, lambda: store.outcome(operation_id)))
+
+
 def routes(repo_root, run_id) -> bool:
     home = home_for(repo_root, run_id)
     return home is not None and promoted(home, run_id)

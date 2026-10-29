@@ -81,6 +81,73 @@ check 0 "$CODE"
 it "--despite does not settle the earlier uncertain prompt"
 check "[\"${SEND}\"]" "$(unreconciled "$RUN")"
 
+# Focus budget: a held start leaves no launch record, --despite focus overrides, a hand-started worker counts.
+limit() {
+  local pid
+  pid="$(run_py "$RUN" "focus budget limited $*" <<'PYEOF'
+run, text = args
+print(fixture_prompt(run, "sess-pm", text, "typed")["prompt_id"])
+PYEOF
+)"
+  prog amend-term focus_budget limited "$@" --prompt "$pid" --run "$RUN"
+}
+write_snapshot base
+prog add-item linear:AI-61 --title "focus item" --run "$RUN"
+limit --points 5
+OPS0="$(field "$RUN" "len(ops)")"
+: > "$CALLS"
+prog start-worker linear:AI-61 --run "$RUN" -- --name w1
+it "an unsized item is held while a point limit is set"
+check 1 "$CODE"
+has "unsized" "$OUT"
+it "the held start admitted no launch and ran no spinoff"
+check "[${OPS0}, 0]" "$(field "$RUN" "[len(ops), $(calls_of spinoff)]")"
+it "the hold survives the raised refusal"
+check 'true' "$(field "$RUN" "bool(items['linear:AI-61']['held'])")"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-61 --run "$RUN" --despite focus -- --name w1
+it "--despite focus without Shawn's pick is refused and the item stays held"
+check "1 true" "${CODE} $(field "$RUN" "bool(items['linear:AI-61']['held'])")"
+has "override-focus linear:AI-61 --prompt <pick id>" "$OUT"
+PICKS="${WORK}/transcripts"
+mkdir -p "$PICKS"
+PICK="$(run_py "$RUN" "$(prog approval-label override-focus linear:AI-61; echo "$OUT")" "$PICKS" <<'PYEOF'
+import copy, pathlib, uuid
+ps = load_lib_module("programme_pick_source")
+fx = [json.loads(l) for l in open(os.path.join(sys.argv[1], "tests/fixtures/askuser_transcript.jsonl"))]
+ASK, ANSWER = fx[0], fx[1]
+run, answer, folder = args
+sid, tid, q = "sess-pm", "toolu_" + uuid.uuid4().hex[:10], "Override the focus budget?"
+answers = {q: answer}
+path = pathlib.Path(folder) / (sid + ".jsonl")
+ask = copy.deepcopy(ASK); ask.update(uuid="a-" + tid, sessionId=sid)
+ask["message"]["content"][0].update(id=tid, input={"questions": [
+    {"question": q, "header": "Setup", "multiSelect": False,
+     "options": [{"label": answer, "description": ""}, {"label": "other", "description": ""}]}]})
+res = copy.deepcopy(ANSWER)
+res.update(uuid="u-" + tid, sessionId=sid, sourceToolAssistantUUID="a-" + tid,
+           toolUseResult={"questions": [{"question": q}], "answers": answers, "annotations": {}})
+res["message"]["content"][0].update(tool_use_id=tid)
+with path.open("a") as stream:
+    stream.write(json.dumps(ask) + "\n" + json.dumps(res) + "\n")
+source = ps.capture({"transcript_path": str(path), "session_id": sid, "tool_use_id": tid,
+                     "tool_response": {"answers": answers}})
+print(pj.append_prompt(run, sid, ps.summary(answers), "unknown", source=source)["prompt_id"])
+PYEOF
+)"
+prog override-focus linear:AI-61 --prompt "$PICK" --run "$RUN"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-61 --run "$RUN" --despite focus -- --name w1
+it "--despite focus after Shawn's pick starts the held item and clears the hold"
+check "0 null" "${CODE} $(field "$RUN" "items['linear:AI-61']['held']")"
+it "the override is recorded on the launch"
+check '[["focus"]]' "$(field "$RUN" "[o['despite'] for o in ops.values() if o['item'] == 'linear:AI-61']")"
+write_snapshot base
+prog add-item linear:AI-9 --title "late" --size small --run "$RUN"
+limit --points none --agents 1
+prog start-worker linear:AI-9 --run "$RUN" -- --name w9
+it "a worker already running in the snapshot uses up the agent limit"
+check 1 "$CODE"
+has "agents at limit: 1 of 1" "$OUT"
+
 # Scenario 4: end at each point between intent, admission and dispatch.
 fresh w4
 : > "$CALLS"

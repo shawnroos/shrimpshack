@@ -123,7 +123,7 @@ def _item_reasons(item_id, item, ctx) -> list:
             out.append({"kind": "open_item", "item": item_id})
     if state == "waiting" and not ctx["watched"][item_id] and not _off("UNWATCHED_WAIT"):
         out.append({"kind": "unwatched_wait", "item": item_id, "who": waiting_on.get("who")})
-    if ctx["paused_all"] or item_id in ctx["paused"]:
+    if ctx["paused_all"] or item_id in ctx["paused"] or item.get("held"):
         out = [r for r in out if r["kind"] not in PAUSED_REASONS]
     return out
 

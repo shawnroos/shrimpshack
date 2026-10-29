@@ -149,7 +149,8 @@ def _pick_write(host, opts, change, kind, *, verb, target):
 
 
 def _h_pick_term(host, argv):
-    positional, opts = host._parse(argv, values=("run", "pick", "why", "until", "seconds"))
+    positional, opts = host._parse(
+        argv, values=("run", "pick", "why", "until", "seconds") + programme_home.TERM_EXTRAS)
     if len(positional) != 2:
         raise ValueError("usage: pick-term <key> <value> --pick <id>")
     key, value = positional
@@ -191,7 +192,7 @@ def _h_take_recommendations(host, argv):
         cite = _cite(pick, *taken[0])
         applied = {}
         for key, term in programme["agreement"]["terms"].items():
-            if key in SHARED_TERMS or not isinstance(term, dict):
+            if key in SHARED_TERMS or programme_home.is_opt_in(key) or not isinstance(term, dict):
                 continue
             value, extras, settle = _recommendation(term)
             _set(host, term, value, extras, cite, TAKE_ALL, settle=settle)

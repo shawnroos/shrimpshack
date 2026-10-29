@@ -50,7 +50,8 @@ TRACKER_SCOPE_PARTS = ("teams", "projects", "initiatives")
 ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
     "deliverables", "waiting_on", "task_runs", "dropped_reason", "joined_at",
-    "history", "trajectory", "repo",
+    "history", "trajectory", "repo", "size", "held", "held_at", "parked_pane",
+    "focus_override",
 )
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "instructions", "decisions", "items",
@@ -207,8 +208,12 @@ def default_terms(now_iso: str) -> dict:
                         seconds=DEFAULT_CADENCE_SECONDS, eval_budget_usd_per_day=25,
                         quiet_hours=None),
         "tools_of_record": term("tools_of_record", SWEEP_SOURCES, list(SWEEP_SOURCES)),
+        "focus_budget": term("focus_budget", ("unlimited", "limited"), "unlimited",
+                             points=None, agents=None, scale=dict(DEFAULT_SIZE_SCALE)),
     }
 
+
+DEFAULT_SIZE_SCALE = {"small": 1, "medium": 3, "large": 5}
 
 TERM_GUIDE = {
     "remit": {
@@ -257,6 +262,16 @@ TERM_GUIDE = {
             "tracker": "The issue tracker.",
             "tasks": "Each session's task list.",
             "plans": "Plan files in the remit's repos.",
+        },
+    },
+    "focus_budget": {
+        "editor": "choice",
+        "binding": "code",
+        "opt_in": True,
+        "description": "How many task points and agents the programme runs at once.",
+        "options": {
+            "unlimited": "No limit on what runs at once.",
+            "limited": "Hold work over the points or agents limit in a queue.",
         },
     },
 }
@@ -339,7 +354,8 @@ def normalize_item(item: dict, item_id=None) -> dict:
     for key in ("aliases", "sessions", "task_runs", "history"):
         out[key] = list(item.get(key) or [])
     out["deliverables"] = dict(item.get("deliverables") or {})
-    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "trajectory", "repo"):
+    for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "trajectory", "repo", "size", "held", "held_at",
+                "parked_pane", "focus_override"):
         out.setdefault(key, None)
     return out
 
@@ -381,6 +397,29 @@ def normalize_programme(block: dict) -> dict:
     remit["tracker"] = tracker
     out["remit"] = remit
     return out
+
+
+TERM_EXTRAS = ("points", "agents", "scale")
+
+
+def term_extra_texts(term: dict) -> list:
+    out = []
+    for name in TERM_EXTRAS:
+        value = term.get(name)
+        if isinstance(value, dict):
+            out.append(f"{name} " + " ".join(f"{k}={v}" for k, v in value.items()))
+        elif value is not None:
+            out.append(f"{name} {value}")
+    return out
+
+
+def is_opt_in(key: str) -> bool:
+    return bool(TERM_GUIDE.get(key, {}).get("opt_in"))
+
+
+def opt_in_hidden(key: str, term: dict) -> bool:
+    default = term.get("default", (term.get("options") or [None])[0])
+    return is_opt_in(key) and term.get("value") == default and term.get("set_by") in (None, "default")
 
 
 def cadence_seconds(record: dict) -> int:

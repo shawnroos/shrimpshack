@@ -33,6 +33,7 @@ programme_naming = load_lib_module("programme_naming")
 programme_approval = load_lib_module("programme_approval")
 programme_proposals = load_lib_module("programme_proposals")
 programme_trajectory = load_lib_module("programme_trajectory")
+programme_focus = load_lib_module("programme_focus")
 
 _Verb = run_record._Verb
 
@@ -367,6 +368,7 @@ def _source_list(term, value) -> list:
 
 
 def _check_value(term, value, extra):
+    programme_focus.check_extras(sys.modules[__name__], term, value, extra)
     if term.get("key") == "tools_of_record":
         return _source_list(term, value)
     if value not in (term.get("options") or []):
@@ -389,6 +391,7 @@ def _set_term(term, value, extra, *, set_by, why, prompt=None) -> dict:
         term["until"] = extra.get("until") if value == "until_time" else None
     if extra.get("seconds") is not None:
         term["seconds"] = int(extra["seconds"])
+    programme_focus.apply(sys.modules[__name__], term, value, extra)
     if prompt:
         term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
     return {"term": term["key"], "value": value, "why": why}
@@ -453,7 +456,7 @@ def _h_rules(argv):
 
 
 def _h_propose_agreement(argv):
-    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source"),
+    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source") + programme_home.TERM_EXTRAS,
                      multi=("term", "project-term", "reserved-term"))
     host = sys.modules[__name__]
     parsed, source = programme_terms.parse_specs(host, opts)
@@ -501,7 +504,7 @@ def _h_accept_agreement(argv):
 
 
 def _h_amend_term(argv):
-    positional, opts = _parse(argv, values=("run", "prompt", "why", "until", "seconds"))
+    positional, opts = _parse(argv, values=("run", "prompt", "why", "until", "seconds") + programme_home.TERM_EXTRAS)
     if len(positional) != 2:
         raise ValueError("usage: amend-term <key> <value> --prompt <id>")
     key, value = positional
@@ -824,7 +827,8 @@ def build_view(run_id, home, record, *, journal=None, inbox_size=None) -> dict:
         inbox_size = programme_record.claims_count(home)
     protocol = _protocol({run_id: journal})
     return programme_view.build(record, journal, inbox_size=inbox_size, protocol=protocol,
-                                rules=rules_in_force(record, {run_id: journal}, protocol))
+                                rules=rules_in_force(record, {run_id: journal}, protocol),
+                                focus=programme_focus.live_usage(sys.modules[__name__], record))
 
 
 def _refresh_promoted(run_id, home) -> None:
@@ -980,6 +984,7 @@ _VERBS.update(load_lib_module("programme_setup").build_verbs(sys.modules[__name_
 _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":
