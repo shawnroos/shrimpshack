@@ -470,7 +470,7 @@ old_prog carry-rulings --run "$LC"
 old_prog carry-rulings c3 --prompt "$(prompt_in "$LC" "carry c3 to the next programme")" --run "$LC"
 LN="$(new_legacy w59)"
 prog propose-agreement --run "$LN" --project-term "naming=kebab case files" --source "repo README"
-it "a set-remit on a JSON home refused for a carried Ruling, moved and retried makes the worktree once"
+it "a set-remit on a JSON home refused for a carried Ruling moves the home once and makes no PM worktree"
 OUT="$(inproc_remit "$LN" "{\"spaces\":[\"w59\"],\"repos\":[{\"path\":\"${REPO3}\"}]}" '
 real_create, real_promote = pw.create, programme.upgrade_legacy
 calls = []
@@ -485,7 +485,7 @@ import atexit
 atexit.register(lambda: print("CALLS", calls))
 ')"
 has "RESULT 0" "$OUT"
-has "CALLS ['create', 'move']" "$OUT"
+has "CALLS ['move']" "$OUT"
 has '"carried_over"' "$OUT"
 case "$OUT" in *unreadable*) fail "a notice names an unreadable home: $OUT" ;; esac
 TARGET3="$(run_py "$LN" "$REPO3" <<'EOF'
@@ -493,8 +493,8 @@ pw = load_lib_module("programme_worktree")
 print(pw.target_path(pw.main_checkout(args[1]), args[0]))
 EOF
 )"
-it "that retried set-remit leaves exactly one worktree for the run, and records it"
-check "1 True" "$(git -C "$REPO3" worktree list --porcelain | grep -c "^worktree $(cd "$(dirname "$TARGET3")" 2>/dev/null && pwd -P)/$(basename "$TARGET3")$") $(run_py "$LN" <<'EOF'
+it "that set-remit leaves no worktree for the run and records none"
+check "0 False" "$(git -C "$REPO3" worktree list --porcelain | grep -c "^worktree $(cd "$(dirname "$TARGET3")" 2>/dev/null && pwd -P)/$(basename "$TARGET3")$") $(run_py "$LN" <<'EOF'
 print(bool(record(args[0])["programme"].get("pm_worktree")))
 EOF
 )"

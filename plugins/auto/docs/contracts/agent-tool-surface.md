@@ -384,6 +384,12 @@ session.
   `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed
   prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
   item then refuses, and requirements stay unchanged.
+- **Item size**: `size-item` (`<item> <size>`) sets an item's size from the agreement's `focus_budget` scale; `add-item --size <name>` does the same. A name outside the scale is refused and the refusal lists the valid names.
+- **Focus limits**: `amend-term focus_budget limited --points <n> --agents <n> --prompt <id>` sets the limits; either may be left out, and the word none clears one. The value unlimited clears both. The option --scale small=1,medium=3,large=5 replaces the point scale. The verbs propose-term and pick-term take the same options. A programme has no limit until one is set, and setup does not wait on it.
+- **Focus gate**: with a `focus_budget` limit set, `start-worker` holds an item that would pass the point limit, pass the agent limit, lacks a size (point limit only), or cannot be counted because herdr is unreadable. The hold records a reason and a held-at time on the item, and the start refuses with the next step. `--despite focus` starts it anyway only after Shawn's pick: without an approved `override-focus` on the item it is refused and the item is held (the refusal names `approval-label override-focus <item>` and the steps). With the approval it passes the gate once, uses the approval up and journals the override. The old-worker hold is never overridden. `focus-recheck` releases each held item that now fits, in held order, counting the room each released item takes.
+- **Focus usage**: `focus-note` (`--agents <n>`) records how many subagents the PM is running with. `status` shows a Focus row (points and agents in play against the limits, no limit for an unset limit, unavailable when herdr cannot be read, and the noted subagent count) and, while a limit is set or an item is parked, a Waiting for a slot list of held items in held order with size and reason.
+- **Override**: `override-focus` (`<item> --prompt <pick id>`) records one approval on `<item>` (`focus_override`, the pick's prompt id). Only a pick whose answer is exactly the `approval-label override-focus <item>` text approves it; typed or suggested text and another verb's or item's label approve nothing, and a pick is used once. It refuses a finished item and an item that is not held (the pick is not spent). The approval is bound to the hold text it approved: the next `start-worker <item> --despite focus` consumes it only if the item's hold still reads the same, checked and cleared in one locked write, so two racing starts cannot both use it. A different hold text (a bigger overrun), a start that fits, `focus-recheck` clearing the hold, `size-item` changing the size and `drop-item` all withdraw it; the next override then needs a fresh pick. `size-item` is not gated and still lowers an item's counted points.
+- **Swap**: `swap-item` (`<out> <in> --prompt <pick id>`) parks `<out>` so `<in>` can start. Only a pick whose answer is exactly the `approval-label swap-item <out> <in>` text approves it; typed or suggested text and the decline option approve nothing. It refuses an `<out>` no live worker holds and an `<in>` that parking `<out>` would still not fit (naming the missing points). A parked item is held with its old pane recorded and can resume only through `start-worker` and the normal gate, which refuses while that pane still holds a live worker. `--despite focus` does not bypass that check. The swap is recorded as a `work_sequencing` decision naming both items.
 - **Waits and watchers**: `set-waiting` sets who an item waits on, with an
   optional named reporter, a watcher (process or task id), the blocker kind and a
   trace or job id; `--clear` returns the item to open. `--blocker` needs
@@ -609,6 +615,15 @@ session.
   writes nothing. Only an item whose step path changed under the same driving
   session gets a `trajectory_changed` journal row; moving the current step to
   done is not a change, and neither is a first recording.
+- **Sweep inputs**: `sweep-inputs` (args: optional --save, optional --reasons) is the
+  read side of a sweep as data. It gathers the actionable reasons, open decisions and
+  asks, unread claims, items that moved since the last working_now row, merge readiness
+  for open PR deliverables (eight at most), worker-owned items whose pane is not working,
+  the journal rows since the last sweep, and whether the remit watcher and the cron are
+  armed. It computes a verdict from the store: unchanged only when nothing needs the PM,
+  and a PR it cannot read counts as changed. --save writes sweep-inputs.json in the
+  programme home and prints the verdict; --reasons prints only the actionable reasons.
+  It changes no programme state and journals nothing.
 - **Merge readiness**: `check-mergeable` (args: a PR as owner/repo#N or URL,
   optional --pin <item>) reads an open PR's state, draft flag, mergeable and merge
   state, review decision, base branch, head, required checks and unresolved review
@@ -721,7 +736,49 @@ session.
   registry pane, a headless driver, another herdr server, or an open pane that
   reports no session is not proof. A refusal on a live driver names its pane and
   tab and gives the `--replace` line to type. `--replace` on the verb itself
-  authorizes nothing.
+  authorizes nothing. The no-request refusal prints `fix: programme.sh become-pm`.
+  `takeover --prompt <id>` needs no typed request. auto picks the route under the
+  leases lock, from the fresh lease status and the herdr presence:
+  - **Pick route** (a live driver, or an orphaned lease whose driver herdr shows
+    present): the prompt is a verified pick from this session, unused, journaled
+    after the last start, takeover or handover, with one question. Its answer,
+    less a trailing ` (Recommended)`, is exactly
+    `programme.sh approval-label takeover --replace <driver session id>`. The
+    named session must still be the driver. The journaled reason is replaced.
+  - **Stopped route** (an orphaned lease that herdr does not show present, or a
+    live lease whose driver herdr shows gone): the same pick as the pick route,
+    of the same label. A typed prompt or an accepted suggestion never counts,
+    because any instruction Shawn gives a worker would otherwise hand it the PM
+    role. The caller also has a session-registry row in a herdr space the run
+    leases; HERDR_* env alone is not proof. The status comes from a readable run
+    record; a record that fails to load refuses. The journaled reason is
+    orphaned or driver_gone.
+  Both routes journal `taken_over` with `request: null`, the approval
+  `{origin: picked, answer}`, and cite the pick. A pick is used once: a pick
+  journaled before the last start, takeover or handover refuses. Every refusal
+  on these routes prints a `fix:` that offers the picker: run
+  `programme.sh approval-label takeover --replace <driver>`, offer its output as
+  the recommended option of one AskUserQuestion picker, then rerun
+  `programme.sh takeover --prompt <pick id>`, with the id from the `<auto-data>`
+  tag the PostToolUse hook adds after Shawn's answer. Only "the PM changed while
+  auto was checking it" prints `fix: programme.sh become-pm`. The prompt hook
+  does not journal prompts from a session that drives no programme, except a
+  typed `/auto:programme-takeover`, `-handover` or `-end` request.
+  `become-pm` is read-only and needs no driving session. It reads the caller's
+  space lease, its status, herdr presence and whether this session drove the run
+  before, writes nothing, and prints one JSON line with a **step** plus one line
+  naming that step. The steps: **start** (no lease, or a free, ended or expired
+  one); **already-pm** (the caller drives); **stand-down** (the caller drove the run
+  and another session drives it now, and that PM has not stopped: CronList shows
+  this session's programme cron to CronDelete, TaskStop each Monitor task id
+  this session started, then stop, with no message to Shawn); **ask-shawn**
+  (another session holds the lease, live or stopped, including a session that
+  drove the run before when its successor stopped: **label** is the exact
+  `approval-label takeover --replace <driver>` text to offer as the recommended
+  option of one AskUserQuestion picker with a decline option, and **command** is
+  `programme.sh takeover --prompt <pick id>`); **refused** (outside a herdr space,
+  an unreadable lease or run record, or a newer programme), which exits 1 with a
+  `fix:` line. It uses the same stopped-PM rule as the takeover routes.
   `handover` runs in the driving session and needs a typed handover request that
   names the new session and cites its prompt. `end` needs a typed end request in
   the driving session, or an orphaned lease; on an expired lease it needs none and
@@ -741,18 +798,29 @@ session.
   it first.
 - **Wake watcher** (`lib/programme-watch.sh`, not a verb): remit mode
   `programme-watch.sh [--run <id>] [--tracker] [--max-polls <n>]` beats the remit
-  watcher each interval and prints one line when the remit changes
-  (remit-changed, claim, wait-due, tracker-changed, tasks-changed,
-  plans-changed or source-available), naming the source. Tasks (a status or
-  count change in a remit session's list) and plans (a new or edited plan file
-  in a remit repo) are local reads and always watched; --tracker polls the
+  watcher each interval and prints a line only for a change the PM must act on
+  (remit-changed for a pane opened or closed, claim, wait-due, tracker-changed, plans-changed for an added
+  plan, or source-available), naming the source. Non-urgent lines
+  (remit-changed, tracker-changed, plans-changed) are held and printed as one
+  line up to 2 minutes after the first one. Claim, wait-due, source and exit
+  lines print at once, after anything held. Every exit, including a SIGTERM or
+  SIGHUP from the Monitor, prints the held lines first. Tasks (a remit session's
+  task list) and plans (plan files in a remit repo) are local reads, polled for
+  outages and new plans: a task-count move, an edited plan or a worker turning busy or idle prints nothing,
+  and the next sweep reads it. --tracker polls the
   tracker providers that need no token. A source the tools_of_record term turns off is
-  never polled. It exits 0 after printing; it prints "source-unavailable <name> <reason>" once and keeps
-  polling. Item mode `programme-watch.sh [--run <id>] --item <id> -- <argv>`
+  never polled. It prints "source-unavailable <name> <reason>" once and keeps
+  polling. Changes made while no watcher runs, between a Monitor expiry and
+  the re-arm, are not reported: the re-armed watcher starts from a fresh
+  baseline, and the PM's next sweep reads them. On an expiry the PM re-arms
+  the watcher and records the Monitor, and does nothing else unless the stream
+  printed change lines before it ended (held lines are printed when the watcher
+  is stopped), which it handles as a normal wake. Item mode `programme-watch.sh [--run <id>] --item <id> -- <argv>`
   beats that item's watcher while the command runs, then prints
   "item-exited <id> exit=N". Exit codes: 0 change or quiet exit, 1 runtime error
-  or 3 refused beats, 2 usage. Settings: `CLAUDE_AUTO_WATCH_INTERVAL_SECONDS`
-  (default 30), `CLAUDE_AUTO_PROGRAMME_CLI`.
+  or 3 refused beats, 2 usage, 128 plus the signal number when stopped. Settings:
+  `CLAUDE_AUTO_WATCH_INTERVAL_SECONDS` (default 30),
+  `CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS` (default 120), `CLAUDE_AUTO_PROGRAMME_CLI`.
   `expire` ends a programme whose agreement stayed unaccepted past one cadence,
   with reason agreement_unaccepted, and otherwise does nothing. `beat` stamps the
   driver beat that keeps the lease live; the sweep runs it each time, because a
@@ -802,7 +870,9 @@ For `record-ruling` and a `close-ruling` that needs a prompt, the Ruling id; for
 name them is refused, and the refusal lists the missing words.
 For `edit-project-term` after acceptance, the text must contain the term's area and
 its new text. `accept-agreement` accepts any typed prompt, because the quote is what it records; `accept-agreement`
-also needs the prompt to come after the last proposal or project-term edit.
+also needs the prompt to come after the last proposal, pick, term amend or project-term edit. A pick of
+its terms-bound label (`approval-label accept-agreement`) also approves it, with `--terms <digest>`; an
+accepted suggestion never does.
 The verbs on the pick list also accept a verified pick or an accepted suggestion;
 every other verb needs a typed prompt. Rulings stay typed-only: `record-ruling`,
 `close-ruling` and `carry-rulings` are not on the list, and `accept-context`

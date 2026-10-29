@@ -55,7 +55,8 @@ p = setup.build(fresh())
 check("a fresh proposal lists the terms in agreement order, then rulings, shared, items and accept",
       keys(p) == terms + tail, keys(p))
 check("the first unfinished step is current", p["current"] == terms[0] and states(p)[terms[0]] == "current"
-      and all(states(p)[k] == "upcoming" for k in keys(p)[1:] if k != "items"), states(p))
+      and all(states(p)[k] == "upcoming" for k in keys(p)[1:] if k not in ("items", "focus_budget")), states(p))
+check("an optional focus_budget left at its default never blocks setup", states(p)["focus_budget"] == "done", states(p))
 check("with no probe recorded the items step is not done and the scope is not probed",
       states(p)["items"] != "done" and p["scope"]["probed"] is False, (states(p), p["scope"]))
 check("each term step offers the term's option names",
@@ -68,8 +69,10 @@ check("each term step carries its group", all(step(p, k)["group"] == k for k in 
 check("per-programme term steps need no typed reply", all(not step(p, k)["needs_typed"] and step(p, k)["reply"] is None
       for k in terms))
 check("the walkthrough has no autonomy step", "autonomy" not in keys(p), keys(p))
-check("accept always needs the typed line", step(p, "accept")["needs_typed"] and step(p, "accept")["reply"] == "accept the agreement",
-      step(p, "accept"))
+check("the accept is offered as a pick of its terms-bound label",
+      not step(p, "accept")["needs_typed"] and step(p, "accept")["reply"] is None
+      and step(p, "accept")["label"] == "Approve accept-agreement --terms " + step(p, "accept")["terms_digest"]
+      and len(step(p, "accept")["terms_digest"]) == 8, step(p, "accept"))
 
 b = fresh()
 b["agreement"]["terms"]["remit"]["set_by"] = "shawn"

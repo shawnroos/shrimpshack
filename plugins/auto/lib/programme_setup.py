@@ -43,6 +43,9 @@ def _picked(host, run_id, rec, pick_id) -> dict:
                                   "only a picker answer Shawn gave in this session approves a setup choice")
     if row.get("session_id") != rec.get("driving_session_id"):
         raise host.ProgrammeError(f"pick {pick_id!r} was not answered in the driving session")
+    if row["payload"].get("driving") is False:
+        raise host.ProgrammeError(f"pick {pick_id!r} was answered before this session drove the programme; "
+                                  "it can serve only a takeover")
     source = row["payload"]["source"]
     used = programme_journal.pick_use(rows, source)
     if used is not None:
@@ -145,7 +148,8 @@ def _pick_write(host, opts, change, kind, *, verb, target):
 
 
 def _h_pick_term(host, argv):
-    positional, opts = host._parse(argv, values=("run", "pick", "why", "until", "seconds"))
+    positional, opts = host._parse(
+        argv, values=("run", "pick", "why", "until", "seconds") + programme_home.TERM_EXTRAS)
     if len(positional) != 2:
         raise ValueError("usage: pick-term <key> <value> --pick <id>")
     key, value = positional
@@ -187,7 +191,7 @@ def _h_take_recommendations(host, argv):
         cite = _cite(pick, *taken[0])
         applied = {}
         for key, term in programme["agreement"]["terms"].items():
-            if not isinstance(term, dict):
+            if programme_home.is_opt_in(key) or not isinstance(term, dict):
                 continue
             value, extras, settle = _recommendation(term)
             _set(host, term, value, extras, cite, TAKE_ALL, settle=settle)
@@ -203,7 +207,8 @@ def _step_name(host, programme, name, *, keep=False) -> str:
     if name not in known:
         raise host.ProgrammeError(f"unknown setup step {name!r}; steps: {known}")
     if keep and name == programme_view_setup.ACCEPT:
-        raise host.ProgrammeError("the accept step is never kept: Shawn types the accept")
+        raise host.ProgrammeError("the accept step is never kept: Shawn accepts by typing it or by "
+                                  "picking the label `programme.sh approval-label accept-agreement` prints")
     return name
 
 

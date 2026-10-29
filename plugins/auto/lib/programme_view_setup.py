@@ -15,14 +15,14 @@ programme_home = load_lib_module("programme_home")
 programme_proposals = load_lib_module("programme_proposals")
 programme_protocol = load_lib_module("programme_protocol")
 programme_view_work = load_lib_module("programme_view_work")
+programme_approval = load_lib_module("programme_approval")
 
 UNSET_BY = (None, "default", "proposal")
 SOURCES = {"carried_over": "carried over", "proposal": "PM proposal"}
 PROPOSAL_SOURCES = {"pm": "PM proposal", "ui": "proposed in the pane"}
 RULINGS, SHARED, ITEMS, ACCEPT = "rulings", "shared", "items", "accept"
 USING_EXISTING = "using existing"
-REPLIES = {RULINGS: "approve the proposed rulings", SHARED: "adopt the proposed shared rules",
-           ACCEPT: "accept the agreement"}
+REPLIES = {RULINGS: "approve the proposed rulings", SHARED: "adopt the proposed shared rules"}
 SEEN_PARTS = ("tabs", "repos", "tracker")
 
 
@@ -54,7 +54,7 @@ def _term_step(key, term, kept) -> dict:
         recommendation, source = term.get("value"), SOURCES.get(term.get("set_by"), "set by Shawn")
     if isinstance(recommendation, list):
         recommendation = ", ".join(str(v) for v in recommendation) or "none"
-    done = term.get("set_by") not in UNSET_BY or key in kept
+    done = term.get("set_by") not in UNSET_BY or key in kept or programme_home.is_opt_in(key)
     out = _step(key, guide.get("label") or key.replace("_", " "),
                 term.get("section") or guide.get("section") or key, done,
                 programme_view_work._value_text(term), recommendation, source)
@@ -159,9 +159,10 @@ def build(block, protocol=None) -> dict | None:
     seen, kept = _dict(setup.get("seen")), set(_strings(setup.get("kept")))
     terms = _dict(agreement.get("terms"))
     steps = [_term_step(key, _dict(terms[key]), kept) for key in programme_view_work._ordered_terms(terms)]
-    steps += [_rulings_step(block, kept), _shared_step(block, kept, protocol), _items_step(seen, block, kept),
-              _step(ACCEPT, "accept", ACCEPT, False, "not accepted", "accept the agreement", None,
-                    needs_typed=True, pending=True)]
+    accept = _step(ACCEPT, "accept", ACCEPT, False, "not accepted", "accept the agreement", None)
+    digest = programme_approval.terms_digest(block)
+    accept.update(terms_digest=digest, label=programme_approval.accept_label(block, digest))
+    steps += [_rulings_step(block, kept), _shared_step(block, kept, protocol), _items_step(seen, block, kept), accept]
     unfinished = [s["key"] for s in steps if not s["done"]]
     current = setup.get("step") if setup.get("step") in unfinished else unfinished[0]
     for s in steps:

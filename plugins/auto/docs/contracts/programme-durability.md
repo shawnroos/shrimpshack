@@ -124,7 +124,8 @@ and only when someone runs `release-resources` after end (see below).
 ### The programme worktree
 
 The programme worktree (`pm_worktree`) is the one thing auto removes, and only
-after programme end. End records it as the closure resource `worktree`.
+after programme end. auto no longer creates one; this covers a programme that
+recorded one before. End records it as the closure resource `worktree`.
 `release-resources` removes it with a plain `git worktree remove`. It never
 uses `-f`, and it never runs `git worktree prune`.
 

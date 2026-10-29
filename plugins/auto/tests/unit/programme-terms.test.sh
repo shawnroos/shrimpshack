@@ -146,7 +146,7 @@ check '[["crop defaults", "PM picks the crop default", "repo README and prior ru
 it "the project term gets an id of t and six hex digits"
 check true "$(field 'bool(__import__("re").fullmatch(r"t[0-9a-f]{6}", prog["agreement"]["project_terms"][0]["id"]))')"
 it "project terms live outside the fixed terms map"
-check '["cadence", "remit", "stop_rule", "tools_of_record"]' "$(field 'sorted(prog["agreement"]["terms"])')"
+check '["cadence", "focus_budget", "remit", "stop_rule", "tools_of_record"]' "$(field 'sorted(prog["agreement"]["terms"])')"
 it "agreement_proposed carries the project terms and their source"
 has '"source": "repo README and prior run 0912"' "$(journal_last agreement_proposed)"
 has '"area": "crop defaults"' "$(journal_last agreement_proposed)"

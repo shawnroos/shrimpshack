@@ -28,6 +28,7 @@ programme_terms = load_lib_module("programme_terms")
 programme_view_work = load_lib_module("programme_view_work")
 programme_view_agreement = load_lib_module("programme_view_agreement")
 programme_view_setup = load_lib_module("programme_view_setup")
+programme_focus = load_lib_module("programme_focus")
 session_registry = load_lib_module("session_registry")
 
 VIEW_FORMAT = 3
@@ -345,7 +346,7 @@ def _rules(block, rules) -> dict:
             "permission_proposals": []}
 
 
-def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, protocol=None) -> dict:
+def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, protocol=None, focus=None) -> dict:
     now = now or datetime.datetime.now(datetime.timezone.utc)
     block = programme_home.normalize_programme(_dict(record.get("programme")))
     status = programme_predicate.compute(record, now, inbox_size)
@@ -379,6 +380,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "remit": {key: _dict(block["remit"]).get(key) for key in ("spaces", "repos", "tracker")},
         "doing_now": working.get("doing"),
         "queue": [_dict(e) for e in working.get("queue") or []],
+        "focus": focus or programme_focus.usage(block, None),
+        "waiting_for_slot": programme_focus.waiting(block),
         "watching": _watching(block, status, now, programme_home.cadence_seconds(record)),
         "waiting_on_whom": waits,
         "decisions_for_shawn": _decisions(block, items) + _context_decisions(status["acceptance"]),
@@ -469,6 +472,7 @@ def _adopted_on(entry) -> str:
 
 def _term_text(key, term) -> str:
     extras = [f"{name} {term[name]}" for name in ("until", "seconds") if term.get(name) is not None]
+    extras += programme_home.term_extra_texts(term)
     value = term.get("value")
     if isinstance(value, list):
         value = ", ".join(str(v) for v in value) or "none"
@@ -567,11 +571,21 @@ def _permission_text(p) -> str:
             f"{p.get('settings_file')}, items {', '.join(p.get('items') or []) or 'none'}")
 
 
+def agreement_lines(block) -> list:
+    agreement = _dict(block.get("agreement"))
+    lines = [_term_text(key, _dict(term)) for key, term in sorted(_dict(agreement.get("terms")).items())
+             if not programme_home.opt_in_hidden(key, _dict(term))]
+    lines += [f"preferred tool {t.get('id')} {t.get('area')}: {t.get('value')} "
+              f"(source {t.get('source') or 'none recorded'})" for t in programme_home.project_terms(block)]
+    return [programme_sanitize.clean(text, cap=0) for text in lines]
+
+
 def rule_texts(r) -> list:
     agreement = _dict(r.get("agreement"))
     accepted = _dict(agreement.get("accepted"))
     out = [("agreement: " + (f"accepted {accepted.get('at')}" if accepted else "not accepted"), "text")]
-    out += [(_term_text(key, _dict(term)), "text") for key, term in sorted(_dict(agreement.get("terms")).items())]
+    out += [(_term_text(key, _dict(term)), "text") for key, term in sorted(_dict(agreement.get("terms")).items())
+            if not programme_home.opt_in_hidden(key, _dict(term))]
     out += [(_ruling_text(_dict(e)), "text") for e in r.get("rulings") or []]
     out += behaviour_texts(r)
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
@@ -683,6 +697,10 @@ def rows(model, work=None) -> list:
     _section(out, "Queue", [_row(f"  {e.get('action')} {e.get('item') or ''}".rstrip()
                                  + (f": {e['why']}" if e.get("why") else ""))
                             for e in model["queue"]], "empty")
+    _section(out, "Focus", [_row(text, style) for text, style in programme_focus.focus_lines(model["focus"])], "")
+    if model["waiting_for_slot"]:
+        _section(out, "Waiting for a slot",
+                 [_row(text, style) for text, style in programme_focus.waiting_lines(model["waiting_for_slot"])], "")
     _section(out, "Watching", [_watching_row(w) for w in model["watching"]], "nothing")
     _section(out, "Who waits on whom", [_row(f"  {w['item'] or w['system']} waits on {w['who']} "
                                              f"({'watched' if w['watched'] else 'unwatched'})",

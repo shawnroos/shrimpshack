@@ -28,12 +28,12 @@ session_registry = load_lib_module("session_registry")
 driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
-programme_worktree = load_lib_module("programme_worktree")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
 MOVABLE_STATES = ("live", "orphaned")
 CONSUMING_KINDS = ("taken_over", "handed_over", "programme_ended")
+_BECOME_PM = "programme.sh become-pm"
 REMIT_CAPS = {"spaces": 8, "repos": 20, "teams": 10, "projects": 20, "initiatives": 10}
 REMIT_INPUT_CAP = 1 << 16
 REMIT_NAME_CAP = 100
@@ -43,11 +43,12 @@ _GITHUB_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 class _Refused(Exception):
-    def __init__(self, reason, status=None, ended=None):
+    def __init__(self, reason, status=None, ended=None, fix=None):
         super().__init__(reason)
         self.reason = reason
         self.status = status
         self.ended = ended
+        self.fix = fix
 
 
 def _tokens(argv) -> list:
@@ -165,7 +166,7 @@ def _refuse(host, run, verb, sid, exc):
         if os.path.isdir(programme_home.home_path(run)):
             host.refresh_view(run, programme_home.home_path(run))
         _cleanup_lines(exc.ended, run)
-    raise host.ProgrammeError(exc.reason)
+    raise host.ProgrammeError(exc.reason, fix=getattr(exc, "fix", None))
 
 
 def _move(run, new_sid, kind, sid, extra, cites=None) -> dict:
@@ -207,27 +208,6 @@ def _rearm_list(record) -> dict:
     return {"waits": waits, "watchers": sorted((programme.get("watchers") or {}).keys())}
 
 
-def _make_worktree(run, programme=None):
-    programme = programme if programme is not None else \
-        ((programme_home._read_record(run) or {}).get("programme") or {})
-    repo = programme_worktree.remit_repo(programme)
-    if programme_worktree.recorded(programme) or not repo:
-        return None
-    try:
-        return programme_worktree.create(repo, run)
-    except OSError as exc:
-        return {"status": "failed", "path": None, "record": None, "error": f"could not create the worktree: {exc}"}
-
-
-def _record_worktree(made, programme) -> dict:
-    if not made:
-        return {}
-    if made["record"] and not programme_worktree.recorded(programme):
-        programme["pm_worktree"] = made["record"]
-        return {"pm_worktree": made["record"]}
-    return {"pm_worktree_error": made["error"]} if made["error"] else {}
-
-
 def _locked(body):
     return programme_home._with_leases_lock(body)
 
@@ -265,13 +245,16 @@ def _driver(lease, run):
     return (programme_home._read_record(run) or {}).get("driving_session_id") or lease.get("session_id")
 
 
+def _last_driver_change(journal) -> int:
+    return max((i for i, r in enumerate(journal)
+                if r.get("kind") in ("programme_started",) + CONSUMING_KINDS[:2]
+                and r.get("provenance") not in programme_authority().UNVERIFIED), default=-1)
+
+
 def _since_driver_changed(run, rows) -> list:
     # A request typed against an earlier PM must not later displace a different one.
     journal = programme_journal.read(run)
-    last = max((i for i, r in enumerate(journal)
-                if r.get("kind") in ("programme_started",) + CONSUMING_KINDS[:2]
-                and r.get("provenance") not in programme_authority().UNVERIFIED), default=-1)
-    later = [_request_ref(r) for r in journal[last + 1:]]
+    later = [_request_ref(r) for r in journal[_last_driver_change(journal) + 1:]]
     return [r for r in rows if _request_ref(r) in later]
 
 
@@ -313,11 +296,110 @@ def _live_driver(lease, presence, name) -> str:
             "If you type nothing, that PM keeps driving and this session changes nothing.")
 
 
+def _check_movable(lease, run, sid, status) -> None:
+    if status == "expired":
+        ended = _watcher_ids(programme_home._read_record(run) or {})
+        programme_home._end_locked(run, EXPIRED_REASON, _stamp())
+        ended.update(reason=EXPIRED_REASON, lease_status=status, request=None)
+        raise _Refused("the agreement was never accepted, so the programme has ended; "
+                       "run /auto:programme to start a new one", status, ended)
+    if status not in MOVABLE_STATES:
+        raise _Refused(f"the lease for {lease.get('key') or run} is {status}; "
+                       "takeover needs a live or orphaned lease", status)
+    if lease.get("session_id") == sid:
+        raise _Refused("this session already holds the lease", status)
+
+
+def _fresh_state(lease) -> tuple:
+    # (status, record); record is None when the status did not come from a readable run record.
+    current = programme_home.read_lease(programme_home.lease_path(lease["server"], lease["workspace"]))
+    if not current or current.get("corrupt") or current.get("run") != lease.get("run"):
+        return "free", None
+    status, read = programme_home.lease_state(current)
+    return status, (read[0] if read else None)
+
+
+def _in_space(run, sid) -> bool:
+    # Only a registry row counts: HERDR_* env is set by the caller, so any session could claim the space.
+    for _, lease in _run_leases(run):
+        space = (lease.get("server"), lease.get("workspace"))
+        row = session_registry.lookup(sid, *space)
+        if row and (row.get("server"), row.get("workspace")) == space:
+            return True
+    return False
+
+
+def _stopped(status, presence) -> bool:
+    # One predicate for become-pm's stand-down and the takeover routes, so the two agree on a stopped PM.
+    return (status == "live" and presence["state"] == "gone") or \
+        (status == "orphaned" and presence["state"] != "present")
+
+
+def _pick_fix(driver) -> str:
+    return (f"run `programme.sh approval-label takeover --replace {driver}`, offer its output as the recommended "
+            "option of one AskUserQuestion picker beside an option that keeps the current PM, then rerun "
+            "`programme.sh takeover --prompt <pick id>` with the id from the <auto-data> tag after his answer")
+
+
+def _cited_route(run, sid, prompt_id, status, record, presence, refused):
+    """(reason, approval) for a takeover citing --prompt, checked under the leases lock."""
+    approval = load_lib_module("programme_approval")
+    rows = programme_journal.read(run)
+    row = programme_journal.find_prompt(run, prompt_id, rows)
+    driver = presence["session_id"]
+    if row is not None and rows.index(row) <= _last_driver_change(rows):
+        raise refused(f"prompt {prompt_id!r} was given before the current PM took the programme")
+    if not _stopped(status, presence):
+        return "replaced", approval.takeover_pick(rows, row, prompt_id, sid, driver, refused)
+    if record is None:
+        raise _Refused("the programme's run record could not be read, so auto cannot tell whether its PM "
+                       "stopped; nothing is taken over", status,
+                       fix=f"`programme.sh status --run {run}` names the fault; repair it, then run "
+                           "`programme.sh become-pm` again")
+    if not _in_space(run, sid):
+        raise _Refused("this session is not in the programme's herdr space; only a session there can "
+                       "take over a PM that stopped", status,
+                       fix="run Claude from a pane in the herdr space the programme leases, then run "
+                           "`programme.sh become-pm` there")
+    found = approval.takeover_pick(rows, row, prompt_id, sid, driver, refused, stopped=True)
+    return ("driver_gone" if status == "live" else "orphaned"), found
+
+
+def _prompt_takeover(host, lease, run, sid, prompt_id) -> dict:
+    # herdr reads take seconds; they run before the leases lock and the driver is re-checked under it.
+    status = _fresh_status(lease)
+    presence = _presence(lease, run) if status in MOVABLE_STATES else None
+
+    def body():
+        status, record = _fresh_state(lease)
+        _check_movable(lease, run, sid, status)
+        if presence is None or presence["session_id"] != _driver(lease, run):
+            raise _Refused("the PM changed while auto was checking it; run the takeover again", status,
+                           fix=_BECOME_PM)
+
+        def refused(reason):
+            return _Refused(reason, status, fix=_pick_fix(presence["session_id"]))
+
+        reason, approval = _cited_route(run, sid, prompt_id, status, record, presence, refused)
+        extra = {"reason": reason, "approval": approval, "request": None}
+        if reason != "orphaned":
+            extra["evidence"] = presence
+        return _move(run, sid, "taken_over", sid, lambda moved, rec: dict(_rearm_list(rec), **extra),
+                     cites=[prompt_id])
+
+    try:
+        return _locked(body)
+    except _Refused as exc:
+        _refuse(host, run, "takeover", sid, exc)
+
+
 def _h_takeover(host, argv):
-    _, opts = host._parse(_tokens(argv), values=("run", "replace"))
+    _, opts = host._parse(_tokens(argv), values=("run", "replace", "prompt"))
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
     run = lease["run"]
+    if opts.get("prompt"):
+        return _took_over(host, run, sid, _prompt_takeover(host, lease, run, sid, opts["prompt"]))
 
     def orphan_asks(status):
         return [r for r in _since_driver_changed(run, _requests(run, "takeover", sid))
@@ -326,33 +408,21 @@ def _h_takeover(host, argv):
     # herdr reads take seconds; they run before the leases lock and the driver is re-checked under it.
     status = _fresh_status(lease)
     presence = None if orphan_asks(status) or status not in MOVABLE_STATES else _presence(lease, run)
-    asked_now = status in MOVABLE_STATES and _since_driver_changed(run, _requests(run, "takeover", sid))
-    made = _make_worktree(run) if asked_now else None
 
     def move(request, reason, evidence):
         extra = {"reason": reason, "evidence": evidence} if evidence else {"reason": reason}
         return _move(run, sid, "taken_over", sid,
                      lambda moved, rec: dict(_rearm_list(rec), request=_request_ref(request),
-                                             request_text=(request.get("payload") or {}).get("text"),
-                                             **_record_worktree(made, rec["programme"]), **extra))
+                                             request_text=(request.get("payload") or {}).get("text"), **extra))
 
     def body():
         status = _fresh_status(lease)
-        if status == "expired":
-            ended = _watcher_ids(programme_home._read_record(run) or {})
-            programme_home._end_locked(run, EXPIRED_REASON, _stamp())
-            ended.update(reason=EXPIRED_REASON, lease_status=status, request=None)
-            raise _Refused("the agreement was never accepted, so the programme has ended; "
-                           "run /auto:programme to start a new one", status, ended)
-        if status not in MOVABLE_STATES:
-            raise _Refused(f"the lease for {lease.get('key') or run} is {status}; "
-                           "takeover needs a live or orphaned lease", status)
-        if lease.get("session_id") == sid:
-            raise _Refused("this session already holds the lease", status)
+        _check_movable(lease, run, sid, status)
         asked = _since_driver_changed(run, _requests(run, "takeover", sid))
         if not asked:
             raise _Refused("no typed takeover request from this session; "
-                           "Shawn types /auto:programme-takeover in this session first", status)
+                           "Shawn types /auto:programme-takeover in this session first", status,
+                           fix=_BECOME_PM)
         if orphan_asks(status):
             return move(orphan_asks(status)[-1], "orphaned", None)
         if presence is None or presence["session_id"] != _driver(lease, run):
@@ -370,12 +440,107 @@ def _h_takeover(host, argv):
         moved = _locked(body)
     except _Refused as exc:
         _refuse(host, run, "takeover", sid, exc)
+    return _took_over(host, run, sid, moved)
+
+
+def _took_over(host, run, sid, moved) -> int:
     _finish(host, run, "taken_over", sid, moved, journal=False)
     if moved.get("evidence"):
         sys.stdout.write(f"Took over from {_driver_words(moved['evidence'])}: {moved['evidence'].get('why')}.\n")
-    sys.stdout.write(host.render_restore(run, sid, os.getcwd()))
+    sys.stdout.write(host.render_restore(run))
     sys.stdout.write("Re-arm the remit watcher, the cron fallback and every watcher listed above "
                      "from this session; the old session's watchers can no longer beat.\n")
+    return 0
+
+
+_START_STATES = ("free", "ended", "expired")
+
+
+def _drove(run, sid) -> bool:
+    unverified = programme_authority().UNVERIFIED
+    for row in programme_journal.read(run):
+        if row.get("provenance") in unverified:
+            continue
+        payload = row.get("payload") or {}
+        if row.get("kind") == "programme_started" and payload.get("session") == sid:
+            return True
+        if row.get("kind") in CONSUMING_KINDS[:2] and sid in (payload.get("to_session"), payload.get("from_session")):
+            return True
+    return False
+
+
+def _become_refused(host, out, why, fix):
+    host._emit(dict(out, step="refused", why=why, fix=fix))
+    sys.stdout.flush()
+    raise host.ProgrammeError(why, fix=fix)
+
+
+def _become_step(host, out, sid, space):
+    lease = programme_home.read_lease(programme_home.lease_path(*space))
+    if lease is None:
+        return dict(out, step="start", lease_status="free")
+    if lease.get("corrupt"):
+        _become_refused(host, out, f"the lease for {out['space']} is unreadable",
+                        f"move the lease file aside, then run `{_BECOME_PM}` again")
+    run = lease["run"]
+    status, record = _fresh_state(dict(lease, server=space[0], workspace=space[1]))
+    out.update(run=run, lease_status=status)
+    if status in _START_STATES:
+        return dict(out, step="start")
+    if status == "newer":
+        _become_refused(host, out, f"programme {run} was written by a newer auto",
+                        "update the auto plugin in this session, then run `programme.sh become-pm` again")
+    if status not in MOVABLE_STATES or record is None:
+        _become_refused(host, out, f"programme {run}'s run record could not be read (lease {status}), so auto "
+                        "cannot tell whether its PM stopped", f"`programme.sh status --run {run}` names the "
+                        "fault; repair it, then run `programme.sh become-pm` again")
+    driver = _driver(lease, run)
+    out["driver"] = driver
+    if driver == sid:
+        return dict(out, step="already-pm")
+    presence = _presence(lease, run)
+    out["presence"] = presence.get("state")
+    # A former PM stands down only for a live successor; once that one stops, Shawn may want this session back.
+    if _drove(run, sid) and not _stopped(status, presence):
+        return dict(out, step="stand-down")
+    approval = load_lib_module("programme_approval")
+    return dict(out, step="ask-shawn", label=approval.takeover_label(driver),
+                command="programme.sh takeover --prompt <pick id>")
+
+
+_BECOME_LINES = {
+    "start": "next: run /auto:programme to start a programme here; this session becomes its PM.",
+    "already-pm": "next: this session is the PM; run the programme sweep.",
+    "stand-down": ("next: stand down. Another session now drives this programme. Cancel this session's wake-ups: "
+                   "CronList shows its programme cron, so CronDelete that id; TaskStop each Monitor task id this "
+                   "session started. Then stop. Do not message Shawn."),
+}
+
+
+def _h_become_pm(host, argv):
+    positional, _ = host._parse(_tokens(argv))
+    if positional:
+        raise ValueError("usage: become-pm (it takes no arguments)")
+    sid = _caller(host)
+    out = {"session": sid}
+    driven = programme_home.lease_driven_by(sid)
+    if driven:
+        step = dict(out, step="already-pm", run=driven["run"], driver=sid)
+    else:
+        space = session_registry.space_of_session(sid, os.environ)
+        if not space:
+            _become_refused(host, out, "this session is not in a herdr space, so it cannot be a space's PM",
+                            "run Claude from a pane in the herdr space, then run `programme.sh become-pm` there")
+        out["space"] = programme_home.space_key(*space)
+        step = _become_step(host, out, sid, space)
+    host._emit(step)
+    if step["step"] == "ask-shawn":
+        sys.stdout.write(f"next: ask Shawn in one AskUserQuestion picker. Offer `{step['label']}` as the "
+                         "recommended option and a decline option that keeps the current PM. If he picks the "
+                         "label, run `programme.sh takeover --prompt <pick id>`, with the id from the <auto-data> tag "
+                         "after his answer. If he declines, stop.\n")
+    else:
+        sys.stdout.write(_BECOME_LINES[step["step"]] + "\n")
     return 0
 
 
@@ -387,7 +552,6 @@ def _h_handover(host, argv):
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
     run = lease["run"]
-    made = _make_worktree(run) if session_registry.caller_drives(programme_home._read_record(run), sid) else None
 
     def body():
         status = _fresh_status(lease)
@@ -404,8 +568,7 @@ def _h_handover(host, argv):
             raise _Refused(f"no typed /auto:programme-handover {target} in the driving session", status)
         cites = list(asked[-1]["cites"])
         moved = _move(run, target, "handed_over", sid,
-                      lambda moved, rec: dict(_record_worktree(made, rec["programme"]),
-                                              request=_request_ref(asked[-1])), cites=cites)
+                      lambda moved, rec: {"request": _request_ref(asked[-1])}, cites=cites)
         return dict(moved, prompt_id=cites[0])
 
     try:
@@ -670,14 +833,8 @@ def _h_set_remit(host, argv):
         doc = json.loads(raw)
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
-    # git worktree add is slow: it runs on the remit-to-be before the leases lock, recorded under it.
-    run, home, record = host._locate(opts, finish_move=True)
-    current = programme_home.normalize_programme(record.get("programme") or {})
-    try:
-        drives = session_registry.caller_drives(record, driver_session.driving_session_id())
-        made = _make_worktree(run, dict(current, remit=parse_remit(doc, current["remit"]))) if drives else None
-    except (ValueError, programme_home.ProgrammeHomeError):
-        made = None
+    # Before the leases lock: finishing a move cut off mid-way takes that lock itself.
+    run, home, _ = host._locate(opts, finish_move=True)
 
     def change(programme, prompt, rec):
         before = programme["remit"]
@@ -697,8 +854,6 @@ def _h_set_remit(host, argv):
             term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
         out = {"remit": after,
                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
-        if after["repos"]:
-            out.update(_record_worktree(made, programme))
         if not accepted:
             # On the JSON files a carried Ruling refuses the write, so neither the store nor a lease may change first.
             moved = host.programme_authority.promoted(home, run)
@@ -720,12 +875,23 @@ _SPECS = (
     ("start", _h_start, "[<server.workspace>|--space <server.workspace>]...",
      "a session outside a herdr space with no --space; a space whose lease is live, orphaned or "
      "newer (the error names the holding run and session). Takes the lease before anything else."),
-    ("takeover", _h_takeover, "[--replace <pane name>] [--run <id>]",
+    ("takeover", _h_takeover, "[--replace <pane name>] [--prompt <id>] [--run <id>]",
      "no typed /auto:programme-takeover from this session; a request already used; a lease that is "
      "not live or orphaned; a driver herdr still shows (or cannot rule out) unless the typed request "
      "says --replace with its pane name, pane id or session id, and a heartbeat-orphaned lease "
-     "needs no proof when the request was typed while it was orphaned. Refusals are journaled as "
-     "request_refused."),
+     "needs no proof when the request was typed while it was orphaned. With --prompt and no typed "
+     "request: anything but this session's unused verified pick of exactly "
+     "`approval-label takeover --replace <driver session id>` (a typed or suggested prompt never "
+     "counts); for an orphaned lease herdr does not show present, or a driver herdr shows gone, also "
+     "a session with no session-registry row in the lease's herdr space, or an unreadable run record; "
+     "any prompt from before the current PM took the programme. Journals taken_over with request null "
+     "and the prompt id. Refusals are journaled as request_refused."),
+    ("become-pm", _h_become_pm, "",
+     "nothing it can route: a session outside a herdr space, an unreadable lease or run record, and a "
+     "newer programme print step refused with a fix. Reads the space lease, its status, herdr presence "
+     "and this session's driver history, and prints one step as JSON plus a line: start, ask-shawn (with "
+     "the exact takeover label and command, for a live or a stopped PM), already-pm, or stand-down (a "
+     "session that drove the programme, while its successor has not stopped). Writes nothing."),
     ("handover", _h_handover, "<session-id> [--run <id>]",
      "a caller that is not the driving session; no typed /auto:programme-handover <session-id> in "
      "the driving session. Refusals are journaled as request_refused."),

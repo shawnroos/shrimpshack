@@ -114,8 +114,7 @@
 #                          session_registry [lazy]. programme_record reaches it lazily.
 #   session_registry     → run_record_core, programme_home, driver_session
 #   programme_exec       → programme_sanitize
-#   programme_worktree   → _bootstrap [plain], run_record_core, programme_exec, session_registry
-#                          (callers write its record value through programme_authority)
+#   programme_worktree   → _bootstrap [plain], run_record_core, programme_exec
 #   programme_tracker    → programme_exec, programme_journal, programme_sanitize
 #   programme_tasks      → programme_sanitize
 #   programme_plans      → programme_exec, programme_sanitize, programme_tracker
@@ -153,6 +152,10 @@
 #   programme_view_agreement → run_record_core, programme_home, programme_context,
 #                          programme_decisions, programme_journal, programme_protocol,
 #                          programme_protocol_changes, programme_terms, programme_view_work
+#   programme_view_setup → programme_approval (the accept step's terms-bound label)
+#   programme_approval   → programme_view [lazy] (the terms digest hashes the rendered terms); a
+#                          module-top load would cycle through programme_view_setup.
+#   programme_fixes      → programme_approval (the accept-agreement fix); programme loads it lazily.
 #   permission_transcript → programme_sanitize, session_registry
 #   programme_permission_state → run_record_core, programme_record, programme_permission_rules
 #   programme_permission_settle → run_record_core, programme_home, programme_journal,
@@ -196,7 +199,8 @@
 #   run_record_evidence  → run_record_core, driver_session; programme_home [lazy],
 #                          programme_journal [lazy], programme_sanitize [lazy],
 #                          programme_evidence [lazy]
-#   on-user-prompt       → programme_home, programme_journal, session_registry
+#   on-user-prompt       → programme_home, programme_journal, session_registry;
+#                          programme_lifecycle [lazy] (a stopped PM's herdr presence)
 #   on-pre-compact       → programme_home [lazy], programme_resume [lazy]
 #   on-session-start     → phase-grammar; on-pre-compact [lazy], programme [lazy],
 #                          programme_resume [lazy]

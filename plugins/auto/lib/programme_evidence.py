@@ -199,7 +199,21 @@ def _check_outcomes(contexts) -> list:
     return out
 
 
-def _merged_bar(view, pr, pin) -> dict:
+def head_context_count(pr):
+    commits = _dig(pr, "commits", "nodes") or []
+    head = _dig(commits[-1], "commit") if commits else None
+    return _dig(head, "statusCheckRollup", "contexts", "totalCount") if isinstance(head, dict) else None
+
+
+def repo_has_ci(owner, name, env) -> bool:
+    doc = _run_json(["gh", "api", f"repos/{owner}/{name}/actions/workflows"], env)
+    count = doc.get("total_count") if isinstance(doc, dict) else None
+    if not isinstance(count, int):
+        raise Unknown("GitHub did not say how many workflows the repo has")
+    return count > 0
+
+
+def _merged_bar(view, pr, pin, no_ci=False) -> dict:
     fields = {"state": view.get("state"), "merge_commit": _dig(view, "mergeCommit", "oid"),
               "head": view.get("headRefOid"), "merged_at": view.get("mergedAt"),
               "merged_by": _dig(view, "mergedBy", "login"), "url": view.get("url")}
@@ -227,7 +241,11 @@ def _merged_bar(view, pr, pin) -> dict:
     bad = [f"{c['name']} {c['outcome']}" for c in checks if c["outcome"] in BAD_OUTCOMES]
     if bad:
         misses.append("checks cancelled or failed on the merged head: " + ", ".join(bad))
-    if not any(c["run"] and c["outcome"] in RUN_SUCCEEDED for c in checks):
+    if no_ci and not checks:
+        fields["ci"] = "none"
+        if pin is None:
+            misses.append("the repo has no CI and the merge was not pinned to a reviewed head")
+    elif not any(c["run"] and c["outcome"] in RUN_SUCCEEDED for c in checks):
         misses.append("no check run succeeded on the merged head")
     unmet = [c["name"] for c in checks if c["required"] and c["outcome"] not in REQUIRED_MET]
     if unmet:
@@ -252,7 +270,8 @@ def check_merged(ref, pin=None) -> dict:
     pr = _dig(graph, "data", "repository", "pullRequest")
     if not isinstance(pr, dict) or not view.get("headRefOid"):
         raise Unknown("GitHub returned no pull request")
-    verdict = _merged_bar(view, pr, pin)
+    no_ci = head_context_count(pr) == 0 and not repo_has_ci(owner, name, env)
+    verdict = _merged_bar(view, pr, pin, no_ci)
     verdict["fields"]["pr"] = f"{owner}/{name}#{number}"
     return verdict
 

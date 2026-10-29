@@ -60,7 +60,7 @@ Programme starts with proposed terms and a remit. The human approves these befor
 
 Setup runs as a walkthrough. `/auto:programme` opens the Programme pane, which shows the draft agreement and what is in and out of scope. The chat asks one question per step, with the PM's recommendation first. The first question offers to take every recommendation at once.
 
-Before acceptance, a picker answer sets a per-programme setting. The programme checks the answer against the session transcript before it counts. A picker answer never approves the accept itself, a shared setting, a ruling or a reserved area; those need a typed reply. After acceptance, only typed replies approve.
+Before acceptance, a picker answer sets a per-programme setting. The programme checks the answer against the session transcript before it counts. A picker answer approves the accept itself only when its answer is the accept's terms-bound label, `Approve accept-agreement --terms <digest>`, and the digest still matches the terms shown. A picker answer never approves a shared setting, a ruling or a reserved area; those need a typed reply. After acceptance, only typed replies approve.
 
 The remit separates three types of scope:
 

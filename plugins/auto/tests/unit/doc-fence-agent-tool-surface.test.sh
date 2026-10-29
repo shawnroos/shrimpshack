@@ -179,7 +179,9 @@ missing_programme_verbs() {
   section="$(programme_section "$1")"
   while IFS= read -r verb; do
     [ -z "$verb" ] && continue
-    printf '%s\n' "$section" | grep -q -F -- "\`${verb}\`" || out+="${verb} "
+    # A here-string, not a pipe: grep -q exits on the first match, and under pipefail a section over the
+    # pipe buffer makes printf die of SIGPIPE, which reads as a missing verb.
+    grep -q -F -- "\`${verb}\`" <<< "$section" || out+="${verb} "
   done <<< "$PVERBS"
   printf '%s' "$out"
 }

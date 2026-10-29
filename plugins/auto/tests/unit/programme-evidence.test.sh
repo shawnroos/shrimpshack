@@ -305,6 +305,14 @@ it "a definite result clears the system wait and the queued arming"
 prog check-deliverable linear:AI-753 merged
 check '["open", null, []]' "$(field "[items['linear:AI-753']['state'], items['linear:AI-753']['waiting_on'], [q for q in prog['working_model']['queue'] if q['item'] == 'linear:AI-753']]")"
 
+ctx_add noci "c['nodes'] = []"
+it "a repo with no CI and no pinned merge is refuted and says why"
+fx FAKE_GH_GRAPHQL="${WORK}/fx/noci.json" FAKE_GH_WORKFLOWS=0
+prog check-deliverable linear:AI-753 merged
+fx
+check '"refuted"' "$(result_of linear:AI-753 merged)"
+has "no CI and the merge was not pinned" "$(journal_last evidence_checked)"
+
 it "a journaled PM pin that differs from the merged head is refuted"
 run_py "$RUN" <<'EOF'
 pj.append(args[0], "merge_pinned", "sess-pm", {"item": "linear:AI-753", "ref": "shawnroos/shrimpshack#97", "head": "0" * 40})
@@ -318,6 +326,19 @@ run_py "$RUN" <<'EOF'
 pj.append(args[0], "merge_pinned", "sess-pm", {"item": "linear:AI-753", "ref": "shawnroos/shrimpshack#97", "head": "9e265cc6c301071b75921e4a73121701f1b5cebd"})
 EOF
 prog check-deliverable linear:AI-753 merged
+check '"confirmed"' "$(result_of linear:AI-753 merged)"
+
+it "a pinned merge with no checks in a repo that has CI workflows is still refuted"
+fx FAKE_GH_GRAPHQL="${WORK}/fx/noci.json" FAKE_GH_WORKFLOWS=2
+prog check-deliverable linear:AI-753 merged
+fx
+check '"refuted"' "$(result_of linear:AI-753 merged)"
+has "no check run succeeded" "$(journal_last evidence_checked)"
+
+it "a repo with no CI and a merge pinned to the merged head is confirmed"
+fx FAKE_GH_GRAPHQL="${WORK}/fx/noci.json" FAKE_GH_WORKFLOWS=0
+prog check-deliverable linear:AI-753 merged
+fx
 check '"confirmed"' "$(result_of linear:AI-753 merged)"
 
 it "recorded: the target beyond a page of other-team issues is found"

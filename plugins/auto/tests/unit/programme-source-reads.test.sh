@@ -180,17 +180,16 @@ src = load_lib_module("programme_sources")
 repo, pm_cwd, worker_cwd = args[0], os.path.join(args[0], args[1]), os.path.join(args[0], args[2])
 pm = {"pane_id": "p-pm", "terminal_id": "t-pm", "cwd": pm_cwd, "label": "pm", "agent": "claude", "owner": {"session_id": "sess-pm"}}
 worker = {"pane_id": "p-w", "terminal_id": "t-w", "cwd": worker_cwd, "label": "w", "agent": "claude", "owner": {"session_id": "sess-w"}}
-drivers = {"panes": {"p-pm"}, "session": "sess-pm"}
-_, _, plans, _ = src._sweep_sources({}, {"repos": [], "workspaces": []}, [pm, worker], [], drivers)
+_, _, plans, _ = src._sweep_sources({}, {"repos": [], "workspaces": []}, [pm, worker], [])
 print(" ".join(sorted(os.path.basename(r["repo"]) for r in plans["repos"])))
 EOF
 }
 
-it "the PM pane's programme worktree does not add a second plans root for its repo"
-check 'wtrepo' "$(sweep_roots worktrees/programme-r1 .)"
+it "the plans sweep reads the PM pane's cwd as a plans root"
+check 'programme-r1 wtrepo' "$(sweep_roots worktrees/programme-r1 .)"
 
-it "a worker pane in its own worktree still contributes its plans"
-check 'programme-r1' "$(sweep_roots . worktrees/programme-r1)"
+it "a worker pane in its own worktree contributes its plans beside the PM pane's"
+check 'programme-r1 wtrepo' "$(sweep_roots . worktrees/programme-r1)"
 
 it "a plan read stops at the byte cap"
 check 'True' "$(lib_py "$WORK" <<'EOF'

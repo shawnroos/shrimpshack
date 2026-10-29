@@ -18,8 +18,11 @@ from this session's lease.
 
 - Run every programme write verb in your own Bash tool. A dispatched Agent
   inherits your session id, so the verbs' own guard cannot refuse it; a hook
-  does instead. It lets a sub-agent run only `status`, `inbox`, `describe` and
-  `check-mergeable` without `--pin`, and never `gh pr merge`.
+  does instead. It lets a sub-agent run only `status`, `inbox`, `describe`,
+  `rules` without `--ack` and `check-mergeable` without `--pin`, and never
+  `gh pr merge`.
+- Read nothing over 6,000 characters yourself, whether a file or a command's
+  output. Have an agent read it and write a digest file, then read the digest.
 - Your context comes from the programme's store, not from this chat. A new
   session, a compaction, a handover or a takeover restores it: the rules in force
   and an `<auto-context>` block with the decisions, their reasons and limits, the
@@ -31,6 +34,16 @@ from this session's lease.
   programme was handed to you. Read the block, run `P rules --ack`, and repeat
   the refused verb. If the ack refuses as stale, the decisions changed since that
   block; read the new block it prints and ack again. An ack accepts nothing.
+- Fix it before asking. Every refusal prints a `fix:` line: run every fix that
+  needs no approval yourself. Ask Shawn only through AskUserQuestion pickers,
+  and only for approvals. Ask for typed text only for a typed-only verb, whose
+  `fix:` line says to ask Shawn to type it.
+- A refusal whose fix is `programme.sh become-pm` means this session may no
+  longer drive the programme. Run `P become-pm`. If it prints `stand-down`,
+  another session now drives: find this session's programme cron with
+  CronList and delete it (CronDelete), stop each Monitor task this session
+  started (TaskStop), and stop, with no message to Shawn. Otherwise follow the
+  step it prints.
 - Never use `/goal`. The programme's stop rule is the only stop rule.
 - Only a checker writes evidence. A worker's "done" is a claim, never evidence.
 - An approval (accept the agreement, amend a term, record, accept, withdraw or
@@ -80,11 +93,45 @@ not "nothing changed". You apply every programme write yourself.
 
 ## The sweep
 
-1. **Beat and expire.** `P beat`. If it refuses because the programme ended,
-   stop. `P expire` ends a programme whose agreement was never accepted; if it
-   prints `"ended": true`, tell Shawn in one line and stop. If the journal has a
-   `reread_requested` row newer than your last `rules_acked` or `rules_loaded`
-   row, run `P rules --ack` and read the rules it prints.
+**An expiry wake is a re-arm, not a sweep.** When the remit watcher's Monitor
+stream ended with no `remit-watcher-exit` line, run the arm command in step 16
+and `P watcher-beat remit --task-id <Monitor task id> --kind monitor`. If the
+stream printed no other line since your last wake, stop there: run no other
+step and no status read, and send no message. If it printed change lines (the
+watcher prints its held lines as it stops), handle them as a normal wake after
+re-arming. Changes made
+between the expiry and the re-arm are not reported; the next sweep reads them.
+
+1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
+   Bash call of the form `{ echo SWEEP-START; <step 2's prune, which finds the run
+   from this session's lease>; P validate; P sweep --record-sources;
+   P propose-permission; P settle-permissions; P sweep-inputs --save; } 2>&1 | tail -c 6000`. If
+   `P beat` refuses because the programme ended, stop. `P expire` ends a
+   programme whose agreement was never accepted; if it prints `"ended": true`,
+   tell Shawn in one line and stop. The last JSON in that output is the verdict of
+   `sweep-inputs`: `unchanged` or `changed`, with `why`, `home`, `unread_claims`
+   and `next_offset`. No `SWEEP-START` line (the cap cut the head) or no verdict
+   JSON (a verb crashed) means unknown: take the changed path with the fallback
+   reads below. If `why` has `rules_reread_requested`, run `P rules --ack` and
+   read the rules it prints.
+   **Quiet sweep.** End the turn, steps 2 to 17 done, only when all of these
+   hold: the wake carried no watcher line (a watcher line is step 6 work);
+   `sweep-inputs` said `unchanged`, which already covers actionable reasons,
+   unread claims, open asks, items that moved (so a due tracker write, step 15),
+   merge readiness, a worker whose pane is not working (step 11) and both
+   wake-ups armed (step 16); and the chained call printed no refusal, no `fix:`
+   line, no adopt or alias proposal, no new permission proposal, no `pending`
+   line from `settle-permissions`, and `"refuted": []` from `P validate`. That is
+   two PM turns.
+   **Changed sweep.** Dispatch `auto:programme-sweep-packager` with `home`. It has
+   no shell: it digests `<home>/sweep-inputs.json` into `<home>/sweep-digest.md`
+   and returns the path. Read the digest, not the sources behind it: every line
+   names its source. It is usable only when the agent returned `ok`, the file
+   ends `DIGEST-DONE`, its `generated` matches the verdict's and it lists
+   `unread_claims` claims. Otherwise it is unknown: dispatch
+   `auto:programme-status-reader` and `auto:programme-inbox-reader`, and run
+   `P rules` (never cut the rules) yourself, and say so in one line. Take steps 2,
+   4, 5 and 9's chained verbs as run, and read their output from that call.
 2. **Prune prompts.** `"${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}" "${CLAUDE_PLUGIN_ROOT}/lib/programme_journal.py" prune --run <run>`.
    The run id is the `run` field of `P status --json`.
 3. **Apply Shawn's answers.** For each message Shawn typed since the last
@@ -97,10 +144,12 @@ not "nothing changed". You apply every programme write yourself.
    that same command with `--prompt <pick id>`. One pick approves one change,
    and only the command its label names. Picks work for rules,
    Authority levels, terms, items, moving and keeping behaviours, accepting a
-   pending requirement, pauses, permissions and disposals. Accepting the
-   agreement, recording, accepting, closing or carrying a Ruling, defining a
-   requirement and new or retired behaviours still need a line he types; an
-   accepted grey suggestion does not count for those either. A remit change takes a typed line or an accepted
+   pending requirement, pauses, permissions, swaps, focus overrides and
+   disposals, and for the accept through its terms-bound label
+   (`P approval-label accept-agreement`). Recording, accepting, closing or
+   carrying a Ruling, defining a requirement and new or retired behaviours
+   still need a line he types; an accepted grey suggestion does not count for
+   those, nor for the accept. A remit change takes a typed line or an accepted
    suggestion, never a pick, because its change comes in on stdin.
 
    After compaction (a verb refused with the rules in force and you ran
@@ -127,8 +176,9 @@ not "nothing changed". You apply every programme write yourself.
    | Reopen a dropped item | `P reopen-item <item> --prompt <id>` |
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
+   | Swap a running item out for a newcomer | `P swap-item <out> <in> --prompt <pick id>` (the pick's answer is the `P approval-label swap-item <out> <in>` text), then send the returned `stop_prompt` with `P prompt-item <out>` |
    | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
-   | He corrects who decides a kind of choice ("that didn't need me") | `P record-ruling <id> --effect grant\|restrict --scope <text> --replies-to <ask-or-decision-id> --prompt <id>`, then see below |
+   | He corrects who decides a kind of choice ("that didn't need me") | `P record-ruling <id> --effect grant\|restrict --scope <text> --replies-to <ask-or-decision-id> --prompt <id>`, then see "Naming and Rulings" below |
    | He corrects a preferred tool, in passing | `P record-behaviour --prompt <id> --when "<the kind of job>" --tool <name> --do "use <name> for <the job>"`, then see "Behaviours" below |
    | Keep a behaviour where it is | Nothing to run |
    | Move a behaviour to the repo, make it global, or bring it back to this programme | `P move-behaviour <behaviour-id> --to repo\|personal\|programme --prompt <id>` (add `--repo <key>` when the remit has several repos) |
@@ -143,74 +193,12 @@ not "nothing changed". You apply every programme write yourself.
    | Lift a safety pause | `P lift-pause <pause-id> --prompt <id>` |
    | Settle an uncertain action after end | `P dispose-action (--attempt <id>\|--resource <id>) --as abandoned_unknown\|accepted_unknown --prompt <id>` |
 
-   A correction replies to an ask or a decision you logged: `--replies-to`
-   takes the ask id from the handed item (`ask_id` in `P status --json`) or
-   the decision-log id from `P log-decision`. The verb takes
-   the decision kind and the item from it, and the Ruling applies at once
-   because his reply is itself the typed prompt. Show Shawn the one-line notice it
-   prints. When a grant moves a handed item back to open, decide it:
-   `P log-decision <item> --kind <the same kind> --why "<why>"`.
-   A correction changes who decides only.
+   **Behaviours.** Read [references/behaviours.md](references/behaviours.md) before you record, move,
+   retire or propose one.
 
-   **Behaviours.** A behaviour is Shawn's standing guidance on how the work is
-   done. It carries no authority and no done bar: who decides stays with
-   Authority and Rulings, and acceptance stays with Done standards.
-   - Before you record one, read the behaviours in force (`P rules`). When the
-     new one overlaps or disagrees with one of them, pass `--conflicts-with <id>`.
-     The new one wins, because the narrower layer wins (programme over repo over
-     personal).
-   - Draft the checks from his words. A check you can test from what the sweep
-     sees (item state, a claim, a merge, a block, the tracker) is `--pm-check`.
-     One only the agent doing the work can judge is `--agent-check`. Keep as many
-     PM checks as you can. You cannot see a PR being opened unless the worker
-     reports it, so ask the worker to name the PR in its claim or make that check
-     an agent check.
-   - In one message, show Shawn the checks it printed, the ones you cannot test
-     and why, the `undo` line it printed, any conflict and which one wins, and
-     ask: "Keep it for this programme, move it to the repo, or make it global?"
-     It moves only on his typed answer naming the layer.
-   - When the output's `related` list shows a disagreement you did not link, name
-     it the same way. If he wants it linked, undo the new one and record it again
-     with `--conflicts-with`.
-   - A new or changed behaviour reaches work in progress as a reminder from now
-     on (step 5). Never send back work that already passed its trigger.
-   - A do line, skill, tool or agent that names a protected escalation
-     (production deploys, releases, spend over cap, merging around the gate,
-     refused permissions) is refused. Tell Shawn those still come to him.
-   - When Shawn corrects you twice on the same thing, you may draft a behaviour
-     from his words with `P propose-behaviour`. Tell him its id. It applies only
-     when his typed reply names it (the "Apply a behaviour you proposed" row).
-   - Once per programme, offer to move preferred tools out of the agreement's
-     Scope. For each preferred tool `P status --agreement` lists, run
-     `P propose-behaviour --from-term <term-id>`. Show him each term with its
-     drafted behaviour id and ask which are tool preferences. Apply the ids his
-     typed reply names with `--from-proposal`, and retire the rest with
-     `--as retired`, citing the same reply. The term itself stays as it is; from
-     then on, read the preferred tool from the behaviour.
+   **Naming and Rulings.** Read [references/rulings.md](references/rulings.md) before you cite a
+   message, record a correction, or record an answer that fits no row as a Ruling.
 
-   The cited message must name what it approves, or the verb refuses it and
-   lists the missing words: the item id or key (`AI-753`) for the item rows, the
-   Ruling id for `record-ruling`, `close-ruling` and `carry-rulings`, the
-   rule id for `adopt-rule`, the decision kind and the level for `adopt-autonomy`, the
-   repo and the check key (`verified.lookup`) for `adopt-check`, the decision or
-   requirement id for `accept-context`, the pause id for `lift-pause`, the attempt
-   or resource for `dispose-action`, the behaviour id and the layer word
-   ("programme", "repo", or "personal", "global" or "all projects") with no
-   negation before it for `move-behaviour`, the proposal id for
-   `record-behaviour --from-proposal`, the proposal id
-   (`perm-1`) and exactly one answer word for `answer-permission`: "applied" or
-   "apply" for applied, "not now", "later" or "postpone" for not-now, "reject" or
-   "decline" for no. Shawn types, for example, "applied perm-1". A `--widening`
-   needs the word "widen" in his message too. When his message does not name the
-   target, do not run the verb: ask him to confirm in words that name it, for
-   example "adopt eval_waiver at act_and_tell, widen it", and cite that reply.
-   A prompt that approves a Ruling change (`record-ruling` that binds,
-   `accept-context` on a Ruling, `close-ruling` with a prompt, `carry-rulings`)
-   must also be typed after the proposal and used once: after the latest change
-   to that Ruling (for a new Ruling, his newest message that no verb has cited
-   yet), and never one that already approved another Ruling change. An old
-   message that happens to name the right words is refused; ask him again and
-   cite the new reply.
    When his words point to one open ask but do not name it ("I've given the
    skill agent the go-ahead"), record nothing and relay nothing. Reply with the
    exact text to type, which `P status --json` shows as the ask's reply, for
@@ -220,17 +208,6 @@ not "nothing changed". You apply every programme write yourself.
    `answer-handed` succeeds, then run `P ask-relayed <item>`. At the start of
    this step, relay any ask `P status --json` lists as answered and not relayed.
 
-   An answer that fits no row is a Ruling: record it. Pick the effect by what he
-   said: his own call is `decided`, handing a kind of choice to you for named
-   items is `grant`, pulling one back to himself is `restrict`. A Ruling that
-   gives you more than its last revision (more items, a dropped limit, a later
-   end; or a restrict that loses items or ends sooner) waits for a prompt that
-   names what it adds. A scope he sets is a
-   decided Ruling (`P record-ruling --effect decided`), what must be true for an item to count is a
-   requirement (`P define-requirement`), and an item tied to a decision is
-   `P assign-item <item> --decision-id <id>`. A decision or requirement recorded
-   without his typed prompt waits for `accept-context`. `P describe` lists every verb with its arguments
-   and what it refuses.
    An answer that brings new work (a bug, a screenshot, a finding): rank it
    and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
 4. **Validate.** `P validate` re-checks confirmed evidence that has gone stale.
@@ -289,9 +266,9 @@ not "nothing changed". You apply every programme write yourself.
      tracker` line is expected: the watcher cannot read through the MCP. Do not
      record it; record the issues through the MCP again instead.
    The sweep records the changes it saw itself, including unsupported sources.
-7. **Read the inbox.** `P inbox` prints the unread claims from the store, each
-   with its index. Act on them, then `P mark-read --offset <n>` with the offset
-   it names. Never read `claims.jsonl`: it is an export and can be stale.
+7. **Read the inbox.** The digest lists the unread claims with their index, each
+   cut to one line; read the ones you act on in full with `P inbox`. Act on them,
+   then `P mark-read --offset <n>` with `next_offset` from the verdict. Never read `claims.jsonl`: it is an export and can be stale.
 8. **Check claims.** First send back work that skips a behaviour. For each
    claim, take each worker behaviour in force for the item that names evidence
    and whose checks held for this work. Look for that evidence in the claim's
@@ -348,6 +325,25 @@ not "nothing changed". You apply every programme write yourself.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
    3. `P queue --remove <entry-id>`.
 11. **Drive workers.**
+   - Check the budget before you start a worker. Run `P focus-recheck` first
+     each sweep, so room that freed up is seen before you choose what to start;
+     it releases held items that now fit, oldest hold first. Read the Focus row
+     in `P status` for points and agents in use against the limits. If
+     `start-worker` holds an item, do not retry it blindly. When the newcomer
+     outranks a running item, ask the swap pick in one AskUserQuestion picker
+     with two options: the exact text `P approval-label swap-item <out> <in>`
+     prints, and "Queue <in>". On the swap, run
+     `P swap-item <out> <in> --prompt <pick id>`, then send the returned
+     `stop_prompt` to the parked worker with `P prompt-item <out> "<stop_prompt>"`
+     and start `<in>` once the room is there. On "Queue <in>", or when the
+     newcomer does not outrank anything, leave it queued. When the
+     budget must be broken anyway, ask Shawn in one AskUserQuestion picker with
+     two options: the exact text `P approval-label override-focus <item>`
+     prints, and "Leave it queued". On the override pick, run
+     `P override-focus <item> --prompt <pick id>`, then start the item with
+     `P start-worker <item> --despite focus -- <spinoff arguments>`. The
+     approval covers one start; `--despite focus` without it is refused. A
+     parked item's old-worker hold is never overridden.
    - Before you start or prompt a worker on new work, find what it waits for
      with section 3 of [references/sequencing.md](references/sequencing.md),
      and re-check the requirements with sections 1, 3 and 10 of
@@ -477,6 +473,10 @@ not "nothing changed". You apply every programme write yourself.
     [references/judgment.md](references/judgment.md)). Then run
     `P queue --action <name> --item <item>` or `--remove <entry-id>` so the
     queue matches your next actions.
+    Run `P focus-note --agents <n>` with the number of subagents you are
+    running now, and keep your subagent fan-out within the agent limit in the
+    Focus row. The limit is advice for subagents; code enforces it only for
+    worker panes.
     Then record every open or waiting item's trajectory in one call:
     `P record-trajectories` with a JSON list on stdin, one entry per item:
     `{item, done, current, planned, finish, location}`. Each step is
@@ -500,23 +500,26 @@ not "nothing changed". You apply every programme write yourself.
     record `P tracker-synced` for each issue it lists as written. It never
     writes a done state or a root-cause comment.
 16. **Re-arm the wake-ups.**
-    - The remit watcher keeps running across changes and prints one line per
-      change. Arm it only at programme start, after a resume or a takeover,
-      and when its Monitor stream ended by expiry or a crash (a
-      `remit-watcher-exit crashed: <error>` line, or no exit line at all). Do not arm it on
-      a routine sweep, and do not re-arm after it printed
+    - The remit watcher keeps running across changes and prints a line only
+      for a change you must act on. Non-urgent lines arrive merged, up to 2
+      minutes after the first change. Arm it only at programme start, after a
+      resume or a takeover, after a `remit-watcher-exit crashed: <error>` line,
+      and on an expiry (a stream end with no exit line: re-arm only, as above).
+      Do not arm it on a routine sweep, and do not re-arm after it printed
       `remit-watcher-exit superseded` or `remit-watcher-exit ended`.
     - To arm it: Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh"`
       with the longest timeout. Add `--tracker` only when the space has an
-      issue tracker it can poll. Tasks and plans are always watched unless the
-      agreement turns them off. Record the Monitor:
+      issue tracker it can poll. Unless the agreement turns them off, it polls
+      tasks and plans for outages and new plans; a task-count move or a plan
+      edit prints nothing. Record the Monitor:
       `P watcher-beat remit --task-id <Monitor task id> --kind monitor`.
     - Keep the cron fallback. If it is missing (after a resume or takeover),
       CronCreate it again at the cadence term with the exact text
       `Run the programme sweep: load the auto:programme-sweep skill and follow it.`
       and run `P watcher-beat cron --task-id <id> --kind cron --prompt "<that exact text>"`.
-17. **Check, then stop.** Run `P status --json` and read
-    `programme.actionable_reasons`. Clear each one (read the claim, run the
+17. **Check, then stop.** Run `P sweep-inputs --reasons`, a fresh read taken after
+    your actions, and read `actionable_reasons` (`programme.actionable_reasons` in
+    `P status --json`). Clear each one (read the claim, run the
     queued action, watch the wait, propose the rule), then read them again.
     `carryover_unoffered` means the programme has active Rulings it never
     offered for carry-over: run `P carry-rulings`, which records the offer and

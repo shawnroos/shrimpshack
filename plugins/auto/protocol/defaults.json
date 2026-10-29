@@ -15,7 +15,7 @@
         "recorded"
       ],
       "evidence_bar": {
-        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved. In a repo with no CI workflows, the pinned head stands in for the checks.",
         "flagged": "The flag's served value, read back per environment, is off in prod and on in stage and dev.",
         "verified": "A build that contains the merge commit ran the fix at runtime, and the trace or job id is posted on the issue. Automated tests and CI do not count.",
         "recorded": "The issue is in its done state and carries a root-cause comment."
@@ -39,7 +39,7 @@
         "recorded"
       ],
       "evidence_bar": {
-        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved. In a repo with no CI workflows, the pinned head stands in for the checks.",
         "verified": "A build that contains the merge commit ran the fix at runtime, and the trace or job id is posted on the issue. Automated tests and CI do not count.",
         "recorded": "The issue is in its done state and carries a root-cause comment."
       },
@@ -62,7 +62,7 @@
         "recorded"
       ],
       "evidence_bar": {
-        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved. In a repo with no CI workflows, the pinned head stands in for the checks.",
         "released": "The registry version and shasum equal the tested build, and an eval experiment exists or a named waiver is active.",
         "recorded": "The issue is in its done state and carries a root-cause comment."
       },
@@ -84,7 +84,7 @@
         "recorded"
       ],
       "evidence_bar": {
-        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved.",
+        "merged": "The PR is merged with a merge commit, the merged head is pinned, at least one required check succeeded on it and none was cancelled or skipped, and 0 review threads are unresolved. In a repo with no CI workflows, the pinned head stands in for the checks.",
         "recorded": "The issue is in its done state and carries a root-cause comment."
       },
       "caveat": "",

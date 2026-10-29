@@ -32,6 +32,7 @@ programme_naming = load_lib_module("programme_naming")
 programme_approval = load_lib_module("programme_approval")
 programme_proposals = load_lib_module("programme_proposals")
 programme_trajectory = load_lib_module("programme_trajectory")
+programme_focus = load_lib_module("programme_focus")
 
 _Verb = run_record._Verb
 
@@ -39,12 +40,11 @@ PROG = "programme.py"
 RULES_TAG = "auto-rules"
 SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep."
 PERSONAL_LOCK = ".personal-protocol.lock"
-CARRIED_KIND = "rulings_carried"
-APPROVAL_KINDS = ("rule_adopted", CARRIED_KIND)
 _OPERATION = {"id": None, "verb": None, "argv": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
-               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label")
+               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label",
+               "become-pm")
 
 
 _name_words, _squash, _runs, _affirmed, _NEGATIONS = (
@@ -53,49 +53,13 @@ _name_words, _squash, _runs, _affirmed, _NEGATIONS = (
 
 
 class ProgrammeError(Exception):
-    pass
+    def __init__(self, *args, fix=None):
+        super().__init__(*args)
+        self.fix = fix
 
 
-def text_hash(text) -> str:
-    return "sha256:" + hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
-
-
-# An imported prompt approves nothing new, so only the approval rows imported with it count.
-def _approved(rows, prompt_id, imported=False) -> list:
-    out = []
-    for row in rows:
-        payload = row.get("payload") or {}
-        if row.get("kind") not in APPROVAL_KINDS or (row.get("cites") or [None])[0] != prompt_id \
-                or payload.get("prompt_id") != prompt_id or row.get("provenance") == programme_authority.FOREIGN \
-                or (imported and row.get("provenance") != programme_authority.LEGACY):
-            continue
-        if row["kind"] == CARRIED_KIND:
-            out.extend(programme_protocol.approval_key(programme_protocol.carryover_target(e.get("key"), e.get("id")),
-                                                       e.get("hash"))
-                       for e in payload.get("stored") or [] if isinstance(e, dict))
-        else:
-            out.append(programme_protocol.approval_key(payload.get("target"), payload.get("hash")))
-    return out
-
-
-def prompt_lookup(run_id, prompt_id, journals=None):
-    try:
-        run_id = programme_home.check_run_id(run_id)
-        if journals is None:
-            rows = programme_journal.read(run_id)
-        else:
-            if run_id not in journals:
-                journals[run_id] = programme_journal.read(run_id)
-            rows = journals[run_id]
-        row = programme_journal.find_prompt(run_id, prompt_id, rows)
-    except programme_home.ProgrammeHomeError:
-        return None
-    if row is None or row.get("provenance") == programme_authority.FOREIGN:
-        return None
-    payload = row.get("payload") or {}
-    imported = row.get("provenance") == programme_authority.LEGACY
-    return {"origin": programme_journal.adopted_origin(row), "text_hash": text_hash(payload.get("text")),
-            "approved": _approved(rows, prompt_id, imported)}
+text_hash = programme_approval.text_hash
+prompt_lookup = programme_approval.prompt_lookup
 
 
 def _parse(argv, *, values=(), flags=(), multi=()):
@@ -123,10 +87,6 @@ def _parse(argv, *, values=(), flags=(), multi=()):
 
 def _resume():
     return load_lib_module("programme_resume")
-
-
-def _worktree():
-    return load_lib_module("programme_worktree")
 
 
 def _run_from_leases(sid):
@@ -258,23 +218,22 @@ def render_rules(record, revision=None) -> str:
     )
 
 
-def render_restore(run_id, session_id=None, cwd=None) -> str:
+def render_restore(run_id) -> str:
     record, revision = _resume().head(run_id)
-    return render_rules(record, revision) + _worktree().restore_line(record, session_id, cwd)
+    return render_rules(record, revision)
 
 
 def _guard(home, record, *, compact_exempt=False):
     sid = driver_session.driving_session_id()
     if not session_registry.caller_drives(record, sid):
-        raise ProgrammeError("only the programme's driving session may run this verb")
+        raise ProgrammeError("only the programme's driving session may run this verb", fix="programme.sh become-pm")
     if (record.get("programme") or {}).get("ended"):
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
-        sys.stdout.write(render_rules(record) + _worktree().restore_line(record, sid))
+        sys.stdout.write(render_rules(record))
         raise ProgrammeError(
             "context was compacted or handed over: read the rules in force and the restored "
-            "context above, then run `programme.py rules --ack`"
-        )
+            "context above, then run `programme.py rules --ack`", fix="programme.sh rules --ack")
     return sid
 
 
@@ -424,6 +383,7 @@ def _source_list(term, value) -> list:
 
 
 def _check_value(term, value, extra):
+    programme_focus.check_extras(sys.modules[__name__], term, value, extra)
     if term.get("key") == "tools_of_record":
         return _source_list(term, value)
     if value not in (term.get("options") or []):
@@ -446,6 +406,7 @@ def _set_term(term, value, extra, *, set_by, why, prompt=None) -> dict:
         term["until"] = extra.get("until") if value == "until_time" else None
     if extra.get("seconds") is not None:
         term["seconds"] = int(extra["seconds"])
+    programme_focus.apply(sys.modules[__name__], term, value, extra)
     if prompt:
         term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
     return {"term": term["key"], "value": value, "why": why}
@@ -483,7 +444,7 @@ def _h_rules(argv):
     _, opts = _parse(argv, values=("run", "context"), flags=("ack",))
     if not opts.get("ack"):
         run_id = _locate(opts)[0]
-        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
+        sys.stdout.write(render_restore(run_id))
         return 0
 
     def ack(programme, prompt, rec):
@@ -501,16 +462,16 @@ def _h_rules(argv):
     except _resume().StaleAck as stale:
         run_id, home, _ = _locate(opts)
         _resume().rebind(home, stale.current)
-        sys.stdout.write(render_restore(run_id, driver_session.driving_session_id()))
+        sys.stdout.write(render_restore(run_id))
         raise ProgrammeError(
             f"stale acknowledgement: the decision context changed since it was restored (now "
             f"{stale.current}); read the block above, then run `programme.sh rules --ack` again") from None
-    sys.stdout.write(render_restore(_locate(opts)[0], driver_session.driving_session_id()))
+    sys.stdout.write(render_restore(_locate(opts)[0]))
     return 0
 
 
 def _h_propose_agreement(argv):
-    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source"),
+    _, opts = _parse(argv, values=("run", "why", "until", "seconds", "source") + programme_home.TERM_EXTRAS,
                      multi=("term", "project-term"))
     host = sys.modules[__name__]
     parsed, source = programme_terms.parse_specs(host, opts)
@@ -535,14 +496,15 @@ def _h_propose_agreement(argv):
 
 
 def _h_accept_agreement(argv):
-    _, opts = _parse(argv, values=("run", "prompt"))
+    _, opts = _parse(argv, values=("run", "prompt", "terms"))
     if not opts.get("prompt"):
-        raise ValueError("accept-agreement needs --prompt <id> of a typed prompt")
+        raise ValueError("accept-agreement needs --prompt <id> of a typed prompt or a terms-bound pick")
 
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
             raise ProgrammeError("the agreement is already accepted")
         programme_terms.check_accept_order(rec["run_id"], prompt["prompt_id"])
+        programme_approval.check_terms(programme, opts.get("terms"), ProgrammeError)
         programme["agreement"]["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
                                               "quote": prompt["quote"]}
         version = programme_terms.stamp(programme)
@@ -557,7 +519,7 @@ def _h_accept_agreement(argv):
 
 
 def _h_amend_term(argv):
-    positional, opts = _parse(argv, values=("run", "prompt", "why", "until", "seconds"))
+    positional, opts = _parse(argv, values=("run", "prompt", "why", "until", "seconds") + programme_home.TERM_EXTRAS)
     if len(positional) != 2:
         raise ValueError("usage: amend-term <key> <value> --prompt <id>")
     key, value = positional
@@ -758,9 +720,9 @@ _VERBS = {
     ),
     "accept-agreement": _Verb(
         _h_accept_agreement,
-        "--prompt <id> [--run <id>]",
-        rejects="no --prompt; a prompt that is unknown, not typed, not from the driving session, or "
-        "older than the last proposal or project-term edit.",
+        "--prompt <id> [--terms <digest>] [--run <id>]",
+        rejects="no --prompt; an accepted suggestion; a prompt not from the driving session or older than the last "
+        "term change or pick; a pick without --terms; a --terms digest that does not match the terms shown.",
     ),
     "amend-term": _Verb(
         _h_amend_term,
@@ -830,7 +792,8 @@ def build_view(run_id, home, record, *, journal=None, inbox_size=None) -> dict:
         inbox_size = programme_record.claims_count(home)
     protocol = _protocol({run_id: journal})
     return programme_view.build(record, journal, inbox_size=inbox_size, protocol=protocol,
-                                rules=rules_in_force(record, {run_id: journal}, protocol))
+                                rules=rules_in_force(record, {run_id: journal}, protocol),
+                                focus=programme_focus.live_usage(sys.modules[__name__], record))
 
 
 def _refresh_promoted(run_id, home) -> None:
@@ -889,9 +852,6 @@ def _h_status(argv):
         _emit(view)
     else:
         sys.stdout.write(programme_view.render_text(view) + "\n")
-        line = _worktree().status_line(record)
-        if line:
-            sys.stdout.write(line + "\n")
     return 0
 
 
@@ -928,6 +888,14 @@ _VERBS["inbox"] = _Verb(
     "[--all] [--run <id>]  (prints the unread worker claims from the store, with their index)",
     reads=True,
     rejects="nothing; read-only. Reads the committed store, never claims.jsonl, which is an export.",
+)
+_VERBS["sweep-inputs"] = _Verb(
+    lambda argv: load_lib_module("programme_sweep_inputs").verb(sys.modules[__name__], argv),
+    "[--run <id>] [--save] [--reasons]  (the read side of a sweep as data, with a quiet verdict; --save writes "
+    "<home>/sweep-inputs.json and prints the verdict, --reasons prints only the actionable reasons)",
+    reads=True,
+    rejects="nothing; it changes no programme state and journals nothing. --save writes only its own file "
+    "in the programme home. A PR it cannot read counts as changed, never unchanged.",
 )
 _VERBS["status"] = _Verb(
     _h_status,
@@ -978,7 +946,8 @@ def _cli(argv) -> int:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2
     _OPERATION["verb"], _OPERATION["argv"] = (argv[0] if argv else None), argv
-    return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS)
+    return verb_cli.dispatch(argv, _VERBS, prog=PROG, errors=_ERRORS,
+                             fixes=lambda verb: load_lib_module("programme_fixes").fix_for(verb))
 
 
 programme_lifecycle = load_lib_module("programme_lifecycle")
@@ -992,6 +961,7 @@ _VERBS.update(programme_protocol_changes.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
+_VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

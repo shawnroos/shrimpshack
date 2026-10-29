@@ -35,6 +35,8 @@ export CLAUDE_AUTO_MACHINE="studio"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
 export CLAUDE_CODE_SESSION_ID="sess-pm"
 export CLAUDE_AUTO_WATCH_INTERVAL_SECONDS="0.3"
+# Held lines go out on the next poll, so the single-change tests below see them within one interval.
+export CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS="0.01"
 unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH CLAUDE_AUTO_REPO 2>/dev/null || true
 : > "$CLAUDE_AUTO_SECRETS_FILE"
 
@@ -176,20 +178,13 @@ alive() { if kill -0 "$1" 2>/dev/null; then echo yes; else echo no; fi; }
 stop_watch() { kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
 
 reset_state
-it "a herdr snapshot whose sequence moves from 41 to 42 prints remit-changed and keeps polling"
-start_watch seq
+it "a worker turning busy or idle (its herdr sequence moving) prints nothing and keeps polling"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=0 start_watch seq --max-polls 6
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 snap 42 5 1
-wait_for "${WORK}/seq.out" "remit-changed" || true
-has "remit-changed" "$(cat "${WORK}/seq.out")"
-sleep 0.7
-check yes "$(alive "$WPID")"
-it "the seq wake is exactly one line on stdout"
-check 1 "$(lines "${WORK}/seq.out")"
-it "the seq wake names the old and new sequence"
-has "41->42" "$(cat "${WORK}/seq.out")"
-stop_watch "$WPID"
+wait_exit "$WPID"
+check 0 "$(count "${WORK}/seq.out" "remit-changed")"
 
 reset_state
 it "a pane added to the remit prints remit-changed naming the pane"
@@ -467,18 +462,21 @@ TASKS="${CLAUDE_AUTO_TASKS_DIR}/sess-w7"
 mkdir -p "$TASKS"
 printf '{"id":"1","subject":"Write tests","activeForm":"Writing tests","status":"pending"}' > "${TASKS}/1.json"
 prog add-item linear:AI-820 --title "Tasks" --session sess-w7
-it "a task status change for a remit session wakes the watcher naming tasks"
-start_watch tasks --max-polls 20
+it "a task status change for a remit session prints nothing"
+start_watch tasks --max-polls 6
 wait_for "$BEATS" "watcher-beat remit" || true
 sleep 0.4
 printf '{"id":"1","subject":"Write tests","activeForm":"Writing tests","status":"in_progress"}' > "${TASKS}/1.json"
-wait_for "${WORK}/tasks.out" "tasks-changed" || true
-check "tasks-changed sess-w7 1/0/0->0/1/0" "$(cat "${WORK}/tasks.out")"
-it "the watcher keeps polling after a task change"
-sleep 0.7
-check yes "$(alive "$WPID")"
-check 1 "$(lines "${WORK}/tasks.out")"
-stop_watch "$WPID"
+wait_exit "$WPID"
+check 0 "$(lines "${WORK}/tasks.out")"
+it "the tasks source going down still prints source-unavailable tasks"
+mv "$CLAUDE_AUTO_TASKS_DIR" "${CLAUDE_AUTO_TASKS_DIR}.away"
+: > "$CLAUDE_AUTO_TASKS_DIR"
+start_watch tasksdown --max-polls 3
+wait_exit "$WPID"
+check "source-unavailable tasks" "$(cut -d' ' -f1,2 "${WORK}/tasksdown.out")"
+rm -f "$CLAUDE_AUTO_TASKS_DIR"
+mv "${CLAUDE_AUTO_TASKS_DIR}.away" "$CLAUDE_AUTO_TASKS_DIR"
 
 reset_state
 it "a task change is ignored while the agreement turns tasks off"
@@ -506,10 +504,12 @@ sleep 0.4
 printf '# New plan for AI-830\n' > "${REPO}/docs/plans/new.md"
 wait_for "${WORK}/plans.out" "plans-changed" || true
 check "plans-changed +planrepo/docs/plans/new.md" "$(cat "${WORK}/plans.out")"
-it "the watcher keeps polling after a plan change"
-sleep 0.7
-check yes "$(alive "$WPID")"
+it "editing that plan afterwards prints nothing over several polls"
+touch -m -t 203001010000 "${REPO}/docs/plans/new.md"
+sleep 1.5
 check 1 "$(lines "${WORK}/plans.out")"
+it "the watcher keeps polling after a plan change"
+check yes "$(alive "$WPID")"
 stop_watch "$WPID"
 
 reset_state
@@ -523,6 +523,78 @@ wait_exit "$WPID"
 check 0 "$(lines "${WORK}/plansoff.out")"
 edit 'prog["agreement"]["terms"]["tools_of_record"]["value"] = ["tracker", "tasks", "plans"]'
 unset SNAP_CWD
+
+HELD="remit-changed +w2:p3"
+held_change() {
+  wait_for "$BEATS" "watcher-beat remit" || true
+  sleep 0.4
+  snap 41 5 1 "w2:p1,w2:p2,w2:p3"
+  sleep 0.7
+}
+
+reset_state
+it "a non-urgent change is held inside the collapse window"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=1.5 start_watch burst
+held_change
+check 0 "$(lines "${WORK}/burst.out")"
+it "two non-urgent changes in successive polls print as one line holding both"
+snap 41 5 1 "w2:p1,w2:p2,w2:p3,w2:p4"
+wait_for "${WORK}/burst.out" "remit-changed" 30 || true
+check "${HELD}; remit-changed +w2:p4" "$(cat "${WORK}/burst.out")"
+stop_watch "$WPID"
+
+reset_state
+it "a claim alone prints in the poll that finds it, without waiting for the window"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=30 start_watch claimfast
+wait_for "$BEATS" "watcher-beat remit" || true
+sleep 0.4
+add_claim
+wait_for "${WORK}/claimfast.out" "claim" 15 || true
+check "claim 1 new" "$(cat "${WORK}/claimfast.out")"
+stop_watch "$WPID"
+
+reset_state
+it "a held change and a later claim print at once as one line, held change first"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=30 start_watch claimheld
+held_change
+add_claim
+wait_for "${WORK}/claimheld.out" "claim" 15 || true
+check "${HELD}; claim 1 new" "$(cat "${WORK}/claimheld.out")"
+stop_watch "$WPID"
+
+reset_state
+it "a held change then a source outage print as one line, held change first"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=30 start_watch heldown
+held_change
+echo 1 > "$HERDR_EXIT_FILE"
+wait_for "${WORK}/heldown.out" "source-unavailable" 15 || true
+check "${HELD}; source-unavailable herdr exit=1" "$(cat "${WORK}/heldown.out")"
+stop_watch "$WPID"
+
+reset_state
+it "a held change prints before the watcher exits at --max-polls"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=30 start_watch heldmax --max-polls 4
+held_change
+wait_exit "$WPID"
+check "$HELD" "$(cat "${WORK}/heldmax.out")"
+
+reset_state
+it "a held change prints, then remit-watcher-exit ended, when the programme ends"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=30 start_watch heldend
+held_change
+edit 'prog["ended"] = True'
+wait_exit "$WPID"
+check "${HELD}|remit-watcher-exit ended" "$(paste -sd'|' "${WORK}/heldend.out")"
+edit 'prog.pop("ended", None)'
+
+reset_state
+it "a held change prints when the watcher's Monitor stops it with SIGTERM"
+CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS=30 start_watch heldterm
+held_change
+check 0 "$(lines "${WORK}/heldterm.out")"
+kill -TERM "$WPID"
+wait_exit "$WPID" 30
+check "$HELD" "$(cat "${WORK}/heldterm.out")"
 
 reset_state
 prog set-waiting linear:AI-800 --who ci

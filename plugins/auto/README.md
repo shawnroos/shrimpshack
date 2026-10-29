@@ -42,6 +42,7 @@ take a worker's word for it.
   doing now, its queue, what it watches, who waits on whom, the decisions waiting on
   you, what it just did, and the rules in force.
 - **`/auto:programme-status [<run>]`** prints the same view once, as text.
+- **Focus budget** is an agreement term that limits how many task points and worker panes run at once; work over the limit waits in a queue the status view shows, and you pick a swap when the slate is full.
 - **`/auto:programme-takeover`** moves the programme to a new session when the old
   session is gone, or replaces a PM you name with `--replace <session id>`. **`/auto:programme-handover`**, typed in the PM session, passes
   it to another session. **`/auto:programme-end`** ends it and frees the space.

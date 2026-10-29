@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # auto PostToolUse hook (AskUserQuestion): journal a picker answer given in a
-# programme's driving session.
+# programme's driving session, or in any session of a herdr space a programme leases.
 #
-# Gate: an empty or missing leases folder, or a session id no lease names, means
-# this session drives no programme, so the hook exits without starting Python.
-# Always exits 0.
+# Gate: an empty or missing leases folder means no programme on this machine, so
+# the hook exits without starting Python. A session no lease names still goes to
+# Python, which resolves its herdr space from the session registry. Always exits 0.
 
 set -uo pipefail
 
@@ -24,14 +24,6 @@ fi
 __cd_stdin_json=""
 if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
-fi
-
-# Anything the shell cannot read exactly (no id, two ids, unusual characters, a \u escape) still goes to Python.
-__cd_after_sid="${__cd_stdin_json#*\"session_id\"}"
-if [[ $__cd_stdin_json != *\\u* && $__cd_after_sid != *\"session_id\"* \
-      && $__cd_stdin_json =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]+)\" ]]; then
-  grep -qsF -- "\"${BASH_REMATCH[1]}\"" "${__cd_files[@]}"
-  [ $? = 1 ] && exit 0
 fi
 
 "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/on-posttooluse-askuser.py" <<< "$__cd_stdin_json" 2>/dev/null

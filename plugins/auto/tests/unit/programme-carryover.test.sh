@@ -531,7 +531,8 @@ rows = [
     carried(["pa1"], "pb2", [{"key": "/r/e", "id": "k5", "hash": "h5"}]),
 ]
 want = [pp.approval_key(pp.carryover_target("/r/a", "k1"), "h1"), pp.approval_key(pp.carryover_target("/r/b", "k2"), "h2")]
-print(programme._approved(rows, "pa1") == want and programme._approved(rows, "pb2") == [])
+approval = load_lib_module("programme_approval")
+print(approval._approved(rows, "pa1") == want and approval._approved(rows, "pb2") == [])
 EOF
 )"
 

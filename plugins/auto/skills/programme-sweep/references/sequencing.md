@@ -49,6 +49,11 @@ see it.
 - **Flag.** Does the check need a feature flag? Create the flag when the first PR needs it. A worker that finds a flag missing in the middle of a browser check loses the run.
 - **Shared environment.** Does it need a shared test environment? Name the environment, its current holder, what frees it, and who is next. If a scheduled job moves the head of the PR that holds an environment, merge that PR on the day of its review, or the reviewed head is gone.
 
+Held items wait in the order they were held (`held_at`), and `focus-recheck`
+releases them in that order. The focus budget is the firm form of this
+section's gate: a dependency says an item cannot start yet, and a full budget
+says the same until room frees or Shawn picks a swap.
+
 ## 4. Gate each merge
 
 Run these checks before the PM merges, and again at step 8 when a worker claims

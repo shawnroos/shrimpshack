@@ -969,6 +969,42 @@ it "remind-behaviour refuses a session that does not drive the programme"
 check 1 "$CODE"
 write_snapshot base
 
+it "a start with no focus limit leaves the item with no hold"
+check 'null' "$(field 'items["linear:AI-753"]["held"]')"
+
+focus_limit() {
+  local pid
+  pid="$("$PY" - "$AUTO_ROOT" "$RUN" "focus budget limited $*" <<'PYEOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
+from programme_prompts import append_prompt
+print(append_prompt(sys.argv[2], "sess-pm", sys.argv[3], "typed")["prompt_id"])
+PYEOF
+)"
+  prog amend-term focus_budget limited "$@" --prompt "$pid"
+}
+focus_limit --points 5 --agents none
+prog add-item linear:AI-760 --title "sized" --size large
+: > "$CALLS"
+FAKE_HERDR_DOWN=1 prog start-worker linear:AI-760 -- --name big --handoff /tmp/h.md
+it "start-worker with a point limit and herdr unreadable holds the start"
+check 1 "$CODE"
+has "count unavailable" "$OUT"
+it "the held start never calls spinoff"
+lacks "spinoff" "$(calls)"
+it "the hold is recorded on the item"
+has "count unavailable" "$(field 'items["linear:AI-760"]["held"]')"
+
+focus_limit --points none --agents 1
+: > "$CALLS"
+prog start-worker linear:AI-760 -- --name big --handoff /tmp/h.md
+it "a worker pane no item owns, started by hand, counts against the agent limit"
+check 1 "$CODE"
+has "agents at limit" "$OUT"
+it "the agent-limit hold never calls spinoff"
+lacks "spinoff" "$(calls)"
+
 it "no command crashed with a traceback"
 check "" "$CRASHES"
 

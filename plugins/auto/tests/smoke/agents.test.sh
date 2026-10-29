@@ -23,7 +23,7 @@ WRITE_VERBS = ("hand-item", "answer-handed", "mark-read", "validate", "check-del
 BYPASS = ("bypassPermissions", "dangerously", "--no-verify", "permissionMode")
 taken = set(os.listdir(os.path.join(root, "skills"))) | {f[:-3] for f in os.listdir(os.path.join(root, "commands")) if f.endswith(".md")}
 files = sorted(f for f in os.listdir(agents) if f.endswith(".md"))
-check("the plugin ships the four programme agents", len(files) == 4, files)
+check("the plugin ships the five programme agents", len(files) == 5, files)
 for f in files:
     text = open(os.path.join(agents, f)).read()
     head = text.split("---", 2)[1] if text.startswith("---") else ""
@@ -38,6 +38,15 @@ for f in files:
     check(f"{f}: runs no programme write verb", not any(v in WRITE_VERBS for v in runs), runs)
     check(f"{f}: never told to pass --pin", "check-mergeable <pr> --pin" not in body and "--pin <" not in body)
     check(f"{f}: name does not shadow a skill or command", f[:-3] not in taken)
+pack = open(os.path.join(agents, "programme-sweep-packager.md")).read()
+meta_tools = json.loads(re.search(r"^tools:\s*(.*)$", pack, re.M).group(1))
+check("sweep packager: its tools are exactly Read and Write, no shell", meta_tools == ["Read", "Write"], meta_tools)
+check("sweep packager: names no programme.sh command, it reads a saved file", "programme.sh" not in pack)
+check("sweep packager: reads <home>/sweep-inputs.json", "`<home>/sweep-inputs.json`" in pack or "<home>/sweep-inputs.json" in pack)
+check("sweep packager: writes the digest with the Write tool to <home>/sweep-digest.md and ends it with DIGEST-DONE", "with the Write tool" in pack and "<home>/sweep-digest.md" in pack and "DIGEST-DONE" in pack)
+check("sweep packager: copies the verdict and may not turn changed into unchanged", "copy them" in pack and "You may not turn `changed` into `unchanged`" in pack)
+check("sweep packager: an unreadable input is unknown", "An empty or failed read is unknown" in pack)
+check("sweep packager: states the 6,000 character limit", "6,000 characters" in pack)
 upd = open(os.path.join(agents, "programme-tracker-updater.md")).read()
 check("tracker updater: writes only the listed issues", "Write only to the issues listed" in upd)
 check("tracker updater: never writes a done or canceled state", "Never set a state whose type is completed or canceled" in upd)

@@ -416,7 +416,7 @@ print(sorted(blk["agreement"]["terms"]), blk["agreement"]["terms"]["cadence"]["s
       sorted(ph.default_terms("2026-10-01T00:00:00Z")), "autonomy" in ph.TERM_GUIDE)
 EOF
 )"
-check "['cadence', 'remit', 'stop_rule', 'tools_of_record'] 600 ['cadence', 'remit', 'stop_rule', 'tools_of_record'] False" "$OUT"
+check "['cadence', 'focus_budget', 'remit', 'stop_rule', 'tools_of_record'] 600 ['cadence', 'focus_budget', 'remit', 'stop_rule', 'tools_of_record'] False" "$OUT"
 
 it "a record carrying an old instruction and a new Ruling under the same id keeps the new Ruling"
 OUT="$(run_py <<'EOF'

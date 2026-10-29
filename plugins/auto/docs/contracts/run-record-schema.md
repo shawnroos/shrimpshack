@@ -674,10 +674,10 @@ keys and keeps unknown ones.
 |-----|-------|
 | `remit` | `{spaces: [{server, workspace}], tabs: [], repos: [{path, github}], tracker: {teams: [{key, name, id}], projects: [{name, id}], initiatives: [{name, id}]}}`. `set-remit` writes it (caps: 8 spaces, 20 repos, 10 teams, 20 projects, 10 initiatives); `path` is an absolute directory, `github` is `owner/name` or null, a team `key` is an issue prefix. An empty list sets no limit. A record without `repos` or `tracker` reads them as empty. `set-remit` also stamps the `remit` term's `set_by` (proposal before acceptance, shawn after), `set_at`, `prompt_id` and `quote`; the term's `value` stays the space/tabs mode |
 | `created_at` | `<iso>` |
-| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, cadence, tools_of_record}, project_terms?}`: the agreement's Scope. Its Rulings live under `context.decisions`. `contract_version` is the accepted marker (today `1`), written only by `accept-agreement`; until it is written, `product_call` and `product_scope` stay with Shawn, and it gates nothing else. A record from before Rulings may also hold the `autonomy` term, which `normalize_programme` drops on read, and `corrections`, which no released version wrote and nothing reads |
+| `agreement` | `{proposed_at?, accepted: null \| {at, prompt_id, quote}, contract_version?, terms: {remit, stop_rule, cadence, tools_of_record, focus_budget}, project_terms?}`: the agreement's Scope. Its Rulings live under `context.decisions`. `contract_version` is the accepted marker (today `1`), written only by `accept-agreement`; until it is written, `product_call` and `product_scope` stay with Shawn, and it gates nothing else. A record from before Rulings may also hold the `autonomy` term, which `normalize_programme` drops on read, and `corrections`, which no released version wrote and nothing reads |
 | `agreement.project_terms[]` | `{id: "t"+6hex, area, value, source, set_by: proposal\|shawn\|carried_over, at, reserved, history: [{value, set_by, at, source, prompt_id}], prompt_id?, quote?, origin?, carried?}`. Preferred tools: free text naming a skill or tool for a kind of job, read in place until Behaviours replaces it. Who decides an area is a Ruling, never a project term. Free-text terms outside the fixed `terms` map, so `normalize_programme` never back-fills them: a record without the key reads as `[]` and keeps no key. New terms write `reserved: false`. A term with `reserved: true` comes from an older record: `normalize_programme` copies it into `context.decisions` as a kind-less legacy restrict Ruling under the term's id, with its `area`, and drops it from this list. `set_by: carried_over`, `origin` and `carried` appear only on terms an older carry-over pre-filled. `history` holds each value an after-acceptance amendment replaced, oldest first; a before-acceptance edit keeps none |
-| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `tools_of_record` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off), and may add `option_descriptions: {<tool>: <text>}` for a tool added through a proposal. A record without the term reads as all three on. A record whose terms still hold the older `sources` term reads it as `tools_of_record`: its `value`, `set_by`, `set_at`, `why`, `prompt_id` and `quote` are copied on the next read or write and `sources` is dropped. Any term may add `term.proposal` and `term.notes` (below). |
-| `agreement.terms.<key>.proposal` | `{value, extras, at, origin: pm\|ui, state: pending\|accepted\|superseded, settled_at?}`. At most one per term; `propose-term` replaces it and `clear-proposal` removes it. `extras` holds `seconds` or `until`, `add` (a remit space `server.workspace`, or a tool) and `description` (a tool's). `amend-term` and `set-remit` set `state` from `pending` to `accepted` when the new value matches, else `superseded`. A refused approval is journaled, never stored here. The rules in force drop it. |
+| `agreement.terms.<key>` | `{key, options, default, value, set_by: default\|proposal\|shawn, set_at, why, prompt_id?, quote?}`. `stop_rule` adds `until` (only for `until_time`); `cadence` adds `seconds` (default 3600), `eval_budget_usd_per_day` (25), `quiet_hours`; `focus_budget` has the options `unlimited` (default) and `limited` and adds `points` (a whole number or null), `agents` (a whole number or null) and `scale` (size name to points, default `small=1, medium=3, large=5`); a null limit means no limit on that count, and `limited` needs at least one limit. `amend-term`, `propose-term` and `pick-term` take `--points <n|none>`, `--agents <n|none>` and `--scale name=points,...` for this term only. A record without the term reads it as `unlimited`, and an untouched one is left out of the agreement text so it never changes the terms digest; `tools_of_record` has a list value: the sweep sources that stay on, in the order tracker, tasks, plans (default all three; `[]` turns every one off), and may add `option_descriptions: {<tool>: <text>}` for a tool added through a proposal. A record without the term reads as all three on. A record whose terms still hold the older `sources` term reads it as `tools_of_record`: its `value`, `set_by`, `set_at`, `why`, `prompt_id` and `quote` are copied on the next read or write and `sources` is dropped. Any term may add `term.proposal` and `term.notes` (below). |
+| `agreement.terms.<key>.proposal` | `{value, extras, at, origin: pm\|ui, state: pending\|accepted\|superseded, settled_at?}`. At most one per term; `propose-term` replaces it and `clear-proposal` removes it. `extras` holds `seconds`, `until`, `points`, `agents` or `scale`, `add` (a remit space `server.workspace`, or a tool) and `description` (a tool's). `amend-term` and `set-remit` set `state` from `pending` to `accepted` when the new value matches, else `superseded`. A refused approval is journaled, never stored here. The rules in force drop it. |
 | `agreement.terms.<key>.notes` | `[{text, at, origin}]`, at most 20; `note-term` adds one and `note-term --clear` removes the key |
 | `context` | `{decisions, requirements, assignments, blockers, pauses, denials}` (`programme_context.SECTIONS`). `context.decisions` maps a Ruling id to its revisions, oldest first. A Ruling revision is `{rev, state: pending_acceptance\|accepted\|superseded\|replaced\|closed, at, kind, effect: decided\|grant\|restrict, scope, reason, limits, requirements, applies_to: ["programme" \| <item id>], until, quote, replies_to, baseline, source, delta, supersedes, superseded_by, accepted, closed?, carried?, legacy?, area?}`. `record-ruling` appends a revision, `accept-context` accepts a pending one, and `close-ruling` sets `closed: {at, as: fulfilled\|withdrawn, why, prompt_id}`. `baseline` is the Authority level for the kind when a grant became active; `carried` is `{from, entry, run_id, quote}` on a Ruling that arrived from the carry-over store, pending and with no items. A revision with `kind` null is a legacy entry the gate never reads: an old decision record, or (with `legacy: instruction` or `legacy: project_term` and `area`) the copy `normalize_programme` made of an old instruction or reserved project term |
 | `protocol_ack` | `{at, repos: {<repo key>: <acknowledged state>}}`, written by `ack-protocol`: per remit repo, the Authority levels, the Done standards' content hashes and the rejected entries the rules view compares with to list protocol changes. Absent until the first `ack-protocol` |
@@ -687,12 +687,12 @@ keys and keeps unknown ones.
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `permission_proposals[]` | `{id: "perm-"+n, destination, settings_file, operations, rules, reach, exclusions, key: {operations, destination}, items, evidence, state, created_at, changed_at, notified_at, answers, explanation, confirmed, verified?, reservation?, attempts?, pending_answer?, outcome?, covering?, redenied_at?}`. A separate list from `proposed_rules`. `state` is open, postponed, rejected, retrying, resolved, ineffective or retry_unobserved. `propose-permission` adds and folds entries, `answer-permission` and `settle-permissions` move them. Fields, states and rules: programme-permission-proposals.md |
 | `items` | `{"<source>:<key>": item}` (below) |
-| `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}]}`. Known actions: `start_worker`, `arm_retry_watcher` |
+| `working_model` | `{doing: null \| {text, item, at}, queue: [{id: "q"+6hex, action, item, why, at}], subagents?: {count, at}}`. `subagents` is written by `focus-note` and read only by the status view; nothing enforces it. Known actions: `start_worker`, `arm_retry_watcher` |
 | `watchers` | `{"<id>": {process_id?, task_id?, kind?, item?, last_beat_at, prompt?, retry?}}`. `kind` is `cron` or `monitor`, set whenever a task id is recorded (`--kind`, else `cron` with `--prompt` and `monitor` without); a record without `kind` reads a task id with `prompt` as cron and one without as a Monitor. `end` prints `CronDelete` for cron task ids and `TaskStop` for Monitor task ids. Ids: `remit` (the remit watcher), `item-<item id with unsafe chars as ->` (item mode), `retry-<item slug>` (evidence retry, with `retry: {deliverable, argv}`). `prompt` is the armed cron prompt, verbatim; prompt capture reads it to mark a cron-origin prompt. A watcher is live when it has `process_id` or `task_id` and its beat is younger than one cadence period |
 | `sources` | `{"herdr"\|"tracker"\|"tasks"\|"plans": {unavailable_since: <iso>\|null, unsupported_since?: <iso>\|null, watcher?, provider?}}`. `set-source --unavailable` records an outage (a timeout, or a supported command that failed); `--unsupported` records that this machine cannot read the source (every tracker provider's tool is missing or reports `op unsupported`) and clears `unavailable_since`; `--available` clears both. `provider` (tracker only) names the provider that answered (`board`, `linear-api`, or `linear-mcp` after `record-issues`), and is null while the tracker is down. A sweep that cannot read the tracker records no change while the provider is `linear-mcp`. A source the agreement's `tools_of_record` term turns off keeps its entry but never holds the stop. The view shows tracker, tasks and plans with their state (available, with the tracker's provider; not read yet; unavailable; "not available on this machine"; or off). |
 | `recorded_issues` | `{provider: "linear-mcp", at, dropped, issues: {"<key>": {title, state, state_type, state_id, url, project: {id, name} \| null, initiatives: [{id, name}] \| null, source: "linear-mcp"}}}`, written by `record-issues` from the PM's MCP read. It claims the tracker provider only when no other provider has it available. `state_type` is one of triage, backlog, unstarted, started, completed, canceled, or null; `state_id` is a UUID or null. The tracker guard reads it to resolve state names and ids; the recorded check never reads it |
 | `trajectory_sweeps` | `[<iso>]`, at most two: the times of the previous and latest `record-trajectories` call that stored a trajectory. The view reads the gap between them. A record without it reads as `[]` |
-| `pm_worktree` | `null \| {path, repo, created_at}`. The programme worktree: a detached git worktree at `<repo>/worktrees/programme-<run>` the PM works from, where `repo` is the main checkout of the first remit repo at creation. Written once through `programme_authority.write` and never re-derived from the remit, so it stays put when the remit's repos change. `null` while the remit has no repo. A record without it reads as `null`. Mechanics: `lib/programme_worktree.py` |
+| `pm_worktree` | `null \| {path, repo, created_at}`. A programme worktree recorded by auto 0.16.2 and earlier: a detached git worktree at `<repo>/worktrees/programme-<run>`, where `repo` is the main checkout. auto no longer writes it; a recorded value is kept so end can release it. A record without it reads as `null`. Mechanics: `lib/programme_worktree.py` |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
 
@@ -724,7 +724,11 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `starts[]` | `{session_id, pane, terminal_id, ok, reason, spinoff_exit, at}` |
 | `task_runs[]` | `{repo, run_id}` |
 | `dropped_reason` | string or `null` |
-| `history[]` | `{at, kind, …}`; kinds include `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `trajectory_changed`, `started`, `start_failed`, `reopened` |
+| `size` | a name in `agreement.terms.focus_budget.scale`, or `null`. Written by `size-item` and `add-item --size`; the gate reads its points from the scale |
+| `held`, `held_at` | `null`, or a reason string and the `<iso>` time it was first held. The focus gate sets them on a refused start; `focus-recheck` and a start that now fits clear them. A held item is not in play, is left out of the predicate's actionable reasons, and is listed in held order by the status view. `swap-item` sets `held` to `parked: swapped out for <item>` |
+| `focus_override` | `null`, or `{prompt_id, hold}`: the pick that approved one `start-worker --despite focus` for this item, and the `held` text it approved. `override-focus` sets it and only while the item is held. The start that uses it clears it, checked and cleared in one locked write. Anything that clears `held`, a hold with different text, a size change and `drop-item` also clear it, so a bigger overrun needs a fresh pick |
+| `parked_pane` | the pane id of the worker `swap-item` parked, or `null`. While that pane holds a live worker the item cannot start again; clearing `held` clears it |
+| `history[]` | `{at, kind, …}`; kinds include `sized` (`size`), `parked` (`for`, `prompt_id`), `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `trajectory_changed`, `started`, `start_failed`, `reopened` |
 
 ### 10.6 Journal and claims
 
@@ -746,7 +750,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `project_term_amended`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`,
 `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`,
 `behaviours_kept`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
-`reread_requested`, `stopped_unwatched`, `item_added`, `item_updated`, `item_aliased`,
+`reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`,
+`item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`, `item_aliased`,
 `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`, `item_handed`,
 `handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`,
 `claim`, `claims_read`, `working_now`, `queue_changed`, `tested_build_recorded`,
@@ -764,6 +769,11 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `permission_proposed`, `permission_answered`, `permission_verified`, `permission_settled`,
 `blocked_settings_write`.
 
+- `item_held {item, reason}` is journaled by `start-worker` each time the focus gate refuses a start (one row per refusal).
+  `focus_override_approved {item, next, prompt_id, quote}` is journaled by `override-focus`.
+  `focus_overridden {item, would_hold, approval_prompt_id}` is journaled when an approved `--despite focus` starts an item the gate would have held.
+  `item_swapped {out, in, parked_pane, decision_id, stop_prompt, next}` is journaled by `swap-item`;
+  `focus_noted {subagents}` by `focus-note`. `size-item` journals `item_updated`.
 - `trajectory_changed {item, old_hash, new_hash}`: one row per item whose step path changed under the same
   driving session. A first recording, a recording under a new driving session and an unchanged path write no row.
 - `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`
@@ -775,7 +785,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `taken_over` and `handed_over {from_session, to_session, leases, request}`; `taken_over` adds
   `reason: orphaned|driver_gone|replaced` and, for the last two, `evidence {state, session_id,
   herdr_reachable, registry_pane, pane_in_snapshot, session_reported, pane_id, pane_label,
-  tab_label, why}` plus `replace_name` on a replace;
+  tab_label, why}` plus `replace_name` on a typed replace (absent on a pick-route replace). A takeover by `--prompt` has `request: null`,
+  `prompt_id` (also in `cites`) and `approval {origin, answer}`; `origin` is always `picked` and
+  `answer` is the picked takeover label, on every reason;
   `programme_ended {reason: ended_by_shawn|agreement_unaccepted, cron_task_ids,
   monitor_task_ids, process_ids, request, lease_status}`; `request_refused {verb, reason, lease_status}`.
   A used request is marked on the consuming line as `request = {kind, at, session_id, prompt_id}`.
@@ -865,6 +877,11 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `entry: keep`, `target: behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the hash.
 - `stopped_unwatched` carries `{items: [item ids]}`, appended on each allowed re-fire
   of the Stop hook; readers dedupe by item.
+- `stop_quiet` carries `{stop_rule, reasons: [reason texts]}`, appended when the Stop hook lets the
+  driving session stop because it already showed that session a block with the same signature.
+  The signature is the stop rule, the reasons (actionable reasons included) and any rules note. It
+  is kept per session in `<home>/.stop-shown-<session>.json`, so a cwd change keeps it. A changed
+  signature blocks again with the full text. Task-run blocks are not quieted.
 - `merge_pinned` carries `{item, ref, head}`; the merged check compares it with the
   PR head. No verb writes it yet.
 - Permission lines (programme-permission-proposals.md gives the full rules):
@@ -981,19 +998,6 @@ The nag file is `<repo>/.claude/auto/.stop-nag-<sid>.json`, or
 `[A-Za-z0-9_-]` and is capped at 128 characters. A stop with no session id uses
 `.stop-nag.json`. A programme holds only its driving session's stop.
 
-Drift: when the driving PM of a live programme with a `pm_worktree` stops, the hook
-compares the `cwd` in the hook's stdin (never the shell's `$PWD` or herdr's pane cwd)
-with the recorded worktree path, by realpath; a subdirectory of the worktree is inside
-it. The check runs before holds whose programme may stop are dropped. When the cwd is
-outside and the worktree is inside the session's start directory (§10.10, newest
-`startup` or `resume` row), the stop is blocked with a `cwd_drift` reason whose fix is
-`cd <worktree>`, and that reason is part of the nag signature. When the `cd` would not
-last, the stop is let through with a `systemMessage` naming `/cd <worktree>`.
-`cwd_drift` is a hook-only reason kind: it is not in `REASON_KINDS` and status does not
-show it. A missing `cwd`, a null or malformed `pm_worktree`, a worktree path that no
-longer exists, an ended programme or any error lets the stop through. The hook writes
-nothing to the record, and no environment variable turns the check off.
-
 ### 10.10 Session registry
 
 `<data>/sessions/<server>.<workspace>.jsonl` (0600, folder 0700, lock
@@ -1049,6 +1053,7 @@ predicate; the recompute ignores it.
 | `CLAUDE_AUTO_WORKER_WAIT` | `30` | `start-worker`, waiting for the new session |
 | `CLAUDE_AUTO_SPINOFF_TIMEOUT` | `600` | `start-worker`, the spinoff call |
 | `CLAUDE_AUTO_WATCH_INTERVAL_SECONDS` | `30` | `programme-watch`, the poll interval |
+| `CLAUDE_AUTO_WATCH_COLLAPSE_SECONDS` | `120` | `programme-watch`, how long non-urgent remit lines are held and merged |
 | `CLAUDE_AUTO_PROGRAMME_CLI` | `python3 lib/programme.py` | `programme-watch`, the CLI it writes through |
 
 ---

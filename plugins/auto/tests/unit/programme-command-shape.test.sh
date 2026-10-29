@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # auto unit test: /auto:programme walks setup one question per step instead of
-# printing a setup screen, and keeps the accept a typed reply.
+# printing a setup screen, and offers the accept as a pick of its terms-bound label. Any ask to be
+# the PM starts with become-pm.
 
 set -uo pipefail
 
@@ -33,9 +34,9 @@ for verb in "pick-term" "take-recommendations" "setup-step" "setup-seen" "setup-
 done
 if [ -z "$missing" ]; then pass; else fail "missing:${missing}"; fi
 
-it "keeps the accept a typed reply"
-if has "Type this: accept the agreement" && has "The accept is never a pick" \
-   && has "accept-agreement --prompt <id>"; then pass; else fail "the typed accept is not stated"; fi
+it "offers the accept as a pick of the terms-bound approval label"
+if has "programme.sh approval-label accept-agreement" && has "--terms <digest>" \
+   && hasnt "The accept is never a pick"; then pass; else fail "the terms-bound accept pick is not stated"; fi
 
 it "never tells the PM to pre-fill picker answers"
 if has "Never put answers into the AskUserQuestion call yourself"; then pass; else fail "the pre-fill ban is missing"; fi
@@ -66,6 +67,33 @@ if grep -qE '^allowed-tools:.*AskUserQuestion' "$TAKEOVER"; then pass; else fail
 it "a handover before acceptance tells the new session to resume setup"
 if grep -qF 'resume `/auto:programme` step 5 at the first step not done' "$HANDOVER"; then
   pass; else fail "no setup resume line in programme-handover.md"; fi
+
+SWEEP="${AUTO_ROOT}/skills/programme-sweep/SKILL.md"
+
+it "both commands start any ask to be or replace the PM with become-pm"
+for doc in "$CMD" "$TAKEOVER"; do
+  if grep -qF 'in any words, to be the PM' "$doc" && grep -qF 'run `programme.sh become-pm` first' "$doc"; then
+    pass; else fail "$(basename "$doc") does not route an ask to be PM through become-pm first"; fi
+done
+
+it "a refused start routes through become-pm, not a typed takeover"
+if has "Run \`programme.sh become-pm\` and follow the step it prints" \
+   && hasnt "typed here once its pane is closed"; then pass; else fail "the start refusal still sends Shawn to type"; fi
+
+it "the takeover command names every become-pm step"
+missing=""
+for step in start already-pm ask-shawn stand-down refused; do
+  grep -qF -- "- \`${step}\`" "$TAKEOVER" || missing="${missing} ${step}"
+done
+if [ -z "$missing" ]; then pass; else fail "missing:${missing}"; fi
+
+it "the sweep asks Shawn only by picker, only for approvals, and fixes the rest itself"
+if grep -qF 'Ask Shawn only through AskUserQuestion pickers' "$SWEEP" && grep -qF 'and only for approvals' "$SWEEP" \
+   && grep -qF 'run every fix that' "$SWEEP"; then pass; else fail "the sweep's asking rule is missing"; fi
+
+it "the sweep stands down silently when become-pm says stand-down"
+if grep -qF 'If it prints `stand-down`' "$SWEEP" && grep -qF 'with no message to' "$SWEEP"; then
+  pass; else fail "the sweep's stand-down rule is missing"; fi
 
 printf "\n%d passed, %d failed\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

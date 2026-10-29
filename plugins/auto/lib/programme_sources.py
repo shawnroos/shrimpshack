@@ -36,6 +36,7 @@ programme_plans = load_lib_module("programme_plans")
 programme_recovery = load_lib_module("programme_recovery")
 session_registry = load_lib_module("session_registry")
 programme_behaviours = load_lib_module("programme_behaviours")
+programme_focus = load_lib_module("programme_focus")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -186,7 +187,18 @@ def _owner(row, agent, hint) -> dict:
     return {"session_id": None, "source": None, "name": None}
 
 
-def pane_views(snap, scope) -> list:
+def worker_panes(programme, record):
+    scope = remit(programme)
+    if scope["unreached"]:
+        return None, f"remit spaces on another herdr server cannot be counted: {', '.join(scope['unreached'])}"
+    snap, reason = read_herdr()
+    if snap is None:
+        return None, f"herdr unreadable ({reason})"
+    drivers = _drivers(record)
+    return [p for p in pane_views(snap, scope, with_branch=False) if role(p, drivers) == "worker"], None
+
+
+def pane_views(snap, scope, with_branch=True) -> list:
     agents = {a.get("pane_id"): a for a in snap.get("agents") or [] if isinstance(a, dict)}
     registry = {ws: session_registry.read_space(scope["server"], ws) for ws in scope["workspaces"]}
     branches = {}
@@ -213,7 +225,7 @@ def pane_views(snap, scope) -> list:
             "title": programme_sanitize.clean(
                 row.get("terminal_title_stripped") or row.get("terminal_title"), 200) or None,
             "cwd": programme_sanitize.clean(cwd, 400) or None,
-            "branch": _branch(cwd, branches) if has_agent else "",
+            "branch": _branch(cwd, branches) if has_agent and with_branch else "",
             "agent": programme_sanitize.token((agent or row).get("agent")) if has_agent else None,
             "agent_status": programme_sanitize.token((agent or row).get("agent_status")),
             "owner": _owner(row, agent, hint),
@@ -365,10 +377,9 @@ def _plan_ids(panes, plans) -> dict:
     return out
 
 
-def _sweep_sources(programme, scope, panes, workers, drivers):
+def _sweep_sources(programme, scope, panes, workers):
     enabled = programme_home.enabled_sources(programme)
-    cwds = [p["cwd"] for p in panes or [] if p["cwd"] and role(p, drivers) != "pm"]
-    cwds += [r["path"] for r in scope["repos"]]
+    cwds = [p["cwd"] for p in panes or [] if p["cwd"]] + [r["path"] for r in scope["repos"]]
     plans = programme_plans.read(list(dict.fromkeys(cwds))) if "plans" in enabled else None
     plan_ids = _plan_ids(panes or [], plans) if plans else {}
     candidates = {i for pane in workers for i in named_issues(pane, {})}
@@ -385,7 +396,7 @@ def sweep(record) -> dict:
     panes = pane_views(snap, scope) if snap is not None else None
     drivers = _drivers(record)
     workers = [p for p in panes or [] if role(p, drivers) == "worker"]
-    tracker, tasks, plans, plan_ids = _sweep_sources(programme, scope, panes, workers, drivers)
+    tracker, tasks, plans, plan_ids = _sweep_sources(programme, scope, panes, workers)
     verified = set(tracker["issues"]) if tracker and not tracker["unavailable"] else None
     found = {}
     for pane in workers:
@@ -740,6 +751,7 @@ def _h_start_worker(host, argv):
     refusal = programme_context.unsafe_reason(programme, key, "start_worker")
     if refusal:
         raise host.ProgrammeError(refusal)
+    programme_focus.admit(host, run_id, home, record, programme, key, opts.get("despite") or ())
     spinoff = spinoff_path()
     if not spinoff:
         raise host.ProgrammeError("spinoff.sh not found beside this plugin or on PATH")
