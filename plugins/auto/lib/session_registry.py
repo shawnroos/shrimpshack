@@ -194,6 +194,23 @@ def record_session(hook_input: dict, env, tty=None) -> dict | None:
         if place is None:
             return None
         env_pane = place["pane_id"]
+    return _store(hook_input, env, host, place, env_pane, tty)
+
+
+def record_proven_pane(session_id, host, found, env) -> dict | None:
+    """Write the row a live own_pane answer proved, for a session whose SessionStart probe failed or timed out.
+
+    Without a row driver_panes() drops the programme's lease and the send-guard never covers the PM.
+    """
+    place = _other_entry(found, host)
+    if place is None or not isinstance(session_id, str) or not session_id:
+        return None
+    return _store({"session_id": session_id}, env, host, place, place["pane_id"],
+                  place["terminal_id"] if host == "ghostty" else None)
+
+
+def _store(hook_input, env, host, place, env_pane, tty) -> dict:
+    session_id = hook_input["session_id"]
     headless = is_headless(env)
     source = _clean(hook_input.get("source"))
     entry = {

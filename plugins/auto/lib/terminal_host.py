@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -157,6 +158,13 @@ class TerminalHost:
                     return "send", ident
         return None
 
+    def is_piped_script(self, argv, text, pane_ids=()):
+        """Like is_host_command for a command whose script arrives on stdin: ``text`` is everything the shell sees."""
+        return None
+
+    def installed(self) -> bool:
+        return any(shutil.which(b) for b in self.binaries)
+
     def report_session(self, session_id, pane_id, source) -> None:
         return None
 
@@ -217,6 +225,9 @@ class RefusedHost(TerminalHost):
 
     def _unimplemented(self, method) -> HostResult:
         return refuse(self._detection.why, fix=self._detection.fix)
+
+    def installed(self) -> bool:
+        return False
 
 
 def _build(name) -> TerminalHost:

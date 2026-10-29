@@ -478,11 +478,19 @@ def spinoff_path():
     return cached[0] if cached else None
 
 
+def _refusal_words(result) -> str:
+    return result.why + (f"; fix: {result.fix}" if result.fix else "")
+
+
 def launch_worker(spinoff, extra, session_id=None) -> dict:
     session_id = session_id or str(uuid.uuid4())
     before = {r.get("pane_id") for r in agent_rows() or []}
-    launched = terminal_host.current().start_pane([spinoff] + list(extra) + ["--session-id", session_id],
-                                                  _seconds(SPINOFF_TIMEOUT_ENV, SPINOFF_TIMEOUT)).value
+    started = terminal_host.current().start_pane([spinoff] + list(extra) + ["--session-id", session_id],
+                                                 _seconds(SPINOFF_TIMEOUT_ENV, SPINOFF_TIMEOUT))
+    launched = started.value
+    if not started.ok and not isinstance(launched, dict):
+        return {"session_id": session_id, "pane": None, "terminal_id": None, "spinoff_exit": None, "ok": False,
+                "reason": _refusal_words(started), "output_tail": "", "outcome": "not_executed"}
     run, output, pane = launched["run"], launched["output"], launched["pane"]
     out = {"session_id": session_id, "pane": pane, "terminal_id": None, "spinoff_exit": run["code"],
            "ok": False, "reason": None, "output_tail": programme_sanitize.clean(output[-400:], 400),
@@ -494,7 +502,7 @@ def launch_worker(spinoff, extra, session_id=None) -> dict:
         return out
     confirmed = terminal_host.current().confirm_started(
         session_id, pane, before, _seconds(WORKER_WAIT_ENV, WORKER_WAIT), session_of)
-    found = confirmed.value
+    found = confirmed.value if isinstance(confirmed.value, dict) else {"row": None}
     if found["row"] is None:
         out.update(reason=confirmed.why, outcome="uncertain")
         return out
@@ -783,6 +791,15 @@ def _h_prompt_item(host, argv):
                         extra={"decision_ids": decision_ids, "restrictions": restrictions}, on_sent=on_sent)
 
 
+def _send_outcome(sent, ok) -> str:
+    if ok:
+        return "completed"
+    if sent.get("text_typed"):
+        # The text already sits in the worker's input, so a blind resend would type it twice.
+        return "uncertain"
+    return "failed" if sent["ran"] else ("uncertain" if sent["timed_out"] else "not_executed")
+
+
 def send_to_item(host, opts, located, programme, key, text, *, kind="prompt_sent", extra=None, on_sent=None):
     run_id, home, record, sid = located
     refusal = programme_context.unsafe_reason(programme, key, "prompt_item")
@@ -813,14 +830,13 @@ def send_to_item(host, opts, located, programme, key, text, *, kind="prompt_sent
         _settled(host, run_id, home, op, "prompt_refused", payload, "not_executed")
         raise host.ProgrammeError(f"prompt refused: {reason}")
     delivery = terminal_host.current().send_prompt(target["pane"], text)
-    sent = delivery.value
+    sent = delivery.value if isinstance(delivery.value, dict) else programme_exec.not_run(_refusal_words(delivery))
     programme_recovery.pause(run_id, "after_invoke")
-    ok = sent["ran"] and sent["code"] == 0
-    outcome = "completed" if ok else ("failed" if sent["ran"] else
-                                      ("uncertain" if sent["timed_out"] else "not_executed"))
+    ok = delivery.ok and sent["ran"] and sent["code"] == 0
+    outcome = _send_outcome(sent, ok)
     payload.update(sent=ok, session_unknown=target["session_unknown"], owner_source=target["owner_source"],
                    text=programme_journal.redact(programme_sanitize.clean(text, QUOTE_CAP)),
-                   error=None if ok else delivery.why, **(extra or {}))
+                   error=None if ok else delivery.why or sent["error"], **(extra or {}))
     assign = None
     if ok and on_sent:
         def assign(prog, settled):

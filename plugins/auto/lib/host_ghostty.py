@@ -36,11 +36,17 @@ SPACE_SERVER = "local"
 RS, US = "\x1e", "\x1f"
 MAX_TERMINALS = 256
 SESSION_FILE_CAP = 65536
-SEND_VERBS = ("input text", "send key", "perform action", "send mouse")
+# Matched on casefolded text with whitespace collapsed; the run-together spellings are the JXA method names, and
+# System Events types into whatever app is frontmost, Ghostty included.
+SEND_VERBS = ("input text", "send key", "perform action", "send mouse", "inputtext", "sendkey", "performaction", "sendmouse",
+              "keystroke", "key code")
 # A send that picks its terminal without naming an id still reaches the PM's terminal.
 BROADCAST = re.compile(r"\b(every terminal|terminals|focused terminal|front window|selected tab|(first|last|some) terminal"
                        r"|terminal \d+)\b")
 OSASCRIPT_TOKENS = frozenset({"$OSASCRIPT", "${OSASCRIPT}"})
+# The shell strips the quotes of a nested script, so the id may arrive bare.
+_LITERAL_OTHER = re.compile(r"""\bterminal id [\\"']*[a-z0-9_-]""")
+_REDIRECTS = frozenset({"<", "<<", "<<-", "<<<"})
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _NO_TTY = ("", "??", "?", "-")
 _OWN_PANE = {}
@@ -85,7 +91,11 @@ on run argv
 			try
 				if (id of tt as text) is (item 1 of argv) then
 					input text (item 2 of argv) to tt
-					send key "enter" to tt
+					try
+						send key "enter" to tt
+					on error
+						return "partial=text-typed"
+					end try
 					return "sent"
 				end if
 			end try
@@ -93,6 +103,8 @@ on run argv
 	end tell
 	return "error=terminal-not-found"
 end run"""
+
+_READ_ONLY = re.compile(re.escape(re.sub(r"\s+", " ", LIST_SCRIPT.casefold())))
 
 native, degraded, refuse = terminal_host.native, terminal_host.degraded, terminal_host.refuse
 _UNSET = object()
@@ -161,7 +173,11 @@ class GhosttyHost(terminal_host.TerminalHost):
         if sent["ran"] and sent["code"] == 0 and sent["stdout"].strip() == "sent":
             return native(sent)
         failure = _failure_of(sent, "osascript send")
-        if sent["ran"] and sent["code"] == 0:
+        if sent["ran"] and sent["code"] == 0 and sent["stdout"].strip() == "partial=text-typed":
+            failure = {"kind": "error", "why": "Ghostty typed the prompt but could not press enter",
+                       "fix": "check the terminal's input line before sending again: the text is already there"}
+            sent = dict(sent, text_typed=True)
+        elif sent["ran"] and sent["code"] == 0:
             failure = {"kind": "gone", "why": f"Ghostty has no terminal {pane} ({sent['stdout'].strip() or 'no answer'})",
                        "fix": "list the live terminals with the host's list verb and prompt one of them"}
         return self._refusal("send_prompt", failure, value=sent)
@@ -186,18 +202,52 @@ class GhosttyHost(terminal_host.TerminalHost):
                         value="journal")
 
     def is_host_command(self, argv, pane_ids=()):
-        if not argv or not (argv[0] in OSASCRIPT_TOKENS or os.path.basename(argv[0]) == "osascript"):
+        if not _is_osascript(argv):
             return None
-        text = " ".join(argv[1:])
-        folded = text.casefold()
-        verb = next((v for v in SEND_VERBS if v in folded), None)
-        for ident in pane_ids:
-            if ident and _names(folded, ident):
-                return verb or "script", ident
-        first = next((i for i in pane_ids if i), None)
-        if verb and first and BROADCAST.search(folded):
-            return verb, first
+        return _classify(" ".join(argv[1:]), pane_ids)
+
+    def is_piped_script(self, argv, text, pane_ids=()):
+        if not _is_osascript(argv) or not _reads_stdin(argv[1:]):
+            return None
+        return _classify(text, pane_ids)
+
+
+def _is_osascript(argv) -> bool:
+    return bool(argv) and (argv[0] in OSASCRIPT_TOKENS or os.path.basename(argv[0]) == "osascript")
+
+
+def _reads_stdin(args) -> bool:
+    """True when osascript has neither -e text nor a script file, so its script arrives on stdin (pipe, heredoc, redirect)."""
+    i, has_script = 0, False
+    while i < len(args):
+        tok = args[i]
+        if tok in _REDIRECTS or tok in ("-e", "-l"):
+            has_script = has_script or tok == "-e"
+            i += 2
+            continue
+        has_script = has_script or not tok.startswith("-")
+        i += 1
+    return not has_script
+
+
+def _classify(text, pane_ids):
+    """(verb, target) when ``text`` is an osascript script that may type into a driver's terminal. Default deny: a
+    script that mentions Ghostty is a send unless it targets one other literal terminal id or is auto's own list script."""
+    folded = _READ_ONLY.sub("", re.sub(r"\s+", " ", text.casefold()))
+    verb = next((v for v in SEND_VERBS if v in folded), None)
+    for ident in pane_ids:
+        if ident and _names(folded, ident):
+            return verb or "script", ident
+    first = next((i for i in pane_ids if i), None)
+    if not first:
         return None
+    if verb in ("keystroke", "key code"):
+        return verb, first
+    if verb and BROADCAST.search(folded):
+        return verb, first
+    if "ghostty" in folded and (BROADCAST.search(folded) or not _LITERAL_OTHER.search(folded)):
+        return verb or "script", first
+    return None
 
 
 def _own_pane_id(session_id):

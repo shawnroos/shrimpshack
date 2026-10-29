@@ -123,6 +123,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list) -> No
         for script in nested:
             _scan(script, depth + 1, hosts, pane_ids, found)
     tokens = _lex(main)
+    piped = main + "\n" + "\n".join(bodies)
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
         script = None
@@ -138,7 +139,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list) -> No
             continue
         segment = _segment(tokens, start)
         for host in hosts:
-            hit = host.is_host_command(segment, pane_ids=pane_ids)
+            hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
             if hit:
                 found.append((host.name, hit[0], hit[1]))
 

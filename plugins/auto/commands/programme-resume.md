@@ -13,10 +13,12 @@ secrets included. Never `git add -A`.
 
 ## 0. Terminal host
 
-Sections 1.3, 1.4, 2 to 4 use herdr commands (`herdr pane read`, `herdr pane
+Sections 1.3, 2 to 4 use herdr commands (`herdr pane read`, `herdr pane
 run`, `herdr tab create`). Resume restarts worker panes in herdr only today. If
-`HERDR_PANE_ID` is empty, the session runs in Rex or Ghostty: do steps 1.1, 1.2
-and 1.5, then stop and tell Shawn:
+`HERDR_PANE_ID` is empty, the session runs in Rex or Ghostty: do steps 1.1, 1.2,
+1.4 and 1.5, then stop and tell Shawn. In step 1.4 drop the `HERDR_PANE_ID=`
+prefix: the watcher is host-neutral and finds the PM's own pane through the
+host. Then tell Shawn:
 
 > resume cannot restart worker panes in Rex or Ghostty yet.
 > fix: in each worker's tab run `cd <worktree> && claude --resume <session id>`,
@@ -38,6 +40,7 @@ and 1.5, then stop and tell Shawn:
    never take one from another machine or an earlier run.
 4. Arm the remit watcher with that pane id, under Monitor at the longest timeout:
    `HERDR_PANE_ID=<real pane> bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --tracker`
+   (off herdr: `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --tracker`, no prefix)
    Then `P watcher-beat remit --task-id <Monitor task id> --kind monitor`.
    Use the same prefix every time you re-arm it.
 5. `CronList`. If the cadence cron is missing, CronCreate it at the cadence term

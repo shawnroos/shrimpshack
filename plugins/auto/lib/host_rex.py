@@ -109,11 +109,13 @@ class RexHost(terminal_host.TerminalHost):
             return refuse(missing.why, fix=missing.fix, value=programme_exec.not_run(f"{missing.why}; fix: {missing.fix}"))
         # The text goes after "--" so a prompt that starts with a dash is not read as a flag.
         sent = programme_exec.bounded(["rex", "send", "-b", pane, NO_AUTOSTART, "--", text], REX_TIMEOUT)
+        what = "rex send"
         if sent["ran"] and sent["code"] == 0:
-            sent = _rex(["send-key", "-b", pane, "enter"], REX_TIMEOUT)
+            sent, what = _rex(["send-key", "-b", pane, "enter"], REX_TIMEOUT), "rex send-key enter (the text is already typed)"
+            sent = dict(sent, text_typed=True)
         if sent["ran"] and sent["code"] == 0:
             return native(sent)
-        return refuse(programme_exec.failure(sent, "rex send"), value=sent)
+        return refuse(programme_exec.failure(sent, what), value=sent)
 
     def presence(self, session_id, row, snap, reported, **_):
         out = terminal_host.presence_facts(session_id, (row or {}).get("pane_id"))

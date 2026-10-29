@@ -245,6 +245,11 @@ def _require_own_pane(host, sid, session_host) -> None:
         return
     found = terminal_host.host_named(session_host).own_pane(os.environ)
     if found.ok and found.value:
+        # Only a row puts the pane under driver_panes(); a live answer alone leaves the programme unguarded.
+        if session_registry.record_proven_pane(sid, session_host, found, os.environ) is None:
+            raise host.ProgrammeError(
+                f"auto found this session's {session_host} pane but could not record it, so it could not stop other "
+                "sessions typing into the PM's pane", fix="run the command again from a pane the terminal host can identify")
         return
     raise host.ProgrammeError(
         f"auto cannot identify this session's {session_host} terminal pane ({found.why or 'no pane id'}), "
@@ -451,7 +456,9 @@ def _h_takeover(host, argv):
     _, opts = host._parse(_tokens(argv), values=("run", "replace", "prompt"))
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
-    _check_host(host, _session_host(host, sid), lease, "take over")
+    session_host = _session_host(host, sid)
+    _check_host(host, session_host, lease, "take over")
+    _require_own_pane(host, sid, session_host)
     run = lease["run"]
     if opts.get("prompt"):
         return _took_over(host, run, sid, _prompt_takeover(host, lease, run, sid, opts["prompt"]))
