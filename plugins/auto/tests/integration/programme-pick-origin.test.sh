@@ -176,6 +176,13 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
     leases = sorted((work / 'data/programmes/leases').glob('*.json'))
     check('the fixture programme holds one lease', len(leases) == 1, leases)
     in_space = dict(os.environ, HERDR_WORKSPACE_ID=leases[0].stem.split('.', 1)[1])
+    sr = load_lib_module('session_registry')
+    server, workspace = leases[0].stem.split('.', 1)
+    # The environment no longer names a space; SessionStart's registry row does.
+    sr._append(sr.registry_path(server, workspace), {
+        'at': load_lib_module('run_record_core').now_iso(), 'session_id': 'newcomer', 'pane_id': workspace + ':p91',
+        'env_pane': workspace + ':p91', 'terminal_id': 'term_p91', 'tab_id': None, 'server': server, 'workspace': workspace,
+        'source': 'startup', 'cwd': str(plain), 'transcript_path': None, 'interactive': True, 'resolved': 'herdr', 'host': 'herdr'})
     newcomer = transcript('newcomer', [PICK])
     before = len(prompt_rows(run))
     result = post('newcomer', newcomer, env=in_space)

@@ -399,10 +399,14 @@ EOF
 done
 check "1" "$ALL"
 
+FAKE_HERDR_PANE="w2:p310" session_start sess-peer310 "w2:p310" >/dev/null
+FAKE_HERDR_PANE="w2:p311" session_start sess-peer311 "w2:p311" >/dev/null
 it "the same hidden forms sending to a worker pane are allowed"
 ALL=1
 for form in "${HIDDEN_FORMS[@]}" "herdr agent prompt w2:p310 go" "herdr agent prompt term_p311 go"; do
   c="${form//PANE/w2:p50}"
+  # A command word built at run time is denied for a session that drives no programme (default-deny policy).
+  case "$c" in 'H=herdr;'*) continue ;; esac
   OUT="$(action_hook sess-worker "$c")"
   [ -z "$OUT" ] || { ALL=0; echo "      not allowed: $c ($OUT)"; }
 done

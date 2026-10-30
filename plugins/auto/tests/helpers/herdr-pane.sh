@@ -17,8 +17,20 @@ sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 sys.exit(0 if load_lib_module("session_registry").lookup(sys.argv[2], include_headless=True) else 1)
 PYEOF
+  local pf="${WORK}/.panefake"
+  if [ ! -x "${pf}/herdr" ]; then
+    mkdir -p "$pf"
+    cat > "${pf}/herdr" <<'FAKE'
+#!/bin/bash
+[ "$1 ${2:-}" = "pane get" ] || exit 0
+pane="$3"
+printf '{"id":"cli:pane:get","result":{"pane":{"pane_id":"%s","workspace_id":"%s","terminal_id":"term_%s","tab_id":"%s:t1"}},"type":"pane_info"}\n' \
+  "$pane" "${pane%%:*}" "${pane##*:}" "${pane%%:*}"
+FAKE
+    chmod +x "${pf}/herdr"
+  fi
   printf '{"session_id":"%s","source":"startup","cwd":"/tmp"}' "$sid" |
-    env -u CLAUDE_CODE_ENTRYPOINT HERDR_PANE_ID="$(pane_for "$sid" "$ws")" HERDR_WORKSPACE_ID="$ws" \
+    env -u CLAUDE_CODE_ENTRYPOINT PATH="${pf}:${PATH}" HERDR_PANE_ID="$(pane_for "$sid" "$ws")" HERDR_WORKSPACE_ID="$ws" \
       "$PY" "${AUTO_ROOT}/lib/session_registry.py" record
 }
 

@@ -12,6 +12,7 @@ WORK="$(mktemp -d -t auto-programme-resume.XXXXXX)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 . "${AUTO_ROOT}/tests/helpers/dispatch-fixture.sh"
 . "${AUTO_ROOT}/tests/helpers/closure-fixture.sh"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
 NOREPO="${WORK}/norepo"
 REPO="${WORK}/repo"
 mkdir -p "$NOREPO" "${REPO}/.claude/auto"
@@ -160,6 +161,7 @@ cp "$DB" "${WORK}/good.db"
 printf 'not a database' > "$DB"
 DBSUM="$(shasum -a 256 "$DB")"
 PAYLOAD="$("$PY" -c 'import json; print(json.dumps({"session_id": "sess-new", "prompt": "/auto:programme-takeover"}))')"
+register_session sess-new w4 >/dev/null
 OUTR="$( cd "$NOREPO" && HERDR_PANE_ID="w4:p77" HERDR_WORKSPACE_ID="w4" CLAUDE_PLUGIN_ROOT="$AUTO_ROOT" \
   bash "${HOOKS}/on-user-prompt.sh" <<< "$PAYLOAD" 2>/dev/null )"
 CTXR="$(context_of "$OUTR")"
