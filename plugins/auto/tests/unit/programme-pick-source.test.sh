@@ -125,10 +125,14 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
         ('different answers hash', {'answers_hash': 'wrong'}),
         ('different stored answer text', {'answers': {QUESTION: 'on change (Recommended)'}}),
         ('different stored question text', {'answers': {'Autonomy: may the PM merge?': 'fixed every 15 min'}}),
-        ('different prefix hash', {'prefix_hash': 'wrong'}),
+        ('different window hash', {'window_hash': 'wrong'}),
+        ('window starting after the offset', {'window_start': 1000000}),
+        ('empty window at a nonzero offset', {'window_start': row['payload']['source']['offset'], 'window_hash': picks._hash(b'')}),
+        ('negative window start', {'window_start': -1}),
+        ('boolean window start', {'window_start': True}),
         ('offset after end', {'offset': 1000000}),
         ('boolean offset', {'offset': True}),
-        ('unsupported version', {'version': 2}),
+        ('unsupported version', {'version': 3}),
         ('unknown kind', {'kind': 'typed'}),
         ('relative path', {'path': 'pick-pm.jsonl'}),
         ('wrong session filename', {'path': str(path.with_name('other.jsonl'))}),
@@ -152,9 +156,66 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
         data = {'session_id': 'pick-pm', 'transcript_path': str(path), 'tool_use_id': odd_id,
                 'tool_response': {'answers': {QUESTION: 'fixed every 15 min'}}}
         check('a tool_use_id outside [A-Za-z0-9_-] records nothing: ' + odd_id, picks.capture(data), None)
-    data = {'session_id': 'pick-pm', 'transcript_path': str(path), 'tool_use_id': 'toolu_01-Ab_9',
+    plain = work / 'plain'
+    plain.mkdir()
+    (plain / 'pick-pm.jsonl').write_text(json.dumps(PICK).replace('toolu_pick', 'toolu_01-Ab_9') + '\n')
+    data = {'session_id': 'pick-pm', 'transcript_path': str(plain / 'pick-pm.jsonl'), 'tool_use_id': 'toolu_01-Ab_9',
             'tool_response': {'answers': {QUESTION: 'fixed every 15 min'}}}
     check('a plain tool_use_id still captures', isinstance(picks.capture(data), dict), True)
+    data['transcript_path'] = str(path)
+    check('a tool_use_id with no asking row in the transcript records nothing', picks.capture(data), None)
+    missing = dict(data, transcript_path=str(work / 'absent' / 'pick-pm.jsonl'))
+    check('a pick on a missing transcript records nothing', picks.capture(missing), None)
+
+    # A long-lived PM's transcript passed the old 64 MB whole-file limit (72 MB on the Studio), and from then on
+    # every prompt and pick journaled as unverified.
+    def big_pick(name, before_rows, after_asking_rows):
+        folder = work / name
+        folder.mkdir()
+        big_path = folder / 'pick-pm.jsonl'
+        pad = json.dumps({'type': 'system', 'sessionId': 'pick-pm', 'pad': 'x' * 4000}) + '\n'
+        with big_path.open('w') as stream:
+            for _ in range(before_rows):
+                stream.write(pad)
+            stream.write(json.dumps(dict(PICK, sessionId='pick-pm')) + '\n')
+            for _ in range(after_asking_rows):
+                stream.write(pad)
+        data = {'session_id': 'pick-pm', 'transcript_path': str(big_path), 'tool_name': 'AskUserQuestion',
+                'tool_use_id': 'toolu_pick', 'tool_input': PICK['message']['content'][0]['input'],
+                'tool_response': {'answers': {QUESTION: 'fixed every 15 min'}}}
+        return data, big_path
+
+    data, big_path = big_pick('big-near', 17500, 50)
+    check('the transcript is over the old 64 MB limit', big_path.stat().st_size > 64 * 1024 * 1024, True)
+    source = picks.capture(data)
+    check('a pick on a transcript over 64 MB captures', isinstance(source, dict), True)
+    with big_path.open('a') as stream:
+        stream.write(json.dumps(dict(RESULT, sessionId='pick-pm')) + '\n')
+    row = pj.append_prompt(run, 'pick-pm', picks.summary(data['tool_response']['answers']), 'unknown', source=source)
+    check('a pick on a transcript over 64 MB resolves picked', pj.prompt_origin(row), 'picked')
+    check('the source records the window, not the whole file', source['window_start'] > 60 * 1024 * 1024, True)
+    flipped = big_path.read_bytes().replace(b'Cadence', b'Kadence', 1)
+    big_path.write_bytes(flipped)
+    check('a change inside the window resolves unknown', pj.prompt_origin(row), 'unknown')
+
+    data, far_path = big_pick('big-far', 9000, 9000)
+    check('an asking row farther back than the lookback records nothing', picks.capture(data), None)
+    data, _ = big_pick('big-edge', 200, 50)
+    check('an asking row well inside the lookback captures', isinstance(picks.capture(data), dict), True)
+
+    legacy = work / 'legacy'
+    legacy.mkdir()
+    legacy_path = legacy / 'pick-pm.jsonl'
+    legacy_path.write_text(json.dumps(dict(PICK, sessionId='pick-pm')) + '\n')
+    prefix = legacy_path.read_bytes()
+    legacy_source = {'version': 1, 'kind': 'pick', 'path': str(legacy_path), 'session_id': 'pick-pm',
+                     'tool_use_id': 'toolu_pick', 'offset': len(prefix), 'prefix_hash': picks._hash(prefix),
+                     'answers_hash': picks.answers_hash({QUESTION: 'fixed every 15 min'}),
+                     'answers': {QUESTION: 'fixed every 15 min'}}
+    with legacy_path.open('a') as stream:
+        stream.write(json.dumps(dict(RESULT, sessionId='pick-pm')) + '\n')
+    row = pj.append_prompt(run, 'pick-pm', 'picked: legacy', 'unknown', source=legacy_source)
+    check('a version 1 source journaled before this change still resolves picked', pj.prompt_origin(row), 'picked')
 
     ph.end_programme(run, 'isolated pick fixture complete')
 

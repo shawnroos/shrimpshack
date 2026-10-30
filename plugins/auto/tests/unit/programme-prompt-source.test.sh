@@ -56,11 +56,13 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
         ('different source session', {'session_id': 'someone-else'}),
         ('different runtime prompt', {'prompt_id': 'another-prompt'}),
         ('different raw text', {'text_hash': 'wrong'}),
-        ('different prefix', {'prefix_hash': 'wrong'}),
+        ('different window', {'window_hash': 'wrong'}),
+        ('window starting after the offset', {'window_start': 1000000}),
+        ('negative window start', {'window_start': -1}),
         ('negative offset', {'offset': -1}),
         ('boolean offset', {'offset': True}),
         ('offset after end', {'offset': 1000000}),
-        ('unsupported version', {'version': 2}),
+        ('unsupported version', {'version': 3}),
         ('boolean version', {'version': True}),
         ('relative path', {'path': 'source-pm.jsonl'}),
         ('wrong session filename', {'path': str(path.with_name('another-session.jsonl'))}),
@@ -122,6 +124,50 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
         cmd_human = dict(cmd_human, promptSource=None, message={'role': 'user', 'content': content})
         cmd_path.write_text(json.dumps(cmd_human) + '\n')
         check(name, pj.prompt_origin(cmd_row), expected)
+
+    # An empty window proves nothing about the transcript before it; only an empty or missing file may have one.
+    pad = b'{"type":"system"}\n'
+    empty_payload, _, empty_path, empty_human = fixture('accept agreement', 'source-pm')
+    empty_path.write_bytes(pad + (json.dumps(empty_human) + '\n').encode())
+    empty_source = {'version': 2, 'path': str(empty_path), 'session_id': 'source-pm',
+                    'prompt_id': empty_payload['prompt_id'], 'offset': len(pad), 'window_start': len(pad),
+                    'window_hash': source_module._hash(b''), 'text_hash': source_module._hash(b'accept agreement')}
+    empty_row = pj.append_prompt(run, 'source-pm', 'accept agreement', 'unknown', source=empty_source)
+    check('an empty window at a nonzero offset resolves unknown', pj.prompt_origin(empty_row), 'unknown')
+    empty_source.update(offset=0, window_start=0)
+    empty_path.write_bytes((json.dumps(empty_human) + '\n').encode())
+    empty_row = pj.append_prompt(run, 'source-pm', 'accept agreement', 'unknown', source=empty_source)
+    check('an empty window at offset 0 still resolves typed', pj.prompt_origin(empty_row), 'typed')
+
+    # A long-lived PM's transcript passed the old 64 MB whole-file limit (72 MB on the Studio), and from then on
+    # every prompt journaled as unverified.
+    big_payload, _, big_path, big_human = fixture('accept agreement', 'source-pm')
+    big_path.write_bytes((json.dumps({'type': 'system', 'sessionId': 'source-pm', 'pad': 'x' * 4000}) + '\n').encode() * 17500)
+    check('the transcript is over the old 64 MB limit', big_path.stat().st_size > 64 * 1024 * 1024, True)
+    big_source = source_module.capture(big_payload)
+    check('a prompt on a transcript over 64 MB captures', isinstance(big_source, dict), True)
+    check('the source records a window at the end, not the whole file', big_source['window_start'] > 60 * 1024 * 1024, True)
+    big_row = pj.append_prompt(run, 'source-pm', 'accept agreement', 'unknown', source=big_source)
+    with big_path.open('a') as stream:
+        stream.write(json.dumps(big_human) + '\n')
+    check('a prompt on a transcript over 64 MB resolves typed', pj.prompt_origin(big_row), 'typed')
+    check('a persisted adoption lookup on it resolves typed', host.prompt_lookup(run, big_row['prompt_id'])['origin'], 'typed')
+    flipped = bytearray(big_path.read_bytes())
+    flipped[big_source['window_start'] + 10] ^= 1
+    big_path.write_bytes(bytes(flipped))
+    check('a change inside the window resolves unknown', pj.prompt_origin(big_row), 'unknown')
+    big_path.unlink()
+
+    old_payload, _, old_path, old_human = fixture('accept agreement', 'source-pm')
+    old_path.write_bytes(b'{"type":"system"}\n' * 50)
+    prefix = old_path.read_bytes()
+    old_source = {'version': 1, 'path': str(old_path), 'session_id': 'source-pm', 'prompt_id': old_payload['prompt_id'],
+                  'offset': len(prefix), 'prefix_hash': source_module._hash(prefix),
+                  'text_hash': source_module._hash(b'accept agreement')}
+    old_row = pj.append_prompt(run, 'source-pm', 'accept agreement', 'unknown', source=old_source)
+    with old_path.open('a') as stream:
+        stream.write(json.dumps(old_human) + '\n')
+    check('a version 1 source journaled before this change still resolves typed', pj.prompt_origin(old_row), 'typed')
 
     ph.end_programme(run, 'isolated source fixture complete')
 
