@@ -40,6 +40,7 @@ it "the digest has a Behaviours due section copied from behaviours_due, with ove
 has "## Behaviours due" "$A"
 has "behaviours_due" "$A"
 has "overflow_ids" "$A"
+has "behaviours_due.error" "$A"
 it "step 5 answers every behaviour the digest lists as due, by reminding or skipping, and the sweep stays open until none is left"
 has "digest's \"Behaviours due\" section" "$W"
 has "P remind-behaviour <item> <behaviour-id> --reason relevant --trigger <its trigger>" "$W"

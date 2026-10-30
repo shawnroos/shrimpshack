@@ -120,13 +120,9 @@ def _moved_items(programme, last_at):
 def _due(host, run_id, record):
     """What the PM owes an answer for. A failure is reported with its message, never raised: one bad file must not stop every sweep."""
     try:
-        found = programme_behaviours_due.due(record, run_id, lookup=host.prompt_lookup)
+        return programme_behaviours_due.due(record, run_id, lookup=host.prompt_lookup)
     except Exception as exc:  # noqa: BLE001 — any failure here must degrade the sweep, not end it
-        return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": [], "error": f"{type(exc).__name__}: {exc}"}, True
-    # load_store reports an unreadable file as a notice and returns the rest, so no exception reaches here.
-    if found["store_notices"]:
-        found["error"] = "; ".join(found["store_notices"])
-    return found, bool(found["store_notices"])
+        return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": [], "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _armed(programme, record):
@@ -147,7 +143,7 @@ def _facts(host, run_id, home, record):
     refs = _open_prs(programme)
     reread = _last_index(rows, ("reread_requested",))
     acked = _last_index(rows, ("rules_acked", "rules_loaded"))
-    due, due_error = _due(host, run_id, record)
+    due = _due(host, run_id, record)
     return {
         "run": run_id, "home": home, "rows": rows, "last": last,
         "since": list(enumerate(rows, 1))[(last + 1) if last is not None else 0:],
@@ -160,7 +156,7 @@ def _facts(host, run_id, home, record):
         "refs": refs, "prs": _readiness(programme, refs), "armed": _armed(programme, record),
         "reread_requested": reread is not None and (acked is None or reread > acked),
         "rules": host.rules_in_force(record).get("rules") or [],
-        "due": due, "due_error": due_error,
+        "due": due,
     }
 
 
@@ -182,7 +178,7 @@ def _verdict(f):
         ("worker_not_working", bool(f["stalled"])),
         ("rules_reread_requested", f["reread_requested"]),
         ("behaviours_due", bool(f["due"]["total"])),
-        ("behaviours_store_unreadable", f["due_error"]),
+        ("behaviours_store_unreadable", bool(f["due"]["error"])),
     )
     return [code for code, hit in checks if hit] + ["watcher_missing:" + name for name, ok in f["armed"].items() if not ok]
 

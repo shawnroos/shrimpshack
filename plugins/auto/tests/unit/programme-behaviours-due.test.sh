@@ -210,11 +210,11 @@ EOF
 )"
 
 it "a store that cannot be read is reported in the result, not hidden"
-check "1" "$(run_py <<'EOF'
+check "True" "$(run_py <<'EOF'
 os.makedirs(os.path.dirname(os.environ["CLAUDE_AUTO_BEHAVIOURS_STORE"]), exist_ok=True)
 open(os.environ["CLAUDE_AUTO_BEHAVIOURS_STORE"], "w").write("{not json")
 run = setup([beh("b1")], a={"claim": TRIGGER})
-print(len(due(run)["store_notices"]))
+print(bool(due(run)["error"]))
 EOF
 )"
 

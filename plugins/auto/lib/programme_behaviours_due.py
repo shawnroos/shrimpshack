@@ -80,4 +80,5 @@ def due(record, run_id, *, lookup=None, store=None, cap=CAP) -> dict:
                 rows.append(_row(key, entry, trigger, passed))
     rest = rows[cap:]
     return {"total": len(rows), "rows": rows[:cap], "overflow": len(rest),
-            "overflow_ids": [f"{r['item']}/{r['behaviour']}" for r in rest], "store_notices": list(loaded["notices"])}
+            "overflow_ids": [f"{r['item']}/{r['behaviour']}" for r in rest],
+            "error": "; ".join(loaded["notices"]) or None}

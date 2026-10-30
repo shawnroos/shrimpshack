@@ -501,7 +501,8 @@ _FIELD_VALUES = ("when", "trigger", "applies-to", "evidence", "stop", "why", "go
 _FIELD_MULTI = ("pm-check", "agent-check") + tuple(opt for opt, _ in _LIST_OPTS)
 _COMMON = ("stop", "the", "and", "for", "when", "with", "that", "this", "its", "from", "into", "are", "was",
            "not", "all", "any", "each", "work", "item")
-_FIELDS_DOC = ("--when <text> [--trigger claim|merge|block|start] [--pm-check <text>]... [--agent-check <text>]... [--applies-to pm|workers|both] "
+_FIELDS_DOC = ("--when <text> [--trigger claim|merge|block|start] [--pm-check <text>]... [--agent-check <text>]... "
+               "[--applies-to pm|workers|both] "
                "[--do <line>]... [--dont <line>]... [--skill <name>]... [--tool <name>]... [--agent <name>]... "
                "[--format <line>]... [--comm <line>]... [--evidence <text>] [--stop <text>] [--good <text>] "
                "[--bad <text>] [--why <text>]")
@@ -622,7 +623,8 @@ def _h_record(host, argv):
         entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
         entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
         return {"behaviour": bid, "layer": "programme", "when": entry["when"]["text"],
-                "trigger": trigger_of(entry), "checks": entry["when"]["checks"], "overrides": entry["overrides"], "from_proposal": proposal,
+                "trigger": trigger_of(entry), "checks": entry["when"]["checks"], "overrides": entry["overrides"],
+                "from_proposal": proposal,
                 "related": _related(entry, others), "undo": f"retire-behaviour {bid} --as undone --prompt <id>"}
 
     return host._write(opts, change, RECORDED, prompt_id=opts.get("prompt"), needs_prompt=True,

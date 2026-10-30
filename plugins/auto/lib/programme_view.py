@@ -544,9 +544,10 @@ def _behaviour_text(b) -> str:
     if b.get("overridden_by"):
         status.append(f"overridden by {', '.join(b['overridden_by'])}")
     status.append(f"applies to {b.get('applies_to')}")
-    parts = [f"when {b.get('when')} (trigger {b.get('trigger')})"] + [f"{label}: {' / '.join(b[key])}" for key, label in
-                                         (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"),
-                                          ("agent_checks", "agent checks")) if b.get(key)]
+    parts = [f"when {b.get('when')} (trigger {b.get('trigger')})"]
+    parts += [f"{label}: {' / '.join(b[key])}" for key, label in
+              (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"), ("agent_checks", "agent checks"))
+              if b.get(key)]
     parts += [f"{key}: {b[key]}" for key in ("evidence", "stop") if b.get(key)]
     parts.append(f"source: Shawn: \"{b['quote']}\"" if b.get("quote") else "source: none recorded")
     return f"behaviour {b.get('id')} ({', '.join(status)}): " + "; ".join(parts)

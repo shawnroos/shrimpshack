@@ -47,6 +47,7 @@ why: <the inputs' why codes, copied exactly>
 ## Behaviours due             (source: behaviours_due; list every row, the PM answers each)
 - item <id> | behaviour <id> | trigger <trigger> | PM checks: <pm_checks or none> | <mark: judge, pm_applies, or blank> | <when>
 - more: <overflow> not listed: <overflow_ids, comma separated>
+- behaviours could not be read: <behaviours_due.error>   (only when it is set)
 ## Merge readiness             (source: prs, prs_unchecked)
 - <pr>: <result> (<note>)
 ## Journal since the last sweep (source: journal_since)

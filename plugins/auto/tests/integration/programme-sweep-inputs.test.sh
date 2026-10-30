@@ -307,7 +307,7 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     quiet_facts = {'last': 3, 'since': [(4, {'kind': 'stop_quiet', 'payload': {}})], 'reasons': [{'kind': 'never_stop'}],
                    'asks': [{'status': 'open', 'shown_current': True}], 'claims': [], 'moved': [], 'refs': [], 'prs': [],
                    'stalled': [], 'armed': {'remit': True, 'cron': True}, 'reread_requested': False,
-                   'due': {'total': 0}, 'due_error': False}
+                   'due': {'total': 0, 'error': None}}
     check('a quiet table of facts has no reason to sweep: a stop-rule reason alone is not one', psi._verdict(quiet_facts), [])
     for name, change, code in (
             ('no completed sweep', {'last': None}, 'no_prior_sweep'),
@@ -321,8 +321,8 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
             ('nine PRs', {'refs': [None] * 9}, 'pr_over_cap'),
             ('a dead remit watcher', {'armed': {'remit': False, 'cron': True}}, 'watcher_missing:remit'),
             ('a missing cron', {'armed': {'remit': True, 'cron': False}}, 'watcher_missing:cron'),
-            ('a due behaviour', {'due': {'total': 1}}, 'behaviours_due'),
-            ('an unreadable behaviours store', {'due_error': True}, 'behaviours_store_unreadable')):
+            ('a due behaviour', {'due': {'total': 1, 'error': None}}, 'behaviours_due'),
+            ('an unreadable behaviours store', {'due': {'total': 0, 'error': 'unreadable'}}, 'behaviours_store_unreadable')):
         check('the verdict names ' + name, psi._verdict(dict(quiet_facts, **change)), [code])
 
 print('programme-sweep-inputs.test.sh: {} passed, {} failed'.format(passed, failed))
