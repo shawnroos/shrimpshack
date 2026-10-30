@@ -24,6 +24,12 @@ Authority and Rulings, and acceptance stays with Done standards.
   with `--conflicts-with`.
 - A new or changed behaviour reaches work in progress as a reminder from now
   on (step 5). Never send back work that already passed its trigger.
+- A behaviour has a trigger (`--trigger claim|merge|block|start`; none reads as
+  claim): the item change after which it applies. Once an item's trigger has
+  passed, the digest lists the behaviour as due until you answer it with a
+  reminder or `skip-behaviour`. A behaviour recorded after the trigger passed is
+  never due for that item. `skip-behaviour` needs no typed prompt: it records
+  your judgment, not Shawn's approval.
 - A do line, skill, tool or agent that names a protected escalation
   (production deploys, releases, spend over cap, merging around the gate,
   refused permissions) is refused. Tell Shawn those still come to him.
