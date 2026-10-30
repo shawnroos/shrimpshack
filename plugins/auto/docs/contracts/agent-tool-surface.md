@@ -257,7 +257,7 @@ session.
   and `close-ruling` closes one with a typed prompt naming it.
 - **Behaviours**: standing guidance on how the PM and its workers do the work. A
   behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
-  --when <text>`) with `--do` or `--dont` lines (plus optional `--pm-check`,
+  --when <text>`) with `--do` or `--dont` lines (plus optional `--trigger claim|merge|block|start`, `--pm-check`,
   `--agent-check`, `--applies-to`, skills, tools, agents, formats, communication
   lines, evidence, stop, examples and why) applies one at once at the programme
   layer and journals `behaviour_recorded`. Its output lists the drafted checks, the
@@ -296,7 +296,7 @@ session.
   item records each brief behaviour in `behaviour_deliveries` with reason brief,
   and the ids join the launch's recovery request.
   `remind-behaviour` (`<item> <id> --reason relevant|sent_back`, optional
-  `--trigger claim|merge|block`, default claim) sends one behaviour to the item's
+  `--trigger claim|merge|block|start`, default claim) sends one behaviour to the item's
   worker through the `prompt-item` path (same owner-pane checks, cut to the
   4000-character cap with the id first) and records the delivery on the item.
   It compares the behaviour's start (its last recorded event) with the time the

@@ -917,6 +917,48 @@ prog keep-behaviours "$B1" --to repo --prompt "$PK" --run "$RUN"
 check 1 "$CODE"
 has "ended" "$OUT"
 
+fresh_store
+RUN="$(new_run)"
+PT="$(tprompt "$RUN" "when an item merges, always check the deploy")"
+it "R1: record-behaviour --trigger merge stores the trigger on the entry and prints it"
+prog record-behaviour --run "$RUN" --prompt "$PT" --when "an item merges" --pm-check "the PR merged" \
+  --trigger merge --do "read the changelog"
+check "0 merge" "$CODE $(jfield "$OUT" 'd["trigger"]')"
+TB="$(jfield "$OUT" 'd["behaviour"]')"
+it "R1: the stored entry carries when.trigger"
+check "merge" "$(q "$RUN" "beh_of('$TB')['when']['trigger']")"
+PTM="$(tprompt "$RUN" "make ${TB} global")"
+it "R1: a moved behaviour keeps its trigger"
+prog move-behaviour "$TB" --to personal --prompt "$PTM" --run "$RUN"
+check "0 merge" "$CODE $(q "$RUN" "stored('$TB')['when']['trigger']")"
+
+fresh_store
+RUN="$(new_run)"
+BID="$(record_one "$RUN")"
+it "R5: a behaviour recorded without a trigger stores none and reads as claim"
+check "False claim" "$(q "$RUN" "'%s %s' % ('trigger' in beh_of('$BID')['when'], pb.trigger_of(beh_of('$BID')))")"
+
+it "R1: an unknown --trigger is refused, naming the allowed values"
+PU="$(tprompt "$RUN" "always check the deploy")"
+prog record-behaviour --run "$RUN" --prompt "$PU" --when "an item merges" --trigger weekly --do "read the changelog"
+check 2 "$CODE"
+has "claim|merge|block|start" "$OUT"
+
+it "R1: an entry with a valid trigger passes and one with trigger never is rejected with bad_value"
+check "None|bad_value when.trigger" "$(run_py <<'EOF2'
+ok = pb.verdict(beh("g1", when={"text": "x", "checks": [], "trigger": "block"}))
+bad = pb.verdict(beh("g1", when={"text": "x", "checks": [], "trigger": "never"}))
+print("%s|%s %s" % (ok.get("reason"), bad["reason"], bad["detail"]))
+EOF2
+)"
+
+it "R1: start is a trigger, and trigger_times reads it from the item's started history row"
+check "True 2026-10-30T10:00:00Z" "$(run_py <<'EOF2'
+item = {"history": [{"kind": "started", "at": "2026-10-30T10:00:00Z"}, {"kind": "started", "at": "2026-10-30T11:00:00Z"}]}
+print("start" in pb.TRIGGERS, pb.trigger_times("no-such-run", "k", item)["start"])
+EOF2
+)"
+
 echo ""
 echo "programme-behaviours.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
