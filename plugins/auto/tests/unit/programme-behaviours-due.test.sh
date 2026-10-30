@@ -129,9 +129,16 @@ print(lines(run))
 EOF
 )"
 
-it "AE3: an agent-check-only behaviour is marked judge and a PM-only one pm_applies"
+it "AE3: an agent-check-only behaviour is marked judge and a PM-only one with a trigger pm_applies"
 check "test:a/b1/claim/judge test:a/b2/claim/pm_applies" "$(run_py <<'EOF'
-run = setup([beh("b1", checks=(("the work is done", "agent"),)), beh("b2", applies_to="pm")], a={"claim": TRIGGER})
+run = setup([beh("b1", checks=(("the work is done", "agent"),)), beh("b2", "claim", applies_to="pm")], a={"claim": TRIGGER})
+print(lines(run))
+EOF
+)"
+
+it "a PM-only behaviour with no trigger is never due: it has no item moment, so it stays out of the list"
+check "" "$(run_py <<'EOF'
+run = setup([beh("b1", applies_to="pm")], a={"claim": TRIGGER, "merged": TRIGGER}, b={"claim": TRIGGER})
 print(lines(run))
 EOF
 )"

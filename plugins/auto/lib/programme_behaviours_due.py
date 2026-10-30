@@ -38,6 +38,11 @@ def _in_force_when(entry, passed) -> bool:
     return start is None or stamp is None or start <= stamp
 
 
+def _pm_only_untriggered(entry) -> bool:
+    """Measured on the Studio programme: defaulting these to claim listed 123 of 176 due lines, so a sweep never cleared."""
+    return entry["applies_to"] == "pm" and "trigger" not in entry["when"]
+
+
 def _mark(entry, pm_checks, agent_checks):
     if entry["applies_to"] == "pm":
         return "pm_applies"
@@ -64,6 +69,8 @@ def due(record, run_id, *, lookup=None, store=None, cap=CAP) -> dict:
             continue
         times = programme_behaviours.trigger_times(run_id, key, item)
         for entry in programme_behaviours.in_force(scoped, item, store=loaded):
+            if _pm_only_untriggered(entry):
+                continue
             trigger = programme_behaviours.trigger_of(entry)
             passed = times.get(trigger)
             if passed and _in_force_when(entry, passed) and not _answered(item, entry, trigger):

@@ -28,7 +28,9 @@ Authority and Rulings, and acceptance stays with Done standards.
   claim): the item change after which it applies. Once an item's trigger has
   passed, the digest lists the behaviour as due until you answer it with a
   reminder or `skip-behaviour`. A behaviour recorded after the trigger passed is
-  never due for that item. `skip-behaviour` needs no typed prompt: it records
+  never due for that item. A behaviour that applies to the PM only and has no
+  trigger is never listed: it has no item moment, so read it from `P rules`.
+  `skip-behaviour` needs no typed prompt: it records
   your judgment, not Shawn's approval.
 - A do line, skill, tool or agent that names a protected escalation
   (production deploys, releases, spend over cap, merging around the gate,
