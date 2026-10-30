@@ -74,6 +74,7 @@ TTY1=/dev/ttys016
 row ghostty srv g1 pm-ghostty "$T1" "$TTY1"
 RUN_GHOSTTY="$(programme ghostty srv g1 pm-ghostty)"
 row ghostty srv g1 sess-worker 3F2A9C10-7B6E-4D55-8A21-0C9E1B7D4A02 /dev/ttys017
+row ghostty srv g1 sess-other-term OTHER-ID /dev/ttys018
 
 hook() {
   local payload
@@ -149,8 +150,9 @@ it "the concatenated id is also denied inside a heredoc to bash"
 check deny "$(verdict "$(hook sess-worker "bash <<EOF${NL}$CONCAT${NL}EOF")")"
 it "the denial names the reason and the fix"
 OUT="$(hook sess-worker "$FILEARG")"
-has "cannot prove harmless" "$OUT"
-has "Fix: run osascript only with -e" "$OUT"
+has "cannot prove is not aimed at pane" "$OUT"
+has "Fix: send only to a literal pane id" "$OUT"
+has "run osascript only with -e" "$OUT"
 it "the denial is journaled"
 has "blocked_driver_send" "$(py "$RUN_GHOSTTY" <<PYEOF
 $HEAD_PY
@@ -358,6 +360,7 @@ check deny "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORK
 check deny "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
 it "a sender whose row puts it in another workspace is still allowed"
 row herdr default w3 sess-far-b w3:p60 term_far
+row herdr default w3 sess-far-peer-b w3:p31 term_far_peer
 check allow "$(verdict "$(hook sess-far-b 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
 it "space_of_session ignores the environment and answers from the registry only"
 OUT="$(env HERDR_PANE_ID=w2:p31 HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" <<PYEOF
@@ -366,6 +369,105 @@ print(sr.space_of_session("sess-no-row"), sr.space_of_session("sess-far-b"))
 PYEOF
 )"
 check "None ('default', 'w3')" "$OUT"
+
+# ---------------------------------------------------------------- one default-deny policy for every host (round 4, D)
+echo "review-fixes: a session that drives no programme may only send to a literal pane the registry proves is another session's"
+row herdr default w2 sess-peer77-d w2:p77 term_p77
+row rex srv s-rx pm-rex-d rex-blk-D1 rex-term-D1
+programme rex srv s-rx pm-rex-d >/dev/null
+row rex srv s-rx sess-rex-o rex-blk-O1 rex-term-O1
+row stub srv win-d pm-stub-d stub-pm-d stub-pm-d-term
+programme stub srv win-d pm-stub-d >/dev/null
+row stub srv win-d sess-stub-o stub-o-d stub-o-d-term
+denied() { # denied <family> <command>: a worker's command is denied and the PM's own session is not asked
+  it "$1"
+  check deny "$(verdict "$(hook sess-worker "$2" AUTO_TEST_HOST=stub)")"
+}
+allowed() {
+  it "$1"
+  check allow "$(verdict "$(hook sess-worker "$2" AUTO_TEST_HOST=stub)")"
+}
+echo "review-fixes: herdr"
+allowed "a literal pane another session ran in is allowed" 'herdr agent prompt w2:p77 go'
+allowed "pane send-text and pane run to that pane are allowed" 'herdr pane send-text w2:p77 hi'
+denied "a literal pane no session ran in is denied" 'herdr agent prompt w2:p88 go'
+denied "target from a variable" 'herdr agent prompt $P go'
+denied "target from a variable set on the same line" 'P=w2:p77; herdr agent prompt $P go'
+denied "target from a command substitution" 'herdr agent prompt $(echo w2:p77) go'
+denied "target from backticks" 'herdr agent prompt `echo w2:p77` go'
+denied "target read from a file" 'herdr agent prompt @/tmp/target go'
+denied "a glob in the target" 'herdr agent prompt w2:p7* go'
+denied "no target at all" 'herdr agent prompt'
+denied "an unknown verb on the herdr command" 'herdr agent frobnicate w2:p77'
+denied "agent start with no literal pane" 'herdr agent start'
+denied "a remote machine option" 'herdr --machine other agent prompt w2:p77 go'
+denied "the command word is a variable" '$H agent prompt w2:p77 go'
+denied "the command word is a variable behind env" 'env H=herdr $H agent prompt w2:p77 go'
+denied "the command word is a substitution" '$(command -v herdr) agent prompt w2:p77 go'
+denied "the command word is a variable inside bash -c" "bash -c '\$H agent prompt w2:p77 go'"
+allowed "pane list is a read" 'herdr pane list'
+allowed "agent list and status are reads" 'herdr agent list; herdr status server'
+echo "review-fixes: tty devices"
+denied "a redirect into a tty device" 'echo hi > /dev/ttys016'
+denied "an append into a tty device" 'echo hi >> /dev/ttys016'
+denied "tee into a tty device" 'echo hi | tee /dev/ttys016'
+denied "a tty device built at run time" 'echo hi > /dev/tty$N'
+denied "a tty device behind bash -c" "bash -c 'echo hi > /dev/ttys016'"
+allowed "the worker's own controlling terminal" 'echo hi > /dev/tty'
+allowed "naming a tty device that is no driver's" 'ls /dev/ttys099'
+echo "review-fixes: Rex"
+allowed "a literal block another session ran in is allowed" 'rex send -b rex-blk-O1 go'
+allowed "split on that block is allowed" 'rex split -b rex-blk-O1'
+allowed "reads stay allowed" 'rex session ls --json'
+denied "a block no session ran in" 'rex send -b rex-blk-X9 go'
+denied "send-key to an unknown block" 'rex send-key -b rex-blk-X9 enter'
+denied "block from a variable" 'rex send -b $B go'
+denied "block from a substitution" 'rex send -b "$(echo rex-blk-O1)" go'
+denied "block with the equals form from a variable" 'rex send --block=$B go'
+denied "no block option" 'rex send go'
+denied "an unknown verb on the rex command, no block" 'rex frobnicate'
+denied "an unknown verb aimed at an unproven block" 'rex frobnicate -b rex-blk-X9'
+denied "api call" 'rex api call -s s-rx session.view'
+denied "run with no block" 'rex run ls'
+denied "the command word is a variable" '$R send -b rex-blk-O1 go'
+echo "review-fixes: stub host and the generic unknown verb"
+allowed "a stub send to a pane another session ran in" 'stubhost send stub-o-d go'
+denied "a stub send to an unproven pane" 'stubhost send stub-nobody go'
+denied "an unknown verb on a host command" 'stubhost frobnicate stub-o-d'
+denied "a host command with no verb" 'stubhost'
+allowed "a host list is a read" 'stubhost list'
+denied "the stub command word is a variable" '$S send stub-o-d go'
+echo "review-fixes: the PM keeps today's behaviour"
+it "the PM may send to a worker pane"
+check allow "$(verdict "$(hook pm-herdr-b 'herdr agent prompt w2:p77 go')")"
+it "the PM may send with a runtime-built target (no regression)"
+check allow "$(verdict "$(hook pm-herdr-b 'herdr agent prompt $P go')")"
+it "the PM may not type into its own pane"
+check deny "$(verdict "$(hook pm-herdr-b 'herdr agent prompt w2:p31 go')")"
+it "the PM of another programme is not held to the allow-list"
+check allow "$(verdict "$(hook pm-rex-d 'herdr agent prompt $P go')")"
+
+echo "review-fixes: the allow-list never raises, because a hook error fails open"
+it "odd and hostile command text goes through every host's classifier without an exception"
+OUT="$(AUTO_TEST_HOST=stub "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+sg = load_lib_module("send_guard")
+cmds = ["", " ", "herdr", "herdr agent", "herdr --session", "herdr --machine", "$", "$(", "`", "'", '"', ">", "< <", "<<", "rex -b", "rex send -b", "rex --block=",
+        "osascript", "osascript -e", "osascript -l", "osascript -", "$H", "$H agent", "$H $H $H", "env", "env X=1", "exec", "x=1", "( herdr agent prompt",
+        "herdr agent prompt )", "stubhost", "stubhost send", "bash -c", "eval", "a;b;c", "herdr agent prompt p1 p2 p3 " * 80, "$(" * 50]
+bad = []
+for c in cmds:
+    try:
+        sg.host_sends(c, ["pane-x", "term-x"], proven=lambda t: False)
+        sg.host_sends(c, ["pane-x", "term-x"])
+    except Exception as exc:
+        bad.append((c[:20], type(exc).__name__))
+print(bad)
+PYEOF
+)"
+check "[]" "$OUT"
 
 # ---------------------------------------------------------------- RefusedHost in the source paths (finding 4)
 echo "review-fixes: a refused host does not crash the sweep, launch or send paths (finding 4)"

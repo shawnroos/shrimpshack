@@ -204,6 +204,11 @@ def lookup(session_id, server=None, workspace=None, *, include_headless=False, h
     return max(found, key=lambda r: r.get("at") or "")
 
 
+def known_panes() -> set:
+    """Casefolded pane ids, terminal ids and ttys any registered session ever ran in."""
+    return {str(v).casefold() for row in _all_rows() for v in (row.get("pane_id"), row.get("terminal_id"), row.get("tty")) if v}
+
+
 def latest_rows(*, include_headless=False) -> dict:
     latest = {}
     for row in _all_rows():
@@ -257,7 +262,7 @@ def driver_panes(now=None) -> list:
         if row and row.get("pane_id"):
             out.append({"run": lease.get("run"), "session_id": lease.get("session_id"),
                         "pane_id": row["pane_id"], "terminal_id": row.get("terminal_id"),
-                        "host": host_of_row(row), "lease": key})
+                        "host": host_of_row(row), "tty": row.get("tty"), "lease": key})
     return out
 
 

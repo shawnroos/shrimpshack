@@ -135,6 +135,17 @@ class RexHost(terminal_host.TerminalHost):
         return degraded("Rex has no notification command, so the ask stays in the journal and the tracker",
                         value="journal")
 
+    def send_class(self, argv, text=""):
+        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
+            return None
+        rest = list(argv[1:])
+        verb = _verb_words(rest)
+        if not verb or _reads_only(verb):
+            return "read", []
+        blocks = [rest[i + 1] for i, tok in enumerate(rest[:-1]) if tok in ("-b", "--block")]
+        blocks += [tok.split("=", 1)[1] for tok in rest if tok.startswith("--block=")]
+        return "send", blocks or None
+
     def is_host_command(self, argv, pane_ids=()):
         if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
             return None

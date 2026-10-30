@@ -160,12 +160,20 @@ class TerminalHost:
                     return "send", ident
         return None
 
-    def is_piped_script(self, argv, text, pane_ids=(), strict=False):
-        """Like is_host_command for a command whose script arrives on stdin: ``text`` is everything the shell sees.
-
-        strict is for a session that is not the programme's PM: the host then allows only what it can prove harmless.
-        """
+    def is_piped_script(self, argv, text, pane_ids=()):
+        """Like is_host_command for a command whose script arrives on stdin: ``text`` is everything the shell sees."""
         return None
+
+    def send_class(self, argv, text=""):
+        """None when ``argv`` is not a call to this host's command, else (kind, targets).
+
+        kind is "read" (cannot type into a pane), "send" (can) or "unknown" (not told apart, so treated as a send).
+        targets are the literal pane ids the call names, or None when any target is runtime-built, missing or hidden
+        in a script on stdin or in a file. The send-guard's one policy decides what to do with the answer.
+        """
+        if not argv or os.path.basename(argv[0]) not in self.binaries:
+            return None
+        return "unknown", None
 
     def installed(self) -> bool:
         return any(shutil.which(b) for b in self.binaries)

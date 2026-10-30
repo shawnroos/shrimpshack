@@ -27,6 +27,14 @@ _LOCALE_DOLLAR = re.compile(r"\$(?=\")")
 _HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
 _ID_EDGE = "A-Za-z0-9_"
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
+_RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
+_TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
+_TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
+# A word after one of these (or after an assignment) is the command being run.
+_LIST_BREAKS = _SHELL_BREAKS - {"(", ")"}
+_UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
+_COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
+                             "elif", "if", "while", "until"})
 
 
 def _shell_script(rest: list):
@@ -116,12 +124,12 @@ def _segment(tokens: list, start: int) -> list:
     return tokens[start:end]
 
 
-def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, strict=False) -> None:
+def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     if depth < MAX_DEPTH:
         nested = _substitutions(main) + bodies + [ln for body in bodies for ln in body.splitlines()]
         for script in nested:
-            _scan(script, depth + 1, hosts, pane_ids, found, strict)
+            _scan(script, depth + 1, hosts, pane_ids, found, proven)
     tokens = _lex(main)
     piped = main + "\n" + "\n".join(bodies)
     for start, token in enumerate(tokens):
@@ -135,24 +143,56 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, stric
             script = rest[0]
         if script is not None:
             if depth < MAX_DEPTH:
-                _scan(script, depth + 1, hosts, pane_ids, found, strict)
+                _scan(script, depth + 1, hosts, pane_ids, found, proven)
             continue
         segment = _segment(tokens, start)
         for host in hosts:
-            hit = host.is_piped_script(segment, piped, pane_ids=pane_ids, strict=True) if strict else (
-                host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids))
+            if proven is not None:
+                hit = _unproven(host, tokens, start, segment, piped, proven)
+            else:
+                hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
             if hit:
                 found.append((host.name, hit[0], hit[1]))
 
 
-def host_sends(command: str, pane_ids: list, strict=False) -> list:
+def _is_command_word(tokens: list, start: int) -> bool:
+    before = tokens[start - 1] if start else None
+    return before is None or before in _SHELL_BREAKS or before in _COMMAND_PREFIX or ("=" in before and before[:1] != "-")
+
+
+def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven):
+    """The one policy for a session that is not the PM. Hosts only say what a send is (send_class) and which targets
+    a call names; a send, or a call that cannot be told from one, passes only when every target is a literal id that
+    the registry proves is another session's pane. A command word built at run time is a hit whenever what follows
+    is a send."""
+    shape = host.send_class(segment, piped)
+    if shape is None:
+        if not (_RUNTIME.search(tokens[start]) and _is_command_word(tokens, start)):
+            return None
+        tail = []
+        for tok in tokens[start + 1:start + SEGMENT_CAP]:
+            if tok in _LIST_BREAKS:
+                break
+            tail.append(tok)
+        binary = list(host.binaries[:1])
+        sends = (host.send_class(binary + tail[k:], piped) for k in range(len(tail)))
+        return ("runtime-built command", "") if any(c and c[0] == "send" for c in sends) else None
+    kind, targets = shape
+    if kind == "read":
+        return None
+    if targets and not any(_RUNTIME.search(t) or not proven(t) for t in targets):
+        return None
+    return "send to a pane auto cannot prove is not the driver's", ""
+
+
+def host_sends(command: str, pane_ids: list, proven=None) -> list:
     """(host, verb, target) for every host command in ``command`` that types into a pane.
 
-    strict (a session that is not the driver) also reports every script the host cannot prove harmless."""
+    proven (a callable, for a session that is not the driver) switches to the allow-list policy in _unproven."""
     terminal_host = load_lib_module("terminal_host")
     hosts = [terminal_host.host_named(name) for name in terminal_host.key_hosts()]
     found = []
-    _scan(command, 0, hosts, [i for i in pane_ids if i], found, strict)
+    _scan(command, 0, hosts, [i for i in pane_ids if i], found, proven)
     return found
 
 
@@ -179,12 +219,32 @@ def _names_pane(command: str, driver: dict):
     return None
 
 
-def _driver_hit(command: str, session_id, driver: dict, sender=None):
+def _proven_other(sender: dict, session_id, drivers: list):
+    """Callable: is this literal id a pane some session ran in that is not any live driver's? Built once per command."""
+    if "proven" not in sender:
+        if "workspace" not in sender:
+            sender["workspace"] = _sender_workspace(session_id)
+        driver_ids = {str(v).casefold() for d in drivers for v in (d.get("pane_id"), d.get("terminal_id"), d.get("tty")) if v}
+        sender["proven"] = load_lib_module("session_registry").known_panes() - driver_ids
+    workspace = sender["workspace"]
+
+    def proven(target: str) -> bool:
+        low = target.casefold()
+        return low in sender["proven"] or (":" not in low and workspace is not None and f"{workspace}:{low}".casefold() in sender["proven"])
+
+    return proven
+
+
+def _tty_write(command: str) -> bool:
+    text = _HIDING_CHARS.sub("", _unquote_dollar(command))
+    return _TTY_PATH.search(text) is not None and _TTY_WRITE.search(text) is not None
+
+
+def _driver_hit(command: str, session_id, driver: dict, sender: dict):
     ids = [driver.get("pane_id"), driver.get("terminal_id")]
     sends = host_sends(command, ids)
     if sends:
         # One session sends, so every driver shares one workspace lookup, made only when a send was found.
-        sender = sender if sender is not None else {}
         if "workspace" not in sender:
             sender["workspace"] = _sender_workspace(session_id)
         for host, verb, target in sends:
@@ -192,11 +252,20 @@ def _driver_hit(command: str, session_id, driver: dict, sender=None):
                 return host, verb, target
     if session_id == driver.get("session_id"):
         return None
-    unlisted = host_sends(command, ids, strict=True) if driver.get("host") == "ghostty" else None
-    if unlisted:
-        return unlisted[0][0], unlisted[0][1], unlisted[0][2]
     named = _names_pane(command, driver)
     return (None, None, named) if named else None
+
+
+def _strict_hit(command: str, session_id, drivers: list, sender: dict):
+    """Allow-list for a session that drives no programme: its command may type into a pane only by proving the
+    target is another session's pane, and may not write to a tty device."""
+    if any(d.get("session_id") == session_id for d in drivers):
+        return None
+    ids = [i for d in drivers for i in (d.get("pane_id"), d.get("terminal_id"))]
+    unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers))
+    if unproven:
+        return unproven[0][0], unproven[0][1], drivers[0]["pane_id"]
+    return (None, "tty write", drivers[0]["pane_id"]) if _tty_write(command) else None
 
 
 def denial(session_id, command):
@@ -204,21 +273,26 @@ def denial(session_id, command):
     sender = {}
     for driver in drivers:
         hit = _driver_hit(command, session_id, driver, sender)
+        if hit is None and driver is drivers[-1]:
+            hit = _strict_hit(command, session_id, drivers, sender)
+            driver = drivers[0]
         if hit is None:
             continue
         host, verb, target = hit
         row = (driver["run"], "blocked_driver_send", session_id, {
             "verb": verb, "target": target, "pane_id": driver["pane_id"], "command": command})
-        unlisted = verb == "unlisted osascript"
-        what = ("an osascript call that auto cannot prove harmless to pane" if unlisted else
+        unproven = verb in _UNPROVEN_VERBS
+        what = (f"a command ({verb}) that auto cannot prove is not aimed at pane" if unproven else
                 f"`{host} {verb}` into pane" if verb else "a command naming pane")
         reason = (
             f"auto: blocked {what} {driver['pane_id']}, the driver's pane of programme "
             f"{driver['run']!r}. Only the person types into the programme driver's pane, "
             "and other sessions may not name it in any command; report through the "
             "programme's inbox instead. This attempt is journaled."
-            + (" Fix: run osascript only with -e and a script that does not mention Ghostty, a terminal, key presses "
-               "or string joins, and never from a file, a pipe or a heredoc." if unlisted else "")
+            + (" Fix: send only to a literal pane id that another session's registry row shows, with no variable, "
+               "substitution or file in the command word or the target; run osascript only with -e and a script "
+               "that does not mention Ghostty, a terminal, key presses or string joins; never write to a tty device."
+               if unproven else "")
         )
         return {"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

@@ -219,14 +219,13 @@ class GhosttyHost(terminal_host.TerminalHost):
             return None
         return _classify(" ".join(argv[1:]), pane_ids)
 
-    def is_piped_script(self, argv, text, pane_ids=(), strict=False):
-        if not _is_osascript(argv):
-            return None
-        if strict:
-            return _unlisted(argv[1:], pane_ids)
-        if not _reads_stdin(argv[1:]):
+    def is_piped_script(self, argv, text, pane_ids=()):
+        if not _is_osascript(argv) or not _reads_stdin(argv[1:]):
             return None
         return _classify(text, pane_ids)
+
+    def send_class(self, argv, text=""):
+        return _shape(argv[1:]) if _is_osascript(argv) else None
 
 
 def _is_osascript(argv) -> bool:
@@ -268,37 +267,19 @@ def _classify(text, pane_ids):
     return None
 
 
-def _unlisted(args, pane_ids):
-    """Allow-list for a session that is not the PM while a driver pane is live: only a literal -e script that is auto's
-    list script, one send to a different literal terminal id, or text that cannot reach a terminal. Everything else is a hit."""
-    first = next((i for i in pane_ids if i), None)
-    if not first:
-        return None
-    deny = ("unlisted osascript", first)
-    if not args or args[0] != "-e" or any(t in _REDIRECTS or _FILE_LIKE.search(t) for t in args):
-        return deny
+def _shape(args):
+    """Allow-list: only a literal -e script that is auto's list script, one send to a literal terminal id, or text that
+    cannot reach a terminal is understood; stdin, files, -l, -s and anything else are "unknown"."""
+    if _reads_stdin(args) or args[0] != "-e" or any(t in _REDIRECTS or _FILE_LIKE.search(t) for t in args):
+        return "unknown", None
     raw = _fold(" ".join(args), keep_lines=True)
     folded = _fold(" ".join(args))
     if folded in ("-e " + _fold(LIST_SCRIPT), "-e " + _fold(LIST_SCRIPT) + " --"):
-        return None
-    if "\n" not in raw and "\r" not in raw:
-        match = _OTHER_SEND.match(folded)
-        if match:
-            return deny if _hits_driver(match.group("id"), folded, pane_ids) else None
-    text = folded[3:]
-    if any(w in text for w in _FORBIDDEN + SEND_VERBS) or any(i and _names(folded, i) for i in pane_ids):
-        return deny
-    return None
-
-
-def _hits_driver(ident, folded, pane_ids) -> bool:
-    """True when the literal id is, contains or is part of a driver's id or tty, or the text names one."""
-    for driver in pane_ids:
-        low = (driver or "").casefold()
-        if low and (ident in low or low in ident or _names(folded, driver)):
-            return True
-    return False
-
+        return "read", []
+    match = None if "\n" in raw or "\r" in raw else _OTHER_SEND.match(folded)
+    if match:
+        return "send", [match.group("id")]
+    return ("unknown", None) if any(w in folded[3:] for w in _FORBIDDEN + SEND_VERBS) else ("read", [])
 
 
 def _ps(pid, fields):

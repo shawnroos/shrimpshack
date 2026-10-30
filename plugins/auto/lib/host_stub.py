@@ -34,6 +34,14 @@ class StubHost(terminal_host.TerminalHost):
                 return argv[1], target
         return super().is_host_command(argv, pane_ids)
 
+    def send_class(self, argv, text=""):
+        if not argv or os.path.basename(argv[0]) != "stubhost":
+            return None
+        if len(argv) > 1 and argv[1] == "list":
+            return "read", []
+        target = next((t for t in argv[2:] if not t.startswith("-")), None) if len(argv) > 2 and argv[1] in SEND_VERBS else None
+        return ("send", [target]) if target else ("unknown", None)
+
     def own_pane(self, env, **_):
         pane = env.get("AUTO_TEST_STUB_PANE")
         server, workspace = env.get("AUTO_TEST_STUB_SERVER"), env.get("AUTO_TEST_STUB_WORKSPACE")

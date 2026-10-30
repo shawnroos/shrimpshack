@@ -83,6 +83,9 @@ RUN_REX="$(programme rex srv s1 pm-rex)"
 row ghostty srv g1 pm-ghostty ghost-term-9 ghost-tty-9
 RUN_GHOSTTY="$(programme ghostty srv g1 pm-ghostty)"
 row herdr default w2 sess-worker w2:p50 term_p50
+row herdr default w2 sess-peer77 w2:p77 term_p77
+row stub srv win-1 sess-stub-other stub-other stub-other-term
+row rex srv s1 sess-rex-other rex-blk-8 rex-term-8
 
 # hook <session> <command> [VAR=value ...]: the PreToolUse output for a Bash command.
 hook() {
@@ -157,7 +160,7 @@ every_form pm-stub "$STUB_ELSEWHERE" allow "${STUB_ENV[@]}"
 it "stub host: a worker's sends to other panes, every form"
 every_form sess-worker "$STUB_ELSEWHERE" allow "${STUB_ENV[@]}"
 it "rex: a send to another block, every form"
-every_form sess-worker 'rex send rex-blk-8 go' allow
+every_form sess-worker 'rex send -b rex-blk-8 go' allow
 it "a PM reading its own pane is allowed"
 check "allow" "$(verdict "$(hook pm-herdr 'herdr pane get w2:p31')")"
 it "another session naming the PM's pane in a read is denied"
@@ -194,8 +197,9 @@ every_form pm-ghostty 'osascript -e tell-ghostty-input-text-to-ghost-term-9' den
 it "a bare pane suffix from a session the registry puts in the PM's workspace is denied whatever HERDR_WORKSPACE_ID says"
 row herdr default w2 sess-peer w2:p60 term_p60
 check "deny" "$(verdict "$(hook sess-peer 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w3)")"
-it "a bare pane suffix from a session the registry puts in another workspace is allowed"
+it "a bare pane suffix from a session the registry puts in another workspace is allowed when that pane is proven another session's"
 row herdr default w3 sess-far w3:p60 term_far
+row herdr default w3 sess-far-peer w3:p31 term_far_peer
 check "allow" "$(verdict "$(hook sess-far 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
 it "a stub driver is guarded only while AUTO_TEST_HOST selects the stub host module, and a lookalike variable does not select it"
 check "allow" "$(verdict "$(hook pm-stub "$STUB_SEND" CLAUDE_AUTO_TEST_HOST=stub)")"

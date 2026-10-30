@@ -28,6 +28,15 @@ SEND_VERBS = frozenset({
     ("agent", "prompt"), ("agent", "send"), ("agent", "send-keys"),
     ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"),
 })
+# Everything that is neither listed here nor in SEND_VERBS is "unknown" and treated as a send.
+READ_VERBS = frozenset({
+    ("agent", "list"), ("agent", "get"), ("agent", "read"), ("agent", "wait"), ("agent", "explain"),
+    ("pane", "list"), ("pane", "current"), ("pane", "get"), ("pane", "layout"), ("pane", "process-info"),
+    ("pane", "neighbor"), ("pane", "edges"), ("pane", "read"), ("pane", "wait-output"),
+    ("api", "snapshot"), ("api", "schema"), ("tab", "list"), ("tab", "get"), ("workspace", "list"),
+    ("workspace", "get"), ("session", "list"), ("worktree", "list"), ("worktree", "get"),
+})
+READ_WORDS = frozenset({"status", "version", "help", "completion", "--help", "-h", "--version"})
 GLOBAL_VALUE_OPTS = frozenset({"--session", "--machine", "--remote"})
 VALUE_OPTS = frozenset({"--until", "--timeout", "--seq"})
 
@@ -36,6 +45,7 @@ native, refuse = terminal_host.native, terminal_host.refuse
 
 class HerdrHost(terminal_host.TerminalHost):
     name = "herdr"
+    binaries = ("herdr",)
 
     def installed(self) -> bool:
         return shutil.which("herdr") is not None
@@ -208,6 +218,29 @@ class HerdrHost(terminal_host.TerminalHost):
         except OSError:
             return refuse("herdr notification could not run", value=None)
         return native(done.returncode)
+
+    def send_class(self, argv, text=""):
+        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "herdr"):
+            return None
+        rest, i = list(argv[1:]), 0
+        while i < len(rest) and rest[i].startswith("-") and rest[i] not in READ_WORDS:
+            i += 2 if rest[i] in GLOBAL_VALUE_OPTS else 1
+        words = tuple(rest[i:i + 2])
+        if any(tok.split("=")[0] in ("--machine", "--remote") for tok in rest[:i + 2]):
+            return "unknown", None
+        if not words or words[0] in READ_WORDS or words in READ_VERBS:
+            return "read", []
+        if words not in SEND_VERBS and words != ("agent", "start"):
+            return "unknown", None
+        j = i + 2
+        while j < len(rest):
+            if rest[j] in VALUE_OPTS:
+                j += 2
+            elif rest[j].startswith("-"):
+                j += 1
+            else:
+                return "send", [rest[j]]
+        return "send", None
 
     def is_host_command(self, argv, pane_ids=()):
         if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "herdr"):
