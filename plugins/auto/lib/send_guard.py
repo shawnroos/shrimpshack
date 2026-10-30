@@ -32,6 +32,8 @@ _TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
 _TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
 # A word after one of these (or after an assignment) is the command being run.
 _LIST_BREAKS = _SHELL_BREAKS - {"(", ")"}
+_INTERPRETERS = re.compile(r"^(?:python[\d.]*|ruby|perl|node|php|osascript|lua|deno|bun)$")
+_STRING_LITERAL = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 _UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
                              "elif", "if", "while", "until"})
@@ -141,6 +143,14 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             script = " ".join(_segment(tokens, start + 1)) or None
         elif token == "<<<" and rest:
             script = rest[0]
+        if _INTERPRETERS.match(os.path.basename(token)) and depth < MAX_DEPTH and _is_command_word(tokens, start):
+            # Inline code of another language can call the host command through a string; scan every string in it.
+            for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
+                _scan(literal, depth + 1, hosts, pane_ids, found, proven)
+        if script is None and os.path.basename(token) in _SHELL_BINS and depth < MAX_DEPTH and _is_command_word(tokens, start):
+            # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be that script.
+            for quoted in {t for t in tokens if " " in t}:
+                _scan(quoted, depth + 1, hosts, pane_ids, found, proven)
         if script is not None:
             if depth < MAX_DEPTH:
                 _scan(script, depth + 1, hosts, pane_ids, found, proven)

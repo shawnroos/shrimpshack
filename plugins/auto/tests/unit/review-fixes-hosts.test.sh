@@ -407,6 +407,14 @@ denied "the command word is a substitution" '$(command -v herdr) agent prompt w2
 denied "the command word is a variable inside bash -c" "bash -c '\$H agent prompt w2:p77 go'"
 allowed "pane list is a read" 'herdr pane list'
 allowed "agent list and status are reads" 'herdr agent list; herdr status server'
+echo "review-fixes: scripts handed to a shell on stdin and inline code of another language"
+denied "a send piped into sh" "printf 'herdr agent prompt w2:p88 go' | sh"
+denied "a send piped into bash" "echo 'herdr agent prompt w2:p88 go' | bash"
+denied "a send inside process substitution run by bash" "bash <(echo 'herdr agent prompt w2:p88 go')"
+denied "a send inside python inline code" "python3 -c 'import os; os.system(\"herdr agent prompt w2:p88 go\")'"
+denied "a send inside ruby inline code" "ruby -e 'system(\"herdr agent prompt w2:p88 go\")'"
+allowed "a proven peer pane piped into sh is still allowed" "echo 'herdr agent prompt w2:p77 go' | sh"
+allowed "harmless python inline code" "python3 -c 'print(\"hello world\")'"
 echo "review-fixes: tty devices"
 denied "a redirect into a tty device" 'echo hi > /dev/ttys016'
 denied "an append into a tty device" 'echo hi >> /dev/ttys016'
