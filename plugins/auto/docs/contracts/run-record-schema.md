@@ -570,7 +570,7 @@ CLI entry (for `lib/run_record.sh` and ad-hoc scripting): `python3 run_record.py
 ## 10. Programme runs
 
 A programme run is the second run kind. A PM agent manages many **items** across one
-herdr space (its **remit**) instead of driving steps. It uses the same record file
+space (its **remit**) instead of driving steps. It uses the same record file
 format, lock and atomic write as a task run, so §1–§7 apply unless this section says
 otherwise. `lib/programme_home.py` owns the shape; the verbs in `lib/programme.py`
 and its parts are the only writers.
@@ -606,7 +606,7 @@ Programmes live outside every repo, under the auto data dir:
 <data>/programmes/<run-id>/.compact-flag       # present only after a compaction (§10.7)
 <data>/programmes/<run-id>/views/view.json     # the read model (§10.8); folder 0700, file 0600
 <data>/programmes/<run-id>/.claude/auto/.stop-nag-<sid>.json   # Stop hook nag state (§10.9)
-<data>/programmes/leases/<server>.<workspace>.json   # one lease per herdr space (§10.3)
+<data>/programmes/leases/<server>.<workspace>.json   # one lease per space (§10.3)
 <data>/programmes/leases.lock                  # flock for leases; beside the folder, never in it
 <data>/programmes/.personal-protocol.lock      # flock for the adopt verbs' personal-file write
 <data>/sessions/<server>.<workspace>.jsonl     # the session registry (§10.10)

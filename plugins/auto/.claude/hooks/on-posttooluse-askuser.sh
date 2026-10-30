@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # auto PostToolUse hook (AskUserQuestion): journal a picker answer given in a
-# programme's driving session, or in any session of a herdr space a programme leases.
+# programme's driving session, or in any session of a space a programme leases.
 #
 # Gate: an empty or missing leases folder means no programme on this machine, so
 # the hook exits without starting Python. A session no lease names still goes to
-# Python, which resolves its herdr space from the session registry. Always exits 0.
+# Python, which resolves its space from the session registry. Always exits 0.
 
 set -uo pipefail
 

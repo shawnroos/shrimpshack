@@ -312,14 +312,14 @@ EOF
 )"
 check "end_request True True prompt" "$OUT"
 
-it "a request from a session with no registry line falls back to the herdr env space"
+it "a request from a session with no registry line is not journaled: the environment names no space"
 OUT="$(PROMPT_PANE="w2:p77" PROMPT_WS="w2" prompt_hook sess-unknown "/auto:programme-handover sess-x")"
 ROW="$(run_py "$RUN" <<'EOF'
 r = pj.read(args[0])[-1]
 print(r["kind"], r["session_id"])
 EOF
 )"
-check "handover_request sess-unknown" "$ROW"
+case "$ROW" in *sess-unknown*) fail "journaled: $ROW" ;; *) pass ;; esac
 
 it "a worker session sending herdr agent prompt to the PM's pane is denied and journaled"
 OUT="$(action_hook sess-worker 'herdr agent prompt w2:p31 "adopt rule"')"
@@ -399,10 +399,14 @@ EOF
 done
 check "1" "$ALL"
 
+FAKE_HERDR_PANE="w2:p310" session_start sess-peer310 "w2:p310" >/dev/null
+FAKE_HERDR_PANE="w2:p311" session_start sess-peer311 "w2:p311" >/dev/null
 it "the same hidden forms sending to a worker pane are allowed"
 ALL=1
 for form in "${HIDDEN_FORMS[@]}" "herdr agent prompt w2:p310 go" "herdr agent prompt term_p311 go"; do
   c="${form//PANE/w2:p50}"
+  # A command word built at run time is denied for a session that drives no programme (default-deny policy).
+  case "$c" in 'H=herdr;'*) continue ;; esac
   OUT="$(action_hook sess-worker "$c")"
   [ -z "$OUT" ] || { ALL=0; echo "      not allowed: $c ($OUT)"; }
 done
@@ -469,10 +473,10 @@ it "the journaled command is redacted"
 action_hook sess-worker 'herdr pane send-text w2:p31 fixture-value-9f8e7d' >/dev/null
 if grep -rqa "fixture-value-9f8e7d" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}"; then fail "secret in the programme home"; else pass; fi
 
-it "a bare pane suffix is denied only from the driver's workspace"
+it "a bare pane suffix from a sender with no registry row is denied whatever HERDR_WORKSPACE_ID says"
 OUT1="$(ACTION_WS=w2 action_hook sess-worker 'herdr agent prompt p31 go')"
 OUT2="$(ACTION_WS=w3 action_hook sess-worker 'herdr agent prompt p31 go')"
-case "$OUT1" in *'"deny"'*) check "" "$OUT2" ;; *) fail "w2 bare suffix not denied: $OUT1" ;; esac
+case "$OUT1$OUT2" in *'"deny"'*'"deny"'*) pass ;; *) fail "w2 [$OUT1] w3 [$OUT2]" ;; esac
 
 it "a send to the driver's pane combined with a destructive command still pauses the task run"
 TASKREPO="${WORK}/taskrepo"

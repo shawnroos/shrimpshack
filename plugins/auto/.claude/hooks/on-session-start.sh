@@ -33,12 +33,19 @@ if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
 fi
 
-# Session registry: runs in every herdr pane, before the presence gate, because
-# a programme's sessions live in any repo or none. Its stdout must stay silent:
-# SessionStart output becomes session context. Under the test harness it runs
-# only with a test data dir, or a suite run inside herdr would report test
-# sessions to the real herdr and write the real registry.
-if [ -n "${HERDR_PANE_ID:-}" ] && { [ -z "${CLAUDE_AUTO_TEST_HARNESS:-}" ] || [ -n "${CLAUDE_AUTO_DATA_DIR:-}" ]; }; then
+# Session registry: runs in every terminal host, before the presence gate, because
+# a programme's sessions live in any repo or none. The shell only asks whether the
+# environment announces a host (so a plain terminal starts no Python); which host,
+# and whether the announcement is usable, is decided by terminal_host.detect in the
+# Python. Its stdout must stay silent: SessionStart output becomes session context.
+# Under the test harness it runs only with a test data dir, or a suite run inside
+# a terminal host would report test sessions to the real host and write the real registry.
+__cd_host_announced=0
+if [ -n "${HERDR_PANE_ID:-}${HERDR_ENV:-}${REX_SESSION:-}${CMUX_WORKSPACE_ID:-}${AUTO_TEST_HOST:-}" ] \
+    || [ "${TERM_PROGRAM:-}" = "ghostty" ]; then
+  __cd_host_announced=1
+fi
+if [ "$__cd_host_announced" = 1 ] && { [ -z "${CLAUDE_AUTO_TEST_HARNESS:-}" ] || [ -n "${CLAUDE_AUTO_DATA_DIR:-}" ]; }; then
   "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/session_registry.py" record <<< "$__cd_stdin_json" >/dev/null 2>&1
 fi
 

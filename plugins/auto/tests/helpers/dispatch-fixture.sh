@@ -195,3 +195,9 @@ wait_for() {
   return 1
 }
 resume() { touch "${CLAUDE_AUTO_DATA_DIR}/programmes/$1/.test-resume-dispatch"; }
+
+# use_host_fake <host>: replace that host's fake in FAKES with the fixture-backed one (host-fakes.sh).
+use_host_fake() {
+  . "${AUTO_ROOT}/tests/helpers/host-fakes.sh"
+  host_fake_install "$1" "$FAKES"
+}

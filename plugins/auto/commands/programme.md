@@ -1,10 +1,10 @@
 ---
-description: Start an auto programme for this herdr space, with the PM running in this session
+description: Start an auto programme for this space, with the PM running in this session
 argument-hint: "[<server.workspace>]..."
 allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop, AskUserQuestion
 ---
 
-Start a programme: this session becomes the PM for the herdr space it runs in.
+Start a programme: this session becomes the PM for the space it runs in.
 Do the steps in order. Run every programme verb in your own Bash tool, never from
 a dispatched Agent.
 
@@ -67,7 +67,7 @@ session's own space.
 4. Record what the probe saw, so the pane can show what is in and what is out:
    `programme.sh setup-seen --json -` with `{"tabs": [...], "repos": [...],
    "tracker": [...], "items": [{"item", "title", "pane", "session"}]}` on
-   stdin: every herdr tab, repo and tracker scope the sweep saw (in the remit
+   stdin: every terminal-host tab, repo and tracker scope the sweep saw (in the remit
    or not), and the items it proposes to adopt (`"items": []` when it found
    none; the items step stays open until this is recorded). When the tracker is
    unavailable, read the remit's issues through `mcp__linear__list_issues` and

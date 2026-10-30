@@ -1,5 +1,5 @@
 ---
-description: End this herdr space's auto programme
+description: End this space's auto programme
 argument-hint: ""
 allowed-tools: Bash, CronDelete, TaskStop
 ---

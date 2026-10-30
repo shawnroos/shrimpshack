@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Which Claude session runs in which herdr pane.
+"""Which Claude session runs in which terminal pane.
 
 SessionStart appends one line per session to
 ``<data dir>/sessions/<server>.<workspace>.jsonl``, resolving the pane through
-herdr because a moved pane keeps a stale ``HERDR_PANE_ID``. Interactive sessions
+the session's terminal host (herdr, because a moved pane keeps a stale ``HERDR_PANE_ID``). Interactive sessions
 are also reported to herdr, so its snapshot carries the owner.
 """
 
@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,11 +22,9 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 driver_session = load_lib_module("driver_session")
+terminal_host = load_lib_module("terminal_host")
 
 LINES_PER_PANE = 50
-# SessionStart's hook timeout is 5s; both herdr calls together must stay well under it.
-PANE_GET_TIMEOUT = 1.0
-REPORT_TIMEOUT = 1.0
 FIELD_CAP = 512
 # "unavailable": a programme whose store is held still has a driver pane to protect.
 DRIVER_LEASE_STATES = ("live", "orphaned", "expired", "unavailable")
@@ -53,57 +49,16 @@ def sessions_dir() -> str:
     return os.path.join(programme_home.data_dir(), "sessions")
 
 
-def registry_path(server: str, workspace: str) -> str:
-    return os.path.join(sessions_dir(), programme_home.space_key(server, workspace) + ".jsonl")
+def registry_path(server: str, workspace: str, host=None) -> str:
+    return os.path.join(sessions_dir(), programme_home.space_key(server, workspace, host) + ".jsonl")
 
 
-def server_from_socket(sock) -> str | None:
-    if not isinstance(sock, str) or not sock.endswith("/herdr.sock"):
-        return None
-    folder = os.path.dirname(sock)
-    if os.path.basename(os.path.dirname(folder)) == "sessions":
-        name = os.path.basename(folder)
-        try:
-            return programme_home.check_segment(name)
-        except programme_home.ProgrammeHomeError:
-            return None
-    return programme_home.DEFAULT_SERVER
+def process_tty(pid=None):
+    return load_lib_module("host_ghostty").process_tty(pid)
 
 
 def is_headless(env) -> bool:
     return (env.get("CLAUDE_CODE_ENTRYPOINT") or "").startswith("sdk")
-
-
-def _herdr():
-    return shutil.which("herdr")
-
-
-def _pane_get(pane_id: str):
-    binary = _herdr()
-    if not binary:
-        return None
-    try:
-        done = subprocess.run([binary, "pane", "get", pane_id], capture_output=True,
-                              text=True, timeout=PANE_GET_TIMEOUT, stdin=subprocess.DEVNULL)
-        pane = json.loads(done.stdout)["result"]["pane"]
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
-        return None
-    return pane if isinstance(pane, dict) else None
-
-
-def _report(session_id: str, pane_id: str, source) -> None:
-    binary = _herdr()
-    if not binary:
-        return
-    argv = [binary, "pane", "report-agent-session", "--source", "auto", "--agent", "claude",
-            "--agent-session-id", session_id]
-    if source:
-        argv += ["--session-start-source", source]
-    argv.append(pane_id)
-    try:
-        subprocess.run(argv, capture_output=True, timeout=REPORT_TIMEOUT, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        pass
 
 
 def _trimmed(rows: list) -> list:
@@ -152,48 +107,73 @@ def _append(path: str, entry: dict) -> None:
     run_record_core._flock_run(os.path.join(folder, ".registry.lock"), body)
 
 
-def record_session(hook_input: dict, env) -> dict | None:
-    env_pane = env.get("HERDR_PANE_ID")
-    session_id = hook_input.get("session_id")
-    if not env_pane or not isinstance(session_id, str) or not session_id:
+def _entry(found, host):
+    """The place a host proved for this session; a host that cannot (refuse) records nothing."""
+    if not found.ok or not isinstance(found.value, dict):
         return None
-    server = server_from_socket(env.get("HERDR_SOCKET_PATH")) or programme_home.DEFAULT_SERVER
-    pane = _pane_get(env_pane)
-    if pane:
-        pane_id = pane.get("pane_id") or env_pane
-        workspace = pane.get("workspace_id") or env.get("HERDR_WORKSPACE_ID")
-        resolved = "herdr"
-    else:
-        pane, pane_id, workspace, resolved = {}, env_pane, env.get("HERDR_WORKSPACE_ID"), "env"
-    if not workspace and ":" in pane_id:
-        workspace = pane_id.split(":", 1)[0]
+    pane = found.value
+    ids = (pane.get("pane_id"), pane.get("server"), pane.get("workspace"))
+    if not all(isinstance(i, str) and i for i in ids):
+        return None
+    return {"pane_id": pane["pane_id"], "terminal_id": pane.get("terminal_id"), "tab_id": pane.get("tab_id"),
+            "server": pane["server"], "workspace": pane["workspace"], "resolved": pane.get("resolved") or host,
+            "env_pane": pane.get("env_pane") or pane["pane_id"], "tab_space_name": pane.get("tab_space_name"),
+            "tty": pane.get("tty")}
+
+
+def record_session(hook_input: dict, env, tty=None) -> dict | None:
+    session_id = hook_input.get("session_id")
+    found = terminal_host.detect(env)
+    if found.name is None or not isinstance(session_id, str) or not session_id:
+        return None
+    place = _entry(terminal_host.host_named(found.name).own_pane(env, tty=tty), found.name)
+    return _store(hook_input, env, found.name, place, tty) if place else None
+
+
+def record_proven_pane(session_id, host, found, env) -> dict | None:
+    """Write the row a live own_pane answer proved, for a session whose SessionStart probe failed or timed out.
+
+    Without a row driver_panes() drops the programme's lease and the send-guard never covers the PM.
+    """
+    place = _entry(found, host)
+    if place is None or not isinstance(session_id, str) or not session_id:
+        return None
+    return _store({"session_id": session_id}, env, host, place, place["tty"])
+
+
+def _store(hook_input, env, host, place, tty) -> dict:
+    session_id = hook_input["session_id"]
     headless = is_headless(env)
     source = _clean(hook_input.get("source"))
     entry = {
         "at": run_record_core.now_iso(),
         "session_id": _clean(session_id),
-        "pane_id": _clean(pane_id),
-        "env_pane": _clean(env_pane),
-        "terminal_id": _clean(pane.get("terminal_id")),
-        "tab_id": _clean(pane.get("tab_id")),
-        "server": server,
-        "workspace": _clean(workspace),
+        "pane_id": _clean(place["pane_id"]),
+        "env_pane": _clean(place["env_pane"]),
+        "terminal_id": _clean(place["terminal_id"]),
+        "tab_id": _clean(place["tab_id"]),
+        "server": place["server"],
+        "workspace": _clean(place["workspace"]),
         "source": source,
         "cwd": _clean(hook_input.get("cwd")),
         "transcript_path": _path(hook_input.get("transcript_path")),
         "interactive": not headless,
-        "resolved": resolved,
+        "resolved": place["resolved"],
     }
-    path = registry_path(server, workspace)
+    entry["host"] = host
+    for key, value in (("tty", tty), ("tab_space_name", place["tab_space_name"])):
+        if _clean(value):
+            entry[key] = _clean(value)
+    path = registry_path(entry["server"], entry["workspace"], host)
     if not headless:
-        _report(session_id, pane_id, source)
+        terminal_host.host_named(host).report_session(session_id, place["pane_id"], source)
     _append(path, entry)
     return entry
 
 
-def read_space(server: str, workspace: str) -> list:
+def read_space(server: str, workspace: str, host=None) -> list:
     try:
-        return _read_rows(registry_path(server, workspace))
+        return _read_rows(registry_path(server, workspace, host))
     except programme_home.ProgrammeHomeError:
         return []
 
@@ -210,18 +190,23 @@ def _all_rows() -> list:
     return rows
 
 
-def lookup(session_id, server=None, workspace=None, *, include_headless=False):
+def lookup(session_id, server=None, workspace=None, *, include_headless=False, host=None):
     if not session_id:
         return None
     def hits(rows):
         return [r for r in rows if r.get("session_id") == session_id
                 and (include_headless or r.get("interactive"))]
 
-    found = hits(read_space(server, workspace)) if server and workspace else []
+    found = hits(read_space(server, workspace, host)) if server and workspace else []
     found = found or hits(_all_rows())
     if not found:
         return None
     return max(found, key=lambda r: r.get("at") or "")
+
+
+def known_panes() -> set:
+    """Casefolded pane ids, terminal ids and ttys any registered session ever ran in."""
+    return {str(v).casefold() for row in _all_rows() for v in (row.get("pane_id"), row.get("terminal_id"), row.get("tty")) if v}
 
 
 def latest_rows(*, include_headless=False) -> dict:
@@ -244,17 +229,20 @@ def latest_rows(*, include_headless=False) -> dict:
     return latest
 
 
-def space_of_session(session_id, env):
+def host_of_row(row) -> str:
+    return (row or {}).get("host") or programme_home.DEFAULT_HOST
+
+
+def space_of_session(session_id):
+    """(server, workspace) for a herdr session, (server, workspace, host) for any other host; None without a registry row.
+
+    A host variable is not evidence of membership (KTD3), so the environment never names a space.
+    """
     row = lookup(session_id, include_headless=True)
     if row and row.get("server") and row.get("workspace"):
-        return row["server"], row["workspace"]
-    workspace = env.get("HERDR_WORKSPACE_ID")
-    if not workspace and ":" in (env.get("HERDR_PANE_ID") or ""):
-        workspace = env["HERDR_PANE_ID"].split(":", 1)[0]
-    if not workspace:
-        return None
-    server = server_from_socket(env.get("HERDR_SOCKET_PATH")) or programme_home.DEFAULT_SERVER
-    return server, workspace
+        host = host_of_row(row)
+        return (row["server"], row["workspace"]) + ((host,) if host != programme_home.DEFAULT_HOST else ())
+    return None
 
 
 def driver_panes(now=None) -> list:
@@ -269,74 +257,24 @@ def driver_panes(now=None) -> list:
         if marker in seen:
             continue
         seen.add(marker)
-        row = lookup(lease.get("session_id"), lease.get("server"), lease.get("workspace"))
+        row = lookup(lease.get("session_id"), lease.get("server"), lease.get("workspace"),
+                     host=lease.get("host"))
         if row and row.get("pane_id"):
             out.append({"run": lease.get("run"), "session_id": lease.get("session_id"),
                         "pane_id": row["pane_id"], "terminal_id": row.get("terminal_id"),
-                        "lease": key})
+                        "host": host_of_row(row), "tty": row.get("tty"), "lease": key})
     return out
-
-
-def _label(row, key) -> str | None:
-    text = _clean((row or {}).get(key))
-    return " ".join(text.split()) or None if text else None
 
 
 def driver_presence(session_id, snap, reported, *, current_server) -> dict:
-    out = {"state": "unknown", "session_id": session_id, "herdr_reachable": snap is not None,
-           "registry_pane": None, "pane_in_snapshot": None, "session_reported": None,
-           "pane_id": None, "pane_label": None, "tab_label": None, "why": None}
     row = lookup(session_id, include_headless=True)
-    if row:
-        out["registry_pane"] = row.get("pane_id")
-    if snap is None:
-        out["why"] = "herdr could not be read"
-        return out
-    panes = [p for p in snap.get("panes") or [] if isinstance(p, dict)]
-    agents = [a for a in snap.get("agents") or [] if isinstance(a, dict)]
-    tabs = {t.get("tab_id"): t for t in snap.get("tabs") or [] if isinstance(t, dict)}
-
-    def named(pane):
-        out.update(pane_id=_clean(pane.get("pane_id")), pane_label=_label(pane, "label"),
-                   tab_label=_label(tabs.get(pane.get("tab_id")), "label"))
-
-    hosting = next((p for p in panes + agents if session_id and reported(p) == session_id), None)
-    if hosting is not None:
-        named(next((p for p in panes if p.get("pane_id") == hosting.get("pane_id")), hosting))
-        out.update(state="present", session_reported=session_id, pane_in_snapshot=True,
-                   why=f"herdr reports the session in pane {out['pane_id']}")
-        return out
-    if not row or not row.get("pane_id"):
-        out["why"] = "no herdr pane was ever recorded for the driving session"
-        return out
-    if not row.get("interactive"):
-        out["why"] = "the driving session runs headless, outside a herdr pane"
-        return out
-    if row.get("server") != current_server:
-        out["why"] = f"the driving session's pane is on herdr server {row.get('server')}, not this one"
-        return out
-    # A pane moved to another tab or workspace gets a new id but keeps its terminal.
-    pane = next((p for p in panes if row.get("terminal_id")
-                 and p.get("terminal_id") == row["terminal_id"]), None)
-    pane = pane or next((p for p in panes if p.get("pane_id") == row["pane_id"]), None)
-    out["pane_in_snapshot"] = pane is not None
-    if pane is None:
-        out.update(state="gone", pane_id=row["pane_id"],
-                   why=f"pane {row['pane_id']} that ran the driving session is closed")
-        return out
-    named(pane)
-    agent = next((a for a in agents if a.get("pane_id") == pane.get("pane_id")), None)
-    now_runs = reported(pane) or reported(agent or {})
-    out["session_reported"] = now_runs
-    terminal = _clean(pane.get("terminal_id"))
-    if now_runs and now_runs != session_id:
-        out.update(state="gone", why=f"pane {out['pane_id']} now runs another session")
-    elif row.get("terminal_id") and terminal and terminal != row["terminal_id"]:
-        out.update(state="gone", why=f"pane {out['pane_id']} now holds a different terminal")
-    else:
-        # A live pane that reports no session is ambiguous: herdr loses reported sessions on restart.
-        out["why"] = f"pane {out['pane_id']} is still open and herdr does not say which session it runs"
-    return out
+    found = terminal_host.current().presence(session_id, row, snap, reported, current_server=current_server,
+                                             clean=_clean)
+    if found.ok and isinstance(found.value, dict):
+        return found.value
+    # A host that cannot answer says unknown, never gone: only host evidence moves a lease.
+    return terminal_host.presence_facts(session_id, (row or {}).get("pane_id"), reachable=snap is not None,
+                                        why=found.why)
 
 
 def caller_drives(record, session_id=None) -> bool:
@@ -353,7 +291,9 @@ def _cli(argv) -> int:
         raw = sys.stdin.read() if not sys.stdin.isatty() else ""
         data = json.loads(raw) if raw else {}
         if isinstance(data, dict):
-            record_session(data, os.environ)
+            host = terminal_host.current()
+            tty = load_lib_module("host_" + host.name).process_tty() if host.needs_tty else None
+            record_session(data, os.environ, tty)
     except Exception:
         pass
     return 0

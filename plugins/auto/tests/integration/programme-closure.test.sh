@@ -13,6 +13,7 @@ BG2=""
 trap '[ -n "$BG" ] && kill -9 "$BG" 2>/dev/null; [ -n "$BG2" ] && kill -9 "$BG2" 2>/dev/null; rm -rf "$WORK"' EXIT
 . "${AUTO_ROOT}/tests/helpers/dispatch-fixture.sh"
 . "${AUTO_ROOT}/tests/helpers/closure-fixture.sh"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
 NOREPO="${WORK}/norepo"
 mkdir -p "$NOREPO" "${WORK}/results"
 printf 'browser run: 12 passed\n' > "${WORK}/results/out.txt"
@@ -350,6 +351,7 @@ check "" "$CRASHES"
 CRUN="$(new_programme w30 sess-closer)"
 end_typed "$CRUN" sess-closer
 ORUN="$(new_programme w31 sess-away)"
+register_session sess-closer w31 >/dev/null
 TAKE_OUT="$(HERDR_WORKSPACE_ID=w31 prompt_hook sess-closer "/auto:programme-takeover")"
 it "the closing session's prompt is still journaled into the programme it is closing"
 has "this session is closing" "$TAKE_OUT"

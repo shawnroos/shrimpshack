@@ -28,12 +28,12 @@ The engine is **workflow-blind**: it drives any toolchain through a thin backend
 
 A **programme** is the second kind of run. A task run drives the steps of one plan.
 A programme lets a PM session manage every piece of work (each one an **item**) in
-one herdr space. It tracks who owns each item, what each item waits on, and what
+one space. It tracks who owns each item, what each item waits on, and what
 evidence shows it is done. The PM checks that evidence itself (a merged PR, a flag
 state, a deployed build, a published package, a recorded root cause) and does not
 take a worker's word for it.
 
-- **`/auto:programme`** starts a programme in the current herdr space. It claims the
+- **`/auto:programme`** starts a programme in the current space. It claims the
   space first, so only one programme runs there. It then shows the proposed
   agreement (Scope: remit, stop rule, cadence, sources and preferred tools; and
   Rulings) and the standing Authority and Done standards it reads. Nothing else

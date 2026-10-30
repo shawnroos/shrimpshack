@@ -137,7 +137,7 @@ def _scope(block, seen) -> dict:
     tracked = _tracker_names(tracker)
     seen_parts = {part: _strings(seen.get(part)) for part in SEEN_PARTS}
     return {
-        "in": {"spaces": [f"{_dict(s).get('server')}.{_dict(s).get('workspace')}" for s in _list(remit.get("spaces"))],
+        "in": {"spaces": [programme_home.space_label(_dict(s)) for s in _list(remit.get("spaces"))],
                "tabs": tabs, "repos": repos,
                "tracker": [_scope_name(e) for part in programme_home.TRACKER_SCOPE_PARTS
                            for e in _list(tracker.get(part))]},

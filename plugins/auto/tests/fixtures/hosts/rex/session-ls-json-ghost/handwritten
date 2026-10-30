@@ -1,0 +1,1 @@
+Hand-written: session-ls-json-one plus a listed session that session.view then reports as not found, to stage a read error mid-poll; the listing shape is the real one.

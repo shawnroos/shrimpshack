@@ -1,0 +1,6 @@
+Error: accepts at most 1 arg(s), received 2
+
+Usage:
+  rex send [TEXT] [flags]
+
+Run "rex send --help" for more information.

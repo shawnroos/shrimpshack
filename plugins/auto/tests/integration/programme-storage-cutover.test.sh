@@ -41,6 +41,22 @@ printf 'FIXTURE_TOKEN=%s\n' "$SECRET" > "$CLAUDE_AUTO_SECRETS_FILE"
 NOREPO="${WORK}/norepo"
 mkdir -p "$NOREPO"
 
+FAKES="${WORK}/fakes"
+mkdir -p "$FAKES"
+cat > "${FAKES}/herdr" <<'EOF'
+#!/bin/bash
+case "$1 ${2:-}" in
+  "pane get")
+    pane="$3"
+    printf '{"id":"cli:pane:get","result":{"pane":{"pane_id":"%s","workspace_id":"%s","terminal_id":"term_%s","tab_id":"w2:t1"}},"type":"pane_info"}\n' \
+      "$pane" "${pane%%:*}" "${pane##*:}" ;;
+esac
+exit 0
+EOF
+chmod +x "${FAKES}/herdr"
+export PATH="${FAKES}:${PATH}"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
+
 OLD="${WORK}/old/plugins/auto/lib"
 mkdir -p "${WORK}/old"
 it "the obsolete implementation at ${OLD_COMMIT} is extracted for the old-writer scenarios"
@@ -82,7 +98,7 @@ PYEOF
 
 as() {
   local sid="$1"; shift
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID="${WS:-w9}" "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" "${WS:-w9}" "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
@@ -112,6 +128,7 @@ old_typed() {
 
 # Runs the current hook with a transcript row that shows Shawn typed the prompt.
 new_typed() {
+  register_session "$1" "${WS:-w9}" >/dev/null
   HERDR_WORKSPACE_ID="${WS:-w9}" "$PY" - "$AUTO_ROOT" "$LIB" "$1" "$2" <<'EOF' | prompt_id_of
 import json, os, subprocess, sys
 root, lib, sid, text = sys.argv[1:]
@@ -438,7 +455,7 @@ cp "${WORK}/db8.bak" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN8}/programme.db"
 # ── 10. crash after ownership commit, before lease publication ───────────
 it "a start killed after its commit leaves no lease, but a competing start is still refused"
 LOG10="${WORK}/start10.log"
-( CLAUDE_AUTO_TEST_STORE_PAUSE_AFTER_COMMIT=1 CLAUDE_CODE_SESSION_ID=sess-f HERDR_WORKSPACE_ID=w10 \
+( CLAUDE_AUTO_TEST_STORE_PAUSE_AFTER_COMMIT=1 CLAUDE_CODE_SESSION_ID=sess-f HERDR_WORKSPACE_ID=w10 HERDR_PANE_ID="$(pane_for sess-f w10)" \
     "$PY" "$PROG" start --space default.w10 > "$LOG10" 2>&1 ) &
 P10=$!
 CHILDREN="$CHILDREN $P10"
@@ -525,7 +542,7 @@ WS=w4
 RUN4="$(legacy_programme sess-d w4)"
 GATE4="${WORK}/gate4"
 LOG4="${WORK}/old4.log"
-( CLAUDE_CODE_SESSION_ID=sess-d HERDR_WORKSPACE_ID=w4 "$PY" "${WORK}/pause_shim.py" "$GATE4" \
+( CLAUDE_CODE_SESSION_ID=sess-d HERDR_WORKSPACE_ID=w4 HERDR_PANE_ID="$(pane_for sess-d w4)" "$PY" "${WORK}/pause_shim.py" "$GATE4" \
     "${OLD}/programme.py" propose-agreement --term stop_rule=never_stop --why old-writer --run "$RUN4" \
     > "$LOG4" 2>&1 ) &
 P4=$!
@@ -569,7 +586,7 @@ WS=w5
 RUN5="$(legacy_programme sess-h w5)"
 GATE5="${WORK}/gate5"
 LOG5="${WORK}/old5.log"
-( CLAUDE_CODE_SESSION_ID=sess-h HERDR_WORKSPACE_ID=w5 SHIM_PAUSE_AT=2 "$PY" "${WORK}/pause_shim.py" "$GATE5" \
+( CLAUDE_CODE_SESSION_ID=sess-h HERDR_WORKSPACE_ID=w5 HERDR_PANE_ID="$(pane_for sess-h w5)" SHIM_PAUSE_AT=2 "$PY" "${WORK}/pause_shim.py" "$GATE5" \
     "${OLD}/programme.py" propose-agreement --term stop_rule=never_stop --why split-write --run "$RUN5" \
     > "$LOG5" 2>&1 ) &
 P5=$!
@@ -611,7 +628,7 @@ as sess-i accept-agreement --prompt "$P6" --run "$RUN6"
 as sess-i propose-rule '{"id":"tidy-branches","applies_when":{"change_kinds":["evals_or_docs"]},"requires":["merged"],"evidence_bar":{"merged":"merged at the gate"},"caveat":"","autonomy":"act_and_tell","added_by":"pm","added_at":"2026-10-06T10:00:00Z","why":"docs need a merge"}' --run "$RUN6"
 P6R="$(new_typed sess-i 'adopt rule tidy-branches')"
 LOG6="${WORK}/adopt6.log"
-( CLAUDE_AUTO_TEST_STORE_PAUSE_BEFORE_COMMIT=1 CLAUDE_CODE_SESSION_ID=sess-i HERDR_WORKSPACE_ID=w6 \
+( CLAUDE_AUTO_TEST_STORE_PAUSE_BEFORE_COMMIT=1 CLAUDE_CODE_SESSION_ID=sess-i HERDR_WORKSPACE_ID=w6 HERDR_PANE_ID="$(pane_for sess-i w6)" \
     "$PY" "$PROG" adopt-rule tidy-branches --prompt "$P6R" --run "$RUN6" > "$LOG6" 2>&1 ) &
 P6P=$!
 CHILDREN="$CHILDREN $P6P"
@@ -721,7 +738,7 @@ print(len(before), ",".join(sorted(set(map(str, prov)))), len(lc._requests(run, 
 EOF
 )"
 LOG7="${WORK}/takeover7.log"
-( CLAUDE_AUTO_TEST_STORE_PAUSE_AFTER_COMMIT=1 CLAUDE_CODE_SESSION_ID=sess-j HERDR_WORKSPACE_ID=w6 \
+( CLAUDE_AUTO_TEST_STORE_PAUSE_AFTER_COMMIT=1 CLAUDE_CODE_SESSION_ID=sess-j HERDR_WORKSPACE_ID=w6 HERDR_PANE_ID="$(pane_for sess-j w6)" \
     "$PY" "$PROG" takeover --run "$RUN6" > "$LOG7" 2>&1 ) &
 P7=$!
 CHILDREN="$CHILDREN $P7"

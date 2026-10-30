@@ -28,6 +28,7 @@ programme_focus = load_lib_module("programme_focus")
 programme_journal = load_lib_module("programme_journal")
 programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
+terminal_host = load_lib_module("terminal_host")
 driver_session = load_lib_module("driver_session")
 programme_tracker = load_lib_module("programme_tracker")
 programme_decisions = load_lib_module("programme_decisions")
@@ -35,14 +36,15 @@ programme_context = load_lib_module("programme_context")
 programme_naming = load_lib_module("programme_naming")
 programme_asks = load_lib_module("programme_asks")
 
-SOURCES = ("herdr", "tracker", "tasks", "plans")
+HOST_SOURCES = terminal_host.HOSTS
+SOURCES = HOST_SOURCES + ("tracker", "tasks", "plans")
 SOURCE_STATES = ("available", "unavailable", "unsupported")
 CHOICES = ("ship", "decline")
 ID_CAP = 128
 CRON_PROMPT_CAP = 4000
 NOTIFY_TIMEOUT_SECONDS = 5
 ISSUE_SOURCE = "linear"
-ISSUELESS_SOURCE = "herdr"
+ISSUELESS_SOURCES = frozenset(HOST_SOURCES)
 WAITABLE_STATES = ("open", "waiting")
 BLOCKER_FIELDS = ("serves", "evidence", "unblocks-when")
 DENIED_OPERATION = "denied_operation"
@@ -327,7 +329,7 @@ def _h_merge_item(host, argv):
 
 
 def _issue_backed(item_id) -> bool:
-    return item_id.split(":", 1)[0] != ISSUELESS_SOURCE
+    return item_id.split(":", 1)[0] not in ISSUELESS_SOURCES
 
 
 def _open_deliverables(item) -> list:
@@ -536,6 +538,10 @@ def _run_tool(argv):
     return done.returncode
 
 
+def notify_host(title, body):
+    return terminal_host.current().notify(title, body).value
+
+
 def notify_handed(item_id, question, title=None) -> dict:
     source, _, key = item_id.partition(":")
     tracker = "skipped"
@@ -543,8 +549,7 @@ def notify_handed(item_id, question, title=None) -> dict:
         tracker = _run_tool(programme_tracker.needs_you_argv(key))
     herdr = None
     if tracker != 0:
-        herdr = _run_tool(["herdr", "notification", "show", f"auto: {programme_naming.label(title, item_id)} needs you",
-                           "--body", question, "--sound", "request"])
+        herdr = notify_host(f"auto: {programme_naming.label(title, item_id)} needs you", question)
     return {"tracker": tracker, "herdr": herdr}
 
 

@@ -34,7 +34,7 @@ The source reader supports the transcript shapes observed in Claude Code 2.1.302
 A picker (AskUserQuestion) answer is a pick, not a typed prompt.
 `UserPromptSubmit` does not fire for it.
 
-The hooks find the programme through the same lease lookup that journals takeover requests (`request_lease` in `lib/on-user-prompt.py`): the lease this session drives, else the lease of this session's herdr space. A session in a space with no lease is not journaled and not denied.
+The hooks find the programme through the same lease lookup that journals takeover requests (`request_lease` in `lib/on-user-prompt.py`): the lease this session drives, else the lease of this session's space. A session in a space with no lease is not journaled and not denied.
 
 1. `PostToolUse` on AskUserQuestion journals a prompt row with origin `unknown` and a source record of kind `pick`. A row from a session that does not drive the programme also carries `driving: false`. A row without the key is a driving-session row.
 2. The record holds the session, transcript path, tool-use ID, transcript byte offset, prefix hash, a hash of the answers map, and the redacted question-to-answer map.
@@ -44,7 +44,7 @@ The hooks find the programme through the same lease lookup that journals takeove
 6. That row's `toolUseResult.answers` must match the captured hash, and its redacted form must match the stored map.
 7. The result row can sit before or after the captured offset. The prefix must be unchanged.
 
-The PreToolUse AskUserQuestion hook denies a call whose input carries `answers` from the driving session or from any session in a leased herdr space. It gates on the lease files, not on a repo `.claude/auto` folder.
+The PreToolUse AskUserQuestion hook denies a call whose input carries `answers` from the driving session or from any session in a leased space. It gates on the lease files, not on a repo `.claude/auto` folder.
 The transcript check is the second line against a pre-filled answer.
 
 The source reader supports the picker shapes observed in Claude Code 2.1.304.

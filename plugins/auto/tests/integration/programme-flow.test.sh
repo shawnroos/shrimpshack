@@ -70,6 +70,7 @@ exit 0
 EOF
 chmod +x "${FAKES}"/*
 export PATH="${FAKES}:${PATH}"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
 
 "$PY" - "$SNAP" <<'PYEOF'
 import json, sys
@@ -119,7 +120,7 @@ OUT=""
 CODE=0
 as() {
   local sid="$1"; shift
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID="${WS:-w2}" "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" "${WS:-w2}" "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
@@ -129,6 +130,7 @@ json_of() {
 
 typed() {
   local sid="$1" text="$2"
+  register_session "$sid" "${WS:-w2}" >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID="${WS:-w2}" "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$sid" "$text" 2>/dev/null )
 }
 
@@ -587,8 +589,8 @@ typed_nospace() {
   ( cd "$NOREPO" && env -u HERDR_WORKSPACE_ID -u HERDR_PANE_ID "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2" 2>/dev/null )
 }
 
-it "a programme started with --space from outside herdr is handed over by its typed request"
-as_nospace sess-n start --space w8
+it "a programme started with --space from a pane in another workspace is handed over by its typed request"
+as sess-n start --space w8
 RUN8="$(json_of 'd["run"]')"
 typed_nospace sess-n '/auto:programme-handover sess-m' >/dev/null
 as_nospace sess-n handover sess-m

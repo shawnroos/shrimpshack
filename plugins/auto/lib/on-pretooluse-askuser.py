@@ -5,7 +5,7 @@ The advisor-routing gate (KTD-4/5). On an AskUserQuestion tool call, DENY and
 redirect the driving agent to the advisor ONLY when a LIVE self-driven /auto run
 owns this very session — otherwise emit nothing (allow). Separately, it DENIES a
 call that pre-fills ``answers`` from a programme's driving session, or from any
-session of a herdr space a programme leases (KTD2).
+session of a space a programme leases (KTD2).
 
 OWNERSHIP PREDICATE (KTD-5 — the load-bearing fact for the whole gate):
     a question belongs to a live auto run iff, for SOME run-record under
@@ -96,7 +96,7 @@ def _prefills_for_programme(stdin_raw: str, session_id, env) -> bool:
 
 
 _PREFILL_REASON = (
-    "auto: this session drives a programme or sits in a herdr space a programme leases, so it "
+    "auto: this session drives a programme or sits in a space a programme leases, so it "
     "may not pre-fill a picker. Ask the AskUserQuestion again without `answers` and let Shawn pick."
 )
 

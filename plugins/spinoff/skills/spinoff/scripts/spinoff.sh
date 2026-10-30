@@ -2284,6 +2284,8 @@ else
       echo "  ⚠ brief file is missing or empty ($BRIEF_FILE) — refusing to launch an unbriefed session" >&2
     else
       launcher_launch_agent
+      # Host-neutral line auto parses on every backend; the herdr line above stays for older auto.
+      [ "$KICKOFF_OK" = 1 ] && [ -n "${LAUNCH_SFC:-}" ] && printf 'agent pane: %s %s\n' "$LAUNCHER" "$LAUNCH_SFC"
       # Readiness is no longer a briefing gate — the brief is already submitted by
       # the launch. It still runs because it is what dismisses the MCP trust modal
       # a fresh project path raises, which is what gets MCP servers enabled for the

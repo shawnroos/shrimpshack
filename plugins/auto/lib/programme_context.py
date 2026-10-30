@@ -565,8 +565,7 @@ def _h_pause(host, record, argv):
         return {"pause": pid, "risk": opts["risk"], "reason": reason, "items": items, "state": "active"}
 
     def after(payload):
-        code = record._run_tool(["herdr", "notification", "show", f"auto: safety pause {pid} needs you",
-                                 "--body", reason, "--sound", "request"])
+        code = record.notify_host(f"auto: safety pause {pid} needs you", reason)
         return {"escalation": {"herdr": code}}
 
     return host._write(opts, change, "pause_raised", after=after)

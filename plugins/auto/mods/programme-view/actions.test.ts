@@ -233,7 +233,7 @@ test('ticking two tools and adding "sentry" with a description, then p, runs one
   ])
 })
 
-test('remit takes any herdr space by name, including one outside the remit, and proposes it', async ($, on) => {
+test('remit takes any space by name, including one outside the remit, and proposes it', async ($, on) => {
   const model = { remit: { spaces: [{ server: 'default', workspace: 'w2' }] } }
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ model }) })
   const calls = verbs(on)
@@ -338,7 +338,7 @@ test('widening the tools of record names every tool that changes, the dropped on
   expect(await lineAfter(pane, 'Type this:')).toBe('widen tools of record to tracker, plans, sentry and drop tasks')
 })
 
-test('widening the remit names the herdr space to add', async ($, on) => {
+test('widening the remit names the space to add', async ($, on) => {
   const terms = defaultTerms()
   terms[0] = term('remit', {
     proposal: { value: 'space', extras: { add: 'default.w3' }, at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'pending' },
@@ -346,7 +346,7 @@ test('widening the remit names the herdr space to add', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
   const pane = await contractPane($)
   await press(pane, 'term:remit')
-  expect(await lineAfter(pane, 'Type this:')).toBe('widen remit to add herdr space default.w3')
+  expect(await lineAfter(pane, 'Type this:')).toBe('widen remit to add space default.w3')
 })
 
 test('picking another option on a term with no proposal shows the amend reply', async ($, on) => {

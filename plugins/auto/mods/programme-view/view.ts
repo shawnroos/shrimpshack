@@ -138,7 +138,11 @@ function spacesOf(model: unknown): string[] {
   return spaces
     .filter(isRaw)
     .filter(space => typeof space.server === 'string' && typeof space.workspace === 'string')
-    .map(space => `${String(space.server)}.${String(space.workspace)}`)
+    .map(space =>
+      typeof space.host === 'string' && space.host !== 'herdr'
+        ? `${space.host}--${String(space.server)}--${String(space.workspace)}`
+        : `${String(space.server)}.${String(space.workspace)}`,
+    )
 }
 
 function partsOf(view: Raw): { contract: Contract; reread: Reread; spaces: string[] } | undefined {

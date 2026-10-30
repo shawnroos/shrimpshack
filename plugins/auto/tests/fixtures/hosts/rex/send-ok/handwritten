@@ -1,0 +1,1 @@
+Hand-written: no real send was made because it would type into a live block; the success shape (empty output, exit 0) is assumed from the failure fixtures.

@@ -44,11 +44,17 @@ cat > "${FAKES}/herdr" <<'EOF'
 case "$1 ${2:-}" in
   "status server") if [ -e "$DOWN" ]; then echo "status: stopped"; else echo "status: running"; fi ;;
   "api snapshot") cat "$SNAP" ;;
+  "pane get")
+    pane="$3"
+    [ "${pane##*:}" = pGHOST ] && exit 1
+    printf '{"id":"cli:pane:get","result":{"pane":{"pane_id":"%s","workspace_id":"%s","terminal_id":"term_%s","tab_id":"w2:t1"}},"type":"pane_info"}\n' \
+      "$pane" "${pane%%:*}" "${pane##*:}" ;;
 esac
 exit 0
 EOF
 chmod +x "${FAKES}/herdr"
 export PATH="${FAKES}:${PATH}"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
 
 # panes: "<pane>|<label>|<session or empty>|<terminal>" ...
 snapshot() {
@@ -100,11 +106,12 @@ OUT=""
 CODE=0
 as() {
   local sid="$1"; shift
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" w2 "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
 typed() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2" 2>/dev/null )
 }
 
@@ -112,6 +119,7 @@ typed() {
 # event or SDK prompt), or a transcript row from a peer session.
 untyped() {
   local sid="$1" text="$2" kind="$3"
+  register_session "$sid" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$sid" "$text" "$kind" <<'PYEOF'
 import json, os, subprocess, sys
 root, sid, text, kind = sys.argv[1:]
@@ -313,9 +321,11 @@ typed sess-g '/auto:programme-takeover' >/dev/null
 set_beat "$RUN" 0
 as sess-g takeover
 check "1 sess-e" "$CODE $(driver_of "$RUN")"
+register sess-h w2:p77 term_p77
 typed sess-h '/auto:programme-takeover --replace PM' >/dev/null
 as sess-h takeover
 check "0 sess-h" "$CODE $(driver_of "$RUN")"
+snapshot "w2:p77|PM|sess-h|term_p77" "w2:p31|scratch|sess-w2|term_p31"
 typed sess-g '/auto:programme-takeover' >/dev/null
 set_beat "$RUN" 3
 as sess-g takeover
@@ -323,11 +333,12 @@ check "1 sess-h" "$CODE $(driver_of "$RUN")"
 
 as_in() {
   local ws="$1" sid="$2"; shift 2
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID="$ws" "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" "$ws" "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
 typed_in() {
+  register_session "$2" "$1" >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID="$1" "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$2" "$3" 2>/dev/null )
 }
 
@@ -360,6 +371,7 @@ has "--replace $CUR" "$(last_entry "$RUN" takeover_request)"
 # A picker answered in a session that is not the PM, journaled by the real PostToolUse hook.
 # A fourth argument pre-fills the answer in the tool input.
 pick() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$WORK" "$@" <<'PYEOF'
 import json, os, pathlib, re, subprocess, sys, uuid
 root, work, sid, answer = sys.argv[1:5]
@@ -507,11 +519,11 @@ snapshot "w2:p31|scratch|sess-w2|term_p31"
 LABEL_T="Approve takeover --replace sess-t"
 
 it "a session in the space only by HERDR env, with no registry row, cannot take over a stopped PM"
-P="$(pick sess-n "$LABEL_T")"
-as sess-n takeover --prompt "$P"
+P=p000000
+OUT="$(CLAUDE_CODE_SESSION_ID=sess-n HERDR_PANE_ID=w2:pGHOST HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" takeover --prompt "$P" 2>&1)"; CODE=$?
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "not in the programme's herdr space" "$OUT"
-has "fix: run Claude from a pane in the herdr space" "$OUT"
+has "this session is not in a space" "$OUT"
+has "fix: programme.sh become-pm" "$OUT"
 
 register sess-k w2:p86 term_p86
 
@@ -551,7 +563,7 @@ it "an ask from a session outside the lease's space is refused"
 A="$(ask sess-w9 "be the PM" 0)"
 as_in w9 sess-w9 takeover --prompt "$A" --run "$RUN"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "not in the programme's herdr space" "$OUT"
+has "not in the programme's space" "$OUT"
 
 P="$(pick sess-k "$LABEL_T")"
 

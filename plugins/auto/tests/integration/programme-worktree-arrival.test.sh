@@ -48,6 +48,10 @@ cat > "${FAKES}/herdr" <<'EOF'
 case "$1 ${2:-}" in
   "status server") echo "status: running" ;;
   "api snapshot") cat "$SNAP" ;;
+  "pane get")
+    pane="$3"
+    printf '{"id":"cli:pane:get","result":{"pane":{"pane_id":"%s","workspace_id":"%s","terminal_id":"term_%s","tab_id":"w2:t1"}},"type":"pane_info"}\n' \
+      "$pane" "${pane%%:*}" "${pane##*:}" ;;
 esac
 exit 0
 EOF
@@ -58,6 +62,7 @@ exec "$REAL_GIT" "$@"
 EOF
 chmod +x "${FAKES}"/*
 export PATH="${FAKES}:${PATH}"
+. "${AUTO_ROOT}/tests/helpers/herdr-pane.sh"
 
 snapshot() {
   "$PY" - "$SNAP" "$@" <<'PYEOF'
@@ -108,17 +113,18 @@ OUT=""
 CODE=0
 as() {
   local sid="$1"; shift
-  OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" "$@" 2>&1)"
+  OUT="$(as_pane "$sid" w2 "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
 }
 
 remit() {
   local sid="$1" run="$2" json="$3"
-  OUT="$(printf '%s' "$json" | CLAUDE_CODE_SESSION_ID="$sid" HERDR_WORKSPACE_ID=w2 "$PY" "$PROG" set-remit --run "$run" 2>&1)"
+  OUT="$(printf '%s' "$json" | as_pane "$sid" w2 "$PY" "$PROG" set-remit --run "$run" 2>&1)"
   CODE=$?
 }
 
 typed() {
+  register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$1" "$2" 2>/dev/null )
 }
 

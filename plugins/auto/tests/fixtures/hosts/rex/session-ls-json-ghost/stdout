@@ -1,0 +1,12 @@
+{
+  "sessions": [
+    {
+      "session_id": "session:01a18693-5b41-787b-af33-87750812e31e",
+      "label": "cosmic-delta"
+    },
+    {
+      "session_id": "session:00000000-0000-0000-0000-000000000000",
+      "label": "ghost"
+    }
+  ]
+}

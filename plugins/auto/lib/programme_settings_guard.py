@@ -41,7 +41,7 @@ def _held_read(lease):
 
 
 def _space_run(session_id, env):
-    space = session_registry.space_of_session(session_id, env)
+    space = session_registry.space_of_session(session_id)
     if not space:
         return None
     try:

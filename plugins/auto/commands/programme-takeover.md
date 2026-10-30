@@ -1,5 +1,5 @@
 ---
-description: Take over this herdr space's auto programme from this session when its PM is gone, or replace a named PM
+description: Take over this space's auto programme from this session when its PM is gone, or replace a named PM
 argument-hint: "[--replace <PM session id>]"
 allowed-tools: Bash, Skill, Monitor, CronCreate, CronDelete, TaskStop, AskUserQuestion
 ---
@@ -32,11 +32,11 @@ argument, is what counts, so pass `--replace` only when Shawn typed it.
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" takeover "$ARGUMENTS"`
 
-A typed takeover works at once when herdr shows the old PM is gone (its pane is
+A typed takeover works at once when the terminal host shows the old PM is gone (its pane is
 closed, or now runs another session or terminal), when the lease is orphaned
 and the request was typed while it was, or when the typed request names the PM
 with `--replace <PM session id>` (a pane name also works inside the PM's own
-herdr workspace). If herdr cannot be read, auto does not count the PM as gone.
+space). If the terminal host cannot be read, auto does not count the PM as gone.
 
 - Exit 1: run the refusal's `fix:` line and follow the step it prints. The
   refusal is journaled.

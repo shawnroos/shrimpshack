@@ -42,6 +42,9 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # lib/run_record.py::_test_hatch_enabled (local copy avoids a circular import).
 export CLAUDE_AUTO_TEST_HARNESS=1
 
+# Terminal host detection reads these; a suite run from Ghostty, Rex or cmux must not change which host a test sees.
+unset REX_SESSION CMUX_WORKSPACE_ID TERM_PROGRAM AUTO_TEST_HOST 2>/dev/null || true
+
 # ──────────────────────────────────────────────────────────────────────────
 # Arg parsing.
 

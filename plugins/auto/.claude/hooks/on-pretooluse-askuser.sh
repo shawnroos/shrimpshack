@@ -19,7 +19,7 @@
 # directly. So this hook emits nothing (allow) on any uncertainty.
 #
 # It also DENIES a call whose input pre-fills `answers` when this session drives
-# a programme or sits in a herdr space a programme leases (KTD2); that check is
+# a programme or sits in a space a programme leases (KTD2); that check is
 # gated on the programme lease files, since a programme has no <repo>/.claude/auto
 # folder.
 #

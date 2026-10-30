@@ -48,7 +48,7 @@ FIXES = {
     "assign-item": _ITEM,
     "beat": _WRITE,
     "carry-rulings": _TYPED,
-    "become-pm": ("run Claude from a pane in the herdr space the programme leases, "
+    "become-pm": ("run Claude from a pane in the space the programme leases, "
                   "then rerun `programme.sh become-pm` there"),
     "check-archive": _ENDED,
     "check-deliverable": _ITEM,

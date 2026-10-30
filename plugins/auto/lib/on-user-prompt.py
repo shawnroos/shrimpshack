@@ -3,7 +3,7 @@
 
 A request typed in a driving session is journaled into the run it drives, citing
 the prompt. Takeover, handover and end requests from any other session go into
-the home of the lease for that session's herdr space. Always exits 0.
+the home of the lease for that session's space. Always exits 0.
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ def _held_context(held) -> dict:
 
 
 def _space_lease(session_id, env):
-    space = session_registry.space_of_session(session_id, env)
+    space = session_registry.space_of_session(session_id)
     if not space:
         return None
     try:
@@ -142,7 +142,7 @@ def _journal_request(verb, session_id, text, env, origin, prompt_id, driving_lea
     programme_journal.append(
         lease["run"], f"{verb}_request", session_id,
         {"verb": verb, "text": programme_journal.redact(text), "origin": origin,
-         "space": programme_home.space_key(lease.get("server"), lease.get("workspace")),
+         "space": programme_home.space_key_of(lease),
          "lease_status": status, "driving": driving, "source": source},
         cites=[prompt_id] if driving and prompt_id else None,
     )
