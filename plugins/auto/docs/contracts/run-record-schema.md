@@ -716,7 +716,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `permission_block` | `{cause, detail, at, proposals}`: the item's latest permission explanation, written by the permission verbs |
 | `permission_scan` | `{<session id>: byte offset}`: how far `propose-permission` has read each session's transcript for this item |
 | `handed` | `{id: "a"+6hex, kind, op?, at, question, answered: null \| {at, choice: ship\|decline, prompt_id, decision_id, relayed_at?}}`, plus on an ask handed with structured facts: `options[{label, effect, cost}]`, `if_nothing`, `recommendation`, `recommendation_why`, `risks[]`, `evidence[]`, `pr {url, title}`, `issue {url, title}`, `readiness`, `fingerprint`, `facts_at`, `shown {at, fingerprint}`, `replies {ship, decline}` and `superseded_answers[]` (voided answers, each with `voided_at` and the `fingerprint` it answered). `op` is the denied operation, set only on kind `denied_operation`. `kind` is the ask's decision kind; an ask written before kinds existed has no `id` or `kind` and reads as kind `unknown` |
-| `behaviour_deliveries` | `[{id, reason, at, via, trigger?, trigger_at?, timing?}]`: each behaviour sent to the item's worker. `reason` is `brief` (`via: start-worker`), `relevant` or `sent_back` (`via: remind-behaviour`, which adds `trigger` (claim, merge or block), `trigger_at` and `timing` (`before_trigger`, `send_back` or `remind_only`)). Absent on items that never had one |
+| `behaviour_deliveries` | `[{id, reason, at, via, trigger?, trigger_at?, timing?, why?}]`: each behaviour sent to the item's worker or answered by the PM. `reason` is `brief` (`via: start-worker`), `relevant` or `sent_back` (`via: remind-behaviour`, which adds `trigger` (claim, merge, block or start), `trigger_at` and `timing` (`before_trigger`, `send_back` or `remind_only`)), or `skipped` or `applied_by_pm` (`via: skip-behaviour`, which adds `why`; nothing is sent to a worker). Absent on items that never had one |
 | `restrictions` | `[{text, source, at, via}]`. `source` is one of human, runtime, requirement, pm_choice or worker_assumption; `via` is start-worker or prompt-item. Absent on items that never carried one |
 | `tested_build` | `{shasum, package, version, at}` |
 | `tracker_synced` | `{state, note, at}`: the last label the PM reported on the item's issue (`tracker-synced`) |
@@ -748,7 +748,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `recommendations_taken`, `setup_step_set`, `setup_seen_recorded`, `setup_step_kept`,
 `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`,
 `project_term_amended`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`,
-`behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`,
+`behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviour_skipped`,
 `behaviours_kept`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
 `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`,
 `item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`, `item_aliased`,
@@ -867,6 +867,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   the approval fields. After `behaviour_moved` or `behaviour_retired` commits, the verb journals one
   `rule_adopted` line for the stored entry it wrote, with `entry: move|retire`, `target:
   behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the entry's hash.
+- `behaviour_skipped` is the row of `skip-behaviour`: `{item, behaviour, reason, why}` with `reason` `skipped` (the behaviour does not apply to the item) or `applied_by_pm`. It carries no prompt id, because it records the PM's judgment and approves nothing.
 - `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
   field (the send writes no separate `prompt_sent` row) plus `{behaviour, reason, trigger, trigger_at,
   timing, sent_back_count, already_reminded}`. `trigger_at` is the item's first claim (claims store),

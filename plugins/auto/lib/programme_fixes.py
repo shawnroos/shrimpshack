@@ -112,6 +112,7 @@ FIXES = {
     "rules": ("`programme.sh rules` prints the rules in force and their context digest; "
               "then `programme.sh rules --ack`"),
     "set-now": _WRITE,
+    "skip-behaviour": _ITEM,
     "set-remit": _TYPED,
     "set-source": _WRITE,
     "set-waiting": _ITEM,

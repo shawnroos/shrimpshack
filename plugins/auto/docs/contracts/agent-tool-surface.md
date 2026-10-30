@@ -304,6 +304,13 @@ session.
   passed or the behaviour started at or after it (remind only, R19). Its output
   reports the timing and `sent_back_count` (this send included), and it journals
   `behaviour_reminded` instead of `prompt_sent`.
+  `skip-behaviour` (`<item> <id> --why <line>`, optional `--applied`) answers a due
+  behaviour without sending it: it records a delivery with reason skipped (the behaviour does
+  not apply to the item) or, with `--applied`, reason applied_by_pm (the PM applied a
+  PM-only behaviour itself), journals `behaviour_skipped` and sends nothing to the
+  worker. It needs no typed prompt, because it records the PM's judgment and
+  approves nothing. It refuses a missing `--why` and a behaviour not in force for
+  the item.
   `keep-behaviours` (`<id>... --to repo|personal --prompt <id>`, `--repo <key>`
   for a remit of several repos) stores the programme-layer behaviours Shawn
   keeps from the one carry-over offer that `carry-rulings` makes. The prompt must name the layer with no negation
