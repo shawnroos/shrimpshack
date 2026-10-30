@@ -18,7 +18,6 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-programme_behaviours = load_lib_module("programme_behaviours")
 programme_behaviours_due = load_lib_module("programme_behaviours_due")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
@@ -119,11 +118,15 @@ def _moved_items(programme, last_at):
 
 
 def _due(host, run_id, record):
-    """What the PM owes an answer for. An unreadable store is reported, never raised: one bad file must not stop every sweep."""
+    """What the PM owes an answer for. A failure is reported with its message, never raised: one bad file must not stop every sweep."""
     try:
-        return programme_behaviours_due.due(record, run_id, lookup=host.prompt_lookup), False
-    except (programme_behaviours.BehaviourError, OSError, ValueError):
-        return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": []}, True
+        found = programme_behaviours_due.due(record, run_id, lookup=host.prompt_lookup)
+    except Exception as exc:  # noqa: BLE001 — any failure here must degrade the sweep, not end it
+        return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": [], "error": f"{type(exc).__name__}: {exc}"}, True
+    # load_store reports an unreadable file as a notice and returns the rest, so no exception reaches here.
+    if found["store_notices"]:
+        found["error"] = "; ".join(found["store_notices"])
+    return found, bool(found["store_notices"])
 
 
 def _armed(programme, record):

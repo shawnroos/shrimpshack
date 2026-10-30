@@ -22,12 +22,15 @@ run_record_core = load_lib_module("run_record_core")
 
 CAP = 20
 ANSWERS = ("relevant", "sent_back", "skipped", "applied_by_pm")
+REMINDERS = ("relevant", "sent_back")
 TEXT_CAP = 160
 
 
 def _answered(item, entry, trigger) -> bool:
+    """A reminder answers the trigger it was sent for (an older row has none, which was claim); a skip answers any."""
     reasons = {d.get("reason") for d in item.get("behaviour_deliveries") or []
-               if isinstance(d, dict) and d.get("id") == entry["id"]}
+               if isinstance(d, dict) and d.get("id") == entry["id"]
+               and (d.get("reason") not in REMINDERS or d.get("trigger", programme_behaviours.TRIGGERS[0]) == trigger)}
     return bool(reasons & set(ANSWERS)) or (trigger == "start" and "brief" in reasons)
 
 
@@ -77,4 +80,4 @@ def due(record, run_id, *, lookup=None, store=None, cap=CAP) -> dict:
                 rows.append(_row(key, entry, trigger, passed))
     rest = rows[cap:]
     return {"total": len(rows), "rows": rows[:cap], "overflow": len(rest),
-            "overflow_ids": [f"{r['item']}/{r['behaviour']}" for r in rest]}
+            "overflow_ids": [f"{r['item']}/{r['behaviour']}" for r in rest], "store_notices": list(loaded["notices"])}

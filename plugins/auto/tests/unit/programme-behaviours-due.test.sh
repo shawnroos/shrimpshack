@@ -68,8 +68,9 @@ def setup(behaviours, **items):
                 item["history"].append({"kind": "started", "at": spec["started"]})
             if spec.get("waiting"):
                 item["history"].append({"kind": "waiting", "at": spec["waiting"]})
-            item["behaviour_deliveries"] = [{"id": b, "reason": r, "at": AFTER, "via": "test"}
-                                            for b, r in spec.get("deliveries", [])]
+            item["behaviour_deliveries"] = [dict({"id": d[0], "reason": d[1], "at": AFTER, "via": "test"},
+                                                 **({"trigger": d[2]} if len(d) > 2 else {}))
+                                            for d in spec.get("deliveries", [])]
             prog["items"]["test:" + key] = item
     core._with_locked_run_record(ph.home_path(run), run, mutate)
     for row in claims:
@@ -95,7 +96,7 @@ EOF
 
 it "AE1: after a relevant delivery the behaviour is not listed again"
 check "" "$(run_py <<'EOF'
-run = setup([beh("b1", "merge")], a={"merged": TRIGGER, "deliveries": [("b1", "relevant")]})
+run = setup([beh("b1", "merge")], a={"merged": TRIGGER, "deliveries": [("b1", "relevant", "merge")]})
 print(lines(run))
 EOF
 )"
@@ -112,6 +113,24 @@ it "AE2: a behaviour with no trigger is due at a claim"
 check "test:a/b1/claim/None" "$(run_py <<'EOF'
 run = setup([beh("b1")], a={"claim": TRIGGER})
 print(lines(run))
+EOF
+)"
+
+it "a reminder sent for another trigger does not answer this one; one sent for it does; a skip answers any"
+check "test:a/b1/merge/None||" "$(run_py <<'EOF'
+d = lambda *x: {"merged": TRIGGER, "deliveries": [x]}
+wrong = setup([beh("b1", "merge")], a=d("b1", "relevant", "claim"))
+right = setup([beh("b1", "merge")], a=d("b1", "relevant", "merge"))
+skip = setup([beh("b1", "merge")], a=d("b1", "skipped", "claim"))
+print(lines(wrong) + "|" + lines(right) + "|" + lines(skip))
+EOF
+)"
+
+it "a delivery recorded before triggers were stored counts as a claim reminder"
+check "|test:a/b1/merge/None" "$(run_py <<'EOF'
+legacy = setup([beh("b1")], a={"claim": TRIGGER, "deliveries": [("b1", "relevant")]})
+merge = setup([beh("b1", "merge")], a={"merged": TRIGGER, "deliveries": [("b1", "relevant")]})
+print(lines(legacy) + "|" + lines(merge))
 EOF
 )"
 
@@ -187,6 +206,15 @@ check "2 1 test:c/b1" "$(run_py <<'EOF'
 run = setup([beh("b1")], a={"claim": TRIGGER}, b={"claim": TRIGGER}, c={"claim": TRIGGER})
 got = due(run, cap=2)
 print(len(got["rows"]), got["overflow"], ",".join(got["overflow_ids"]))
+EOF
+)"
+
+it "a store that cannot be read is reported in the result, not hidden"
+check "1" "$(run_py <<'EOF'
+os.makedirs(os.path.dirname(os.environ["CLAUDE_AUTO_BEHAVIOURS_STORE"]), exist_ok=True)
+open(os.environ["CLAUDE_AUTO_BEHAVIOURS_STORE"], "w").write("{not json")
+run = setup([beh("b1")], a={"claim": TRIGGER})
+print(len(due(run)["store_notices"]))
 EOF
 )"
 

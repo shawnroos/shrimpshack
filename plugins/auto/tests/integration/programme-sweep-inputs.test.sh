@@ -287,7 +287,7 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     keep_due = psi.programme_behaviours_due.due
 
     def unreadable(*_a, **_k):
-        raise psi.programme_behaviours.BehaviourError('behaviours.json is unreadable')
+        raise RuntimeError('authority database is locked')
     psi.programme_behaviours_due.due = unreadable
     try:
         broken = psi.build(host, run_id, home_dir, core.read_run_record(phome.home_path(run), run))
@@ -295,6 +295,14 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
         psi.programme_behaviours_due.due = keep_due
     check('an unreadable behaviours store is a change with its own code, never a crash',
           (broken['behaviours_due']['total'], 'behaviours_store_unreadable' in broken['why']), (0, True))
+
+    store_path = os.path.join(work, 'p', 'behaviours.json')
+    os.makedirs(os.path.dirname(store_path), exist_ok=True)
+    open(store_path, 'w').write('{not json')
+    code, hurt = inputs()
+    check('a behaviours file that cannot be read is a change with its own code and a visible message',
+          ('behaviours_store_unreadable' in hurt['why'], bool(hurt['behaviours_due'].get('error'))), (True, True))
+    os.unlink(store_path)
 
     quiet_facts = {'last': 3, 'since': [(4, {'kind': 'stop_quiet', 'payload': {}})], 'reasons': [{'kind': 'never_stop'}],
                    'asks': [{'status': 'open', 'shown_current': True}], 'claims': [], 'moved': [], 'refs': [], 'prs': [],

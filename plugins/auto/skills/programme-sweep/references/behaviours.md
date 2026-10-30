@@ -30,6 +30,12 @@ Authority and Rulings, and acceptance stays with Done standards.
   reminder or `skip-behaviour`. A behaviour recorded after the trigger passed is
   never due for that item. A behaviour that applies to the PM only and has no
   trigger is never listed: it has no item moment, so read it from `P rules`.
+  A trigger passes at the item's first claim, first merge, first wait or hand,
+  or first worker start, so a behaviour recorded after that is not due for the
+  item; a worker that was never started by `start-worker` has no start. The
+  digest shows 20 lines. After answering them, run `P sweep-inputs --save`
+  again while its `behaviours_due.overflow` is above 0. A reminder answers only
+  the trigger it was sent for, so pass `--trigger` as the line shows it.
   `skip-behaviour` needs no typed prompt: it records
   your judgment, not Shawn's approval.
 - A do line, skill, tool or agent that names a protected escalation
