@@ -22,7 +22,7 @@ You turn one saved file into one digest. You have no shell, you never change the
 
 ## What you do
 
-1. Read `<home>/sweep-inputs.json`. It holds everything a sweep reads, already gathered by the programme: the verdict and why, actionable reasons, open decisions and asks, unread claims, items that moved, merge readiness, stalled workers, the journal rows since the last sweep, whether the wake-ups are armed, and the rules in force.
+1. Read `<home>/sweep-inputs.json`. It holds everything a sweep reads, already gathered by the programme: the verdict and why, actionable reasons, open decisions and asks, unread claims, items that moved, merge readiness, stalled workers, the behaviours due, the journal rows since the last sweep, whether the wake-ups are armed, and the rules in force.
 2. Write the digest with the Write tool to `<home>/sweep-digest.md` and nowhere else. A hook refuses a Write to any other path in a programme home.
 
 ## The digest
@@ -44,6 +44,9 @@ why: <the inputs' why codes, copied exactly>
 ## Items that moved            (source: items_changed, stalled)
 - item <id> | <kind> at <time>
 - item <id> | worker pane <pane> is <agent_status>
+## Behaviours due             (source: behaviours_due; list every row, the PM answers each)
+- item <id> | behaviour <id> | trigger <trigger> | PM checks: <pm_checks or none> | <mark: judge, pm_applies, or blank> | <when>
+- more: <overflow> not listed: <overflow_ids, comma separated>
 ## Merge readiness             (source: prs, prs_unchecked)
 - <pr>: <result> (<note>)
 ## Journal since the last sweep (source: journal_since)

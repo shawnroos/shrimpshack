@@ -18,6 +18,8 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
+programme_behaviours = load_lib_module("programme_behaviours")
+programme_behaviours_due = load_lib_module("programme_behaviours_due")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_resume = load_lib_module("programme_resume")
@@ -116,6 +118,14 @@ def _moved_items(programme, last_at):
     return moved
 
 
+def _due(host, run_id, record):
+    """What the PM owes an answer for. An unreadable store is reported, never raised: one bad file must not stop every sweep."""
+    try:
+        return programme_behaviours_due.due(record, run_id, lookup=host.prompt_lookup), False
+    except (programme_behaviours.BehaviourError, OSError, ValueError):
+        return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": []}, True
+
+
 def _armed(programme, record):
     """The remit watcher beats from its own process, so its heartbeat must be fresh; the cron has no process to beat."""
     watchers = programme.get("watchers") or {}
@@ -134,6 +144,7 @@ def _facts(host, run_id, home, record):
     refs = _open_prs(programme)
     reread = _last_index(rows, ("reread_requested",))
     acked = _last_index(rows, ("rules_acked", "rules_loaded"))
+    due, due_error = _due(host, run_id, record)
     return {
         "run": run_id, "home": home, "rows": rows, "last": last,
         "since": list(enumerate(rows, 1))[(last + 1) if last is not None else 0:],
@@ -146,6 +157,7 @@ def _facts(host, run_id, home, record):
         "refs": refs, "prs": _readiness(programme, refs), "armed": _armed(programme, record),
         "reread_requested": reread is not None and (acked is None or reread > acked),
         "rules": host.rules_in_force(record).get("rules") or [],
+        "due": due, "due_error": due_error,
     }
 
 
@@ -166,6 +178,8 @@ def _verdict(f):
         ("pr_closed_or_merged", any(p["ends"] for p in f["prs"])),
         ("worker_not_working", bool(f["stalled"])),
         ("rules_reread_requested", f["reread_requested"]),
+        ("behaviours_due", bool(f["due"]["total"])),
+        ("behaviours_store_unreadable", f["due_error"]),
     )
     return [code for code, hit in checks if hit] + ["watcher_missing:" + name for name, ok in f["armed"].items() if not ok]
 
@@ -189,7 +203,7 @@ def build(host, run_id, home, record):
                            "ref": c.get("ref"), "text": _clip(c.get("text") or c.get("note"))} for c in f["claims"]],
         "items_changed": f["moved"], "stalled": f["stalled"],
         "prs": f["prs"], "prs_unchecked": [ref for _, _, ref in f["refs"][PR_CAP:]],
-        "watchers_armed": f["armed"],
+        "watchers_armed": f["armed"], "behaviours_due": f["due"],
         "rules": {"count": len(f["rules"]), "ids": [r.get("id") for r in f["rules"] if isinstance(r, dict)],
                   "reread_requested": f["reread_requested"]},
         "journal_since": [{"line": n, "kind": row.get("kind"), "at": row.get("at"), "quiet": _quiet_row(row)}

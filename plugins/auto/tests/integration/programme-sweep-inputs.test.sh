@@ -265,9 +265,41 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     check('merge readiness marks a merged PR as ended', readiness._bar(pr_facts('MERGED')).get('ended'), True)
     check('merge readiness marks a closed PR as ended', readiness._bar(pr_facts('CLOSED')).get('ended'), True)
 
+    core = load_lib_module('run_record_core')
+    pjournal = load_lib_module('programme_journal')
+    phome = load_lib_module('programme_home')
+
+    def add_behaviour(rec):
+        rec['programme'].setdefault('behaviours', []).append({
+            'id': 'bdue', 'layer': 'programme', 'applies_to': 'both', 'state': 'active', 'at': '2026-01-01T00:00:00Z',
+            'when': {'text': 'when work is claimed', 'checks': [{'text': 'the item is a bug', 'by': 'pm'}]},
+            'do': ['reproduce it first']})
+    core._with_locked_run_record(phome.home_path(run), run, add_behaviour)
+    pjournal.append_row(run, {'kind': 'claim', 'at': '2026-10-30T10:00:00Z', 'payload': {'item': 'test:one'}}, channel='claims')
+    code, owed = inputs()
+    check('a behaviour due on a claimed item is listed and is a change',
+          (owed['behaviours_due']['total'], [(r['item'], r['behaviour'], r['trigger']) for r in owed['behaviours_due']['rows']],
+           'behaviours_due' in owed['why']), (1, [('test:one', 'bdue', 'claim')], True))
+    code, answered = verb('skip-behaviour', 'test:one', 'bdue', '--why', 'not a bug')
+    code, after = inputs()
+    check('after skip-behaviour the behaviour is no longer due and the verdict drops the code',
+          (code, after['behaviours_due']['total'], 'behaviours_due' in after['why']), (0, 0, False))
+    keep_due = psi.programme_behaviours_due.due
+
+    def unreadable(*_a, **_k):
+        raise psi.programme_behaviours.BehaviourError('behaviours.json is unreadable')
+    psi.programme_behaviours_due.due = unreadable
+    try:
+        broken = psi.build(host, run_id, home_dir, core.read_run_record(phome.home_path(run), run))
+    finally:
+        psi.programme_behaviours_due.due = keep_due
+    check('an unreadable behaviours store is a change with its own code, never a crash',
+          (broken['behaviours_due']['total'], 'behaviours_store_unreadable' in broken['why']), (0, True))
+
     quiet_facts = {'last': 3, 'since': [(4, {'kind': 'stop_quiet', 'payload': {}})], 'reasons': [{'kind': 'never_stop'}],
                    'asks': [{'status': 'open', 'shown_current': True}], 'claims': [], 'moved': [], 'refs': [], 'prs': [],
-                   'stalled': [], 'armed': {'remit': True, 'cron': True}, 'reread_requested': False}
+                   'stalled': [], 'armed': {'remit': True, 'cron': True}, 'reread_requested': False,
+                   'due': {'total': 0}, 'due_error': False}
     check('a quiet table of facts has no reason to sweep: a stop-rule reason alone is not one', psi._verdict(quiet_facts), [])
     for name, change, code in (
             ('no completed sweep', {'last': None}, 'no_prior_sweep'),
@@ -280,7 +312,9 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
             ('a PR that ended', {'prs': [{'result': 'not_ready', 'ends': True}]}, 'pr_closed_or_merged'),
             ('nine PRs', {'refs': [None] * 9}, 'pr_over_cap'),
             ('a dead remit watcher', {'armed': {'remit': False, 'cron': True}}, 'watcher_missing:remit'),
-            ('a missing cron', {'armed': {'remit': True, 'cron': False}}, 'watcher_missing:cron')):
+            ('a missing cron', {'armed': {'remit': True, 'cron': False}}, 'watcher_missing:cron'),
+            ('a due behaviour', {'due': {'total': 1}}, 'behaviours_due'),
+            ('an unreadable behaviours store', {'due_error': True}, 'behaviours_store_unreadable')):
         check('the verdict names ' + name, psi._verdict(dict(quiet_facts, **change)), [code])
 
 print('programme-sweep-inputs.test.sh: {} passed, {} failed'.format(passed, failed))
