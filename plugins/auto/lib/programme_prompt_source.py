@@ -12,7 +12,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_pick_source = load_lib_module("programme_pick_source")
 
-_MAX_TRANSCRIPT_BYTES = programme_pick_source._MAX_TRANSCRIPT_BYTES
 _hash = programme_pick_source._hash
 # Accepting Claude Code's suggested prompt is Shawn pressing Enter on model-written text: it resolves to
 # "suggested", which approves what a pick may approve but never a typed-only verb. Other sources stay unverified.
@@ -33,13 +32,11 @@ def capture(data):
         return None
     if not isinstance(text, str):
         return None
-    prefix = programme_pick_source.read_prefix(path, sid)
-    if prefix is None:
+    source = programme_pick_source.window_source(path, sid)
+    if source is None:
         return None
     # The runtime appends the source row after UserPromptSubmit returns; older rows cannot authorize this occurrence.
-    return {'version': 1, 'path': path, 'session_id': sid, 'prompt_id': prompt_id,
-            'offset': len(prefix), 'prefix_hash': _hash(prefix),
-            'text_hash': _hash(text.encode('utf-8'))}
+    return dict(source, prompt_id=prompt_id, text_hash=_hash(text.encode('utf-8')))
 
 
 def _human_text(row):
@@ -69,25 +66,19 @@ def origin(row):
     source = payload.get('source')
     if isinstance(source, dict) and source.get('kind') == 'pick':
         return programme_pick_source.verify(row)
-    if not isinstance(source, dict) or type(source.get('version')) is not int or source.get('version') != 1:
+    if not isinstance(source, dict) or type(source.get('version')) is not int or source.get('version') not in (1, 2):
         return 'unknown'
     sid = row.get('session_id')
     path = source.get('path')
-    offset = source.get('offset')
     if (source.get('session_id') != sid or not isinstance(sid, str)
             or not isinstance(path, str) or not os.path.isabs(path)
-            or os.path.basename(path) != sid + '.jsonl'
-            or type(offset) is not int or not 0 <= offset <= _MAX_TRANSCRIPT_BYTES):
+            or os.path.basename(path) != sid + '.jsonl'):
         return 'unknown'
     try:
-        with open(path, 'rb') as stream:
-            prefix = stream.read(offset)
-            if len(prefix) != offset or _hash(prefix) != source.get('prefix_hash'):
-                return 'unknown'
-            tail = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
-        if len(tail) > _MAX_TRANSCRIPT_BYTES:
+        checked = programme_pick_source.read_checked(path, source)
+        if checked is None:
             return 'unknown'
-        for line in tail.splitlines(keepends=True):
+        for line in checked[1].splitlines(keepends=True):
             if not line.endswith(b'\n'):
                 break
             candidate = json.loads(line)

@@ -11,7 +11,12 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
+# Version 1 sources hash the whole transcript up to this size; they stay readable so approvals already given keep
+# their proof. A long-lived PM outgrew it (72 MB), so every later prompt and pick journaled as unverified.
 _MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
+_WINDOW_BYTES = 1024 * 1024
+_LOOKBACK_BYTES = 32 * 1024 * 1024
+_MAX_OFFSET = 1 << 50
 TOOL = "AskUserQuestion"
 _TOOL_USE_ID = re.compile(r"[A-Za-z0-9_-]+")
 
@@ -20,19 +25,64 @@ def _hash(value):
     return hashlib.sha256(value).hexdigest()
 
 
-def read_prefix(path, sid):
+def read_window(path, sid, needle=None):
+    """The part of the transcript a later check must find unchanged: from the line holding `needle` (a pick's
+    asking row) to the end, or the last _WINDOW_BYTES when there is no needle. Returns (start, bytes) or None."""
     if not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl":
         return None
     try:
         with open(path, "rb") as stream:
-            prefix = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
+            size = os.fstat(stream.fileno()).st_size
+            start = max(0, size - (_LOOKBACK_BYTES if needle else _WINDOW_BYTES))
+            stream.seek(start)
+            data = stream.read(size - start)
     except FileNotFoundError:
-        prefix = b""
+        return None if needle else (0, b"")
     except OSError:
         return None
-    if len(prefix) > _MAX_TRANSCRIPT_BYTES or (prefix and not prefix.endswith(b"\n")):
+    if len(data) != size - start or (data and not data.endswith(b"\n")):
         return None
-    return prefix
+    if needle:
+        at = data.find(needle)
+        if at < 0:
+            return None
+        line = data.rfind(b"\n", 0, at) + 1
+        if line == 0 and start > 0:
+            return None
+        start, data = start + line, data[line:]
+    return start, data
+
+
+def window_source(path, sid, needle=None):
+    found = read_window(path, sid, needle)
+    if found is None:
+        return None
+    start, window = found
+    return {"version": 2, "path": path, "session_id": sid, "offset": start + len(window),
+            "window_start": start, "window_hash": _hash(window)}
+
+
+def read_checked(path, source):
+    """The captured window and everything written after it, or None when the window changed. Reads version 1
+    (whole-file hash) and version 2 sources."""
+    offset = source.get("offset")
+    if type(offset) is not int or not 0 <= offset <= _MAX_OFFSET:
+        return None
+    if source.get("version") == 1:
+        start, want, limit = 0, source.get("prefix_hash"), _MAX_TRANSCRIPT_BYTES
+    else:
+        start, want, limit = source.get("window_start"), source.get("window_hash"), _LOOKBACK_BYTES
+        if type(start) is not int or not 0 <= start <= offset or (start == offset and offset):
+            return None
+    if offset - start > limit:
+        return None
+    with open(path, "rb") as stream:
+        stream.seek(start)
+        window = stream.read(offset - start)
+        if len(window) != offset - start or _hash(window) != want:
+            return None
+        tail = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
+    return None if len(tail) > _MAX_TRANSCRIPT_BYTES else (window, tail)
 
 
 def answers_hash(answers) -> str:
@@ -63,12 +113,11 @@ def capture(data):
     if (not all(isinstance(value, str) and value for value in (path, sid, tool_use_id))
             or not _TOOL_USE_ID.fullmatch(tool_use_id) or not _valid_answers(answers)):
         return None
-    prefix = read_prefix(path, sid)
-    if prefix is None:
+    source = window_source(path, sid, tool_use_id.encode("utf-8"))
+    if source is None:
         return None
-    return {"version": 1, "kind": "pick", "path": path, "session_id": sid, "tool_use_id": tool_use_id,
-            "offset": len(prefix), "prefix_hash": _hash(prefix), "answers_hash": answers_hash(answers),
-            "answers": redacted(answers)}
+    return dict(source, kind="pick", tool_use_id=tool_use_id, answers_hash=answers_hash(answers),
+                answers=redacted(answers))
 
 
 def _plain(row, sid) -> bool:
@@ -113,17 +162,13 @@ def _human_result(row, source) -> bool:
             and redacted(answers) == source.get("answers"))
 
 
-def _rows(path, offset, prefix_hash, tool_use_id):
-    with open(path, "rb") as stream:
-        prefix = stream.read(offset)
-        if len(prefix) != offset or _hash(prefix) != prefix_hash:
-            return None
-        tail = stream.read(_MAX_TRANSCRIPT_BYTES + 1)
-    if len(tail) > _MAX_TRANSCRIPT_BYTES:
+def _rows(path, source, tool_use_id):
+    checked = read_checked(path, source)
+    if checked is None:
         return None
     needle = tool_use_id.encode("utf-8")
     rows = []
-    for line in (prefix + tail).splitlines(keepends=True):
+    for line in b"".join(checked).splitlines(keepends=True):
         if not line.endswith(b"\n"):
             break
         if needle not in line:
@@ -137,18 +182,16 @@ def _rows(path, offset, prefix_hash, tool_use_id):
 def verify(row) -> str:
     source = (row.get("payload") or {}).get("source")
     sid = row.get("session_id")
-    if not isinstance(source, dict) or type(source.get("version")) is not int or source.get("version") != 1:
+    if not isinstance(source, dict) or type(source.get("version")) is not int or source.get("version") not in (1, 2):
         return "unknown"
     path = source.get("path")
-    offset = source.get("offset")
     tool_use_id = source.get("tool_use_id")
     if (source.get("kind") != "pick" or source.get("session_id") != sid or not isinstance(sid, str)
             or not isinstance(tool_use_id, str) or not tool_use_id
-            or not isinstance(path, str) or not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl"
-            or type(offset) is not int or not 0 <= offset <= _MAX_TRANSCRIPT_BYTES):
+            or not isinstance(path, str) or not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl"):
         return "unknown"
     try:
-        rows = _rows(path, offset, source.get("prefix_hash"), tool_use_id)
+        rows = _rows(path, source, tool_use_id)
         if rows is None:
             return "unknown"
         asked = [r for r in rows if r.get("type") == "assistant" and _asks(r, tool_use_id)]
