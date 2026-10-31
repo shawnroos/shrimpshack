@@ -159,6 +159,7 @@ KINDS = (
     "permission_verified",
     "permission_settled",
     "blocked_settings_write",
+    "blocked_behaviours_write",
 )
 
 _TOKEN_PATTERNS = [

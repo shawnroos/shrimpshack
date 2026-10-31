@@ -768,7 +768,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `operation_settled`, `operation_uncertain`, `resources_reconciled`, `item_disposed`,
 `uncertainty_accepted`, `archive_check_failed`, `programme_archived`, `successor_created`,
 `permission_proposed`, `permission_answered`, `permission_verified`, `permission_settled`,
-`blocked_settings_write`.
+`blocked_settings_write`, `blocked_behaviours_write`.
 
 - `item_held {item, reason}` is journaled by `start-worker` each time the focus gate refuses a start (one row per refusal).
   `focus_override_approved {item, next, prompt_id, quote}` is journaled by `override-focus`.
@@ -900,6 +900,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   - `blocked_settings_write {tool, path, item_ids, command?}`, written by the
     PreToolUse hook when it refuses a call that names a proposal's
     `.claude/settings.local.json`.
+  - `blocked_behaviours_write {tool, path, item_ids, command?}`, written by the
+    PreToolUse hook when it refuses a call that names the personal behaviours
+    folder or the stored `behaviours.json`.
 
 `<home>/claims.jsonl` is the worker inbox. Each line has the journal line shape with
 kind `claim`, `session_id` = the worker, payload `{item, deliverable, ref}`. Inbox

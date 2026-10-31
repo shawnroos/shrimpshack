@@ -38,7 +38,7 @@ VIEW_NAME = "view.json"
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
-HOOK_KINDS = ("blocked_settings_write",)
+HOOK_KINDS = ("blocked_settings_write", "blocked_behaviours_write")
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
