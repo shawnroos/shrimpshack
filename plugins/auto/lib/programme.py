@@ -775,6 +775,8 @@ programme_sources = load_lib_module("programme_sources")
 _VERBS.update(programme_sources.build_verbs(sys.modules[__name__]))
 programme_gone_panes = load_lib_module("programme_gone_panes")
 _VERBS.update(programme_gone_panes.build_verbs(sys.modules[__name__]))
+programme_domain_state = load_lib_module("programme_domain_state")
+_VERBS.update(programme_domain_state.build_verbs(sys.modules[__name__]))
 
 _VERBS.update(programme_trajectory.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_proposals.build_verbs(sys.modules[__name__]))

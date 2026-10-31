@@ -29,6 +29,7 @@ programme_view_work = load_lib_module("programme_view_work")
 programme_view_agreement = load_lib_module("programme_view_agreement")
 programme_view_setup = load_lib_module("programme_view_setup")
 programme_focus = load_lib_module("programme_focus")
+programme_domain_state = load_lib_module("programme_domain_state")
 session_registry = load_lib_module("session_registry")
 
 VIEW_FORMAT = 3
@@ -382,6 +383,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "queue": [_dict(e) for e in working.get("queue") or []],
         "focus": focus or programme_focus.usage(block, None),
         "waiting_for_slot": programme_focus.waiting(block),
+        "recommendations": programme_domain_state.recommendations(block),
         "watching": _watching(block, status, now, programme_home.cadence_seconds(record)),
         "waiting_on_whom": waits,
         "decisions_for_shawn": _decisions(block, items) + _context_decisions(status["acceptance"]),
@@ -703,6 +705,9 @@ def rows(model, work=None) -> list:
     if model["waiting_for_slot"]:
         _section(out, "Waiting for a slot",
                  [_row(text, style) for text, style in programme_focus.waiting_lines(model["waiting_for_slot"])], "")
+    _section(out, "Recommended for the remit",
+             [_row(f"  {r['pane']} ({r.get('workspace_id')}): {r['reason']}")
+              for r in (model.get("recommendations") or {}).get("set") or []], "none")
     _section(out, "Watching", [_watching_row(w) for w in model["watching"]], "nothing")
     _section(out, "Who waits on whom", [_row(f"  {w['item'] or w['system']} waits on {w['who']} "
                                              f"({'watched' if w['watched'] else 'unwatched'})",

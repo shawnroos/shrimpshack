@@ -19,6 +19,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_behaviours_due = load_lib_module("programme_behaviours_due")
+programme_domain_state = load_lib_module("programme_domain_state")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_resume = load_lib_module("programme_resume")
@@ -125,6 +126,13 @@ def _due(host, run_id, record):
         return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": [], "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _domain_due(host, record):
+    try:
+        return programme_domain_state.domain_due(record, lookup=host.prompt_lookup)
+    except Exception as exc:  # noqa: BLE001 — same rule as _due: a bad file degrades the sweep, never ends it
+        return {"total": 0, "rows": [], "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _armed(programme, record):
     """The remit watcher beats from its own process, so its heartbeat must be fresh; the cron has no process to beat."""
     watchers = programme.get("watchers") or {}
@@ -156,7 +164,8 @@ def _facts(host, run_id, home, record):
         "refs": refs, "prs": _readiness(programme, refs), "armed": _armed(programme, record),
         "reread_requested": reread is not None and (acked is None or reread > acked),
         "rules": host.rules_in_force(record).get("rules") or [],
-        "due": due,
+        "due": due, "domain_due": _domain_due(host, record),
+        "recommendations": programme_domain_state.recommendations(programme),
     }
 
 
@@ -178,7 +187,9 @@ def _verdict(f):
         ("worker_not_working", bool(f["stalled"])),
         ("rules_reread_requested", f["reread_requested"]),
         ("behaviours_due", bool(f["due"]["total"])),
-        ("behaviours_store_unreadable", bool(f["due"]["error"])),
+        ("behaviours_store_unreadable", bool(f["due"]["error"] or f["domain_due"]["error"])),
+        ("domain_behaviours_due", bool(f["domain_due"]["total"])),
+        ("recommendations_not_shown", bool(f["recommendations"]["set"]) and not f["recommendations"]["shown_current"]),
     )
     return [code for code, hit in checks if hit] + ["watcher_missing:" + name for name, ok in f["armed"].items() if not ok]
 
@@ -203,6 +214,7 @@ def build(host, run_id, home, record):
         "items_changed": f["moved"], "stalled": f["stalled"],
         "prs": f["prs"], "prs_unchecked": [ref for _, _, ref in f["refs"][PR_CAP:]],
         "watchers_armed": f["armed"], "behaviours_due": f["due"],
+        "domain_behaviours_due": f["domain_due"], "recommendations": f["recommendations"],
         "rules": {"count": len(f["rules"]), "ids": [r.get("id") for r in f["rules"] if isinstance(r, dict)],
                   "reread_requested": f["reread_requested"]},
         "journal_since": [{"line": n, "kind": row.get("kind"), "at": row.get("at"), "quiet": _quiet_row(row)}

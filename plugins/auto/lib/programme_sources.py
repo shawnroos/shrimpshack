@@ -38,6 +38,7 @@ session_registry = load_lib_module("session_registry")
 programme_behaviours = load_lib_module("programme_behaviours")
 programme_focus = load_lib_module("programme_focus")
 programme_domain = load_lib_module("programme_domain")
+programme_domain_state = load_lib_module("programme_domain_state")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -469,6 +470,9 @@ def _h_sweep(host, argv):
             with contextlib.redirect_stdout(io.StringIO()):
                 programme_record._h_set_source(host, argv)
             result["recorded_sources"].append(change)
+        if result.get("domain") is not None:
+            host._write(opts, lambda programme, prompt, rec: programme_domain_state.record_scan(programme, result),
+                        "domain_recorded", journal=False, beat=False, names_change=False)
     host._emit(result)
     return 0
 
