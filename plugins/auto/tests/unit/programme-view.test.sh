@@ -959,9 +959,9 @@ BEH_TERMS="$("$PY" "$PROG" status agreement --run "$BEH_RUN" 2>&1)"
 BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUN" --json 2>&1)"
 beh_q() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.argv[2]))' "$BEH_JSON" "$1" 2>&1; }
 
-BEH_THREE='behaviour bprog (programme, active, applies to both): when a bug is reported; do: reproduce it first; don'"'"'t: guess the cause; PM checks: the item is a bug; source: Shawn: "always reproduce bugs"
-behaviour brepo (repo acme/alpha, active, applies to workers): when a bug is reported; do: reproduce it first; PM checks: the item is a bug; source: none recorded
-behaviour bper (personal, active, applies to pm): when a bug is reported; do: reproduce it first; PM checks: the item is a bug; source: none recorded'
+BEH_THREE='behaviour bprog (programme, active, applies to both): when a bug is reported (trigger claim); do: reproduce it first; don'"'"'t: guess the cause; PM checks: the item is a bug; source: Shawn: "always reproduce bugs"
+behaviour brepo (repo acme/alpha, active, applies to workers): when a bug is reported (trigger claim); do: reproduce it first; PM checks: the item is a bug; source: none recorded
+behaviour bper (personal, active, applies to pm): when a bug is reported (trigger claim); do: reproduce it first; PM checks: the item is a bug; source: none recorded'
 it "a programme with one behaviour at each layer renders three lines with the right layer names"
 check "$BEH_THREE" "$(beh_lines "$BEH_STATUS")"
 it "the <auto-rules> block contains the behaviour lines"

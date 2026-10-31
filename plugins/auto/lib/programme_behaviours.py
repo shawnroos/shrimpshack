@@ -44,6 +44,7 @@ AUDIENCES = ("pm", "workers", "both")
 STATES = ("active", "proposed", "retired")
 ACTIVE = "active"
 CHECK_BY = ("pm", "agent")
+TRIGGERS = ("claim", "merge", "block", "start")
 LIST_FIELDS = ("do", "dont", "skills", "tools", "agents", "formats", "comms")
 TEXT_FIELDS = ("evidence", "stop", "why")
 REQUIRED = ("id", "layer", "when", "applies_to")
@@ -79,8 +80,10 @@ def _sub(obj, required, optional, prefix) -> None:
 
 
 def _check_when(when) -> None:
-    _sub(when, ("text",), ("checks",), "when")
+    _sub(when, ("text",), ("checks", "trigger"), "when")
     programme_protocol._text(when["text"], "when.text")
+    if when.get("trigger", TRIGGERS[0]) not in TRIGGERS:
+        raise _Reject("bad_value", "when.trigger")
     checks = when.get("checks", [])
     if not isinstance(checks, list):
         raise _Reject("bad_value", "when.checks")
@@ -467,12 +470,18 @@ def timing(entry, trigger_at) -> str:
     return "send_back" if start and passed and start < passed else "remind_only"
 
 
+def trigger_of(entry) -> str:
+    return entry["when"].get("trigger", TRIGGERS[0])
+
+
 def trigger_times(run_id, key, item) -> dict:
     claims = [r.get("at") for r in programme_journal.claims(run_id)
               if (r.get("payload") or {}).get("item") == key and r.get("at")]
     blocks = [h.get("at") for h in item.get("history") or [] if h.get("kind") in ("waiting", "handed")]
     merged = ((item.get("deliverables") or {}).get("merged") or {}).get("confirmed_at")
-    return {"claim": min(claims, default=None), "merge": merged, "block": min(blocks, default=None)}
+    starts = [h.get("at") for h in item.get("history") or [] if h.get("kind") == "started" and h.get("at")]
+    return {"claim": min(claims, default=None), "merge": merged, "block": min(blocks, default=None),
+            "start": min(starts, default=None)}
 
 
 def record_delivery(item, bid, reason, via, **extra) -> None:
@@ -488,11 +497,12 @@ ENDINGS = ("retired", "undone")
 LAYER_WORDS = {"programme": ("programme",), "repo": ("repo",), "personal": ("personal", "global", "all projects")}
 _LIST_OPTS = (("do", "do"), ("dont", "dont"), ("skill", "skills"), ("tool", "tools"), ("agent", "agents"),
               ("format", "formats"), ("comm", "comms"))
-_FIELD_VALUES = ("when", "applies-to", "evidence", "stop", "why", "good", "bad")
+_FIELD_VALUES = ("when", "trigger", "applies-to", "evidence", "stop", "why", "good", "bad")
 _FIELD_MULTI = ("pm-check", "agent-check") + tuple(opt for opt, _ in _LIST_OPTS)
 _COMMON = ("stop", "the", "and", "for", "when", "with", "that", "this", "its", "from", "into", "are", "was",
            "not", "all", "any", "each", "work", "item")
-_FIELDS_DOC = ("--when <text> [--pm-check <text>]... [--agent-check <text>]... [--applies-to pm|workers|both] "
+_FIELDS_DOC = ("--when <text> [--trigger claim|merge|block|start] [--pm-check <text>]... [--agent-check <text>]... "
+               "[--applies-to pm|workers|both] "
                "[--do <line>]... [--dont <line>]... [--skill <name>]... [--tool <name>]... [--agent <name>]... "
                "[--format <line>]... [--comm <line>]... [--evidence <text>] [--stop <text>] [--good <text>] "
                "[--bad <text>] [--why <text>]")
@@ -517,6 +527,10 @@ def _draft(opts, bid, *, when=None, tools=(), do=()) -> dict:
               for by in CHECK_BY for t in opts.get(by + "-check") or []]
     entry = {"id": bid, "layer": "programme", "applies_to": opts.get("applies-to") or "both", "state": ACTIVE,
              "at": run_record_core.now_iso(), "when": {"text": _clean(when_text, "--when"), "checks": checks}}
+    if opts.get("trigger"):
+        if opts["trigger"] not in TRIGGERS:
+            raise ValueError("--trigger must be one of " + "|".join(TRIGGERS))
+        entry["when"]["trigger"] = opts["trigger"]
     for opt, field in _LIST_OPTS:
         rows = [_clean(v, "--" + opt) for v in opts.get(opt) or []]
         if rows:
@@ -609,7 +623,8 @@ def _h_record(host, argv):
         entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
         entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
         return {"behaviour": bid, "layer": "programme", "when": entry["when"]["text"],
-                "checks": entry["when"]["checks"], "overrides": entry["overrides"], "from_proposal": proposal,
+                "trigger": trigger_of(entry), "checks": entry["when"]["checks"], "overrides": entry["overrides"],
+                "from_proposal": proposal,
                 "related": _related(entry, others), "undo": f"retire-behaviour {bid} --as undone --prompt <id>"}
 
     return host._write(opts, change, RECORDED, prompt_id=opts.get("prompt"), needs_prompt=True,
@@ -840,7 +855,6 @@ def _h_keep(host, argv):
 
 REMINDED = "behaviour_reminded"
 REASONS = ("relevant", "sent_back")
-TRIGGERS = ("claim", "merge", "block")
 _OPENERS = {
     ("sent_back", "send_back"): "Your claim is sent back: it does not show what this behaviour asks for. "
                                 "Bring the work into line, then claim again.",
@@ -861,7 +875,7 @@ def _h_remind(host, argv):
     trigger = opts.get("trigger") or "claim"
     if len(positional) != 2 or opts.get("reason") not in REASONS or trigger not in TRIGGERS:
         raise ValueError("usage: remind-behaviour <item> <id> --reason relevant|sent_back "
-                         "[--trigger claim|merge|block] [--despite <attempt>]...")
+                         "[--trigger claim|merge|block|start] [--despite <attempt>]...")
     sources = load_lib_module("programme_sources")
     programme_record = load_lib_module("programme_record")
     item_id, bid, reason = programme_record.check_item_id(positional[0]), positional[1], opts["reason"]
@@ -920,7 +934,7 @@ _SPECS = (
      "programme-layer behaviour; an unreadable behaviours store; --to repo with several remit repos and no "
      "--repo; an ended programme. Ids the prompt does not name are left out and listed as not_named."),
     ("remind-behaviour", _h_remind,
-     "<item> <id> --reason relevant|sent_back [--trigger claim|merge|block] [--despite <attempt>]... [--run <id>]",
+     "<item> <id> --reason relevant|sent_back [--trigger claim|merge|block|start] [--despite <attempt>]... [--run <id>]",
      "a session that does not drive the programme; a behaviour not in force for the item's worker (unknown, "
      "retired, overridden or PM-only); --reason sent_back when the item has not passed the trigger (default "
      "claim) or the behaviour started at or after it (remind only); every prompt-item refusal (no owner pane, "

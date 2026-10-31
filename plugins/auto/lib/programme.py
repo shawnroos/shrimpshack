@@ -907,6 +907,7 @@ _VERBS["status"] = _Verb(
 
 programme_behaviours = load_lib_module("programme_behaviours")
 _VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_behaviours_skip").build_verbs(sys.modules[__name__]))
 
 _ERRORS = (
     ProgrammeError,

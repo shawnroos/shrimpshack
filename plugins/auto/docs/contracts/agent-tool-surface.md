@@ -257,7 +257,7 @@ session.
   and `close-ruling` closes one with a typed prompt naming it.
 - **Behaviours**: standing guidance on how the PM and its workers do the work. A
   behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
-  --when <text>`) with `--do` or `--dont` lines (plus optional `--pm-check`,
+  --when <text>`) with `--do` or `--dont` lines (plus optional `--trigger claim|merge|block|start`, `--pm-check`,
   `--agent-check`, `--applies-to`, skills, tools, agents, formats, communication
   lines, evidence, stop, examples and why) applies one at once at the programme
   layer and journals `behaviour_recorded`. Its output lists the drafted checks, the
@@ -296,7 +296,7 @@ session.
   item records each brief behaviour in `behaviour_deliveries` with reason brief,
   and the ids join the launch's recovery request.
   `remind-behaviour` (`<item> <id> --reason relevant|sent_back`, optional
-  `--trigger claim|merge|block`, default claim) sends one behaviour to the item's
+  `--trigger claim|merge|block|start`, default claim) sends one behaviour to the item's
   worker through the `prompt-item` path (same owner-pane checks, cut to the
   4000-character cap with the id first) and records the delivery on the item.
   It compares the behaviour's start (its last recorded event) with the time the
@@ -304,6 +304,13 @@ session.
   passed or the behaviour started at or after it (remind only, R19). Its output
   reports the timing and `sent_back_count` (this send included), and it journals
   `behaviour_reminded` instead of `prompt_sent`.
+  `skip-behaviour` (`<item> <id> --why <line>`, optional `--applied`) answers a due
+  behaviour without sending it: it records a delivery with reason skipped (the behaviour does
+  not apply to the item) or, with `--applied`, reason applied_by_pm (the PM applied a
+  PM-only behaviour itself), journals `behaviour_skipped` and sends nothing to the
+  worker. It needs no typed prompt, because it records the PM's judgment and
+  approves nothing. It refuses a missing `--why` and a behaviour not in force for
+  the item.
   `keep-behaviours` (`<id>... --to repo|personal --prompt <id>`, `--repo <key>`
   for a remit of several repos) stores the programme-layer behaviours Shawn
   keeps from the one carry-over offer that `carry-rulings` makes. The prompt must name the layer with no negation

@@ -118,7 +118,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    **Quiet sweep.** End the turn, steps 2 to 17 done, only when all of these
    hold: the wake carried no watcher line (a watcher line is step 6 work);
    `sweep-inputs` said `unchanged`, which already covers actionable reasons,
-   unread claims, open asks, items that moved (so a due tracker write, step 15),
+   unread claims, open asks, behaviours due, items that moved (so a due tracker write, step 15),
    merge readiness, a worker whose pane is not working (step 11) and both
    wake-ups armed (step 16); and the chained call printed no refusal, no `fix:`
    line, no adopt or alias proposal, no new permission proposal, no `pending`
@@ -244,17 +244,14 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      again each sweep while the board and the key stay down.
    - New work the sweep finds (a new issue, a failed check, a review finding):
      rank it and route it with sections 1 and 2 of [references/sequencing.md](references/sequencing.md).
-   - Behaviours on changed items. Only for an item whose state changed since
-     the last sweep (a claim arrived, a worker started, a PR merged, the item was
-     blocked or handed), test the PM checks of each behaviour in force. `P rules`
-     prints each behaviour's PM checks, agent checks, evidence and stop, and
-     `P status --json` lists the same behaviours under `contract.behaviours`,
-     each with its `deliveries` per item. Skip a behaviour for an item whose
-     deliveries already hold `relevant` or `sent_back`; a `brief` delivery does
-     not count. When its PM checks hold, send a worker behaviour
-     with `P remind-behaviour <item> <behaviour-id> --reason relevant --trigger claim|merge|block`,
-     naming the change you saw. Apply a behaviour for the PM yourself:
-     `remind-behaviour` refuses one that applies to the PM only.
+   - Behaviours due. The digest's "Behaviours due" section lists each
+     behaviour you owe an answer for on an item whose trigger passed. Answer
+     every line. When its PM checks hold (a line marked `judge` has none), send
+     it with `P remind-behaviour <item> <behaviour-id> --reason relevant --trigger <its trigger>`.
+     When they do not hold, run `P skip-behaviour <item> <behaviour-id> --why "<one line>"`.
+     Apply a `pm_applies` line yourself, then `P skip-behaviour <item>
+     <behaviour-id> --applied --why "<what you did>"`. The sweep stays open
+     until that list is empty. `P rules` prints each behaviour's checks.
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;

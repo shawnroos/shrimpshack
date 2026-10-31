@@ -36,7 +36,7 @@ A behaviour is Shawn's standing guidance on how the PM and its workers do the wo
 | --- | --- | --- |
 | `id` | string | Required. `^[a-z][a-z0-9-]*$`; the verbs mint `b` plus 6 hex digits. |
 | `layer` | string | Required. `programme`, `repo` or `personal`. |
-| `when` | object | Required. `{text, checks?}`. `text` is Shawn's plain-words situation, not empty. Each check is `{text, by}`, with `by` either `pm` (the PM tests it from what the sweep sees) or `agent` (the agent doing the work judges it). |
+| `when` | object | Required. `{text, checks?, trigger?}`. `text` is Shawn's plain-words situation, not empty. `trigger` is `claim`, `merge`, `block` or `start`: the item change after which the behaviour applies. A missing trigger reads as `claim` for the due list, except that a behaviour that applies to the PM only and has no trigger is never listed as due; any other value is rejected as `bad_value when.trigger`. Each check is `{text, by}`, with `by` either `pm` (the PM tests it from what the sweep sees) or `agent` (the agent doing the work judges it). |
 | `applies_to` | string | Required. `pm`, `workers` or `both`. |
 | `do`, `dont`, `skills`, `tools`, `agents`, `formats`, `comms` | list of strings | Each line not empty. At least one `do` or `dont` line is required. |
 | `evidence` | string | What shows the behaviour was followed. Never a condition of acceptance. |
