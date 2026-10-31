@@ -22,6 +22,7 @@ _SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
 _SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 MAX_DEPTH = 4
+# Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
 SEEN_CAP = 8
 SEGMENT_CAP = 256
 _ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
@@ -33,7 +34,7 @@ _RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
 # Only these let the shell turn a command word into a different program. Shell operators arrive as their own
 # tokens, and quoted code (JavaScript `=>`) or `~`/`@` paths cannot become a host binary.
 _RUNTIME_WORD = re.compile(r"[$`*?\[{\\]")
-_REDIRECT_OP = re.compile(r"^(?:[<>]|>>|>&|<&|<>|&>|&>>|>\|)$")
+_REDIRECT_OPS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
 _TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
 _TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
 # A word after one of these (or after an assignment) is the command being run.
@@ -134,9 +135,11 @@ def _segment(tokens: list, start: int) -> list:
 
 def _strip_redirects(words: list) -> list:
     """The words with every redirection removed; the lexer splits `2>&1` into `2`, `>&`, `1`, so the fd digit goes too."""
+    if _REDIRECT_OPS.isdisjoint(words):
+        return words
     out, i = [], 0
     while i < len(words):
-        if _REDIRECT_OP.match(words[i]):
+        if words[i] in _REDIRECT_OPS:
             if len(out) > 1 and out[-1].isdigit():
                 out.pop()
             i += 2
@@ -357,27 +360,30 @@ def _live_ids(driver: dict, snap: dict, server) -> list:
     return [i for i in (pane, terminal) if isinstance(i, str) and i]
 
 
-def _with_live_ids(drivers: list) -> list:
+def _with_live_ids(drivers: list) -> None:
     """Guard each herdr driver by the pane herdr reports it in now: `herdr pane move` gives a pane a new id, and the
     registry keeps the id from session start. Ids seen once stay guarded when a later lookup fails."""
-    herdr = load_lib_module("host_herdr")
-    server = herdr.server_from_socket(os.environ.get("HERDR_SOCKET_PATH")) or load_lib_module("programme_home").DEFAULT_SERVER
-    local = [d for d in drivers if d.get("host") == "herdr" and d.get("server") == server]
-    snap = herdr.guard_snapshot() if local else None
-    for driver in drivers:
+    herdr_drivers = [d for d in drivers if d.get("host") == "herdr"]
+    if not herdr_drivers:
+        return
+    server = load_lib_module("programme_sources").current_server()
+    local = [d for d in herdr_drivers if d.get("server") == server]
+    snap = load_lib_module("host_herdr").guard_snapshot() if local else None
+    for driver in herdr_drivers:
         live = []
         if snap is not None and driver in local:
             try:
                 live = _live_ids(driver, snap, server)
             except Exception:
-                live = []
-        seen = _seen_ids(driver) if driver.get("host") == "herdr" else []
+                # One driver's bad row must not drop the live ids of the others.
+                pass
+        seen = _seen_ids(driver)
         if live and not set(live) <= set(seen):
             _remember(driver, live + [i for i in seen if i not in live])
         driver["ids"] = list(dict.fromkeys(_ids(driver) + live + seen))
         if live:
+            # The denial and the journal name the pane the PM is in now.
             driver["pane_id"] = live[0]
-    return drivers
 
 
 def denial(session_id, command):

@@ -101,7 +101,7 @@ row rex srv s-rx pm-rex rex-blk-D1 rex-term-D1
 programme rex srv s-rx pm-rex >/dev/null
 row rex srv s-rx sess-rex-o rex-blk-O1 rex-term-O1
 
-echo "send-guard-precision: harmless commands are allowed (R1-R4)"
+echo "send-guard-precision: harmless commands are allowed"
 allowed 'agent-browser eval '\''document.querySelectorAll("a").forEach(a => a.click())'\'''
 allowed 'agent-browser eval '\''window.x >= 3 && f(1)'\'''
 allowed 'EMAIL=$(grep SLATE_STAGE_USER_EMAIL ~/.secrets | cut -d= -f2); agent-browser fill @e1 "$EMAIL"'
@@ -118,7 +118,7 @@ allowed 'grep -nE '\''^\s*(rex|send)'\'' file'
 allowed 'cat $R/intake.md; ls docs/plans 2>/dev/null | tail -5'
 allowed 'python3 -c "import sys; print(sys.argv)" "$(date)"'
 
-echo "send-guard-precision: real sends stay denied (R5, R6)"
+echo "send-guard-precision: real sends stay denied"
 denied 'herdr pane send-text w2:p9T hi'
 denied 'herdr agent prompt $P go'
 denied '$H agent prompt w2:p77 go'
@@ -131,7 +131,7 @@ denied 'herdr pane send-text w2:p88 hi 2>&1'
 denied 'echo hi 2>&1 > /dev/ttys016'
 denied 'rex block rename rex-blk-D1 x'
 
-echo "send-guard-precision: wrappers, here-strings, groups, globs and braces still reach the scan (R5)"
+echo "send-guard-precision: wrappers, here-strings, groups, globs and braces still reach the scan"
 denied "timeout 5 bash -c '\$H agent prompt w2:p77 go'"
 denied "env -i bash -c '\$H agent prompt w2:p77 go'"
 denied "sudo -u me bash -c '\$H agent prompt w2:p77 go'"
@@ -143,13 +143,13 @@ denied '/usr/local/bin/herd? agent prompt w2:p77 go'
 denied '{herdr,} agent prompt w2:p77 go'
 denied '$R api call -s s-rx -b rex-blk-O1 session.view'
 
-echo "send-guard-precision: Rex verb classes (KTD3, KTD6)"
+echo "send-guard-precision: Rex verb classes"
 allowed '$R frobnicate -b rex-blk-O1'
 allowed '$R send go'
 denied 'rex send -b rex-blk-X9 go'
 allowed 'rex send -b rex-blk-O1 go'
 
-echo "send-guard-precision: a moved herdr pane is guarded by its live id (R7-R9)"
+echo "send-guard-precision: a moved herdr pane is guarded by its live id"
 cat > "$FAKE_HERDR_SNAPSHOT" <<'EOF'
 {"result": {"snapshot": {
   "panes": [{"pane_id": "w2:pAG", "terminal_id": "term_pAG", "workspace_id": "w2", "tab_id": "w2:t42"},

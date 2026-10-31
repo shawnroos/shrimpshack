@@ -105,8 +105,8 @@ class HerdrHost(terminal_host.TerminalHost):
         result = _herdr(["api", "snapshot"])
         if not result["ran"] or result["code"] != 0:
             return refuse(programme_exec.failure(result, "herdr api snapshot"))
-        snap = ((programme_exec.parse_json(result["stdout"]) or {}).get("result") or {}).get("snapshot")
-        if not isinstance(snap, dict) or not isinstance(snap.get("panes"), list):
+        snap = _panes_snapshot(result["stdout"])
+        if snap is None:
             return refuse("herdr api snapshot returned no pane list")
         return native(snap)
 
@@ -280,8 +280,13 @@ def guard_snapshot():
     result = programme_exec.bounded(["herdr", "api", "snapshot"], GUARD_SNAPSHOT_TIMEOUT)
     if not result["ran"] or result["code"] != 0:
         return None
-    data = programme_exec.parse_json(result["stdout"])
-    snap = (data.get("result") or {}).get("snapshot") if isinstance(data, dict) and isinstance(data.get("result"), dict) else None
+    return _panes_snapshot(result["stdout"])
+
+
+def _panes_snapshot(stdout):
+    data = programme_exec.parse_json(stdout)
+    result = data.get("result") if isinstance(data, dict) else None
+    snap = result.get("snapshot") if isinstance(result, dict) else None
     return snap if isinstance(snap, dict) and isinstance(snap.get("panes"), list) else None
 
 
