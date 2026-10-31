@@ -7,6 +7,7 @@ proves a pane or a host (KTD3).
 from __future__ import annotations
 
 import codecs
+import json
 import os
 import re
 import shlex
@@ -21,6 +22,7 @@ _SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
 _SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 MAX_DEPTH = 4
+SEEN_CAP = 8
 SEGMENT_CAP = 256
 _ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
 _LOCALE_DOLLAR = re.compile(r"\$(?=\")")
@@ -28,6 +30,10 @@ _HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
 _ID_EDGE = "A-Za-z0-9_"
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
 _RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
+# Only these let the shell turn a command word into a different program. Shell operators arrive as their own
+# tokens, and quoted code (JavaScript `=>`) or `~`/`@` paths cannot become a host binary.
+_RUNTIME_WORD = re.compile(r"[$`*?\[{\\]")
+_REDIRECT_OP = re.compile(r"^(?:[<>]|>>|>&|<&|<>|&>|&>>|>\|)$")
 _TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
 _TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
 # A word after one of these (or after an assignment) is the command being run.
@@ -126,6 +132,42 @@ def _segment(tokens: list, start: int) -> list:
     return tokens[start:end]
 
 
+def _strip_redirects(words: list) -> list:
+    """The words with every redirection removed; the lexer splits `2>&1` into `2`, `>&`, `1`, so the fd digit goes too."""
+    out, i = [], 0
+    while i < len(words):
+        if _REDIRECT_OP.match(words[i]):
+            if len(out) > 1 and out[-1].isdigit():
+                out.pop()
+            i += 2
+            continue
+        out.append(words[i])
+        i += 1
+    return out
+
+
+def _runtime_tail(tokens: list, start: int) -> list:
+    """The words a runtime-built command word at ``start`` is run with, after its own `$( … )` or backtick group."""
+    i, word = start + 1, tokens[start]
+    if word.endswith("$") and i < len(tokens) and tokens[i] == "(":
+        depth = 0
+        while i < len(tokens):
+            depth += (tokens[i] == "(") - (tokens[i] == ")")
+            i += 1
+            if depth == 0:
+                break
+    elif word.startswith("`") and (word == "`" or not word.endswith("`")):
+        while i < len(tokens) and not tokens[i].endswith("`"):
+            i += 1
+        i += 1
+    tail = []
+    for tok in tokens[i:i + SEGMENT_CAP]:
+        if tok in _LIST_BREAKS:
+            break
+        tail.append(tok)
+    return _strip_redirects(tail)
+
+
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     if depth < MAX_DEPTH:
@@ -155,7 +197,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             if depth < MAX_DEPTH:
                 _scan(script, depth + 1, hosts, pane_ids, found, proven)
             continue
-        segment = _segment(tokens, start)
+        segment = _strip_redirects(_segment(tokens, start))
         for host in hosts:
             if proven is not None:
                 hit = _unproven(host, tokens, start, segment, piped, proven)
@@ -177,16 +219,10 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven)
     is a send."""
     shape = host.send_class(segment, piped)
     if shape is None:
-        if not (_RUNTIME.search(tokens[start]) and _is_command_word(tokens, start)):
+        word = tokens[start]
+        if not (_RUNTIME_WORD.search(word) and _is_command_word(tokens, start)):
             return None
-        tail = []
-        for tok in tokens[start + 1:start + SEGMENT_CAP]:
-            if tok in _LIST_BREAKS:
-                break
-            tail.append(tok)
-        binary = list(host.binaries[:1])
-        sends = (host.send_class(binary + tail[k:], piped) for k in range(len(tail)))
-        return ("runtime-built command", "") if any(c and c[0] == "send" for c in sends) else None
+        return ("runtime-built command", "") if host.runtime_send(_runtime_tail(tokens, start), piped) else None
     kind, targets = shape
     if kind == "read":
         return None
@@ -212,18 +248,22 @@ def _sender_workspace(session_id):
     return row["workspace"] if row and row.get("workspace") else None
 
 
+def _ids(driver: dict) -> list:
+    return [i for i in driver.get("ids") or (driver.get("pane_id"), driver.get("terminal_id")) if i]
+
+
 def _targets_pane(target: str, driver: dict, workspace) -> bool:
-    pane = driver.get("pane_id") or ""
-    if target in (pane, driver.get("terminal_id")):
-        return True
-    if ":" in target or not pane.endswith(":" + target):
-        return False
-    return workspace is None or pane.split(":", 1)[0] == workspace
+    for ident in _ids(driver):
+        if target == ident:
+            return True
+        if ":" not in target and ident.endswith(":" + target) and (workspace is None or ident.split(":", 1)[0] == workspace):
+            return True
+    return False
 
 
 def _names_pane(command: str, driver: dict):
     text = _HIDING_CHARS.sub("", _unquote_dollar(command)).casefold()
-    for ident in (driver.get("pane_id"), driver.get("terminal_id")):
+    for ident in _ids(driver):
         if ident and re.search(r"(?<![%s])%s(?![%s])" % (_ID_EDGE, re.escape(ident.casefold()), _ID_EDGE), text):
             return ident
     return None
@@ -234,7 +274,7 @@ def _proven_other(sender: dict, session_id, drivers: list):
     if "proven" not in sender:
         if "workspace" not in sender:
             sender["workspace"] = _sender_workspace(session_id)
-        driver_ids = {str(v).casefold() for d in drivers for v in (d.get("pane_id"), d.get("terminal_id"), d.get("tty")) if v}
+        driver_ids = {str(v).casefold() for d in drivers for v in _ids(d) + [d.get("tty")] if v}
         sender["proven"] = load_lib_module("session_registry").known_panes() - driver_ids
     workspace = sender["workspace"]
 
@@ -251,8 +291,7 @@ def _tty_write(command: str) -> bool:
 
 
 def _driver_hit(command: str, session_id, driver: dict, sender: dict):
-    ids = [driver.get("pane_id"), driver.get("terminal_id")]
-    sends = host_sends(command, ids)
+    sends = host_sends(command, _ids(driver))
     if sends:
         # One session sends, so every driver shares one workspace lookup, made only when a send was found.
         if "workspace" not in sender:
@@ -271,15 +310,83 @@ def _strict_hit(command: str, session_id, drivers: list, sender: dict):
     target is another session's pane, and may not write to a tty device."""
     if any(d.get("session_id") == session_id for d in drivers):
         return None
-    ids = [i for d in drivers for i in (d.get("pane_id"), d.get("terminal_id"))]
+    ids = [i for d in drivers for i in _ids(d)]
     unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers))
     if unproven:
         return unproven[0][0], unproven[0][1], drivers[0]["pane_id"]
     return (None, "tty write", drivers[0]["pane_id"]) if _tty_write(command) else None
 
 
+def _seen_path(driver: dict) -> str:
+    return os.path.join(load_lib_module("programme_home").programmes_dir(), "live-panes", f"{driver['lease']}.json")
+
+
+def _seen_ids(driver: dict) -> list:
+    try:
+        with open(_seen_path(driver)) as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("session_id") == driver.get("session_id"):
+            return [i for i in data.get("ids") or [] if isinstance(i, str) and i]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return []
+
+
+def _remember(driver: dict, ids: list) -> None:
+    path = _seen_path(driver)
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        payload = {"session_id": driver.get("session_id"), "ids": ids[:SEEN_CAP]}
+        load_lib_module("programme_home").atomic_write(path, lambda fh: json.dump(payload, fh), ".live.")
+    except Exception:
+        # The live ids still guard this call; only the fallback for a later failed lookup is lost.
+        pass
+
+
+def _live_ids(driver: dict, snap: dict, server) -> list:
+    sr = load_lib_module("session_registry")
+    row = sr.lookup(driver.get("session_id"), driver.get("server"), driver.get("workspace"), include_headless=True)
+    found = load_lib_module("terminal_host").host_named("herdr").presence(
+        driver.get("session_id"), row, snap, load_lib_module("programme_sources").session_of,
+        current_server=server, clean=sr._clean)
+    facts = found.value if found.ok else None
+    if not isinstance(facts, dict) or facts.get("state") == "gone" or not facts.get("pane_in_snapshot"):
+        return []
+    pane = facts.get("pane_id")
+    terminal = next((p.get("terminal_id") for p in snap["panes"] if isinstance(p, dict) and p.get("pane_id") == pane), None)
+    return [i for i in (pane, terminal) if isinstance(i, str) and i]
+
+
+def _with_live_ids(drivers: list) -> list:
+    """Guard each herdr driver by the pane herdr reports it in now: `herdr pane move` gives a pane a new id, and the
+    registry keeps the id from session start. Ids seen once stay guarded when a later lookup fails."""
+    herdr = load_lib_module("host_herdr")
+    server = herdr.server_from_socket(os.environ.get("HERDR_SOCKET_PATH")) or load_lib_module("programme_home").DEFAULT_SERVER
+    local = [d for d in drivers if d.get("host") == "herdr" and d.get("server") == server]
+    snap = herdr.guard_snapshot() if local else None
+    for driver in drivers:
+        live = []
+        if snap is not None and driver in local:
+            try:
+                live = _live_ids(driver, snap, server)
+            except Exception:
+                live = []
+        seen = _seen_ids(driver) if driver.get("host") == "herdr" else []
+        if live and not set(live) <= set(seen):
+            _remember(driver, live + [i for i in seen if i not in live])
+        driver["ids"] = list(dict.fromkeys(_ids(driver) + live + seen))
+        if live:
+            driver["pane_id"] = live[0]
+    return drivers
+
+
 def denial(session_id, command):
     drivers = load_lib_module("session_registry").driver_panes()
+    try:
+        _with_live_ids(drivers)
+    except Exception:
+        # A hook error fails open, so a broken live lookup must leave the registry ids guarding, not raise.
+        pass
     sender = {}
     for driver in drivers:
         hit = _driver_hit(command, session_id, driver, sender)

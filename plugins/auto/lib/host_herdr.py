@@ -21,6 +21,8 @@ HERDR_TIMEOUT = 5.0
 PANE_GET_TIMEOUT = 1.0
 REPORT_TIMEOUT = 1.0
 SERVER_PROBE_TIMEOUT = 1.0
+# The send-guard reads this on every Bash call of every session while a programme runs.
+GUARD_SNAPSHOT_TIMEOUT = 1.0
 NOTIFY_TIMEOUT = 5
 POLL_SECONDS = 1.0
 BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
@@ -272,6 +274,16 @@ def server_from_socket(sock) -> str | None:
         except programme_home.ProgrammeHomeError:
             return None
     return programme_home.DEFAULT_SERVER
+
+def guard_snapshot():
+    """herdr's snapshot from one call bounded for the send-guard, or None when herdr cannot answer in time."""
+    result = programme_exec.bounded(["herdr", "api", "snapshot"], GUARD_SNAPSHOT_TIMEOUT)
+    if not result["ran"] or result["code"] != 0:
+        return None
+    data = programme_exec.parse_json(result["stdout"])
+    snap = (data.get("result") or {}).get("snapshot") if isinstance(data, dict) and isinstance(data.get("result"), dict) else None
+    return snap if isinstance(snap, dict) and isinstance(snap.get("panes"), list) else None
+
 
 def _herdr(args):
     return programme_exec.bounded(["herdr"] + list(args), programme_exec.source_timeout(HERDR_TIMEOUT))

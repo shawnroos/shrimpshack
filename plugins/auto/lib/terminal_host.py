@@ -175,6 +175,14 @@ class TerminalHost:
             return None
         return "unknown", None
 
+    def runtime_send(self, tail, text="") -> bool:
+        """True when ``tail``, run by a command word built at run time, is unmistakably a send of this host's.
+
+        An unknown verb does not count here: the command word may be any program, so only a real send verb proves
+        it is this host."""
+        shape = self.send_class(list(self.binaries[:1]) + list(tail), text)
+        return bool(shape) and shape[0] == "send"
+
     def installed(self) -> bool:
         return any(shutil.which(b) for b in self.binaries)
 
