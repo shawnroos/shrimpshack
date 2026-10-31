@@ -262,7 +262,8 @@ def driver_panes(now=None) -> list:
         if row and row.get("pane_id"):
             out.append({"run": lease.get("run"), "session_id": lease.get("session_id"),
                         "pane_id": row["pane_id"], "terminal_id": row.get("terminal_id"),
-                        "host": host_of_row(row), "tty": row.get("tty"), "lease": key})
+                        "host": host_of_row(row), "tty": row.get("tty"), "lease": key,
+                        "server": lease.get("server"), "workspace": lease.get("workspace")})
     return out
 
 
