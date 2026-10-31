@@ -22,7 +22,8 @@ STATUSES = ("native", "degraded", "refuse")
 # is_host_command has no row: its per-host coverage is a required test, not a table cell.
 CAPABILITY_OF = {"own_pane": "find_own_pane", "list_panes": "list_panes", "start_pane": "start_pane",
                  "confirm_started": "confirm_started", "send_prompt": "send_prompt",
-                 "presence": "presence", "change_token": "change_signal", "notify": "notify"}
+                 "presence": "presence", "change_token": "change_signal", "notify": "notify",
+                 "close_pane": "close_pane"}
 _NEW_PANE_LINE = re.compile(r"^[ \t]*(?:\u25b8[ \t]+)?agent pane: ([a-z]+) (\S+)", re.MULTILINE)
 _OLD_PANE_LINE = re.compile(r"herdr agent pane: (\S+)")
 
@@ -148,6 +149,9 @@ class TerminalHost:
 
     def notify(self, *_, **__) -> HostResult:
         return self._unimplemented("notify")
+
+    def close_pane(self, pane, **_) -> HostResult:
+        return self._unimplemented("close_pane")
 
     def is_host_command(self, argv, pane_ids=()):
         """(verb, target) when ``argv`` (one simple command) types into a pane, else None.
