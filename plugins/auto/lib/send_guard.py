@@ -31,13 +31,18 @@ _HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
 _ID_EDGE = "A-Za-z0-9_"
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
 _RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
-# Only these let the shell turn a command word into a different program (a leading `=` is zsh's path lookup). Shell
-# operators arrive as their own tokens, and quoted code (JavaScript `=>`) or `~`/`@` paths cannot become a host binary.
-# A command word built this way is denied whatever follows it: three review rounds broke every rule that tried to
-# tell from the rest of the command whether it types into a pane.
-_RUNTIME_WORD = re.compile(r"[$`*?\[{\\]|^=")
+# A command word holding any of these may become a different program at run time (a leading `=` is zsh's path
+# lookup) and is denied whatever follows it: three review rounds broke every rule that tried to tell from the rest of
+# the command whether it types into a pane. A token made only of shell operators is punctuation the lexer split out
+# (the `)` and `>` of quoted JavaScript), never a program.
+_RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=")
+_OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
-_TEST_WORDS = frozenset({"[", "[[", "{"})
+# After these an `a=b` word is the program they run, not an assignment.
+_RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "time", "sudo", "xargs", "builtin"})
+# A quoted `">"` lexes the same as the operator, so stripping it could drop a real target.
+_QUOTED_REDIRECT = re.compile(r"([\"'])\s*\d*(?:[<>]+&?|&>+)\d*\s*\1")
+_TEST_WORDS = frozenset({"[", "[[", "{", "}"})
 _REDIRECT_OPS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
 _TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
 _TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
@@ -144,7 +149,8 @@ def _strip_redirects(words: list) -> list:
     out, i = [], 0
     while i < len(words):
         if words[i] in _REDIRECT_OPS:
-            if len(out) > 1 and out[-1].isdigit():
+            # A file descriptor is one or two digits; a longer number is an argument (a Rex id tail) and stays.
+            if len(out) > 1 and out[-1].isdigit() and len(out[-1]) <= 2:
                 out.pop()
             i += 2
             continue
@@ -161,6 +167,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             _scan(script, depth + 1, hosts, pane_ids, found, proven)
     tokens = _lex(main)
     piped = main + "\n" + "\n".join(bodies)
+    strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
         script = None
@@ -182,7 +189,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             if depth < MAX_DEPTH:
                 _scan(script, depth + 1, hosts, pane_ids, found, proven)
             continue
-        segment = _strip_redirects(_segment(tokens, start))
+        segment = strip(_segment(tokens, start))
         for host in hosts:
             if proven is not None:
                 hit = _unproven(host, tokens, start, segment, piped, proven)
@@ -194,7 +201,16 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
 
 def _is_command_word(tokens: list, start: int) -> bool:
     before = tokens[start - 1] if start else None
-    return before is None or before in _SHELL_BREAKS or before in _COMMAND_PREFIX or ("=" in before and before[:1] != "-")
+    if before is None or before in _SHELL_BREAKS or before in _COMMAND_PREFIX:
+        return True
+    return _is_assignment(tokens, start - 1)
+
+
+def _is_assignment(tokens: list, i: int) -> bool:
+    """`NAME=value` in a command word's place, so the shell sets a variable and the next word is the command."""
+    if not _ASSIGNMENT.match(tokens[i]) or not _is_command_word(tokens, i):
+        return False
+    return not i or tokens[i - 1] not in _RUNS_NEXT_WORD
 
 
 def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven):
@@ -204,7 +220,7 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven)
     shape = host.send_class(segment, piped)
     if shape is None:
         word = tokens[start]
-        if word in _TEST_WORDS or _ASSIGNMENT.match(word):
+        if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or _is_assignment(tokens, start):
             return None
         return ("runtime-built command", "") if _RUNTIME_WORD.search(word) and _is_command_word(tokens, start) else None
     kind, targets = shape
