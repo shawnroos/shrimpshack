@@ -19,48 +19,64 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 settings_guard = load_lib_module("programme_settings_guard")
-programme_behaviours = load_lib_module("programme_behaviours")
-programme_protocol = load_lib_module("programme_protocol")
 
-DIR_ENV = "CLAUDE_AUTO_BEHAVIOURS_DIR"
 _TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
-_TOKEN = re.compile(r"[^\s;&|<>()`]*behaviours[^\s;&|<>()`]*", re.IGNORECASE)
-
-
-def _folder() -> str:
-    return os.environ.get(DIR_ENV) or os.path.join(
-        os.path.dirname(programme_protocol.personal_path()), "behaviours")
+_TOKEN = re.compile(r"[^\s;&|<>()`]*(?:behaviours|behaviour-files)[^\s;&|<>()`]*", re.IGNORECASE)
+_ENV_REDIRECT = re.compile(r"CLAUDE_AUTO_(?:SHIPPED_)?BEHAVIOURS_(?:DIR|STORE)", re.IGNORECASE)
+# A separator-free blob this long is not a command Shawn's session typed; bounding it keeps the
+# token regex from stalling every PreToolUse call.
+_MAX_COMMAND = 20000
 
 
 def _guard() -> tuple:
+    # Loaded here, not at the top: the hook loads this module on every PreToolUse call, and
+    # programme_behaviours pulls in many modules that only a "behaviours" call needs.
+    programme_behaviours = load_lib_module("programme_behaviours")
+    programme_behaviour_files = load_lib_module("programme_behaviour_files")
+    verbs = load_lib_module("programme_behaviour_file_verbs")
+    programme_home = load_lib_module("programme_home")
     # Casefolded: the macOS file system is case-insensitive, so Behaviours/ is the same folder.
-    return (os.path.realpath(_folder()).casefold(),
-            os.path.realpath(programme_behaviours.store_path()).casefold())
+    files = {os.path.realpath(programme_behaviours.store_path()).casefold(),
+             os.path.realpath(verbs.seen_path()).casefold(),
+             os.path.realpath(os.path.join(programme_home.programmes_dir(), verbs.LOCK_NAME)).casefold()}
+    return os.path.realpath(programme_behaviour_files.personal_dir()).casefold(), files
 
 
-def _hit(path: str, folder: str, store: str) -> bool:
+def _hit(path: str, folder: str, files) -> bool:
     folded = path.casefold()
-    return folded == store or folded == folder or folded.startswith(folder + os.sep)
+    return folded in files or folded == folder or folded.startswith(folder + os.sep)
+
+
+def _examined(command: str) -> str:
+    if len(command) <= _MAX_COMMAND:
+        return command
+    # Head and tail, so padding in front of the target cannot push it out of view.
+    return command[:_MAX_COMMAND] + " " + command[-_MAX_COMMAND:]
 
 
 def _target(tool_name, tool_input, cwd):
-    folder, store = _guard()
+    folder, files = _guard()
     if tool_name != "Bash":
         raw = tool_input.get("file_path")
         path = settings_guard._resolved(raw, cwd) if isinstance(raw, str) else None
-        return path if path and _hit(path, folder, store) else None
+        return path if path and _hit(path, folder, files) else None
     command = tool_input.get("command")
     if not isinstance(command, str):
         return None
-    text = settings_guard._HIDING_CHARS.sub("", command)
+    text = _examined(settings_guard._HIDING_CHARS.sub("", command))
+    # Setting these redirects what counts as Shawn's files, so naming one is refused outright.
+    redirect = _ENV_REDIRECT.search(text)
+    if redirect:
+        return redirect.group(0)
     for token in _TOKEN.findall(text):
         bases = [cwd]
-        if not os.path.isabs(settings_guard._expanded(token)):
-            # A relative name after a cd elsewhere resolves against the wrong folder; best effort.
-            bases += [os.path.dirname(folder), os.path.dirname(store)]
+        # A bare word such as `grep -rn behaviours lib` names no file; only a path or a dotted
+        # name is worth resolving against the folders a cd could have left behind.
+        if (os.sep in token or "." in token) and not os.path.isabs(settings_guard._expanded(token)):
+            bases += [os.path.dirname(folder), *(os.path.dirname(f) for f in files)]
         for base in bases:
             path = settings_guard._resolved(token, base)
-            if _hit(path, folder, store):
+            if _hit(path, folder, files):
                 return path
     return None
 
@@ -72,7 +88,8 @@ def decision(stdin_raw: str):
         return None
     tool_name = data["tool_name"]
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    if "behaviours" not in json.dumps(tool_input).casefold():
+    named = json.dumps(tool_input).casefold()
+    if "behaviours" not in named and "behaviour-files" not in named:
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
     found = settings_guard.scope(session_id, os.environ)

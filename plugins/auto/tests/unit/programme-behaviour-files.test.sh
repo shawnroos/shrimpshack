@@ -165,6 +165,80 @@ fresh_dirs
 printf 'x' > "${PERSONAL}/notes.txt"
 check "0 0" "$(load 'str(len(r["entries"])) + " " + str(len(r["rejected"]))')"
 
+it "evidence, dont, when text and check text naming a protected escalation each reject"
+fresh_dirs
+printf -- '---\nwhen: x\nevidence: the production deploy log\n---\nDo:\n- a thing\n' > "${PERSONAL}/ev.md"
+printf -- '---\nwhen: x\n---\nDo:\n- a thing\nDont:\n- deploy to production\n' > "${PERSONAL}/dn.md"
+printf -- '---\nwhen: before the production deploy\n---\nDo:\n- a thing\n' > "${PERSONAL}/wt.md"
+printf -- '---\nwhen: x\nchecks:\n  - pm: production deploy approved\n---\nDo:\n- a thing\n' > "${PERSONAL}/ck.md"
+printf -- '---\nwhen: x\nchecks:\n  - agent: production deploy approved\n---\nDo:\n- a thing\n' > "${PERSONAL}/ca.md"
+check "protected_escalation protected_escalation protected_escalation protected_escalation protected_escalation" \
+  "$(load 'rej["ev"]["reason"] + " " + rej["dn"]["reason"] + " " + rej["wt"]["reason"] + " " + rej["ck"]["reason"] + " " + rej["ca"]["reason"]')"
+
+it "text carrying an escape sequence, a zero-width char or a bidi mark rejects with bad_value naming the field"
+fresh_dirs
+printf -- '---\nwhen: x\n---\nDo:\n- a \033[31mred\033[0m thing\n' > "${PERSONAL}/esc.md"
+printf -- '---\nwhen: x\n---\nDo:\n- a zero\xe2\x80\x8bwidth thing\n' > "${PERSONAL}/zw.md"
+printf -- '---\nwhen: x\nevidence: a bidi \xe2\x80\xaemark\n---\nDo:\n- a thing\n' > "${PERSONAL}/bidi.md"
+printf -- '---\nwhen: x\n---\nDo:\n- a vertical\vtab thing\n' > "${PERSONAL}/vt.md"
+check "bad_value:do bad_value:do bad_value:evidence True" \
+  "$(load 'rej["esc"]["reason"] + ":" + rej["esc"]["detail"] + " " + rej["zw"]["reason"] + ":" + rej["zw"]["detail"] + " " + rej["bidi"]["reason"] + ":" + rej["bidi"]["detail"] + " " + str("vt" in rej)')"
+
+it "a file name with a newline before .md is rejected"
+fresh_dirs
+printf -- '---\nwhen: x\n---\nDo:\n- a thing\n' > "${PERSONAL}/$(printf 'nl\nx').md"
+check "1 0" "$(load 'str(len(r["rejected"])) + " " + str(len(r["entries"]))')"
+
+it "a file over 64 KiB is rejected and a line over 500 characters is rejected"
+fresh_dirs
+"$PY" -c 'import sys; sys.stdout.write("---\nwhen: x\n---\nDo:\n" + "- a thing\n" * 8000)' > "${PERSONAL}/big.md"
+"$PY" -c 'import sys; sys.stdout.write("---\nwhen: x\n---\nDo:\n- " + "word " * 120 + "\n")' > "${PERSONAL}/wide.md"
+check "bad_value bad_value" "$(load 'rej["big"]["reason"] + " " + rej["wide"]["reason"]')"
+
+it "a symlink to a file outside the folder is rejected and one inside the folder loads"
+fresh_dirs
+printf -- '---\nwhen: x\n---\nDo:\n- a thing\n' > "${WORK}/${N}/outside.md"
+ln -s "${WORK}/${N}/outside.md" "${PERSONAL}/out.md"
+printf -- '---\nwhen: x\n---\nDo:\n- a thing\n' > "${PERSONAL}/real.md"
+ln -s "${PERSONAL}/real.md" "${PERSONAL}/alias.md"
+check "bad_value True True" "$(load 'rej["out"]["reason"] + " " + str("alias" in by) + " " + str("real" in by)')"
+
+it "a FIFO named x.md is rejected without blocking"
+fresh_dirs
+mkfifo "${PERSONAL}/pipe.md"
+check "bad_value" "$(load 'rej["pipe"]["reason"]')"
+
+it "a directory named x.md is rejected"
+fresh_dirs
+mkdir "${PERSONAL}/dir.md"
+check "bad_value" "$(load 'rej["dir"]["reason"]')"
+
+it "flow lists load, including an empty one"
+fresh_dirs
+printf -- '---\nwhen: x\nformats: [one table, two lines]\ncomms: []\n---\nDo:\n- a thing\n' > "${PERSONAL}/flow.md"
+check "['one table', 'two lines']|False" "$(load 'str(by["flow"]["formats"]) + "|" + str("comms" in by["flow"])')"
+
+it "a malformed flow list rejects"
+fresh_dirs
+printf -- '---\nwhen: x\nformats: [one, \n---\nDo:\n- a thing\n' > "${PERSONAL}/badflow.md"
+check "bad_value" "$(load 'rej["badflow"]["reason"]')"
+
+it "list items at the same indent as the key load"
+fresh_dirs
+printf -- '---\nwhen: x\ncomms:\n- lead with the action\n- name the file\n---\nDo:\n- a thing\n' > "${PERSONAL}/flat.md"
+check "['lead with the action', 'name the file']" "$(load 'by["flat"]["comms"]')"
+
+it "one matching pair of quotes is stripped from scalars and list items, including when.text"
+fresh_dirs
+printf -- "---\nwhen: \"a bug is reported\"\nevidence: 'the log'\ncomms:\n  - \"lead with the action\"\nformats: ['one table', \"two lines\"]\n---\nDo:\n- a thing\n" > "${PERSONAL}/quoted.md"
+check "a bug is reported|the log|['lead with the action']|['one table', 'two lines']" \
+  "$(load 'by["quoted"]["when"]["text"] + "|" + by["quoted"]["evidence"] + "|" + str(by["quoted"]["comms"]) + "|" + str(by["quoted"]["formats"])')"
+
+it "a mismatched quote is kept as written"
+fresh_dirs
+printf -- "---\nwhen: \"half open\n---\nDo:\n- a thing\n" > "${PERSONAL}/half.md"
+check "\"half open" "$(load 'by["half"]["when"]["text"]')"
+
 it "the personal folder defaults beside the store file and honours the env override"
 fresh_dirs
 mkdir -p "${WORK}/personal/behaviours"

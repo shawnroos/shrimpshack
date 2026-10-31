@@ -40,6 +40,7 @@ APPROVAL_KIND = "rule_adopted"
 
 LAYERS = ("programme", "repo", "personal", "shipped")
 STORED_LAYERS = ("repo", "personal")
+MOVE_LAYERS = ("programme", "repo", "personal")
 # Same id: the higher rank replaces the lower. "shipped" is only ever loaded from files.
 LAYER_RANK = {"shipped": 0, "personal": 1, "repo": 2, "programme": 3}
 AUDIENCES = ("pm", "workers", "both")
@@ -402,7 +403,7 @@ def shown_programme_entries(programme, loaded) -> list:
     return [e for e in _programme_entries(programme, []) if not all(_held_for(loaded, e, k) for k in keys)]
 
 
-def _from_file(entry) -> bool:
+def from_file(entry) -> bool:
     return entry.get("layer") == "shipped" or entry.get("source") == "file"
 
 
@@ -418,10 +419,13 @@ def resolve(record, item, repo=None, *, audience=None, lookup=None, store=None) 
     ranked += [(LAYER_RANK["shipped"], e) for e in loaded.get("shipped", [])]
     top = {}
     for rank, e in ranked:
-        top[e["id"]] = max(top.get(e["id"], 0), rank)
+        # A proposal is not a decision yet, so it must not hide the file entry it would replace.
+        if e.get("state", ACTIVE) in (ACTIVE, "retired"):
+            top[e["id"]] = max(top.get(e["id"], 0), rank)
     # Only file-sourced entries are replaced by a higher layer; stored layers keep coexisting as before.
-    # A retired winner still hides the file entries below it: retiring is how a default is switched off.
-    candidates = [e for rank, e in ranked if (rank == top[e["id"]] or not _from_file(e))
+    # A retired winner still hides the file entries below it. No verb retires a file id: a shipped
+    # default is switched off by a personal file or a --conflicts-with record whose overrides name it.
+    candidates = [e for rank, e in ranked if (rank == top.get(e["id"]) or not from_file(e))
                   and e.get("state", ACTIVE) == ACTIVE]
     overridden = {name for e in candidates for name in e.get("overrides") or ()}
     in_force = [e for e in candidates if e["id"] not in overridden and _reaches(e, audience)]
@@ -592,7 +596,12 @@ def _stored_entry(loaded, bid):
 def _active(programme, loaded) -> list:
     rows = [e for e in _programme_entries(programme, []) if not _held(loaded, e)]
     rows += _stored_rows(loaded)
+    rows += _file_rows(loaded)
     return [e for e in rows if e.get("state", ACTIVE) == ACTIVE]
+
+
+def _file_rows(loaded) -> list:
+    return list(loaded.get("shipped") or []) + list(loaded.get("files") or [])
 
 
 def _topic(entry) -> set:
@@ -722,7 +731,8 @@ def _placed(entry, to, key, loaded) -> tuple:
     if to == "repo":
         out["repo_key"] = key
     wanted = list(entry.get("overrides") or ())
-    broader = {e["id"] for e in loaded["personal"]} if to == "repo" else set()
+    broader = ({e["id"] for e in loaded["personal"]}
+               | {e["id"] for e in _file_rows(loaded) if e.get("state", ACTIVE) == ACTIVE}) if to == "repo" else set()
     kept = wanted if to == "programme" else [b for b in wanted if b in broader]
     if kept:
         out["overrides"] = kept
@@ -772,7 +782,7 @@ def _after_store(seen, how) -> None:
 
 def _h_move(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt", "to", "repo"))
-    if len(positional) != 1 or opts.get("to") not in LAYERS[:3] or (opts.get("repo") and opts["to"] != "repo"):
+    if len(positional) != 1 or opts.get("to") not in MOVE_LAYERS or (opts.get("repo") and opts["to"] != "repo"):
         raise ValueError("usage: move-behaviour <id> --to programme|repo|personal --prompt <id> "
                          "[--repo <key>] (--repo only with --to repo)")
     bid, to = positional[0], opts["to"]

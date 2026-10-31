@@ -187,6 +187,30 @@ prog start-worker linear:AI-703 -- --name plain --target tab
 check 0 "$CODE"
 lacks "--handoff" "$(grep '^spinoff ' "$CALLS")"
 
+it "KTD12: after a plain start the shipped start rule is answered as not_briefed, so due lists nothing for that item"
+check "not_briefed|0" "$(run_py "$RUN" <<'EOF'
+core = load_lib_module("run_record_core")
+bd = load_lib_module("programme_behaviours_due")
+rec = core.read_run_record(ph.home_path(args[0]), args[0])
+item = rec["programme"]["items"]["linear:AI-703"]
+reasons = ",".join(d["reason"] for d in item["behaviour_deliveries"] if d["id"] == "record-before-long-wait")
+due = bd.due(rec, args[0])
+print(reasons + "|" + str(sum(1 for r in due["rows"] if r["item"] == "linear:AI-703")))
+EOF
+)"
+
+it "KTD12: a start with a handoff still records brief, and due lists nothing for it either"
+check "brief|0" "$(run_py "$RUN" <<'EOF'
+core = load_lib_module("run_record_core")
+bd = load_lib_module("programme_behaviours_due")
+rec = core.read_run_record(ph.home_path(args[0]), args[0])
+item = rec["programme"]["items"]["linear:AI-701"]
+reasons = ",".join(d["reason"] for d in item["behaviour_deliveries"] if d["id"] == "record-before-long-wait")
+due = bd.due(rec, args[0])
+print(reasons + "|" + str(sum(1 for r in due["rows"] if r["item"] == "linear:AI-701")))
+EOF
+)"
+
 echo
 printf "programme-default-behaviours.test.sh: %d passed, %d failed\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

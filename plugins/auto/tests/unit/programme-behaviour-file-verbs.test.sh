@@ -239,6 +239,70 @@ print(len(bf.load_files()["rejected"]))
 EOF
 )"
 
+it "approval hash: a picker prompt whose PM-written quote carries the hash but whose answer only names the id is refused"
+check "refused" "$(run_py <<'EOF'
+class Host:
+    def require_named(self, prompt, *needs): pass
+    def prompt_lookup(self, run, pid): return {}
+digest = "sha256:" + "ab" * 32
+prompt = {"prompt_id": "pk", "origin": "picked", "quote": "approve " + digest + "?", "answer": "adopt p1"}
+try:
+    fv._approve(Host(), {"run_id": "r"}, prompt, "p1", digest)
+    print("accepted")
+except fv.BehaviourError:
+    print("refused")
+EOF
+)"
+
+it "approval hash: a picker answer that carries the hash approves, and so does a typed prompt"
+check "ok ok" "$(run_py <<'EOF'
+class Host:
+    def require_named(self, prompt, *needs): pass
+    def prompt_lookup(self, run, pid): return {}
+digest = "sha256:" + "ab" * 32
+picked = {"prompt_id": "pk", "origin": "picked", "quote": "q", "answer": "adopt p1 " + digest}
+typed = {"prompt_id": "pt", "origin": "typed", "quote": "adopt p1 " + digest}
+for p in (picked, typed):
+    fv._approve(Host(), {"run_id": "r"}, p, "p1", digest)
+print("ok ok")
+EOF
+)"
+
+it "an id with a trailing newline is refused by the verb and writes nothing"
+P="$(tprompt "$RUN" "adopt a with ${HASH_A}")"
+prog adopt-behaviour-file $'a\n' --file "${WORK}/drafts/a.md" --prompt "$P" --run "$RUN"
+check "2 absent" "$CODE $([ -e "${PERS}/a.md" ] && echo present || echo absent)"
+
+it "adopt-behaviour-file: an id that already exists as a stored personal behaviour is refused with a clear message"
+printf '{"personal": [{"id": "stored1"}], "repos": {}}\n' > "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+HS="$(dhash "${WORK}/drafts/a.md" stored1)"
+P="$(tprompt "$RUN" "adopt stored1 with ${HS}")"
+prog adopt-behaviour-file stored1 --file "${WORK}/drafts/a.md" --prompt "$P" --run "$RUN"
+check "1 absent" "$CODE $([ -e "${PERS}/stored1.md" ] && echo present || echo absent)"
+has "stored personal behaviour" "$OUT"
+rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+
+draft_shipped d2 "write a note"
+printf '[]\n' > "$SEEN"
+
+it "a corrupt seen file: copy-default refuses and writes no personal file"
+P="$(tprompt "$RUN" "copy d2 into my folder")"
+prog copy-default d2 --prompt "$P" --run "$RUN"
+check "1 absent" "$CODE $([ -e "${PERS}/d2.md" ] && echo present || echo absent)"
+
+it "a corrupt seen file: take refuses and the personal file remains"
+cp "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d1.md" "${PERS}/d1.md"
+P="$(tprompt "$RUN" "take d1 theirs")"
+prog settle-default-update d1 --as take --prompt "$P" --run "$RUN"
+check "1 present" "$CODE $([ -e "${PERS}/d1.md" ] && echo present || echo absent)"
+
+it "a corrupt seen file: merge refuses and leaves the personal file as it was"
+HMX="$(dhash "${WORK}/drafts/m2.md" d1)"
+P="$(tprompt "$RUN" "merge d1 with ${HMX}")"
+prog settle-default-update d1 --as merge --file "${WORK}/drafts/m2.md" --prompt "$P" --run "$RUN"
+check "1 same" "$CODE $(cmp -s "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d1.md" "${PERS}/d1.md" && echo same || echo different)"
+rm -f "$SEEN"
+
 echo
 echo "passed: $PASS failed: $FAIL"
 [ "$FAIL" -eq 0 ]

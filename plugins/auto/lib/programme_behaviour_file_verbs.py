@@ -36,11 +36,11 @@ SEEN_NAME = "behaviours-seen.json"
 LOCK_NAME = ".behaviour-files.lock"
 MODES = ("shown", "keep", "take", "merge")
 MAX_BYTES = 64 * 1024
-_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
 def _check_id(bid) -> str:
-    if not _ID.match(bid or ""):
+    if not _ID.fullmatch(bid or ""):
         raise ValueError("a behaviour id is lowercase letters, digits, - and _, and starts with a letter or digit")
     return bid
 
@@ -74,18 +74,32 @@ def _entry_hash(entry) -> str:
     return programme_protocol.content_hash({k: v for k, v in entry.items() if k != "at"})
 
 
-def draft_hash(text, bid) -> str:
+def _text_hash(text, bid, layer) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, bid + ".md")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(text)
-        return _entry_hash(_validated(path, bid, "personal"))
+        return _entry_hash(_validated(path, bid, layer))
+
+
+def draft_hash(text, bid) -> str:
+    return _text_hash(text, bid, "personal")
 
 
 def shipped_hash(bid) -> str:
     if not os.path.isfile(_shipped_path(bid)):
         raise BehaviourError(f"no shipped behaviour {bid!r}")
     return _entry_hash(_validated(_shipped_path(bid), bid, "shipped"))
+
+
+def _shipped_text_and_hash(bid) -> tuple:
+    # One read: the approved hash must describe the very bytes copy-default writes.
+    if not os.path.isfile(_shipped_path(bid)):
+        raise BehaviourError(f"no shipped behaviour {bid!r}")
+    text = _read_text(_shipped_path(bid))
+    if text is None:
+        raise BehaviourError(f"behaviour file {bid}.md is not valid: bad_value (file)")
+    return text, _text_hash(text, bid, "shipped")
 
 
 def _locked(body):
@@ -100,6 +114,9 @@ def _atomic(path, text) -> None:
 
 
 def _read_text(path):
+    # isfile first: opening a FIFO named <id>.md would block.
+    if not os.path.isfile(path):
+        return None
     try:
         with open(path, encoding="utf-8") as fh:
             return fh.read()
@@ -147,10 +164,11 @@ def _draft_text(opts) -> str:
 def _approve(host, rec, prompt, bid, digest) -> None:
     host.require_named(prompt, bid)
     # A prompt Shawn typed can approve a draft by carrying its hash; an approval row keyed to the hash
-    # (the _verify_adoption key) approves it too.
+    # (the _verify_adoption key) approves it too. named_text, not the quote: a picker question is
+    # PM-written, so only Shawn's own answer may carry the hash.
     key = programme_protocol.approval_key(_target(bid), digest)
     row = host.prompt_lookup(rec["run_id"], prompt["prompt_id"]) or {}
-    if key in (row.get("approved") or ()) or digest.split(":")[-1] in prompt["quote"].lower():
+    if key in (row.get("approved") or ()) or digest.split(":")[-1] in programme_journal.named_text(prompt).lower():
         return
     raise BehaviourError(
         f"prompt {prompt['prompt_id']!r} does not approve this content of {bid}.md; Shawn's typed "
@@ -180,6 +198,10 @@ def _h_adopt(host, argv):
     text = _draft_text(opts)
 
     def change(programme, prompt, rec):
+        # The stored entry would shadow the file at load, so the file is refused up front.
+        if any(isinstance(e, dict) and e.get("id") == bid for e in programme_behaviours.read_store()["personal"]):
+            raise BehaviourError(f"a stored personal behaviour {bid!r} already exists; a file with this id "
+                                 "would be rejected as shadowed")
         digest = draft_hash(text, bid)
         _approve(host, rec, prompt, bid, digest)
         _write_file(bid, text, replace=False)
@@ -196,11 +218,11 @@ def _h_copy(host, argv):
     bid = _check_id(positional[0])
 
     def change(programme, prompt, rec):
-        digest = shipped_hash(bid)
+        text, digest = _shipped_text_and_hash(bid)
         host.require_named(prompt, bid)
-        text = _read_text(_shipped_path(bid))
 
         def body():
+            _seen_doc()
             if os.path.exists(_personal_path(bid)):
                 raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder")
             _atomic(_personal_path(bid), text)
@@ -227,6 +249,8 @@ def _settle(host, rec, prompt, bid, mode, text) -> dict:
         _approve(host, rec, prompt, bid, written)
 
     def body():
+        # Before any file change: a corrupt seen file must refuse with nothing half done.
+        _seen_doc()
         if mode == "merge":
             _atomic(_personal_path(bid), text)
         elif mode == "take":
@@ -260,7 +284,7 @@ _SPECS = (
     ("adopt-behaviour-file", _h_adopt, "<id> --file <path> --prompt <id>",
      "a session that does not drive the programme; a prompt that is not Shawn's typed prompt, does not name the "
      "id, or does not carry the hash of exactly this content; a draft that fails the behaviour file check; an id "
-     "that already has a personal file. Writes <id>.md into the personal behaviours folder and journals "
+     "that already has a personal file or a stored personal behaviour. Writes <id>.md into the personal behaviours folder and journals "
      "rule_adopted (how file). A refusal shows the content hash to put in the approval."),
     ("copy-default", _h_copy, "<id> --prompt <id>",
      "a prompt that is not Shawn's typed prompt or does not name the id; an id with no shipped file; an id that "

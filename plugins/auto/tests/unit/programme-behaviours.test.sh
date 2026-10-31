@@ -1108,6 +1108,26 @@ EOF
 )"
 
 fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+RUN="$(new_run)"
+P1="$(tprompt "$RUN" "here, do not follow the shipped default")"
+it "record-behaviour --conflicts-with a shipped id succeeds and the shipped entry drops out of force"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "the work is a bug" --do "do my own thing" --conflicts-with ship1
+BID="$(jfield "$OUT" 'd["behaviour"]')"
+check "0 ['ship1'] ${BID}@programme" "$CODE $(q "$RUN" "str(beh_of('$BID')['overrides']) + ' ' + ids(run)")"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+it "a proposed entry with a shipped id leaves the shipped default in force, in the programme and in the store"
+check "ship1@shipped|ship1@shipped" "$(run_py <<'EOF'
+run = setup([beh("ship1", state="proposed")])
+first = ids(run)
+keep(run, [beh("ship1", "repo", state="proposed")])
+print(first + "|" + ids(run))
+EOF
+)"
+
+fresh_store; fresh_files
 it "AE2: a broken personal file leaves the shipped default in force and raises one notice naming the file"
 wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
 printf 'not frontmatter\n' > "$CLAUDE_AUTO_BEHAVIOURS_DIR/broken.md"

@@ -1070,6 +1070,25 @@ has "behaviour sdef (yours (replaces shipped), update available, active" "$BEH_S
 it "the view never writes the seen record"
 check "$BEH_OLD_HASH" "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["sdef"]["seen"])' "${WORK}/beh/behaviours-seen.json")"
 
+it "a shipped change after the last shown hash sets needs_show and the row says not yet shown"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUNF" --json 2>&1)"
+check "True" "$(beh_q '[b["needs_show"] for b in d["contract"]["behaviours"] if b["layer"] == "personal" and b["id"] == "sdef"][0]')"
+has "update available, active, not yet shown" "$BEH_STATUS3"
+it "once shown equals the current shipped hash, needs_show is false and the text drops not yet shown"
+BEH_NEW_HASH="$(run_py <<'EOF'
+print(load_lib_module("programme_behaviour_file_verbs").shipped_hash("sdef"))
+EOF
+)"
+printf '{"sdef": {"seen": "%s", "shown": "%s"}}\n' "$BEH_OLD_HASH" "$BEH_NEW_HASH" > "${WORK}/beh/behaviours-seen.json"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUNF" --json 2>&1)"
+BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+check "True False" "$(beh_q '"%s %s" % tuple([(b["update_available"], b["needs_show"]) for b in d["contract"]["behaviours"] if b["layer"] == "personal" and b["id"] == "sdef"][0])')"
+has "update available" "$BEH_STATUS3"
+lacks "not yet shown" "$BEH_STATUS3"
+it "a shipped row and a personal file row with no quote name their source"
+has "source: shipped" "$(printf '%s\n' "$BEH_STATUS3" | grep 'behaviour sdef (shipped')"
+has "source: personal file" "$(printf '%s\n' "$BEH_STATUS3" | grep 'behaviour mine')"
+
 it "a broken personal file appears under rejected behaviours with its file name"
 printf 'no frontmatter here\n' > "$BEH_PERSONAL/broken.md"
 BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"

@@ -801,7 +801,8 @@ check "" "$OUT"
 BEH_DIR="${WORK}/personal/behaviours"
 BEH_STORE="${WORK}/personal/behaviours.json"
 mkdir -p "$BEH_DIR"
-export CLAUDE_AUTO_BEHAVIOURS_DIR="$BEH_DIR" CLAUDE_AUTO_BEHAVIOURS_STORE="$BEH_STORE" BEH_ROOT="${WORK}/personal"
+BEH_SEEN="${WORK}/personal/behaviours-seen.json"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="$BEH_DIR" CLAUDE_AUTO_BEHAVIOURS_STORE="$BEH_STORE"
 BEH_CALLS=(
   "Edit|{\"file_path\": \"${BEH_DIR}/rules.md\", \"old_string\": \"a\", \"new_string\": \"b\"}"
   "MultiEdit|{\"file_path\": \"${BEH_DIR}/rules.md\", \"edits\": []}"
@@ -810,8 +811,12 @@ BEH_CALLS=(
   "Edit|{\"file_path\": \"${WORK}/personal/BEHAVIOURS.json\", \"old_string\": \"a\", \"new_string\": \"b\"}"
   "Write|{\"file_path\": \"${WORK}/personal/Behaviours/rules.md\", \"content\": \"x\"}"
   "Bash|{\"command\": \"echo x > ${BEH_STORE}\"}"
-  "Bash|{\"command\": \"echo x | tee \\\"\$BEH_ROOT/behaviours/rules.md\\\"\"}"
+  "Bash|{\"command\": \"echo x | tee ${BEH_DIR}/rules.md\"}"
   "Bash|{\"command\": \"cd ${WORK}/personal && echo x >> 'behaviours.json'\"}"
+  "Write|{\"file_path\": \"${BEH_SEEN}\", \"content\": \"{}\"}"
+  "Bash|{\"command\": \"echo '{}' > ${BEH_SEEN}\"}"
+  "Bash|{\"command\": \"CLAUDE_AUTO_BEHAVIOURS_DIR=/elsewhere claude-auto status\"}"
+  "Bash|{\"command\": \"env claude_auto_shipped_behaviours_dir=/elsewhere true\"}"
 )
 
 it "an owner's and the driver's Edit, MultiEdit, Write, echo and tee into the personal behaviours folder or behaviours.json are refused and journaled"
@@ -838,6 +843,8 @@ OUT="$(file_call "$DEST" sess-own Write "{\"file_path\": \"${BEH_STORE}.bak\", \
 OUT="${OUT}$(file_call "$DEST" sess-own Write "{\"file_path\": \"${WORK}/personal/behaviours-notes.md\", \"content\": \"x\"}")"
 OUT="${OUT}$(file_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/behaviours.md\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
 OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"echo x > ${BEH_STORE}.bak\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"grep -rn behaviours lib\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"ls behaviours\"}")"
 check "" "$OUT"
 
 it "malformed JSON naming behaviours.json: the action hook exits 0 with no output"

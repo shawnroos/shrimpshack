@@ -13,6 +13,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_behaviour_file_verbs = load_lib_module("programme_behaviour_file_verbs")
+programme_behaviours = load_lib_module("programme_behaviours")
 
 SHIPPED = "shipped"
 REPLACES = "yours (replaces shipped)"
@@ -42,31 +43,34 @@ def _shipped_now(bid):
 
 
 def file_facts(loaded) -> dict:
-    """Per-id label facts, keyed by (layer, id), for the entries loaded from files."""
-    shipped_ids = {e["id"] for e in loaded.get("shipped") or []}
+    shipped = loaded.get("shipped") or []
+    files = loaded.get("files") or []
+    shipped_ids = {e["id"] for e in shipped}
+    file_ids = {f["id"] for f in files}
     seen = _seen()
     facts = {}
-    for e in loaded.get("shipped") or []:
+    for e in shipped:
         facts[(SHIPPED, e["id"])] = {"label": SHIPPED,
-                                     "replaced_by": [e["id"]] if any(f["id"] == e["id"] for f in loaded.get("files") or []) else []}
-    for e in loaded.get("files") or []:
+                                     "replaced_by": [e["id"]] if e["id"] in file_ids else []}
+    for e in files:
         copy = e["id"] in shipped_ids
         record = seen.get(e["id"]) if isinstance(seen.get(e["id"]), dict) else {}
         current = _shipped_now(e["id"]) if copy else None
         stale = bool(copy and record.get("seen") and current and record["seen"] != current)
         facts[("personal", e["id"])] = {"label": REPLACES if copy else PERSONAL_FILE, "update_available": stale,
+                                        "needs_show": stale and record.get("shown") != current,
                                         "replaced_by": []}
     return facts
 
 
 def apply(row, entry, facts) -> None:
-    """Add the file labels to a row; a row with no file facts is left untouched."""
-    fact = facts.get((entry["layer"], entry["id"])) if entry.get("layer") == SHIPPED or entry.get("source") == "file" else None
+    fact = facts.get((entry["layer"], entry["id"])) if programme_behaviours.from_file(entry) else None
     if not fact:
         return
     row["label"] = fact["label"]
     if fact.get("update_available"):
         row["update_available"] = True
+        row["needs_show"] = bool(fact.get("needs_show"))
     if fact["replaced_by"] and "overridden_by" in row:
         row["overridden_by"] = sorted(set(row.get("overridden_by") or ()) | set(fact["replaced_by"]))
 
@@ -74,3 +78,13 @@ def apply(row, entry, facts) -> None:
 def layer_text(b, repo_layer) -> str:
     label = b.get("label") or repo_layer
     return f"{label}, {UPDATE}" if b.get("update_available") else label
+
+
+def show_text(b) -> list:
+    return ["not yet shown"] if b.get("needs_show") else []
+
+
+def source_text(b) -> str:
+    if b.get("quote"):
+        return f"source: Shawn: \"{b['quote']}\""
+    return f"source: {b['label']}" if b.get("label") else "source: none recorded"

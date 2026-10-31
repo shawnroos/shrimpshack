@@ -548,7 +548,8 @@ def behaviours_view(record, lookup) -> dict:
 
 def _behaviour_text(b) -> str:
     layer = f"repo {b.get('repo_key')}" if b.get("layer") == "repo" else b.get("layer")
-    status = [programme_view_behaviours.layer_text(b, layer), b.get("state")]
+    status = [programme_view_behaviours.layer_text(b, layer), b.get("state"),
+              *programme_view_behaviours.show_text(b)]
     if b.get("overridden_by"):
         status.append(f"overridden by {', '.join(b['overridden_by'])}")
     status.append(f"applies to {b.get('applies_to')}")
@@ -557,7 +558,7 @@ def _behaviour_text(b) -> str:
               (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"), ("agent_checks", "agent checks"))
               if b.get(key)]
     parts += [f"{key}: {b[key]}" for key in ("evidence", "stop") if b.get(key)]
-    parts.append(f"source: Shawn: \"{b['quote']}\"" if b.get("quote") else "source: none recorded")
+    parts.append(programme_view_behaviours.source_text(b))
     return f"behaviour {b.get('id')} ({', '.join(status)}): " + "; ".join(parts)
 
 

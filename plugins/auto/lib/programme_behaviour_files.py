@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import stat
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,12 +29,13 @@ FOLDER_NAME = "behaviours"
 SCALARS = ("when", "trigger", "applies_to", "evidence", "stop", "why")
 LISTS = ("checks", "overrides", "skills", "tools", "agents", "formats", "comms")
 KEYS = SCALARS + LISTS
-# Only file entries scan these two; the stored PROTECTED_FIELDS stay as they are.
-FILE_SCANNED = ("formats", "comms")
+MAX_FILE_BYTES = 64 * 1024
+MAX_LINE_CHARS = 500
 
 _Reject = programme_protocol._Reject
 _KEY_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
-_ITEM = re.compile(r"^\s+-\s+(.*\S)\s*$")
+_ITEM = re.compile(r"^\s*-\s+(.*\S)\s*$")
+_LINES = re.compile(r"\r\n|\n|\r")
 _HEADING = re.compile(r"^(?:#+\s*)?(?:\*\*)?(do|don'?t)(?::)?(?:\*\*)?:?\s*$", re.IGNORECASE)
 _BULLET = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
 
@@ -49,8 +51,27 @@ def personal_dir() -> str:
     return os.path.join(os.path.dirname(programme_protocol.personal_path()), FOLDER_NAME)
 
 
+def _unquote(value):
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1].strip()
+    return value
+
+
+def _flow(value):
+    if not value.endswith("]"):
+        raise _Reject("bad_value", "frontmatter")
+    inner = value[1:-1].strip()
+    if not inner:
+        return []
+    items = [_unquote(part.strip()) for part in inner.split(",")]
+    if not all(items):
+        raise _Reject("bad_value", "frontmatter")
+    return items
+
+
 def _split(text):
-    lines = text.splitlines()
+    # Not str.splitlines: it would turn a vertical tab or U+2028 into a silent line break.
+    lines = _LINES.split(text)
     if not lines or lines[0].strip() != "---":
         raise _Reject("missing_field", "frontmatter")
     for end in range(1, len(lines)):
@@ -66,7 +87,7 @@ def _frontmatter(lines) -> dict:
             continue
         item = _ITEM.match(line)
         if item and current is not None and isinstance(fields[current], list):
-            fields[current].append(item.group(1))
+            fields[current].append(_unquote(item.group(1)))
             continue
         key = _KEY_LINE.match(line)
         if not key or line[0].isspace():
@@ -76,7 +97,12 @@ def _frontmatter(lines) -> dict:
             raise _Reject("unknown_key", name)
         if name in fields:
             raise _Reject("bad_value", name)
-        fields[name] = value if name in SCALARS else ([value] if value else [])
+        if name in SCALARS:
+            fields[name] = _unquote(value)
+        elif value.startswith("["):
+            fields[name] = _flow(value)
+        else:
+            fields[name] = [_unquote(value)] if value else []
         current = name
         if name in LISTS and value:
             current = None
@@ -129,28 +155,73 @@ def _entry(bid, fields, body, mtime) -> dict:
     return entry
 
 
-def _parse(path, bid) -> dict:
+def _read_file(path):
+    folder = os.path.realpath(os.path.dirname(path))
     try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-        mtime = os.stat(path).st_mtime
-    except (OSError, UnicodeDecodeError):
+        if stat.S_ISLNK(os.lstat(path).st_mode) and os.path.commonpath([os.path.realpath(path), folder]) != folder:
+            raise _Reject("bad_value", "file")
+        # Checked before open: opening a FIFO named x.md would block the whole load.
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            raise _Reject("bad_value", "file")
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as fh:
+            info = os.fstat(fh.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise _Reject("bad_value", "file")
+            data = fh.read(MAX_FILE_BYTES + 1)
+    except OSError:
         raise _Reject("bad_value", "file")
+    if len(data) > MAX_FILE_BYTES:
+        raise _Reject("bad_value", "file size")
+    try:
+        return data.decode("utf-8"), info.st_mtime
+    except UnicodeDecodeError:
+        raise _Reject("bad_value", "file")
+
+
+def _parse(path, bid) -> dict:
+    text, mtime = _read_file(path)
+    # _line_kind is quadratic in the words of a line, so a long line is refused before it runs.
+    if any(len(line) > MAX_LINE_CHARS for line in _LINES.split(text)):
+        raise _Reject("bad_value", "line length")
     head, body = _split(text)
     return _entry(bid, _frontmatter(head), _body(body), mtime)
 
 
-def _scan(entry) -> None:
-    for field in FILE_SCANNED:
+def _texts(entry):
+    for field in ("do", "dont", "skills", "tools", "agents", "formats", "comms"):
         for line in entry.get(field) or ():
-            kind = programme_behaviours._line_kind(line)
-            if kind:
-                raise _Reject("protected_escalation", kind)
+            yield field, line
+    if entry.get("evidence"):
+        yield "evidence", entry["evidence"]
+    when = entry.get("when") or {}
+    yield "when.text", when.get("text", "")
+    for check in when.get("checks") or ():
+        yield "checks", check["text"]
+
+
+def _clean_only(entry) -> None:
+    clean = programme_behaviours.programme_sanitize.clean
+    for field, text in _texts(entry):
+        if clean(text, cap=0) != text:
+            raise _Reject("bad_value", field)
+
+
+# File entries scan every rendered text field; the stored PROTECTED_FIELDS stay as they are.
+def _scan(entry) -> None:
+    for _, line in _texts(entry):
+        kind = programme_behaviours._line_kind(line)
+        if kind:
+            raise _Reject("protected_escalation", kind)
 
 
 # source is set after verdict: the stored schema types it as an object, a file entry's is the string "file".
 def _read_one(path, bid, layer) -> dict:
+    # fullmatch: the verdict's "$" anchor accepts a trailing newline in an id taken from a file name.
+    if not re.fullmatch(programme_behaviours._ID_RE.pattern, bid):
+        raise _Reject("bad_value", "id")
     entry = _parse(path, bid)
+    _clean_only(entry)
     check = programme_behaviours.verdict(entry, allow_adoption=False)
     if not check["ok"]:
         raise _Reject(check["reason"], check["detail"])

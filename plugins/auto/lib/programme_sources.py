@@ -650,7 +650,7 @@ def _brief_copy(home, item_id, extra, at, brief, tail) -> list:
     return extra[:at] + [copy] + extra[at + 1:]
 
 
-def _launch_assign(started, session_name, restrictions=(), behaviour_ids=()):
+def _launch_assign(started, session_name, restrictions=(), behaviour_ids=(), not_briefed_ids=()):
     def assign(prog, op):
         item = prog["items"][programme_record._resolve(prog, op["item"])]
         entry = {k: started.get(k) for k in ("session_id", "pane", "terminal_id", "ok", "reason", "spinoff_exit")}
@@ -663,6 +663,9 @@ def _launch_assign(started, session_name, restrictions=(), behaviour_ids=()):
             _record_restrictions(item, restrictions, "start-worker")
             for bid in behaviour_ids:
                 programme_behaviours.record_delivery(item, bid, "brief", "start-worker")
+            # Answers the start trigger of a default no brief carried, or due() would list it forever.
+            for bid in not_briefed_ids:
+                programme_behaviours.record_delivery(item, bid, "not_briefed", "start-worker")
         item["history"].append({"at": entry["at"], "kind": "started" if started.get("ok") else "start_failed",
                                 "session_id": started["session_id"]})
         return True
@@ -724,11 +727,14 @@ def _h_start_worker(host, argv):
         dict(record, programme=programme), programme["items"][key], chosen, lookup=host.prompt_lookup)
     # Shipped defaults are optional context: without a handoff there is no brief to carry them, and they
     # must not make a plain start refuse. Stored and personal behaviours still do.
-    if "--handoff" not in extra[:-1] and not chosen and all(b.get("layer") == "shipped" for b in behaviours):
+    has_handoff = "--handoff" in extra[:-1]
+    not_briefed = []
+    if not has_handoff and not chosen and all(b.get("layer") == "shipped" for b in behaviours):
+        not_briefed = [b["id"] for b in behaviours]
         behaviours = []
     behaviour_ids = [b["id"] for b in behaviours]
     # Without a handoff there is no brief to carry the Rulings, and requiring one would refuse plain starts.
-    with_brief = bool(decision_ids or restrictions or behaviours) or "--handoff" in extra[:-1]
+    with_brief = bool(decision_ids or restrictions or behaviours) or has_handoff
     tail = _brief_tail(host, programme, key, decision_ids, restrictions, behaviours, rulings=with_brief)
     refusal = programme_context.unsafe_reason(programme, key, "start_worker")
     if refusal:
@@ -760,7 +766,7 @@ def _h_start_worker(host, argv):
                    behaviour_ids=behaviour_ids, behaviours_held_back=held_back, **{k: v for k, v in started.items() if k != "ok"})
     done = _settled(host, run_id, home, op, "worker_started" if started["ok"] else "worker_start_failed",
                     payload, started["outcome"],
-                    assign=_launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids))
+                    assign=_launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids, not_briefed))
     host._emit(dict({"ok": True, "run": run_id, "kind": "worker_started" if started["ok"] else
                      "worker_start_failed", "attempt": op["attempt"], "operation_state": done["state"],
                      "late": not done["receipt"]["authority_current"]}, **payload))

@@ -845,8 +845,8 @@ FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-880 -- --name shipplain --targe
 it "KTD12: a plain start-worker still starts when the only behaviour in force is a shipped one"
 check 0 "$CODE"
 lacks "--handoff" "$(grep '^spinoff ' "$CALLS")"
-it "that start records no delivery and carries no behaviour id"
-check "null" "$(field 'items["linear:AI-880"].get("behaviour_deliveries")')"
+it "that start records only a not_briefed delivery (never brief) and carries no behaviour id"
+check '["not_briefed"]' "$(field '[d["reason"] for d in items["linear:AI-880"].get("behaviour_deliveries") or []]')"
 has '"behaviour_ids": []' "$OUT"
 
 write_snapshot base

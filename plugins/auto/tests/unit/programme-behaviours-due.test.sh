@@ -284,6 +284,27 @@ print(pb.brief_lines(pb.in_force(rec, None, None))[1][2:])
 EOF
 )"
 
+it "a broken personal file does not set due()['error'], which sweep-inputs reports as an unreadable store"
+check "None" "$(run_py <<'EOF'
+os.environ["CLAUDE_AUTO_BEHAVIOURS_STORE"] = os.path.join(os.environ["WORK"], "clean-store.json")
+folder = files()
+open(os.path.join(folder, "broken.md"), "w").write("not frontmatter\n")
+run = setup([], a={"claim": TRIGGER})
+rec = core.read_run_record(ph.home_path(run), run)
+print(bd.due(rec, run)["error"])
+EOF
+)"
+
+it "a plain-started item whose shipped start rule was answered not_briefed is not due"
+check "" "$(run_py <<'EOF'
+folder = files()
+open(os.path.join(os.environ["CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR"], "s1.md"), "w").write(
+    "---\nwhen: when the work starts\ntrigger: start\napplies-to: workers\n---\nDo:\n- send your claim first\n")
+run = setup([], a={"started": TRIGGER, "deliveries": [("s1", "not_briefed")]})
+print(lines(run))
+EOF
+)"
+
 echo ""
 echo "programme-behaviours-due.test.sh:${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

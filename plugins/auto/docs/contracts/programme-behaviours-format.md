@@ -99,11 +99,11 @@ For one item, the behaviours in force are built in this order:
 3. Personal entries, stored and from personal files.
 4. Shipped files.
 
-A file entry is replaced by any entry of the same id on a higher layer: a personal file replaces the shipped file, and a repo or programme entry replaces either. Stored entries are not replaced this way and coexist as before. A retired entry that wins an id still hides the file entries below it, which is how a shipped default is switched off.
+A file entry is replaced by any entry of the same id on a higher layer: a personal file replaces the shipped file, and a repo or programme entry replaces either. Stored entries are not replaced this way and coexist as before. A retired stored entry that wins an id still hides the file entries below it, but no verb retires a file id: `retire-behaviour` works on stored entries only. A shipped default is switched off by a personal file, or by `record-behaviour --conflicts-with <id>`, whose `overrides` names it. A `proposed` entry does not count as winning an id, so it never hides a file entry.
 
 Then entries that are not `active` drop out, every entry named in another candidate's `overrides` drops out, and an audience filter keeps the entries whose `applies_to` is the audience or `both`.
 
-`overrides` is set when the PM names a conflict (`record-behaviour --conflicts-with <id>`): the new programme entry overrides the other one, because the narrower layer wins. Shawn's typed reply can undo the new entry instead. A move or keep keeps only links to a strictly broader layer (a repo entry may override a personal one; a personal entry overrides nothing) and reports the dropped links as `dropped_overrides`, so the PM can raise the conflict again.
+`overrides` is set when the PM names a conflict (`record-behaviour --conflicts-with <id>`, where the id may also be an active shipped or personal-file behaviour): the new programme entry overrides the other one, because the narrower layer wins. Shawn's typed reply can undo the new entry instead. A move or keep keeps only links to a strictly broader layer (a repo entry may override a personal one; a personal entry overrides nothing) and reports the dropped links as `dropped_overrides`, so the PM can raise the conflict again.
 
 ## 7. Moves
 

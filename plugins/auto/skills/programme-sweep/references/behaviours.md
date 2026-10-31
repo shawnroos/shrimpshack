@@ -76,11 +76,18 @@ The files get written by the verbs below, after his typed approval.
    `P settle-default-update <id> --as merge --file <path>` (the adopt verb
    refuses to overwrite a file that exists).
 5. Update notice: a copy made with `copy-default` is flagged `update available`
-   when the shipped default changed. Show the shipped difference once with
-   `P settle-default-update <id> --as shown` (no approval needed). Then offer
+   when the shipped default changed. Raise the update prompt only when the row
+   also says `not yet shown`. Show the shipped difference once, then record it
+   with `P settle-default-update <id> --as shown` (no approval needed); the
+   row stops saying `not yet shown`, so later sweeps stay quiet. Then offer
    keep mine, take theirs or merge. Settle on his typed choice:
    `--as keep`, `--as take`, or `--as merge --file <path>` carrying the merged
    file's hash.
+
+To switch a shipped default off, no verb retires it: write a personal file whose
+`overrides` names its id, or record a programme behaviour with
+`--conflicts-with <id>`. A broken behaviour file is reported to Shawn once; do
+not repeat it every sweep.
 
 Shipped files and personal files carry no adoption record: shipped ones count
 by install, personal ones by where they sit. A file's start time is its last
