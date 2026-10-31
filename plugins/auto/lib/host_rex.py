@@ -37,9 +37,6 @@ READ_NOUNS = frozenset({"session", "window", "block", "client", "server", "hosts
 # rename only changes a label and cannot type into a block, so it sits with the reads on purpose.
 READ_SUBVERBS = frozenset({"ls", "list", "inspect", "status", "logs", "describe", "show", "rename"})
 TYPING_VERBS = frozenset({"send", "send-key", "run", "split", "do"})
-# run and split open a new block; their -b only says where it goes. Generic tools share the word (`$UV run pytest`).
-NEW_BLOCK_VERBS = frozenset({"run", "split"})
-SCOPE_OPTS = ("-b", "--block", "-s", "--session", "-w", "--window", "-C", "--client", "-S", "--server")
 # Rex accepts the end of an id as a target; 4 characters is the shortest tail worth treating as naming a block.
 MIN_ID_TAIL = 4
 _FRAGMENT_SPLIT = re.compile(r"[\s=,;:\"'{}\[\]]+")
@@ -148,14 +145,6 @@ class RexHost(terminal_host.TerminalHost):
         if not verb or _reads_only(verb):
             return "read", []
         return ("send" if _types(verb) else "unknown"), _blocks_of(rest) or None
-
-    def runtime_send(self, tail, text=""):
-        # send and send-key without -b go to Rex's default block, which may be the PM's, and do / api call can name a
-        # block anywhere in their arguments, so those always count.
-        verb = _verb_words(list(tail))
-        if not verb or _reads_only(verb) or not _types(verb):
-            return False
-        return verb[0] not in NEW_BLOCK_VERBS or _has_scope_option(tail)
 
     def is_host_command(self, argv, pane_ids=()):
         if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
@@ -302,10 +291,6 @@ def _types(verb) -> bool:
 def _blocks_of(rest) -> list:
     blocks = [rest[i + 1] for i, tok in enumerate(rest[:-1]) if tok in ("-b", "--block")]
     return blocks + [tok.split("=", 1)[1] for tok in rest if tok.startswith("--block=")]
-
-
-def _has_scope_option(rest) -> bool:
-    return any(tok in SCOPE_OPTS or tok.split("=", 1)[0] in SCOPE_OPTS or tok[:2] in SCOPE_OPTS for tok in rest)
 
 
 def _reads_only(verb) -> bool:

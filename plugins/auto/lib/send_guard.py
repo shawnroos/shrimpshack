@@ -33,8 +33,18 @@ _HIDING_CHARS = re.compile(r"[\"'\\\\]")
 _RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
 # Only these let the shell turn a command word into a different program. Shell operators arrive as their own
 # tokens, and quoted code (JavaScript `=>`) or `~`/`@` paths cannot become a host binary.
-_RUNTIME_WORD = re.compile(r"[$`*?\[{\\]")
+_RUNTIME_WORD = re.compile(r"[$`*?\[{\\]|^=")
 _REDIRECT_OPS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
+# What follows a runtime-built command word is judged by words, never by parsing its groups or quotes: every parse
+# rule tried here (group skipping, one tail, every suffix) had a bypass. A typing verb anywhere after it is a hit.
+_SEND_WORD = re.compile(r"^(?:send|prompt|call|do|keystroke)(?:$|[^a-z0-9_])", re.I)
+_SEND_SUBSTR = re.compile(r"inputtext|sendkey|performaction|sendmouse|keystroke", re.I)
+_SEND_PAIRS = frozenset({("pane", "run"), ("agent", "start"), ("input", "text"), ("perform", "action"), ("key", "code")})
+# A runtime token right after one of these, or after the value of one of _VERB_VALUE_OPTS, is in a verb's place.
+_VERB_NOUNS = frozenset({"pane", "agent"})
+_VERB_VALUE_OPTS = frozenset({"-s", "-S", "-b", "-w", "-C", "--session", "--server", "--block", "--window", "--client",
+                              "--machine", "--remote", "--timeout", "--color"})
+_PATH_LIKE = re.compile(r"/|\.[A-Za-z0-9]{1,6}$")
 _TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
 _TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
 # A word after one of these (or after an assignment) is the command being run.
@@ -149,27 +159,30 @@ def _strip_redirects(words: list) -> list:
     return out
 
 
-def _runtime_tail(tokens: list, start: int) -> list:
-    """The words a runtime-built command word at ``start`` is run with, after its own `$( … )` or backtick group."""
-    i, word = start + 1, tokens[start]
-    if word.endswith("$") and i < len(tokens) and tokens[i] == "(":
-        depth = 0
-        while i < len(tokens):
-            depth += (tokens[i] == "(") - (tokens[i] == ")")
-            i += 1
-            if depth == 0:
-                break
-    elif word.startswith("`") and "`" not in word[1:]:
-        # The closing backtick may sit inside a glued word (`echo her`dr), so stop at any token holding one.
-        while i < len(tokens) and "`" not in tokens[i]:
-            i += 1
-        i += 1
-    tail = []
-    for tok in tokens[i:i + SEGMENT_CAP]:
-        if tok in _LIST_BREAKS:
-            break
-        tail.append(tok)
-    return _strip_redirects(tail)
+def _runtime_reaches(tokens: list, start: int) -> bool:
+    """Whether the rest of the command after the runtime-built command word at ``start`` could make it type into a
+    pane: a typing verb anywhere (quoted text split into words), or a runtime-built token where a verb would go."""
+    word = tokens[start]
+    tail = _strip_redirects(tokens[start + 1:start + 1 + SEGMENT_CAP])
+    words = []
+    for i, tok in enumerate(tail):
+        if tok == "do" and i and tail[i - 1] in _LIST_BREAKS:
+            continue
+        words += [w.strip("`\"'") for w in tok.split()]
+    words = [w for w in words if w]
+    if any(_SEND_WORD.match(w) or _SEND_SUBSTR.search(w) for w in words):
+        return True
+    low = [w.casefold() for w in words]
+    if any(pair in _SEND_PAIRS for pair in zip(low, low[1:])):
+        return True
+    for i, tok in enumerate(tail):
+        if not _RUNTIME_WORD.search(tok) or _PATH_LIKE.search(tok):
+            continue
+        prev = tail[i - 1] if i else word
+        if (i == 0 or _RUNTIME_WORD.search(prev) or prev in _VERB_NOUNS
+                or (i >= 2 and tail[i - 2] in _VERB_VALUE_OPTS)):
+            return True
+    return False
 
 
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None) -> None:
@@ -223,14 +236,9 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven)
     is a send."""
     shape = host.send_class(segment, piped)
     if shape is None:
-        word = tokens[start]
-        if not (_RUNTIME_WORD.search(word) and _is_command_word(tokens, start)):
+        if not (_RUNTIME_WORD.search(tokens[start]) and _is_command_word(tokens, start)):
             return None
-        tail = _runtime_tail(tokens, start)
-        # Every suffix, because a wrapper word ($W $H ...) or a name glued to a substitution ($(printf her)dr ...)
-        # puts the real send verb later in the tail.
-        sends = (host.runtime_send(tail[k:], piped) for k in range(len(tail)))
-        return ("runtime-built command", "") if any(sends) else None
+        return ("runtime-built command", "") if _runtime_reaches(tokens, start) else None
     kind, targets = shape
     if kind == "read":
         return None
