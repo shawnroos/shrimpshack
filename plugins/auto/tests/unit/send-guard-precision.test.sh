@@ -143,9 +143,25 @@ denied '/usr/local/bin/herd? agent prompt w2:p77 go'
 denied '{herdr,} agent prompt w2:p77 go'
 denied '$R api call -s s-rx -b rex-blk-O1 session.view'
 
+echo "send-guard-precision: a send later in a runtime-built command still counts"
+denied 'W=nice; H=herdr; $W $H agent prompt $P go'
+denied '"$X" "$H" pane send-text $P hi'
+denied '$WRAP $R send -b "$B" go'
+denied '$(printf her)dr pane send-text w2:p88 hi'
+denied '/usr/bin/he$(true)rdr pane send-text w2:p88 hi'
+denied '`echo her`dr pane send-text w2:p88 hi'
+denied '$H --machine other pane send-text w2:p88 hi'
+
 echo "send-guard-precision: Rex verb classes"
 allowed '$R frobnicate -b rex-blk-O1'
-allowed '$R send go'
+denied '$R send go'
+denied '$R send -s s-rx -w 1 go'
+denied '$R -s s-pm send-key enter'
+denied '$R send -C c1 go'
+denied '$R do -e x'
+denied '$R api call -s s-rx com.superlogical.terminal.write '\''{"block_id":"'\''$B'\''"}'\'''
+denied '$R run -s build -- make'
+allowed '"$NPM" run build'
 denied 'rex send -b rex-blk-X9 go'
 allowed 'rex send -b rex-blk-O1 go'
 

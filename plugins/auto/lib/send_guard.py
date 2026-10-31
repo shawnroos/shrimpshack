@@ -159,8 +159,9 @@ def _runtime_tail(tokens: list, start: int) -> list:
             i += 1
             if depth == 0:
                 break
-    elif word.startswith("`") and (word == "`" or not word.endswith("`")):
-        while i < len(tokens) and not tokens[i].endswith("`"):
+    elif word.startswith("`") and "`" not in word[1:]:
+        # The closing backtick may sit inside a glued word (`echo her`dr), so stop at any token holding one.
+        while i < len(tokens) and "`" not in tokens[i]:
             i += 1
         i += 1
     tail = []
@@ -225,7 +226,11 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven)
         word = tokens[start]
         if not (_RUNTIME_WORD.search(word) and _is_command_word(tokens, start)):
             return None
-        return ("runtime-built command", "") if host.runtime_send(_runtime_tail(tokens, start), piped) else None
+        tail = _runtime_tail(tokens, start)
+        # Every suffix, because a wrapper word ($W $H ...) or a name glued to a substitution ($(printf her)dr ...)
+        # puts the real send verb later in the tail.
+        sends = (host.runtime_send(tail[k:], piped) for k in range(len(tail)))
+        return ("runtime-built command", "") if any(sends) else None
     kind, targets = shape
     if kind == "read":
         return None
