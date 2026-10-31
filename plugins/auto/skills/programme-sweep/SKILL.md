@@ -94,6 +94,9 @@ not "nothing changed". You apply every programme write yourself.
 
 ## The sweep
 
+Four stages: domain check (1 to 5, 5b), remit sessions (6 to 11), outside
+sessions (11b), domain check again (11c, 12 to 17). See [references/domain.md](references/domain.md).
+
 **An expiry wake is a re-arm, not a sweep.** When the remit watcher's Monitor
 stream ended with no `remit-watcher-exit` line, run the arm command in step 16
 and `P watcher-beat remit --task-id <Monitor task id> --kind monitor`. If the
@@ -118,7 +121,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    **Quiet sweep.** End the turn, steps 2 to 17 done, only when all of these
    hold: the wake carried no watcher line (a watcher line is step 6 work);
    `sweep-inputs` said `unchanged`, which already covers actionable reasons,
-   unread claims, open asks, behaviours due, items that moved (so a due tracker write, step 15),
+   unread claims, open asks, behaviours due, recommendations not shown, items that moved (so a due tracker write, step 15),
    merge readiness, a worker whose pane is not working (step 11) and both
    wake-ups armed (step 16); and the chained call printed no refusal, no `fix:`
    line, no adopt or alias proposal, no new permission proposal, no `pending`
@@ -227,7 +230,8 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      and `--title` from the proposal). Decide each `alias` proposal yourself with
      `P alias-item` or `P add-item`.
    - Proposals hold only issues inside the remit. A skipped pane with why
-     `repo_out_of_remit` or `issue_out_of_remit` is outside it; leave it.
+     `repo_out_of_remit` or `issue_out_of_remit` is outside it; leave it. A pane
+     whose folder is gone is in `folder_gone` (step 11), not here.
      `project_unknown` means no source gave the issue's project: read it with
      `mcp__linear__get_issue` and `P record-issues`, then sweep again.
    - `unstaffed` lists in-scope issues no pane works on. Never adopt one by
@@ -252,6 +256,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      Apply a `pm_applies` line yourself, then `P skip-behaviour <item>
      <behaviour-id> --applied --why "<what you did>"`. The sweep stays open
      until that list is empty. `P rules` prints each behaviour's checks.
+5b. **Domain check.** Answer the digest's domain behaviours (domain.md).
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;
@@ -323,6 +328,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
    3. `P queue --remove <entry-id>`.
 11. **Drive workers.**
+   - Take sessions in `P sweep`'s `order`; handle `folder_gone` panes (domain.md).
    - Check the budget before you start a worker. Run `P focus-recheck` first
      each sweep, so room that freed up is seen before you choose what to start;
      it releases held items that now fit, oldest hold first. Read the Focus row
@@ -392,6 +398,8 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    - Before you prompt or start a worker on an item, read section 6 of
      [references/sequencing.md](references/sequencing.md): an open investigation
      is a follow-up, a required dependency is a blocker, and a risk is a pause.
+11b. **Outside sessions.** See domain.md.
+11c. **Domain check again.** Repeat 5b (domain.md).
 12. **Record waits.** Every wait has a live watcher or a named reporter.
     - A wait the PM watches: Monitor
       `programme-watch.sh --item <item> -- <watch command>` (for example

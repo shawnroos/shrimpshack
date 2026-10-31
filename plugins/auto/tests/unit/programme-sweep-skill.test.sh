@@ -49,5 +49,20 @@ it "the tracker voice allows PR and issue numbers with titles and bans herdr cod
 has "Name a PR or issue with its title beside its" "$T"
 has "herdr item codes" "$T"
 
+DOMAIN="$(cat "${AUTO_ROOT}/skills/programme-sweep/references/domain.md" 2>/dev/null)"
+it "the sweep names its four stages in order and points to domain.md"
+has "Four stages: domain check (1 to 5, 5b), remit sessions (6 to 11), outside" "$S"
+has "references/domain.md" "$S"
+it "steps 5b, 11b and 11c exist without renumbering the 17 steps"
+has "5b. **Domain check.**" "$S"
+has "11b. **Outside sessions.**" "$S"
+has "11c. **Domain check again.**" "$S"
+has "17. **Check, then stop.**" "$S"
+it "domain.md carries the order, the close rule and the recommend-only rule"
+has "rank 0 \`needs_shawn\`" "$DOMAIN"
+has "only when the folder is gone, the item's PR is merged and the" "$DOMAIN"
+has "You only recommend." "$DOMAIN"
+has "P recommendations-shown --fingerprint" "$DOMAIN"
+
 echo "programme-sweep-skill.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
