@@ -383,7 +383,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      - The assignment it works under, by id: the Ruling revision and its
        limits from `P context --item <item>` (for example `decision:browser-first@2`,
        "no Linux work"). Quote the limits; do not paraphrase them.
-     - "Record before any long background wait: send your claim first."
+     - In a prompt to a running worker (a start brief gets it from the shipped behaviour file): "Record before any long background wait: send your claim first."
      - "Never prompt the PM's pane. Report with
        `bash <plugin root>/lib/programme.sh claim --run <run> --item <item> --deliverable <name> --ref <ref>`."
      - "When a command is denied permission, do not run it again, and do not try
