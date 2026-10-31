@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""The only sanctioned writers of the personal behaviours folder.
+
+``adopt-behaviour-file`` and ``settle-default-update --as merge`` write drafted content, and only
+after Shawn's typed prompt approves the hash of exactly that content. ``copy-default`` and
+``settle-default-update --as keep|take`` need a typed prompt that names the id and the mode.
+``--as shown`` only records that the PM displayed a shipped change. ``behaviours-seen.json``
+maps each id to ``seen`` (the shipped hash Shawn last settled) and ``shown`` (the shipped hash the
+PM last displayed).
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+import os
+import re
+import sys
+import tempfile
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+from _bootstrap import load_lib_module  # noqa: E402
+
+programme_behaviours = load_lib_module("programme_behaviours")
+programme_behaviour_files = load_lib_module("programme_behaviour_files")
+programme_home = load_lib_module("programme_home")
+programme_journal = load_lib_module("programme_journal")
+programme_protocol = load_lib_module("programme_protocol")
+run_record_core = load_lib_module("run_record_core")
+
+BehaviourError = programme_behaviours.BehaviourError
+ADOPTED = programme_behaviours.APPROVAL_KIND
+SEEN_NAME = "behaviours-seen.json"
+LOCK_NAME = ".behaviour-files.lock"
+MODES = ("shown", "keep", "take", "merge")
+MAX_BYTES = 64 * 1024
+_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def _check_id(bid) -> str:
+    if not _ID.match(bid or ""):
+        raise ValueError("a behaviour id is lowercase letters, digits, - and _, and starts with a letter or digit")
+    return bid
+
+
+def _target(bid) -> str:
+    return f"behaviour-file:{bid}"
+
+
+def _personal_path(bid) -> str:
+    return os.path.join(programme_behaviour_files.personal_dir(), bid + ".md")
+
+
+def _shipped_path(bid) -> str:
+    return os.path.join(programme_behaviour_files.shipped_dir(), bid + ".md")
+
+
+def seen_path() -> str:
+    return os.path.join(os.path.dirname(programme_behaviours.store_path()), SEEN_NAME)
+
+
+def _validated(path, bid, layer) -> dict:
+    try:
+        return programme_behaviour_files._read_one(path, bid, layer)
+    except programme_protocol._Reject as exc:
+        raise BehaviourError(f"behaviour file {bid}.md is not valid: {exc.reason}"
+                             + (f" ({exc.detail})" if exc.detail else ""))
+
+
+def _entry_hash(entry) -> str:
+    # "at" is the file's mtime, which changes on every write; the approval must survive a rewrite.
+    return programme_protocol.content_hash({k: v for k, v in entry.items() if k != "at"})
+
+
+def draft_hash(text, bid) -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, bid + ".md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return _entry_hash(_validated(path, bid, "personal"))
+
+
+def shipped_hash(bid) -> str:
+    if not os.path.isfile(_shipped_path(bid)):
+        raise BehaviourError(f"no shipped behaviour {bid!r}")
+    return _entry_hash(_validated(_shipped_path(bid), bid, "shipped"))
+
+
+def _locked(body):
+    os.makedirs(programme_home.programmes_dir(), exist_ok=True)
+    return run_record_core._flock_run(os.path.join(programme_home.programmes_dir(), LOCK_NAME), body)
+
+
+def _atomic(path, text) -> None:
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    programme_home.atomic_write(path, lambda fh: fh.write(text), ".behaviour.", folder)
+
+
+def _read_text(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _seen_doc() -> dict:
+    path = seen_path()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise BehaviourError(f"{path} is unreadable; not overwriting it: {exc}")
+    if not isinstance(doc, dict) or not all(isinstance(v, dict) for v in doc.values()):
+        raise BehaviourError(f"{path} is not a seen record; not overwriting it")
+    return doc
+
+
+def _record(bid, **fields) -> None:
+    doc = _seen_doc()
+    doc[bid] = dict(doc.get(bid) or {}, **fields)
+    _atomic(seen_path(), json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+def _draft_text(opts) -> str:
+    path = opts.get("file")
+    if not path:
+        raise ValueError("--file <path> is required: the drafted behaviour file ('-' reads stdin)")
+    try:
+        if path == "-":
+            text = sys.stdin.read(MAX_BYTES + 1)
+        else:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read(MAX_BYTES + 1)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"cannot read the draft {path}: {exc}")
+    if len(text.encode("utf-8")) > MAX_BYTES:
+        raise ValueError(f"the draft is over {MAX_BYTES} bytes")
+    return text
+
+
+def _approve(host, rec, prompt, bid, digest) -> None:
+    host.require_named(prompt, bid)
+    # A prompt Shawn typed can approve a draft by carrying its hash; an approval row keyed to the hash
+    # (the _verify_adoption key) approves it too.
+    key = programme_protocol.approval_key(_target(bid), digest)
+    row = host.prompt_lookup(rec["run_id"], prompt["prompt_id"]) or {}
+    if key in (row.get("approved") or ()) or digest.split(":")[-1] in prompt["quote"].lower():
+        return
+    raise BehaviourError(
+        f"prompt {prompt['prompt_id']!r} does not approve this content of {bid}.md; Shawn's typed "
+        f"approval must name {bid} and carry the content hash {digest}")
+
+
+def _write_file(bid, text, *, replace) -> None:
+    def body():
+        path = _personal_path(bid)
+        if os.path.exists(path) and not replace and _read_text(path) != text:
+            raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder; "
+                                 "settle-default-update --as merge replaces it")
+        _atomic(path, text)
+
+    _locked(body)
+
+
+def _adopted(bid, digest, **extra) -> dict:
+    return {"entry": "file", "how": "file", "target": _target(bid), "hash": digest, "behaviour": bid, **extra}
+
+
+def _h_adopt(host, argv):
+    positional, opts = host._parse(argv, values=("run", "prompt", "file"))
+    if len(positional) != 1:
+        raise ValueError("usage: adopt-behaviour-file <id> --file <path> --prompt <id>")
+    bid = _check_id(positional[0])
+    text = _draft_text(opts)
+
+    def change(programme, prompt, rec):
+        digest = draft_hash(text, bid)
+        _approve(host, rec, prompt, bid, digest)
+        _write_file(bid, text, replace=False)
+        return _adopted(bid, digest, path=_personal_path(bid))
+
+    return host._write(opts, change, ADOPTED, prompt_id=opts.get("prompt"), needs_prompt=True,
+                       verb="adopt-behaviour-file", target=bid)
+
+
+def _h_copy(host, argv):
+    positional, opts = host._parse(argv, values=("run", "prompt"))
+    if len(positional) != 1:
+        raise ValueError("usage: copy-default <id> --prompt <id>")
+    bid = _check_id(positional[0])
+
+    def change(programme, prompt, rec):
+        digest = shipped_hash(bid)
+        host.require_named(prompt, bid)
+        text = _read_text(_shipped_path(bid))
+
+        def body():
+            if os.path.exists(_personal_path(bid)):
+                raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder")
+            _atomic(_personal_path(bid), text)
+            _record(bid, seen=digest)
+
+        _locked(body)
+        return _adopted(bid, digest, path=_personal_path(bid))
+
+    return host._write(opts, change, ADOPTED, prompt_id=opts.get("prompt"), needs_prompt=True,
+                       verb="copy-default", target=bid)
+
+
+def _settle(host, rec, prompt, bid, mode, text) -> dict:
+    digest = shipped_hash(bid)
+    if mode == "shown":
+        _locked(lambda: _record(bid, shown=digest))
+        return {"behaviour": bid, "as": mode, "shipped_hash": digest}
+    if not os.path.isfile(_personal_path(bid)):
+        raise BehaviourError(f"no personal copy of {bid!r} to settle")
+    host.require_named(prompt, bid, mode)
+    written = digest
+    if mode == "merge":
+        written = draft_hash(text, bid)
+        _approve(host, rec, prompt, bid, written)
+
+    def body():
+        if mode == "merge":
+            _atomic(_personal_path(bid), text)
+        elif mode == "take":
+            os.unlink(_personal_path(bid))
+        _record(bid, seen=digest)
+
+    _locked(body)
+    return _adopted(bid, written, **{"as": mode, "shipped_hash": digest})
+
+
+def _h_settle(host, argv):
+    positional, opts = host._parse(argv, values=("run", "prompt", "as", "file"))
+    if len(positional) != 1 or opts.get("as") not in MODES or (opts.get("file") and opts["as"] != "merge"):
+        raise ValueError("usage: settle-default-update <id> --as shown|keep|take|merge [--prompt <id>] "
+                         "[--file <path>] (--file only with merge; shown needs no --prompt)")
+    bid, mode = _check_id(positional[0]), opts["as"]
+    if mode != "shown" and not opts.get("prompt"):
+        raise ValueError(f"--as {mode} needs --prompt <id> of Shawn's typed approval")
+    text = _draft_text(opts) if mode == "merge" else None
+
+    def change(programme, prompt, rec):
+        return _settle(host, rec, prompt, bid, mode, text)
+
+    shown = mode == "shown"
+    return host._write(opts, change, "behaviour_default_shown" if shown else ADOPTED,
+                       prompt_id=opts.get("prompt"), needs_prompt=not shown, journal=not shown,
+                       verb="settle-default-update", target=bid)
+
+
+_SPECS = (
+    ("adopt-behaviour-file", _h_adopt, "<id> --file <path> --prompt <id>",
+     "a session that does not drive the programme; a prompt that is not Shawn's typed prompt, does not name the "
+     "id, or does not carry the hash of exactly this content; a draft that fails the behaviour file check; an id "
+     "that already has a personal file. Writes <id>.md into the personal behaviours folder and journals "
+     "rule_adopted (how file). A refusal shows the content hash to put in the approval."),
+    ("copy-default", _h_copy, "<id> --prompt <id>",
+     "a prompt that is not Shawn's typed prompt or does not name the id; an id with no shipped file; an id that "
+     "already has a personal file. Copies the shipped file into the personal folder, records seen in "
+     "behaviours-seen.json and journals rule_adopted (how file)."),
+    ("settle-default-update", _h_settle, "<id> --as shown|keep|take|merge [--prompt <id>] [--file <path>]",
+     "an id with no shipped file or no personal copy; for keep, take and merge a prompt that is not Shawn's typed "
+     "prompt or does not name the id and the mode; for merge content whose hash the prompt does not carry. shown "
+     "records the displayed shipped hash and needs no prompt; keep records seen; take removes the personal file "
+     "and records seen; merge writes the approved content and records seen."),
+)
+
+
+def build_verbs(host) -> dict:
+    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+            for name, handler, args, rejects in _SPECS}

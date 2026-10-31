@@ -35,6 +35,7 @@ FIXES = {
     "ack-protocol": _WRITE,
     "add-item": _ITEM,
     "adopt-autonomy": _PICKED,
+    "adopt-behaviour-file": _TYPED,
     "adopt-check": _PICKED,
     "adopt-rule": _PICKED,
     "alias-item": _ITEM,
@@ -75,6 +76,7 @@ FIXES = {
     "focus-note": _WRITE,
     "focus-recheck": _WRITE,
     "hand-item": _ITEM,
+    "copy-default": _TYPED,
     "handover": ("ask Shawn to type /auto:programme-handover <session-id> in the driving session, "
                  "then rerun `programme.sh handover`"),
     "inbox": _READ,
@@ -115,6 +117,7 @@ FIXES = {
     "rules": ("`programme.sh rules` prints the rules in force and their context digest; "
               "then `programme.sh rules --ack`"),
     "set-now": _WRITE,
+    "settle-default-update": _TYPED,
     "skip-behaviour": _ITEM,
     "set-remit": _TYPED,
     "set-source": _WRITE,
