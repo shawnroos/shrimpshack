@@ -5,10 +5,14 @@ It needs the rex command on PATH and nothing else (R18). REX_SESSION and REX_BLO
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import threading
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -34,6 +38,10 @@ STATE_WORD = {"done": "idle"}
 # One status call and at most one process call per block, each up to REX_TIMEOUT.
 MAX_STATUS_BLOCKS = 64
 _OFFERED: dict = {}
+# Bounds how long a missed event can hide: the watcher reads at least this often while the stream is healthy.
+SAFETY_NET_SECONDS = 300.0
+# Only these leave or join the remit. Every CLI call, the watcher's own included, also raises client events.
+JOIN_LEAVE_EVENTS = frozenset({"block_created", "block_closed", "session_created", "session_destroyed"})
 SESSION_PREFIX = "session:"
 BIN_TOKENS = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", "--color"})
@@ -138,6 +146,9 @@ class RexHost(terminal_host.TerminalHost):
             return refuse(why)
         return native(_snapshot(views, with_seq=True))
 
+    def wake_source(self):
+        return _EventWake() if self.installed() else None
+
     def notify(self, title, body, **_):
         return degraded("Rex has no notification command, so the ask stays in the journal and the tracker",
                         value="journal")
@@ -215,6 +226,52 @@ def _all_views(call):
             return None, "bad-json"
         views.append(view)
     return views, None
+
+
+class _EventWake:
+    """Wakes the remit watcher from `rex events`: a block or session joining or leaving makes it due.
+    Healthy only while the stream runs; once it ends the watcher reads on every poll, as it did before."""
+
+    def __init__(self):
+        self._proc, self._flag, self._last_read = None, threading.Event(), None
+        self._flag.set()
+
+    def start(self) -> bool:
+        try:
+            self._proc = subprocess.Popen(["rex", "events", "--json", NO_AUTOSTART], stdin=subprocess.DEVNULL,
+                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        except OSError:
+            return False
+        threading.Thread(target=self._read, args=(self._proc,), daemon=True).start()
+        return True
+
+    def _read(self, proc):
+        for line in proc.stdout:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            inner = ((event.get("payload") or {}).get("event") or {}).get("type") if isinstance(event, dict) else None
+            if (event.get("type") if isinstance(event, dict) else None) in JOIN_LEAVE_EVENTS or inner in JOIN_LEAVE_EVENTS:
+                self._flag.set()
+        self._flag.set()
+
+    def healthy(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def due(self) -> bool:
+        """True when the watcher must read now: an event came, the stream is down, or the safety net is due."""
+        return (not self.healthy() or self._flag.is_set() or self._last_read is None
+                or time.monotonic() - self._last_read >= SAFETY_NET_SECONDS)
+
+    def begin_read(self) -> None:
+        # Cleared before the read, so an event that lands during it still makes the next poll due.
+        self._flag.clear()
+        self._last_read = time.monotonic()
+
+    def close(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
 
 
 def _offers(method) -> bool:

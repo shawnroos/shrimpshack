@@ -14,6 +14,7 @@ its exit status. Record writes go only through the programme CLI.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -232,6 +233,18 @@ def _session_value(entry):
 
 
 def _read_herdr(ctx):
+    wake, spaces, last = ctx.get("wake"), ctx["workspaces"], ctx.get("host_read")
+    if wake and last and last["spaces"] == spaces and not wake.due():
+        return last["state"], None
+    if wake:
+        wake.begin_read()
+    state, why = _read_host(ctx)
+    if state is not None:
+        ctx["host_read"] = {"spaces": set(spaces), "state": state}
+    return state, why
+
+
+def _read_host(ctx):
     token = terminal_host.current().change_token(_read_json_command)
     if not token.ok:
         return None, token.why
@@ -488,7 +501,12 @@ def _remit_loop(run_id, opts, record, held) -> int:
     # a wait this watcher covers reads as unwatched.
     if not _beat(run_id, REMIT_WATCHER):
         return 1
-    signals = RemitSignals({"home": programme_home.home_path(run_id)}, opts["tracker"])
+    wake = terminal_host.current().wake_source()
+    if wake and wake.start():
+        atexit.register(wake.close)
+    else:
+        wake = None
+    signals = RemitSignals({"home": programme_home.home_path(run_id), "wake": wake}, opts["tracker"])
     held.take(signals.poll(record))
     interval, deadline, polls, refused = _interval(), time.monotonic(), 0, 0
     while True:

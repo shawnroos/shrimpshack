@@ -93,7 +93,7 @@ The status method answered a read-only call on the revision 6 server (it returne
 - KTD1. **Probe by method, not by version.** Before using a new method, ask the connected server whether it offers it (`rex api describe`, or the method list). Cache the answer for the life of the process. A CLI newer than its server then fails safe. The exact probe is chosen in U2 after U1 shows what is cheap and reliable. Realises R6, R7. (session-settled: user-approved — chosen over a version floor of revision 8.)
 - KTD2. **One status per block, worst state wins.** A block's records (a root and optional children) reduce to one state in the order blocked, error, working, done, idle. A state the host does not know reads as idle, as Rex's own schema says. States pass through under Rex's names: idle, working, blocked and done match the sweep's vocabulary, and "error" reaches it as a status the sweep treats as neither idle nor gone. Realises R1.
 - KTD3. **A report counts only while its reporter lives.** Compare the record's owner (pid and name; Rex warns the system reuses pids) with the block's foreground process, child and ancestors from the existing process call. No match reads "unknown". Only blocks that have a record cost the extra call. Realises R2.
-- KTD4. **Events wake the watcher; the watcher's contract stays.** A reader of the event stream marks the watcher dirty on a block or session joining or leaving; other events, including every client connecting (the watcher's own reads cause those), are ignored. Dirty, or the safety-net interval elapsed, triggers the existing snapshot read and diff, so its printed lines stay identical. Events that arrive within a minimum gap of the last read coalesce into one read, because busy and idle changes also raise events and a naive wake could read more often than today's 30-second poll. The gap and the longer safety-net interval are measured in U4, not guessed here. Realises R4, R5.
+- KTD4. **Events wake the watcher; the watcher's contract stays.** A reader of the event stream marks the watcher dirty on a block or session joining or leaving; other events, including every client connecting (the watcher's own reads cause those), are ignored. Dirty, or the safety-net interval elapsed, triggers the existing snapshot read and diff, so its printed lines stay identical. The watcher still reads at most once per poll, so events that arrive between polls coalesce into one read and a wake can never read more often than today's 30-second poll. On a healthy stream a quiet poll skips the host read, and a safety-net read every five minutes bounds how long a missed event can hide. Realises R4, R5.
 - KTD5. **Auto does not write status.** Claude Code reports its own status in a Rex block (U1), and its next report would replace anything auto wrote. Realises R8.
 - KTD6. **Mark by status, not by label or focus.** A block label is the identity the exact-label takeover pick uses, so renaming the PM's block would break takeover. Switching the app steals Shawn's focus. The status Claude Code already reports does neither. Realises R8. (session-settled: user-approved — chosen over switching the Rex app to the PM's session.)
 
@@ -108,7 +108,7 @@ flowchart TB
   H --> SW[sweep inputs]
   H --> PS[permission settle]
   S -->|rex events stream| W[remit watcher]
-  W -->|dirty or safety-net tick| T[existing token read and diff]
+  W -->|dirty or safety-net poll| T[existing token read and diff]
   W -.->|stream drops| P[polling as today]
 ```
 
@@ -224,7 +224,7 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 **Approach:**
 1. Give the host an optional wake source (a child that reads the event stream) beside `change_token`. Hosts without one behave as today.
 2. The watcher marks itself dirty on an event and keeps its diff and output as they are (KTD4).
-3. Coalesce events inside a minimum gap into one read, and on a healthy stream lengthen the safety-net interval; measure both values against the call count before and after on U1's server.
+3. On a healthy stream a quiet poll skips the host read; a safety-net read still happens every five minutes.
 4. The host owns the child's lifetime: the watcher's exit and a stream drop both end it, and a drop returns to plain polling.
 
 **Execution note:** `programme-watch` is a known timing flake under load; judge new tests by rerunning them alone, and count the runs before calling one flaky.
@@ -233,7 +233,7 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 - Covers AE4. A block joins while the stream is healthy: the watcher prints its usual line within one event, with fewer view reads than today.
 - Stream drops mid-run: the watcher keeps polling and prints the same lines (Covers AE4).
 - A busy/idle revision change with no block joining or leaving: nothing is printed (Covers R5).
-- A burst of events on a busy server: reads per minute do not exceed today's poll.
+- A burst of events between two polls: one read on the next poll.
 - Server lacks the stream command: the watcher polls exactly as today.
 - Watcher exits: no event child remains.
 - Many sessions: the safety-net read still covers up to the existing session cap.
@@ -273,7 +273,6 @@ No version bump in the PR; `scripts/publish-plugin.sh` does that.
 ### Deferred to implementation
 
 - Which probe is cheapest and most reliable for "does the server offer this method"? (U2)
-- How long can the safety-net interval grow on a healthy stream, and what minimum gap coalesces a burst? (U4, measured)
 
 ## Sources & Research
 

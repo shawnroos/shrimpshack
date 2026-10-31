@@ -142,6 +142,10 @@ class TerminalHost:
     def change_token(self, *_, **__) -> HostResult:
         return self._unimplemented("change_token")
 
+    def wake_source(self):
+        """An object with start, due, begin_read and close that lets the watcher skip quiet reads, or None to poll."""
+        return None
+
     def notify(self, *_, **__) -> HostResult:
         return self._unimplemented("notify")
 

@@ -381,6 +381,116 @@ it "revision 53 to 54 alone does not wake the PM: the watcher wakes on a block j
 check "" "$(cat "${WORK}/watch.out")"
 kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
 
+echo "host-rex: the event stream wakes the remit watcher, and a dropped stream falls back to polling (R4, R5)"
+EVFAKE="${WORK}/evfake"
+mkdir -p "$EVFAKE"
+EVFILE="${WORK}/events.in"
+: > "$EVFILE"
+# A rex whose `events` command stays open and prints every line appended to $EVFILE, like the real stream.
+cat > "${EVFAKE}/rex" <<EOF
+#!/bin/bash
+case "\$1" in
+  events) tail -n +1 -f "$EVFILE" ;;
+  *) exec "${FAKEBIN}/rex" "\$@" ;;
+esac
+EOF
+chmod +x "${EVFAKE}/rex"
+EVPATH="${EVFAKE}:${NOREX_PATH}"
+BLOCK_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"block_created","payload":{"block_id":"block:x"}}}}'
+CLOSE_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"block_closed","payload":{"block_id":"block:x"}}}}'
+NOISE_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"client_connected","payload":{"client_id":"client:x"}}}}'
+REV_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"session_view_changed","payload":{"revision":9}}}}'
+SESSION_LINE='{"type":"session_destroyed","payload":{"session_id":"'$SID'"}}'
+wake_py() { # wake_py <path> <python body>: runs the body with `w` a started wake source
+  env PATH="$1" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+import time
+w = rex.wake_source()
+started = w is not None and w.start()
+$2
+if w is not None:
+    w.close()
+PYEOF
+}
+it "a fresh wake source is due once, then quiet until an event arrives"
+OUT="$(wake_py "$EVPATH" '
+first = w.due(); w.begin_read(); time.sleep(0.3)
+print(started, first, w.due())')"
+check "True True False" "$OUT"
+
+it "a block joining, a block leaving and a session ending each make it due"
+OUT="$(for line in "$BLOCK_LINE" "$CLOSE_LINE" "$SESSION_LINE"; do : > "$EVFILE"
+  wake_py "$EVPATH" "
+w.due(); w.begin_read(); time.sleep(0.3)
+open('$EVFILE', 'a').write('''$line''' + chr(10)); time.sleep(0.6)
+print(w.due())"; done | tr '\n' ' ')"
+check "True True True " "$OUT"
+
+it "a client connecting and a revision change alone never make it due (the watcher's own reads cause the first)"
+: > "$EVFILE"
+OUT="$(wake_py "$EVPATH" "
+w.due(); w.begin_read(); time.sleep(0.3)
+f = open('$EVFILE', 'a'); f.write('''$NOISE_LINE''' + chr(10)); f.write('''$REV_LINE''' + chr(10)); f.flush(); time.sleep(0.6)
+print(w.due())")"
+check "False" "$OUT"
+
+it "an event that arrives while a read is under way is not lost"
+: > "$EVFILE"
+OUT="$(wake_py "$EVPATH" "
+w.due(); w.begin_read()
+open('$EVFILE', 'a').write('''$BLOCK_LINE''' + chr(10)); time.sleep(0.6)
+print(w.due())")"
+check "True" "$OUT"
+
+it "the safety net makes it due even when no event came"
+OUT="$(wake_py "$EVPATH" "
+import sys
+sys.modules[type(rex).__module__].SAFETY_NET_SECONDS = 0.2
+w = rex.wake_source(); w.start(); w.due(); w.begin_read(); time.sleep(0.5)
+print(w.due())")"
+check "True" "$OUT"
+
+it "a stream that ends is never healthy again: the watcher reads on every poll as before"
+OUT="$(env PATH="$WITHREX_PATH" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+import time
+w = rex.wake_source(); w.start(); time.sleep(0.5)
+w.begin_read()
+print(w.due(), w.due())
+w.close()
+PYEOF
+)"
+check "True True" "$OUT"
+
+it "close stops the event reader"
+OUT="$(wake_py "$EVPATH" "
+p = w._proc; w.close(); time.sleep(0.5)
+print(p.poll() is not None)")"
+check "True" "$OUT"
+
+it "rex missing from PATH: no wake source, the watcher polls"
+OUT="$(env PATH="$NOREX_PATH" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+print(rex.wake_source())
+PYEOF
+)"
+check "None" "$OUT"
+
+echo "host-rex: the remit watcher skips its host read on a quiet poll (R4)"
+WCALLS="${WORK}/wake.calls"
+run_watch() { # run_watch <path> <polls>: a remit watcher on a 0.3s poll; CALLS records every rex call it makes
+  : > "$WCALLS"
+  env PATH="$1" CALLS="$WCALLS" HOST_FAKE_OVERLAY="session-ls-json-one" CLAUDE_CODE_SESSION_ID=pm-rex REX_SESSION=$SID \
+    bash "$WATCH" --run "$RUN_PM" --max-polls "$2" > "${WORK}/wake.out" 2>/dev/null
+}
+: > "$EVFILE"
+run_watch "$EVPATH" 6
+it "a healthy stream and no events: the session view is read once, not on every poll"
+check "1" "$(grep -c 'session.view' "$WCALLS")"
+it "the same polls with no stream read the view on every poll, as today"
+run_watch "$WITHREX_PATH" 6
+[ "$(grep -c 'session.view' "$WCALLS")" -ge 6 ] && pass || fail "view reads: $(grep -c 'session.view' "$WCALLS")"
+
 echo "host-rex: notify is degraded to a journal line"
 OUT="$("$PY" - "$AUTO_ROOT" <<PYEOF
 $HEAD_PY
