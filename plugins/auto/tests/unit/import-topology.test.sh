@@ -171,6 +171,8 @@
 #   programme_behaviour_guard → programme_settings_guard, programme_behaviours,
 #                          programme_protocol
 #   programme_behaviour_files → programme_behaviours, programme_protocol
+#   programme_view_behaviours → programme_behaviour_file_verbs [lazy]
+#   programme_view [lazy]  → programme_view_behaviours
 #   programme_behaviour_file_verbs → programme_behaviours, programme_behaviour_files,
 #                          programme_home, programme_journal, programme_protocol,
 #                          run_record_core

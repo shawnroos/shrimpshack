@@ -27,6 +27,7 @@ programme_tasks = load_lib_module("programme_tasks")
 programme_terms = load_lib_module("programme_terms")
 programme_view_work = load_lib_module("programme_view_work")
 programme_view_agreement = load_lib_module("programme_view_agreement")
+programme_view_behaviours = load_lib_module("programme_view_behaviours")
 programme_view_setup = load_lib_module("programme_view_setup")
 programme_focus = load_lib_module("programme_focus")
 programme_domain_state = load_lib_module("programme_domain_state")
@@ -519,6 +520,8 @@ def behaviours_view(record, lookup) -> dict:
     rejected = [r for r in base["rejected"] if r.get("layer") != "repo" or r.get("key") in keys]
     entries = programme_behaviours.shown_programme_entries(programme, loaded)
     entries += [e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
+    entries += programme_view_behaviours.file_entries(loaded)
+    facts = programme_view_behaviours.file_facts(loaded)
     overriders = {}
     for e in forced:
         for name in e.get("overrides") or ():
@@ -532,7 +535,10 @@ def behaviours_view(record, lookup) -> dict:
                 reasons.setdefault(d["id"], []).append(d.get("reason"))
         for bid, rs in reasons.items():
             deliveries.setdefault(bid, []).append({"item": key, "reasons": rs})
-    out = {"behaviours": [_behaviour_row(e, seen, overriders, deliveries) for e in entries]}
+    rows = [_behaviour_row(e, seen, overriders, deliveries) for e in entries]
+    for row, e in zip(rows, entries):
+        programme_view_behaviours.apply(row, e, facts)
+    out = {"behaviours": rows}
     if rejected:
         out["rejected_behaviours"] = [{k: r.get(k) for k in ("id", "layer", "key", "reason")} for r in rejected]
     if base["notices"]:
@@ -542,7 +548,7 @@ def behaviours_view(record, lookup) -> dict:
 
 def _behaviour_text(b) -> str:
     layer = f"repo {b.get('repo_key')}" if b.get("layer") == "repo" else b.get("layer")
-    status = [layer, b.get("state")]
+    status = [programme_view_behaviours.layer_text(b, layer), b.get("state")]
     if b.get("overridden_by"):
         status.append(f"overridden by {', '.join(b['overridden_by'])}")
     status.append(f"applies to {b.get('applies_to')}")
