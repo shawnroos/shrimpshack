@@ -239,8 +239,8 @@ def _read_herdr(ctx):
     if wake:
         wake.begin_read()
     state, why = _read_host(ctx)
-    if state is not None:
-        ctx["host_read"] = {"spaces": set(spaces), "state": state}
+    # A failed read drops the cache: begin_read already cleared the wake flag, so the next poll must read again.
+    ctx["host_read"] = {"spaces": set(spaces), "state": state} if state is not None else None
     return state, why
 
 

@@ -295,6 +295,12 @@ def _offers(method) -> bool:
     return _OFFERED[method]
 
 
+def _owner_alive(owner, alive) -> bool:
+    # A program writes its own report, so the owner's shape is not trusted: a list would not even hash.
+    return (isinstance(owner, dict) and isinstance(owner.get("pid"), int) and isinstance(owner.get("name"), str)
+            and (owner["pid"], owner["name"]) in alive)
+
+
 def _block_status(session, block):
     """The one status word for a block, or None. A report counts only while its reporter still runs in the block."""
     reported, _ = _rex_json(["api", "call", "-s", session, STATUS_METHOD, json.dumps({"block_id": block})])
@@ -306,8 +312,7 @@ def _block_status(session, block):
         return None
     # Compare the name as well as the pid: the system reuses pids.
     alive = {(n.get("pid"), n.get("name")) for n in _process_nodes(proc) if isinstance(n, dict)}
-    states = {r["state"] if r.get("state") in STATE_RANK else "idle" for r in records
-              if isinstance(r.get("owner"), dict) and (r["owner"].get("pid"), r["owner"].get("name")) in alive}
+    states = {r["state"] if r.get("state") in STATE_RANK else "idle" for r in records if _owner_alive(r.get("owner"), alive)}
     worst = next((s for s in STATE_RANK if s in states), None)
     return STATE_WORD.get(worst, worst)
 

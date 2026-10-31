@@ -644,6 +644,8 @@ it "a pid that now belongs to a program with another name reads unknown"
 check "native -" "$(panes_status "session-ls-json-one api-process-reused-pid")"
 it "a record with no owner cannot be checked, so it reads unknown"
 check "native -" "$(panes_status "$OVERLAY_ONE api-program-status-no-owner")"
+it "a record whose owner pid or name is not a number and a string reads unknown and never raises"
+check "native -" "$(panes_status "$OVERLAY_ONE api-program-status-malformed-owner")"
 it "a block with no records reads unknown and makes no process call"
 : > "$CALLS"
 OUT="$(panes_status "$OVERLAY_ONE api-program-status-empty")"
@@ -690,6 +692,29 @@ sys.modules[type(rex).__module__].MAX_STATUS_BLOCKS = 0
 rex.list_panes()
 PYEOF
 lacks "program_status {" "$(cat "$CALLS")"
+
+it "a host read that fails while the stream is healthy is read again on the next poll, never answered from the old state"
+OUT="$("$PY" - "$AUTO_ROOT" <<PYEOF
+import importlib.util, os, sys
+lib = os.path.join(sys.argv[1], "lib"); sys.path.insert(0, lib)
+spec = importlib.util.spec_from_file_location("pw", os.path.join(lib, "programme-watch.py"))
+pw = importlib.util.module_from_spec(spec); spec.loader.exec_module(pw)
+class Wake:
+    due_now = True
+    def due(self): return self.due_now
+    def begin_read(self): self.due_now = False
+reads = [({"panes": {"a"}}, None), (None, "boom"), ({"panes": {"a", "b"}}, None)]
+calls = []
+pw._read_host = lambda ctx: (calls.append(1), reads[len(calls) - 1])[1]
+ctx = {"workspaces": {"w"}, "wake": Wake()}
+first = pw._read_herdr(ctx)
+ctx["wake"].due_now = True
+failed = pw._read_herdr(ctx)
+third = pw._read_herdr(ctx)
+print(first[0] == {"panes": {"a"}}, failed[0] is None, sorted(third[0]["panes"]) if third[0] else None, len(calls))
+PYEOF
+)"
+check "True True ['a', 'b'] 3" "$OUT"
 
 it "the change token stays free of status, so a status change never wakes the PM (R5)"
 OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="session-ls-json-one api-program-status-blocked" "$PY" - "$AUTO_ROOT" <<PYEOF
