@@ -9,10 +9,13 @@ A behaviour is Shawn's standing guidance on how the PM and its workers do the wo
 | programme | the programme block's `behaviours` list (run-record-schema.md §10.5) | one programme |
 | repo | the behaviours store, under `repos.<repo key>` | every programme whose remit holds that repo |
 | personal | the behaviours store, under `personal` | every programme |
+| personal file | a markdown file in the `behaviours/` folder beside `behaviours.json` (env `CLAUDE_AUTO_BEHAVIOURS_DIR` replaces the folder) | every programme |
+| shipped file | a markdown file in the plugin's `behaviours/` folder (env `CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR` replaces the folder) | every programme |
 
+- Precedence, weakest to strongest: shipped file, personal file, repo, programme. A personal file replaces the shipped file with the same id. A stored personal entry beats a personal file with the same id; that file is reported as `shadowed` (section 9). A repo or programme entry beats a file of the same id, but stored entries keep coexisting with each other as before; only file entries are replaced by a higher layer.
 - The repo key is the repo's GitHub `owner/name`, else its normalised path, the same key the carry-over store uses.
 - The behaviours store is one JSON file per machine, `behaviours.json` in the folder of the personal protocol file. The env var `CLAUDE_AUTO_BEHAVIOURS_STORE` replaces the path (tests use it). It syncs between Shawn's machines with the personal protocol. It is not in any repo, so other people on a repo do not see its repo layer.
-- When two behaviours in force disagree, the narrower layer wins: programme over repo over personal (section 6).
+- When two behaviours in force disagree, the narrower layer wins: programme over repo over personal, and personal over shipped (section 6).
 - A programme record without `behaviours` reads as an empty list.
 
 ## 2. Store file
@@ -56,6 +59,15 @@ Any other key rejects the entry (`unknown_key`). A field of the wrong type gives
 
 A behaviour has no decision kind, no item list and no autonomy level, so nothing in it can widen what the PM or a worker may decide.
 
+### 3.1 Behaviour file
+
+A file is one entry: the file name without `.md` is the `id`, and a file with no `.md` ending or a leading dot is ignored. It starts with a frontmatter block between two `---` lines, then a body.
+
+- Frontmatter keys: `when` (required, one scalar line), and the optional scalars `trigger`, `applies_to` (default `both`), `evidence`, `stop`, `why`; and the optional lists `checks` (each item starts `pm:` or `agent:`), `overrides`, `skills`, `tools`, `agents`, `formats`, `comms`. Any other key, including `examples`, is `unknown_key`. A key given twice, a line that is not `key: value`, or a bad check prefix is `bad_value`.
+- The body holds a `Do:` heading and a `Don't:` heading, each followed by `-` or `*` bullets. Text outside a bullet list is `bad_value body`. At least one Do or Don't line is required (section 3).
+- The file goes through the same entry check as a stored entry (sections 3 and 4), and `formats` and `comms` lines are also scanned for protected escalations.
+- A file entry has state `active`, a `source` that is the string `file` (not the object of section 3), and no `history` or `adoption`. Its `at` is the file's modification time, so editing a file restarts its start (section 8).
+
 ## 4. Protected escalations
 
 A `do`, `skills`, `tools` or `agents` line that names a protected escalation rejects the entry (`protected_escalation`, with the escalation kind as detail): production deploys, releases, spend over cap, merging around the gate, refused permissions. The words come from `PROTECTED_STEMS` and `PROTECTED_WORDS` in `lib/programme_terms.py`. A stem counts only where a word starts, so "reproduction" does not match "production" while "deployed" matches "deploy". The risk-or-cost-limit and settled-human-choice kinds are not checked, because limits are enforced in code and a behaviour carries no authority.
@@ -72,7 +84,11 @@ When the store loads, each entry is checked in this order. The first failure rej
 2. Its `layer` matches the list it sits in (`wrong_layer`), and a repo entry's `repo_key` matches its key (`wrong_key`).
 3. Its adoption verifies like a personal protocol entry: on this machine, the cited prompt is typed, its hash matches and the journal holds the approval (`adoption_unverified`, `adoption_malformed`, `not_adopted`). An entry adopted on another of Shawn's machines loads on its own hash, because a behaviour carries no authority and the file syncs between his machines.
 
-A rejected entry is reported, never delivered. A programme entry that fails section 3 or 4, or whose layer is not `programme`, is rejected the same way.
+Shipped files and personal-folder files carry no adoption block and skip step 3. A shipped file counts as adopted by the install of the plugin. A personal file counts as adopted by where it sits: the folder is on Shawn's machine, and programme agents are denied direct Write, Edit and Bash writes to it and to `behaviours.json` by a best-effort hook guard (journal kind `blocked_behaviours_write`). It is a guard against honest mistakes, not a security boundary. Files reach the folder through the verbs `adopt-behaviour-file`, `copy-default` and `settle-default-update`, which write only on Shawn's typed prompt that names the id and carries the content hash (agent-tool-surface.md "Behaviours"). Each of those writes journals one `rule_adopted` row with `how` `file`. `settle-default-update --as shown` records only that the PM displayed a shipped change, and needs no prompt.
+
+The file `behaviours-seen.json`, beside the store, maps each shipped id to `seen` (the shipped hash Shawn last settled) and `shown` (the shipped hash the PM last displayed). The Programme view labels rows `shipped`, `yours (replaces shipped)` and `personal file`, and tags `update available` on a personal file that replaces a shipped one when the shipped file's current hash differs from its recorded `seen`. Update notices cover only copies made with `copy-default`.
+
+A file that fails the check is reported and loads nothing. The loader names a broken file once in the notices, and the shipped default with the same id then takes over. A rejected entry is reported, never delivered. A programme entry that fails section 3 or 4, or whose layer is not `programme`, is rejected the same way.
 
 ## 6. Resolution
 
@@ -80,7 +96,10 @@ For one item, the behaviours in force are built in this order:
 
 1. Programme entries, less any copy that has moved to a stored layer whose verified copy serves this item (section 7).
 2. Repo entries under the item's repo key.
-3. Personal entries.
+3. Personal entries, stored and from personal files.
+4. Shipped files.
+
+A file entry is replaced by any entry of the same id on a higher layer: a personal file replaces the shipped file, and a repo or programme entry replaces either. Stored entries are not replaced this way and coexist as before. A retired entry that wins an id still hides the file entries below it, which is how a shipped default is switched off.
 
 Then entries that are not `active` drop out, every entry named in another candidate's `overrides` drops out, and an audience filter keeps the entries whose `applies_to` is the audience or `both`.
 
@@ -98,6 +117,8 @@ Then entries that are not `active` drop out, every entry named in another candid
 ## 8. Delivery
 
 - A worker's brief carries a "Behaviours this work follows:" block: one line per worker behaviour in force for the item (id, when, do, don't, evidence and the checks the worker judges). A behaviour with no checks or with an agent check joins by itself. One gated only by PM checks joins only when the PM names it with `start-worker --behaviour <id>`, because code cannot test a PM check.
+- A shipped worker rule rides along in a `start-worker` brief only when `--handoff` exists. It does not by itself make `--handoff` mandatory.
+- A file entry's start is its file's modification time (`at`), so editing a file restarts its start and the edited rule reaches work in progress as a reminder only.
 - `remind-behaviour` sends one behaviour to an item's worker later, with reason `relevant` or `sent_back`.
 - Each delivery is recorded on the item in `behaviour_deliveries` (run-record-schema.md §10.5). A `brief` delivery does not stop a later reminder; the PM skips a behaviour on an item only when that item already has a `relevant` or `sent_back` delivery for it. `P status --json` shows each behaviour's PM checks, agent checks, evidence, stop and per-item deliveries under `contract.behaviours`.
 - A send-back needs the behaviour to have started before the item passed its trigger (the first claim, the first confirmed merge, or the first wait or hand). A behaviour's start is its last `recorded`, `moved` or `kept` history event, else `at`, because a move or keep is when it began reaching other items. A behaviour that started at or after the trigger, or at an unknown time, reaches the work as a reminder only.
@@ -105,3 +126,5 @@ Then entries that are not `active` drop out, every entry named in another candid
 ## 9. Rejection reasons
 
 `unknown_key`, `missing_field`, `bad_value`, `protected_escalation`, `wrong_layer`, `wrong_key`, and the adoption reasons of programme-protocol-format.md §4 (`not_adopted`, `adoption_malformed`, `adoption_unverified`).
+
+Behaviour files add no reasons of their own. A file with no opening `---` line is `missing_field frontmatter`; a frontmatter block never closed, an unreadable file, a bad line, a repeated key, a bad check prefix or a body outside the Do and Don't lists is `bad_value`; a key outside section 3.1 (including `examples`) is `unknown_key`. One more reason applies only to a personal file: `shadowed`, when a stored personal entry has the same id (the stored entry wins and the file is not loaded). Each rejected file is reported once as a notice, `behaviour file <layer>/<id>.md rejected: <reason>`, and never stops its neighbours; a broken personal file leaves the shipped default of the same id in force.

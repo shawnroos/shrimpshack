@@ -187,6 +187,9 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    | Keep a behaviour where it is | Nothing to run |
    | Move a behaviour to the repo, make it global, or bring it back to this programme | `P move-behaviour <behaviour-id> --to repo\|personal\|programme --prompt <id>` (add `--repo <key>` when the remit has several repos) |
    | Apply a behaviour you proposed | `P record-behaviour --from-proposal <behaviour-id> --prompt <id>` |
+   | Adopt a behaviour file he approved by hash | `P adopt-behaviour-file <id> --file <path> --prompt <id>` |
+   | Copy a shipped default to edit | `P copy-default <id> --prompt <id>` |
+   | Settle a shipped default's update | `P settle-default-update <id> --as shown\|keep\|take\|merge [--file <path>] [--prompt <id>]` |
    | Retire a behaviour | `P retire-behaviour <behaviour-id> --as retired --prompt <id>` |
    | Undo a behaviour you just recorded | `P retire-behaviour <behaviour-id> --as undone --prompt <id>` |
    | Settle a conflict you named: the new behaviour wins | Nothing to run: you recorded it with `--conflicts-with` |
@@ -198,7 +201,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    | Settle an uncertain action after end | `P dispose-action (--attempt <id>\|--resource <id>) --as abandoned_unknown\|accepted_unknown --prompt <id>` |
 
    **Behaviours.** Read [references/behaviours.md](references/behaviours.md) before you record, move,
-   retire or propose one.
+   retire, propose or adopt one (the file flow is there).
 
    **Naming and Rulings.** Read [references/rulings.md](references/rulings.md) before you cite a
    message, record a correction, or record an answer that fits no row as a Ruling.

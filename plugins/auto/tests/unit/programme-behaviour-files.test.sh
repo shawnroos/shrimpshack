@@ -59,7 +59,7 @@ it "happy path: frontmatter and Do/Dont body load as one entry"
 fresh_dirs
 cat > "${PERSONAL}/check-diff.md" <<EOF
 ---
-when: a worker claims a unit
+when: a worker starts a long wait
 trigger: start
 applies_to: workers
 checks:
