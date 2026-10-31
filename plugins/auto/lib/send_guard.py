@@ -39,7 +39,7 @@ _RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=")
 _OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 # After these an `a=b` word is the program they run, not an assignment.
-_RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "time", "sudo", "xargs", "builtin"})
+_RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "xargs", "builtin"})
 # A quoted `">"` lexes the same as the operator, so stripping it could drop a real target.
 _QUOTED_REDIRECT = re.compile(r"([\"'])\s*\d*(?:[<>]+&?|&>+)\d*\s*\1")
 _TEST_WORDS = frozenset({"[", "[[", "{", "}"})
@@ -52,7 +52,8 @@ _INTERPRETERS = re.compile(r"^(?:python[\d.]*|ruby|perl|node|php|osascript|lua|d
 _STRING_LITERAL = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 _UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
-                             "elif", "if", "while", "until", "{", "!"})
+                             "elif", "if", "while", "until", "{", "!", "timeout", "nice", "noglob", "nocorrect",
+                             "doas", "stdbuf", "caffeinate"})
 
 
 def _shell_script(rest: list):
@@ -200,17 +201,30 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
 
 
 def _is_command_word(tokens: list, start: int) -> bool:
-    before = tokens[start - 1] if start else None
-    if before is None or before in _SHELL_BREAKS or before in _COMMAND_PREFIX:
-        return True
-    return _is_assignment(tokens, start - 1)
+    """Walk back over assignments, options and redirections: the word runs as a program when the walk reaches the
+    start, a list break or a precommand. A loop, not recursion: a hook that raises lets the command through."""
+    i = start
+    while i > 0:
+        before = tokens[i - 1]
+        if before in _SHELL_BREAKS or before in _COMMAND_PREFIX:
+            return True
+        if i >= 2 and tokens[i - 2] in _REDIRECT_OPS:
+            i -= 2
+            if i > 0 and tokens[i - 1].isdigit() and len(tokens[i - 1]) <= 2:
+                i -= 1
+            continue
+        if _ASSIGNMENT.match(before) or before.startswith("-") or (i >= 2 and tokens[i - 2].startswith("-")):
+            i -= 1
+            continue
+        return False
+    return True
 
 
 def _is_assignment(tokens: list, i: int) -> bool:
     """`NAME=value` in a command word's place, so the shell sets a variable and the next word is the command."""
-    if not _ASSIGNMENT.match(tokens[i]) or not _is_command_word(tokens, i):
+    if not _ASSIGNMENT.match(tokens[i]) or (i and tokens[i - 1] in _RUNS_NEXT_WORD):
         return False
-    return not i or tokens[i - 1] not in _RUNS_NEXT_WORD
+    return _is_command_word(tokens, i)
 
 
 def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven):
