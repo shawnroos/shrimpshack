@@ -53,7 +53,18 @@ _STRING_LITERAL = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 _UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
                              "elif", "if", "while", "until", "{", "!", "noglob", "nocorrect", "doas", "stdbuf",
-                             "caffeinate"})
+                             "caffeinate", "nice"})
+# Options of a precommand that take the next word as their value; any other option keeps the command position.
+_PREFIX_VALUE_OPTS = {
+    "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-r", "-t", "-U", "-D", "-R", "-T"}),
+    "doas": frozenset({"-u", "-C"}),
+    "env": frozenset({"-u", "-C", "-S", "-P"}),
+    "xargs": frozenset({"-I", "-i", "-n", "-P", "-a", "-d", "-E", "-L", "-s", "-J", "-R", "-S"}),
+    "nice": frozenset({"-n"}),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+    "exec": frozenset({"-a"}),
+    "time": frozenset({"-o", "-f"}),
+}
 
 
 def _shell_script(rest: list):
@@ -208,7 +219,7 @@ def _command_positions(tokens: list) -> tuple:
     that times out or raises lets the command through. Redirections keep the position; a precommand's flags and
     assignments keep it too."""
     runs, assigns = [False] * len(tokens), [False] * len(tokens)
-    at_cmd, after_prefix, skip = True, False, 0
+    at_cmd, prefix, skip = True, None, 0
     for k, tok in enumerate(tokens):
         if skip:
             skip -= 1
@@ -221,11 +232,16 @@ def _command_positions(tokens: list) -> tuple:
             continue
         runs[k] = at_cmd
         if tok in _SHELL_BREAKS or tok in _COMMAND_PREFIX:
-            at_cmd, after_prefix = True, tok in _COMMAND_PREFIX
+            at_cmd, prefix = True, (tok if tok in _COMMAND_PREFIX else None)
         elif at_cmd and _ASSIGNMENT.match(tok) and not (k and tokens[k - 1] in _RUNS_NEXT_WORD):
             assigns[k] = True
-        elif not (at_cmd and after_prefix and tok.startswith("-")):
-            at_cmd, after_prefix = False, False
+        elif at_cmd and prefix and tok.startswith("-"):
+            if prefix == "command" and tok in ("-v", "-V"):
+                at_cmd, prefix = False, None
+            elif tok in _PREFIX_VALUE_OPTS.get(prefix, ()):
+                skip = 1
+        else:
+            at_cmd, prefix = False, None
     return runs, assigns
 
 
