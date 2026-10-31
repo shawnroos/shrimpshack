@@ -37,6 +37,7 @@ programme_recovery = load_lib_module("programme_recovery")
 session_registry = load_lib_module("session_registry")
 programme_behaviours = load_lib_module("programme_behaviours")
 programme_focus = load_lib_module("programme_focus")
+programme_domain = load_lib_module("programme_domain")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -296,13 +297,16 @@ def _pane_item_id(pane, host) -> str:
 
 
 def propose(programme, panes, drivers, issues_found, verified, scope=None, info=None) -> dict:
-    proposals, skipped = [], []
+    proposals, skipped, gone = [], [], []
     scope, info, cache = scope or {}, info or {}, {}
     host = terminal_host.current().name or programme_home.DEFAULT_HOST
     for pane in panes:
         why = role(pane, drivers)
         if why != "worker":
             skipped.append({"pane": pane["pane_id"], "why": why})
+            continue
+        if programme_domain.folder_gone(pane):
+            gone.append(programme_domain.gone_entry(programme, pane))
             continue
         why, found = _pane_scope(pane, issues_found.get(pane["pane_id"]) or {}, scope, info, cache)
         if why:
@@ -320,7 +324,7 @@ def propose(programme, panes, drivers, issues_found, verified, scope=None, info=
         if action == "alias":
             entry["from"] = existing
         proposals.append(entry)
-    return {"proposals": proposals, "skipped": skipped}
+    return {"proposals": proposals, "skipped": skipped, "folder_gone": gone}
 
 
 def _owner_sessions(programme, panes) -> set:
@@ -398,12 +402,16 @@ def sweep(record) -> dict:
         "issues": {k: v for k, v in ((tracker or {}).get("issues") or {}).items() if k in candidates},
         "tasks": tasks["sessions"] if tasks else None,
         "plans": plans["repos"] if plans else None,
-        "panes": panes, "proposals": None, "skipped": None,
+        "panes": panes, "proposals": None, "skipped": None, "folder_gone": None, "order": None, "domain": None,
     }
     info = issue_info(tracker, programme)
     result["unstaffed"] = unstaffed(programme, info, found, scope) if any(scope["tracker"].values()) else []
     if panes is not None:
         result.update(propose(programme, panes, drivers, found, verified, scope, info))
+        result["order"] = programme_domain.order(programme, workers)
+        outside = programme_domain.outside_views(
+            snap, scope, lambda row, agent: _owner(row, agent, None), lambda pane: role(pane, drivers))
+        result["domain"] = [programme_domain.recommendation(p) for p in outside]
     result["source_changes"] = source_changes(programme, result["sources"])
     return result
 
