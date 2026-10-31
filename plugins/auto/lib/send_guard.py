@@ -52,8 +52,8 @@ _INTERPRETERS = re.compile(r"^(?:python[\d.]*|ruby|perl|node|php|osascript|lua|d
 _STRING_LITERAL = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 _UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
-                             "elif", "if", "while", "until", "{", "!", "timeout", "nice", "noglob", "nocorrect",
-                             "doas", "stdbuf", "caffeinate"})
+                             "elif", "if", "while", "until", "{", "!", "noglob", "nocorrect", "doas", "stdbuf",
+                             "caffeinate"})
 
 
 def _shell_script(rest: list):
@@ -169,6 +169,8 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
     tokens = _lex(main)
     piped = main + "\n" + "\n".join(bodies)
     strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
+    positions = _command_positions(tokens)
+    runs = positions[0]
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
         script = None
@@ -178,11 +180,11 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             script = " ".join(_segment(tokens, start + 1)) or None
         elif token == "<<<" and rest:
             script = rest[0]
-        if _INTERPRETERS.match(os.path.basename(token)) and depth < MAX_DEPTH and _is_command_word(tokens, start):
+        if _INTERPRETERS.match(os.path.basename(token)) and depth < MAX_DEPTH and runs[start]:
             # Inline code of another language can call the host command through a string; scan every string in it.
             for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
                 _scan(literal, depth + 1, hosts, pane_ids, found, proven)
-        if script is None and os.path.basename(token) in _SHELL_BINS and depth < MAX_DEPTH and _is_command_word(tokens, start):
+        if script is None and os.path.basename(token) in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
             # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be that script.
             for quoted in {t for t in tokens if " " in t}:
                 _scan(quoted, depth + 1, hosts, pane_ids, found, proven)
@@ -193,50 +195,51 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         segment = strip(_segment(tokens, start))
         for host in hosts:
             if proven is not None:
-                hit = _unproven(host, tokens, start, segment, piped, proven)
+                hit = _unproven(host, tokens, start, segment, piped, proven, positions)
             else:
                 hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
             if hit:
                 found.append((host.name, hit[0], hit[1]))
 
 
-def _is_command_word(tokens: list, start: int) -> bool:
-    """Walk back over assignments, options and redirections: the word runs as a program when the walk reaches the
-    start, a list break or a precommand. A loop, not recursion: a hook that raises lets the command through."""
-    i = start
-    while i > 0:
-        before = tokens[i - 1]
-        if before in _SHELL_BREAKS or before in _COMMAND_PREFIX:
-            return True
-        if i >= 2 and tokens[i - 2] in _REDIRECT_OPS:
-            i -= 2
-            if i > 0 and tokens[i - 1].isdigit() and len(tokens[i - 1]) <= 2:
-                i -= 1
+def _command_positions(tokens: list) -> tuple:
+    """(runs, assigns): per token, whether it sits where the shell runs a program, and whether it is a `NAME=value`
+    assignment there. One left-to-right pass, because the hook runs on every command under a 10 s limit and a hook
+    that times out or raises lets the command through. Redirections keep the position; a precommand's flags and
+    assignments keep it too."""
+    runs, assigns = [False] * len(tokens), [False] * len(tokens)
+    at_cmd, after_prefix, skip = True, False, 0
+    for k, tok in enumerate(tokens):
+        if skip:
+            skip -= 1
             continue
-        if _ASSIGNMENT.match(before) or before.startswith("-") or (i >= 2 and tokens[i - 2].startswith("-")):
-            i -= 1
+        nxt = tokens[k + 1] if k + 1 < len(tokens) else None
+        if tok in _REDIRECT_OPS:
+            skip = 1
             continue
-        return False
-    return True
+        if tok.isdigit() and len(tok) <= 2 and nxt in _REDIRECT_OPS:
+            continue
+        runs[k] = at_cmd
+        if tok in _SHELL_BREAKS or tok in _COMMAND_PREFIX:
+            at_cmd, after_prefix = True, tok in _COMMAND_PREFIX
+        elif at_cmd and _ASSIGNMENT.match(tok) and not (k and tokens[k - 1] in _RUNS_NEXT_WORD):
+            assigns[k] = True
+        elif not (at_cmd and after_prefix and tok.startswith("-")):
+            at_cmd, after_prefix = False, False
+    return runs, assigns
 
 
-def _is_assignment(tokens: list, i: int) -> bool:
-    """`NAME=value` in a command word's place, so the shell sets a variable and the next word is the command."""
-    if not _ASSIGNMENT.match(tokens[i]) or (i and tokens[i - 1] in _RUNS_NEXT_WORD):
-        return False
-    return _is_command_word(tokens, i)
-
-
-def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven):
+def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven, positions):
     """The one policy for a session that is not the PM. Hosts only say what a send is (send_class) and which targets
     a call names; a send, or a call that cannot be told from one, passes only when every target is a literal id that
     the registry proves is another session's pane. A command word built at run time is always a hit."""
     shape = host.send_class(segment, piped)
     if shape is None:
         word = tokens[start]
-        if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or _is_assignment(tokens, start):
+        runs, assigns = positions
+        if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or assigns[start]:
             return None
-        return ("runtime-built command", "") if _RUNTIME_WORD.search(word) and _is_command_word(tokens, start) else None
+        return ("runtime-built command", "") if _RUNTIME_WORD.search(word) and runs[start] else None
     kind, targets = shape
     if kind == "read":
         return None

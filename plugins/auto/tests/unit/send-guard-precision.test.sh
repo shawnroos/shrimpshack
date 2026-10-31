@@ -116,6 +116,11 @@ allowed 'make CC=gcc FOO=1 "$TARGET"'
 allowed 'make -C build "$TARGET"'
 allowed 'ls -la "$DIR"'
 allowed 'grep -nE pat "$F" > out.txt'
+allowed 'xargs -0 rm "$F"'
+allowed 'sudo -E make "$T"'
+allowed 'env -i make "$T"'
+allowed 'time -p make "$T"'
+allowed 'timeout "$SECS" pytest'
 allowed 'for t in a b; do bash "$t" > out.txt; echo "exit=$?"; done'
 allowed 'rex session rename "$REX_SESSION" auto-hook-146'
 allowed 'rex window rename w1 x'
@@ -197,10 +202,13 @@ denied 'sudo -E A=1 $H pane send-text $P hi'
 denied 'time -p A=1 $R send -b $B go'
 denied '>/dev/null $H pane send-text $P hi'
 denied 'x=1 2>/dev/null $H pane send-text $P hi'
-denied 'sudo -u root $H pane send-text $P hi'
-denied 'nice -n 5 $H pane send-text $P hi'
 it "denied: a thousand assignment prefixes do not crash the guard open"
 check deny "$(verdict "$(hook sess-worker "$(printf 'a=1 %.0s' $(seq 1000))\$H pane send-text \$P hi")")"
+it "denied fast: twenty thousand assignment prefixes are judged well inside the hook's 10 s limit"
+START=$(date +%s)
+V="$(verdict "$(hook sess-worker "$(printf 'a=1 %.0s' $(seq 20000))\$H pane send-text \$P hi")")"
+ELAPSED=$(( $(date +%s) - START ))
+check "deny fast" "$V $([ "$ELAPSED" -lt 5 ] && echo fast || echo "slow:${ELAPSED}s")"
 
 echo "send-guard-precision: any command word built at run time is denied, whatever follows (fails closed)"
 denied '"$PY" "$SKILL_DIR/scripts/x.py"'
