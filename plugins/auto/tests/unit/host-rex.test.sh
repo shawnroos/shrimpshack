@@ -507,5 +507,102 @@ PYEOF
 it "the item is still open and has no done time"
 check "open None" "$STATE"
 
+echo "host-rex: a pane's agent_status is read from the status its program reports, only where the server offers it (R1, R2, R3, R6)"
+# Fixtures api-program-status-* and api-process-claude-live were captured on a Rex server of API revision 8
+# (the proof run); a `handwritten` file in a directory marks the ones that change one captured field.
+OVERLAY_ONE="session-ls-json-one api-process-claude-live"
+panes_status() { # overlay words as $1; prints the pane's agent_status, or "-" when the key is absent
+  env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$1" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+r = rex.list_panes(); p = [x for x in r.value["panes"] if x["pane_id"] == "$BID"][0]
+print(r.status, p.get("agent_status", "-"))
+PYEOF
+}
+it "a working Claude reads working"
+check "native working" "$(panes_status "$OVERLAY_ONE")"
+it "a Claude blocked on a permission reads blocked"
+check "native blocked" "$(panes_status "$OVERLAY_ONE api-program-status-blocked")"
+it "a finished turn (done) reads idle, which is what the sweep treats as settled"
+check "native idle" "$(panes_status "$OVERLAY_ONE api-program-status-done")"
+it "a state this host does not know reads idle, as the Rex schema says"
+check "native idle" "$(panes_status "$OVERLAY_ONE api-program-status-unknown-state")"
+it "a root record that works and a child that is blocked: the worst state wins"
+check "native blocked" "$(panes_status "$OVERLAY_ONE api-program-status-tree")"
+it "a record whose reporter is not in the block reads unknown (AE2)"
+check "native -" "$(panes_status "$OVERLAY_ONE api-program-status-dead-owner")"
+it "a pid that now belongs to a program with another name reads unknown"
+check "native -" "$(panes_status "session-ls-json-one api-process-reused-pid")"
+it "a record with no owner cannot be checked, so it reads unknown"
+check "native -" "$(panes_status "$OVERLAY_ONE api-program-status-no-owner")"
+it "a block with no records reads unknown and makes no process call"
+: > "$CALLS"
+OUT="$(panes_status "$OVERLAY_ONE api-program-status-empty")"
+check "native -" "$OUT"
+lacks "terminal.process" "$(cat "$CALLS")"
+
+it "the reported text never reaches the snapshot: not the message, not an escape sequence (AE5)"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE api-program-status-hostile-message" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+r = rex.list_panes(); text = json.dumps(r.value)
+print(r.status, "IGNORE" in text, "\\\\u001b" in text, len(text) < 5000)
+PYEOF
+)"
+check "native False False True" "$OUT"
+
+it "an older server (no status method): no status call, no agent_status, the panes as before (AE3)"
+: > "$CALLS"
+OUT="$(panes_status "session-ls-json-one api-describe-program-status-missing")"
+check "native -" "$OUT"
+lacks "program_status {" "$(cat "$CALLS")"
+has "api describe com.superlogical.terminal.program_status" "$(cat "$CALLS")"
+
+it "the probe runs once per process however many snapshots are read"
+: > "$CALLS"
+env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE" "$PY" - "$AUTO_ROOT" <<PYEOF >/dev/null 2>&1
+$HEAD_PY
+rex.list_panes(); rex.list_panes(); rex.list_panes()
+PYEOF
+check "1" "$(grep -c 'api describe' "$CALLS")"
+
+it "a probe that cannot run counts as not offered, never as a refusal"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="session-ls-json-one" HOST_FAKE_FORCE="command-not-found" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+print(sys.modules[type(rex).__module__]._offers("com.superlogical.terminal.program_status"))
+PYEOF
+)"
+check "False" "$OUT"
+
+it "the number of blocks read per snapshot is capped"
+: > "$CALLS"
+env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE" "$PY" - "$AUTO_ROOT" <<PYEOF >/dev/null 2>&1
+$HEAD_PY
+sys.modules[type(rex).__module__].MAX_STATUS_BLOCKS = 0
+rex.list_panes()
+PYEOF
+lacks "program_status {" "$(cat "$CALLS")"
+
+it "the change token stays free of status, so a status change never wakes the PM (R5)"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="session-ls-json-one api-program-status-blocked" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+import subprocess
+def read_json(argv):
+    done = subprocess.run(argv, capture_output=True, text=True)
+    return (json.loads(done.stdout), None) if done.returncode == 0 else (None, "exit=%d" % done.returncode)
+r = rex.change_token(read_json)
+print(sorted(set(k for a in r.value["agents"] for k in a)), any("agent_status" in p for p in r.value["panes"]))
+PYEOF
+)"
+check "['pane_id', 'state_change_seq'] False" "$OUT"
+
+it "a Rex pane that reads idle lets the permission settle see the owner pane as idle, as it does for herdr"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE api-program-status-done" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+settle = load_lib_module("programme_permission_settle")
+snap = rex.list_panes().value
+print(settle._pane_status(snap, "$BID"), settle._pane_status(snap, "$NOB"))
+PYEOF
+)"
+check "idle gone" "$OUT"
+
 echo "host-rex.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

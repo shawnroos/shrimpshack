@@ -27,6 +27,13 @@ MAX_SESSIONS = 32
 # A poll must never start a Rex server.
 NO_AUTOSTART = "--autostart=false"
 PROCESS_METHOD = "com.superlogical.terminal.process"
+STATUS_METHOD = "com.superlogical.terminal.program_status"
+# Rex's state names, worst first. "done" is a finished turn, which the sweep treats as idle.
+STATE_RANK = ("blocked", "error", "working", "done", "idle")
+STATE_WORD = {"done": "idle"}
+# One status call and at most one process call per block, each up to REX_TIMEOUT.
+MAX_STATUS_BLOCKS = 64
+_OFFERED: dict = {}
 SESSION_PREFIX = "session:"
 BIN_TOKENS = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", "--color"})
@@ -89,7 +96,7 @@ class RexHost(terminal_host.TerminalHost):
         views, why = _all_views(_rex_json)
         if views is None:
             return refuse(why)
-        return native(_snapshot(views, with_seq=False))
+        return native(_snapshot(views, with_seq=False, statuses=_statuses(views)))
 
     def start_pane(self, argv, timeout, **_):
         missing = self._needs_rex("start_pane")
@@ -210,7 +217,49 @@ def _all_views(call):
     return views, None
 
 
-def _snapshot(views, with_seq) -> dict:
+def _offers(method) -> bool:
+    """True when the connected server offers `method`. Asked once per process; a failed ask also reads as no."""
+    if method not in _OFFERED:
+        asked = _rex(["api", "describe", method], REX_TIMEOUT)
+        _OFFERED[method] = bool(asked["ran"] and asked["code"] == 0)
+    return _OFFERED[method]
+
+
+def _block_status(session, block):
+    """The one status word for a block, or None. A report counts only while its reporter still runs in the block."""
+    reported, _ = _rex_json(["api", "call", "-s", session, STATUS_METHOD, '{"block_id":"%s"}' % block])
+    records = [r for r in (reported or {}).get("records") or [] if isinstance(r, dict)]
+    if not records:
+        return None
+    proc, _ = _rex_json(["api", "call", "-s", session, PROCESS_METHOD, '{"block_id":"%s"}' % block])
+    if proc is None:
+        return None
+    # Compare the name as well as the pid: the system reuses pids.
+    alive = {(n.get("pid"), n.get("name")) for n in [proc.get("foreground"), proc.get("child")] + (proc.get("ancestors") or [])
+             if isinstance(n, dict)}
+    states = {r["state"] if r.get("state") in STATE_RANK else "idle" for r in records
+              if isinstance(r.get("owner"), dict) and (r["owner"].get("pid"), r["owner"].get("name")) in alive}
+    worst = next((s for s in STATE_RANK if s in states), None)
+    return STATE_WORD.get(worst, worst)
+
+
+def _statuses(views) -> dict:
+    """block id -> status word for the blocks whose program reported one; empty on a server without the method."""
+    if not _offers(STATUS_METHOD):
+        return {}
+    found, budget = {}, MAX_STATUS_BLOCKS
+    for view in views:
+        for _, entry in _blocks(view):
+            if budget <= 0:
+                return found
+            budget -= 1
+            word = _block_status(view.get("session_id"), entry["block_id"])
+            if word:
+                found[entry["block_id"]] = word
+    return found
+
+
+def _snapshot(views, with_seq, statuses=None) -> dict:
     """The herdr-shaped snapshot the sweep and the remit watcher read; every block carries its session's revision."""
     panes, agents, tabs = [], [], []
     for view in views:
@@ -218,8 +267,11 @@ def _snapshot(views, with_seq) -> dict:
         for window in view.get("windows") or []:
             tabs.append({"tab_id": window.get("window_id"), "label": window.get("label")})
         for window, entry in _blocks(view):
-            panes.append({"pane_id": entry["block_id"], "workspace_id": space,
-                          "tab_id": window.get("window_id"), "label": entry.get("label"), "terminal_id": None})
+            pane = {"pane_id": entry["block_id"], "workspace_id": space,
+                    "tab_id": window.get("window_id"), "label": entry.get("label"), "terminal_id": None}
+            if (statuses or {}).get(entry["block_id"]):
+                pane["agent_status"] = statuses[entry["block_id"]]
+            panes.append(pane)
             if with_seq:
                 agents.append({"pane_id": entry["block_id"], "state_change_seq": view["revision"]})
     return {"panes": panes, "agents": agents, "tabs": tabs}
