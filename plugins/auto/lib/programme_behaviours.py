@@ -464,6 +464,7 @@ def _short(entry) -> str:
             parts.append(f"{label}: {'; '.join(entry[field])}")
     if entry.get("evidence"):
         parts.append(f"evidence: {entry['evidence']}")
+    parts += [f"{field}: {', '.join(entry[field])}" for field in ("skills", "formats", "comms") if entry.get(field)]
     judged = [c["text"] for c in entry["when"].get("checks") or [] if c["by"] == "agent"]
     if judged:
         parts.append(f"you judge: {'; '.join(judged)}")

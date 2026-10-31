@@ -722,6 +722,10 @@ def _h_start_worker(host, argv):
         raise host.ProgrammeError(f"item {key!r} is {programme['items'][key]['state']}")
     behaviours, held_back = programme_behaviours.brief_entries(
         dict(record, programme=programme), programme["items"][key], chosen, lookup=host.prompt_lookup)
+    # Shipped defaults are optional context: without a handoff there is no brief to carry them, and they
+    # must not make a plain start refuse. Stored and personal behaviours still do.
+    if "--handoff" not in extra[:-1] and not chosen and all(b.get("layer") == "shipped" for b in behaviours):
+        behaviours = []
     behaviour_ids = [b["id"] for b in behaviours]
     # Without a handoff there is no brief to carry the Rulings, and requiring one would refuse plain starts.
     with_brief = bool(decision_ids or restrictions or behaviours) or "--handoff" in extra[:-1]
