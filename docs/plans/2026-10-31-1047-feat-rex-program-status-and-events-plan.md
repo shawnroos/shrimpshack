@@ -18,7 +18,7 @@ execution: code
 - **Objective:** When a programme runs in Rex, the PM can tell a worker that waits for Shawn from one that works or has finished, and it learns about changes without reading every Rex session on a timer.
 - **Means:** Read the status that programs report to Rex, and Rex's event stream, behind the existing terminal host seam. Use each only when the connected server offers it (KTD1, KTD2, KTD4).
 - **Authority:** Product Contract, then Key Technical Decisions. The safety rules of the merged terminal-host work stay in force: only host proof moves a lease or counts as an own-pane proof.
-- **Stop conditions:** Stop before U3 if no program in a Rex block reports a status and the report path (U5) does not look buildable: reading an empty status delivers nothing. U2 and U4 do not depend on a reporter and go ahead on any U1 result. If U5 is buildable but no worker-side reporter exists, U3 and U5 still go ahead, and worker panes keep reading "unknown"; the worker-state outcome is then not met and the handoff says so.
+- **Stop conditions:** None open. U1 found a reporter (Claude Code reports its own status), so U2, U3 and U4 go ahead.
 - **Execution profile:** Code. U1 runs against a separate throwaway Rex server started from the installed CLI (revision 8), so Shawn's running server is never touched.
 
 ---
@@ -27,7 +27,7 @@ execution: code
 
 ### Summary
 
-Make the Rex terminal host use three things the newest Rex CLI offers and auto ignores today: the status a program reports (working, blocked, done), the live event stream, and a per-server check for each. An older Rex server keeps today's behaviour. Last, and gated on a first proof run (U1), the PM's own Rex block reports "blocked" while an ask waits for Shawn.
+Make the Rex terminal host use three things the newest Rex CLI offers and auto ignores today: the status a program reports (working, blocked, done), the live event stream, and a per-server check for each. An older Rex server keeps today's behaviour. The PM's own block already shows "blocked" while Claude waits on a permission or question, because Claude Code reports that itself; auto adds no writer.
 
 ### Problem Frame
 
@@ -38,7 +38,7 @@ The installed Rex CLI is API revision 8 (built Oct 30). Shawn's running Rex serv
 - **Change signal.** The remit watcher reads the session list, then every session's view, each interval (up to 32 calls). Rex has an event stream built for this.
 - **Version drift.** Several Rex versions run on one machine. The CLI can be newer than the server it talks to, so a feature cannot be assumed from the CLI's version.
 
-The status method answered a read-only call on the revision 6 server (it returned no records), and the event commands are confirmed from the CLI's help. Which methods revisions 7 and 8 added, and whether anything reports a status, is not known yet; U1 finds out on a throwaway server of the installed revision.
+The status method answered a read-only call on the revision 6 server (it returned no records), and the event commands are confirmed from the CLI's help. U1 settled the rest on a throwaway server of the installed revision: revisions 7 and 8 add only an onboarding block method, so everything here also works on a revision 6 server; and Claude Code reports its own status (working, blocked with kind, done, with a message and the reporter's pid).
 
 ### Requirements
 
@@ -55,8 +55,8 @@ The status method answered a read-only call on the revision 6 server (it returne
 - R6. A server that lacks a method gets today's behaviour for that feature: the same snapshot, the same feature calls, no new refusal, plus one cached probe call per process.
 - R7. Each Rex capability row says what an older server gives and the revision on which the new path was verified.
 
-**Asking Shawn (gated on U1)**
-- R8. When a hand-off needs Shawn, the PM's own Rex block reports "blocked" with the kind of wait. The Rex app is not switched to the PM's session and no label is changed.
+**Asking Shawn**
+- R8. The PM's own Rex block shows "blocked" with the kind of wait while Claude waits for Shawn. Claude Code reports this itself; auto writes no status, switches no app focus and changes no label.
 
 ### Acceptance Examples
 
@@ -69,7 +69,7 @@ The status method answered a read-only call on the revision 6 server (it returne
 ### Key Decisions
 
 - **Older Rex keeps today's behaviour.** Use the new APIs when the server has them; do not refuse below revision 8. Governs R6, R7. (session-settled: user-approved — chosen over refusing below revision 8: the running server is on revision 6.)
-- **Reading comes first, reporting last.** Governs R1, R8.
+- **Auto only reads status; Claude Code does the reporting.** Governs R1, R8.
 - **Wake rules do not change.** A blocked worker does not wake the PM by itself, because the PM is meant to stay quiet unless Shawn must decide. Governs R5.
 
 ### Scope Boundaries
@@ -82,6 +82,7 @@ The status method answered a read-only call on the revision 6 server (it returne
 - Wake the PM when a worker turns "blocked". Needs a decision on noise.
 - Name Rex sessions and blocks after the programme item, as Rex's agent guide suggests.
 - Switch the Rex app to the PM's session. Declined for now; revisit if marking proves too quiet.
+- Report "blocked" from auto for a hand-off that waits on Shawn while Claude itself is idle. Withdrawn (was U5): Claude overwrites its own record on its next report, so a second writer would not hold.
 
 ---
 
@@ -92,9 +93,9 @@ The status method answered a read-only call on the revision 6 server (it returne
 - KTD1. **Probe by method, not by version.** Before using a new method, ask the connected server whether it offers it (`rex api describe`, or the method list). Cache the answer for the life of the process. A CLI newer than its server then fails safe. The exact probe is chosen in U2 after U1 shows what is cheap and reliable. Realises R6, R7. (session-settled: user-approved — chosen over a version floor of revision 8.)
 - KTD2. **One status per block, worst state wins.** A block's records (a root and optional children) reduce to one state in the order blocked, error, working, done, idle. A state the host does not know reads as idle, as Rex's own schema says. States pass through under Rex's names: idle, working, blocked and done match the sweep's vocabulary, and "error" reaches it as a status the sweep treats as neither idle nor gone. Realises R1.
 - KTD3. **A report counts only while its reporter lives.** Compare the record's owner (pid and name; Rex warns the system reuses pids) with the block's foreground process, child and ancestors from the existing process call. No match reads "unknown". Only blocks that have a record cost the extra call. Realises R2.
-- KTD4. **Events wake the watcher; the watcher's contract stays.** A reader of the event stream marks the watcher dirty. Dirty, or the safety-net interval elapsed, triggers the existing snapshot read and diff, so its printed lines stay identical. Events that arrive within a minimum gap of the last read coalesce into one read, because busy and idle changes also raise events and a naive wake could read more often than today's 30-second poll. The gap and the longer safety-net interval are measured in U4, not guessed here. Realises R4, R5.
-- KTD5. **Reporting never writes to a device path from registry data.** The report is a new host method (report and clear) called wherever auto already asks the host to notify. The emitting process is the programme verb the PM runs from a Bash call, not a hook, so U1 must prove that process can reach the block's own terminal. The send-guard keeps denying tty-device writes. Realises R8.
-- KTD6. **Mark by status, not by label or focus.** A block label is the identity the exact-label takeover pick uses, so renaming the PM's block would break takeover. Switching the app steals Shawn's focus. A reported "blocked" does neither. Realises R8. (session-settled: user-approved — chosen over switching the Rex app to the PM's session.)
+- KTD4. **Events wake the watcher; the watcher's contract stays.** A reader of the event stream marks the watcher dirty on a block or session joining or leaving; other events, including every client connecting (the watcher's own reads cause those), are ignored. Dirty, or the safety-net interval elapsed, triggers the existing snapshot read and diff, so its printed lines stay identical. Events that arrive within a minimum gap of the last read coalesce into one read, because busy and idle changes also raise events and a naive wake could read more often than today's 30-second poll. The gap and the longer safety-net interval are measured in U4, not guessed here. Realises R4, R5.
+- KTD5. **Auto does not write status.** Claude Code reports its own status in a Rex block (U1), and its next report would replace anything auto wrote. Realises R8.
+- KTD6. **Mark by status, not by label or focus.** A block label is the identity the exact-label takeover pick uses, so renaming the PM's block would break takeover. Switching the app steals Shawn's focus. The status Claude Code already reports does neither. Realises R8. (session-settled: user-approved — chosen over switching the Rex app to the PM's session.)
 
 ### High-Level Technical Design
 
@@ -115,14 +116,12 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 
 ### Assumptions
 
-- Claude Code may not report a status by itself. U1 settles this; the plan does not assume either answer.
-- The report grammar (the escape sequence a program writes) is not documented in what was read. The CLI shows only the query form and the state and kind names. U1 captures the real grammar before U5.
+- The report grammar is colon-separated fields (`state`, `kind`, `app`, `progress`); U1 found that a report with an unknown field is ignored whole. Only Claude Code writes reports here, so auto never needs the grammar.
 
 ### Risks & Dependencies
 
 | Risk | Mitigation |
 |---|---|
-| Nothing in a Rex block reports a status, so U2 to U4 deliver nothing | U1 gates them (stop condition); U5 is the path to a real reporter |
 | A stale or spoofed "working" or "idle" changes what the sweep does | KTD3 liveness check; R3; the status only feeds the sweep's "pending or retry" choice and never a lease or a permission |
 | Test fixtures replay recorded output, and revisions 7 and 8 cannot be recorded from the running server | Record on the throwaway server in U1; label any hand-written fixture as built from the schema |
 | `rex api call` on a block is classed as a send by the send-guard | Leave the guard as it is; the host runs its calls from Python, not from a Bash command, and a test pins the guard's class |
@@ -134,7 +133,7 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 
 ### U1. Prove the status and event paths on a current Rex server
 
-**Goal:** Turn the open questions into recorded facts, and decide whether U2 to U5 go ahead.
+**Goal:** Turn the open questions into recorded facts, and decide which of U2 to U4 go ahead.
 
 **Requirements:** All; gates R1 to R8.
 
@@ -146,8 +145,8 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 1. Start a separate foreground server from the installed CLI on its own socket and state directory, with no restore and exit-when-empty (`rex server run --listen`, `--state-dir`, `--restore=false`, `--exit-empty`), and point every call at it with `--server`. Never stop or restart Shawn's running server.
 2. Start Claude in a block of that server, and read `com.superlogical.terminal.program_status` for the block while it works, waits on a permission and sits idle.
 3. Capture real output of the status method, of `rex events --json` while a block opens and closes, and of the method list. Diff the list against the revision 6 list to learn what revisions 7 and 8 added.
-4. Record the grammar a program writes to report a status, and check that a process started the way the programme verbs are (from a Bash call) can reach a block's terminal to write it.
-5. Write the gate decision. A reporter exists: build U2, U3, U4, then U5. No reporter but U5 is buildable: build U2, U4, U3, then U5; worker panes read "unknown" until a worker-side reporter exists. Neither: build U2 and U4 only and stop.
+4. Record the grammar a program writes to report a status.
+5. Gate decision: a reporter exists (Claude Code), so build U2, U3 and U4. U5 is withdrawn.
 
 **Execution note:** Runtime probing, so it happens at execution, not in this plan. Label each fixture as recorded from a revision or built from the schema.
 
@@ -187,7 +186,7 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 
 **Requirements:** R1, R2, R3; AE1, AE2, AE5.
 
-**Dependencies:** U2, and a U1 decision that is not "neither".
+**Dependencies:** U2.
 
 **Files:** `plugins/auto/lib/host_rex.py`, `plugins/auto/tests/unit/host-rex.test.sh`, `plugins/auto/tests/unit/programme-permission.test.sh`, `plugins/auto/tests/unit/programme-sources.test.sh`, `plugins/auto/tests/fixtures/hosts/rex/`.
 
@@ -241,32 +240,9 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 
 **Verification:** The watcher suite passes alone and in the full run; a recorded call count shows the reduction on a healthy stream.
 
-### U5. Report "blocked" for the PM's own asks (gated)
+### U5. Withdrawn
 
-**Goal:** When a hand-off needs Shawn, the PM's Rex block says so in Rex, without focus or label changes.
-
-**Requirements:** R8, R3.
-
-**Dependencies:** U1 (grammar, and proof that the emitting process reaches the block's terminal), U3 (so the same status reads back).
-
-**Files:** `plugins/auto/lib/host_rex.py`, `plugins/auto/lib/terminal_host.py`, `plugins/auto/lib/terminal_host_capabilities.json`, `plugins/auto/lib/programme_record.py`, `plugins/auto/tests/unit/host-rex.test.sh`, `plugins/auto/tests/unit/terminal-host-coverage.test.sh`, `plugins/auto/tests/unit/send-guard-hosts.test.sh`, `plugins/auto/tests/fixtures/hosts/rex/`.
-
-**Approach:**
-1. Add a host method (report and clear), with a capability row, that reports "blocked" and the kind of wait on the PM's own block (KTD5, KTD6). Hosts without it keep today's notify answer.
-2. Call it from every place auto asks the host to notify: a handed ask regardless of the tracker result (today the host is notified only when the tracker write fails), a permission proposal, and a safety pause.
-3. Clear the report in the verb that records the answer; U5 names that verb when it reads the code.
-4. Keep the journal and tracker route as the durable record; the report is an addition.
-
-**Execution note:** Do not start until U1 has the report grammar. If U1 shows Claude Code already reports its own state, check that auto's report does not fight it.
-
-**Test scenarios:**
-- Ask handed: the block's status reads "blocked" with the right kind (read back through U3).
-- Ask answered: the status returns to idle or working.
-- Not inside a Rex block, or `rex` missing: no write, the journal route runs, no failure.
-- The send-guard still denies a tty-device write built from registry data (Covers KTD5).
-- The report text is bounded and carries no ask text beyond a short label (R3).
-
-**Verification:** A live check in Rex shows the PM block marked while an ask is open and cleared after.
+Not built; see Deferred to Follow-Up Work. The ID stays so references hold.
 
 ---
 
@@ -274,12 +250,11 @@ The gate is evaluated per block. Status feeds only the pane snapshot the sweep r
 
 | Gate | Command (from `plugins/auto`) | Applies to |
 |---|---|---|
-| Targeted | `bash tests/unit/host-rex.test.sh`, `bash tests/unit/terminal-host-coverage.test.sh`, `bash tests/unit/terminal-host-boundary.test.sh` | U2 to U5 |
+| Targeted | `bash tests/unit/host-rex.test.sh`, `bash tests/unit/terminal-host-coverage.test.sh`, `bash tests/unit/terminal-host-boundary.test.sh` | U2 to U4 |
 | Consumers | `bash tests/unit/programme-permission.test.sh`, `bash tests/unit/programme-sources.test.sh` | U3 |
-| Send-guard | `bash tests/unit/send-guard-hosts.test.sh` | U5 |
 | Watcher | `bash tests/unit/programme-watch.test.sh`, run alone | U4 |
 | Full suite | `~/.claude/tools/honest-run/run.sh --expect "TOTAL: [0-9]+ passed" -- bash tests/run.sh all` | Every unit; never run two at once |
-| Manual, live | On the throwaway server from U1: a worker blocked on a permission reads "blocked" in the sweep; a stream drop leaves the watcher working | U3, U4, U5 |
+| Manual, live | On the throwaway server from U1: a Claude blocked on a permission reads "blocked" in the sweep; a stream drop leaves the watcher working | U3, U4 |
 
 No version bump in the PR; `scripts/publish-plugin.sh` does that.
 
@@ -291,17 +266,14 @@ No version bump in the PR; `scripts/publish-plugin.sh` does that.
 - No status value moves a lease, grants a permission or proves an own pane.
 - The full suite passes with no new failure, and a live Rex check is recorded.
 - No abandoned-attempt code is left in the diff.
-- Each unit that the U1 decision routes to meets its own done check: U1 the recorded facts and the gate decision, U2 to U4 their verification lines, and U5 the live mark and clear when U1 routes to it.
+- Each unit meets its own done check: U1 the recorded facts and the gate decision, and U2 to U4 their verification lines.
 
 ## Open Questions
 
 ### Deferred to implementation
 
-- Does Claude Code report a status in a Rex block by itself? (U1)
-- What do API revisions 7 and 8 add over 6, and which of them matter here? (U1)
-- What is the exact report grammar? (U1, before U5)
 - Which probe is cheapest and most reliable for "does the server offer this method"? (U2)
-- How much can the safety-net interval grow on a healthy stream? (U4, measured)
+- How long can the safety-net interval grow on a healthy stream, and what minimum gap coalesces a burst? (U4, measured)
 
 ## Sources & Research
 
