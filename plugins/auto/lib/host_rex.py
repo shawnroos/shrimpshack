@@ -193,6 +193,14 @@ def _rex_json(args):
     return _json(_rex(args, REX_TIMEOUT), "rex " + " ".join(args[:3]))
 
 
+def _block_process(session, block):
+    return _rex_json(["api", "call", "-s", session, PROCESS_METHOD, json.dumps({"block_id": block})])
+
+
+def _process_nodes(proc) -> list:
+    return [proc.get("foreground"), proc.get("child")] + (proc.get("ancestors") or [])
+
+
 def _segment(value):
     """A Rex id as a path-safe space segment: the id without its kind prefix, or None when it is not safe."""
     text = value.split(":", 1)[-1] if isinstance(value, str) else ""
@@ -251,8 +259,10 @@ class _EventWake:
                 event = json.loads(line)
             except ValueError:
                 continue
-            inner = ((event.get("payload") or {}).get("event") or {}).get("type") if isinstance(event, dict) else None
-            if (event.get("type") if isinstance(event, dict) else None) in JOIN_LEAVE_EVENTS or inner in JOIN_LEAVE_EVENTS:
+            if not isinstance(event, dict):
+                continue
+            inner = ((event.get("payload") or {}).get("event") or {}).get("type")
+            if event.get("type") in JOIN_LEAVE_EVENTS or inner in JOIN_LEAVE_EVENTS:
                 self._flag.set()
         self._flag.set()
 
@@ -261,7 +271,7 @@ class _EventWake:
 
     def due(self) -> bool:
         """True when the watcher must read now: an event came, the stream is down, or the safety net is due."""
-        return (not self.healthy() or self._flag.is_set() or self._last_read is None
+        return (not self.healthy() or self._flag.is_set()
                 or time.monotonic() - self._last_read >= SAFETY_NET_SECONDS)
 
     def begin_read(self) -> None:
@@ -275,25 +285,27 @@ class _EventWake:
 
 
 def _offers(method) -> bool:
-    """True when the connected server offers `method`. Asked once per process; a failed ask also reads as no."""
+    """True when the connected server offers `method`. The server's answer is kept for the process; a describe
+    that could not run (a timeout) reads as no this time and is asked again."""
     if method not in _OFFERED:
         asked = _rex(["api", "describe", method], REX_TIMEOUT)
-        _OFFERED[method] = bool(asked["ran"] and asked["code"] == 0)
+        if not asked["ran"]:
+            return False
+        _OFFERED[method] = asked["code"] == 0
     return _OFFERED[method]
 
 
 def _block_status(session, block):
     """The one status word for a block, or None. A report counts only while its reporter still runs in the block."""
-    reported, _ = _rex_json(["api", "call", "-s", session, STATUS_METHOD, '{"block_id":"%s"}' % block])
+    reported, _ = _rex_json(["api", "call", "-s", session, STATUS_METHOD, json.dumps({"block_id": block})])
     records = [r for r in (reported or {}).get("records") or [] if isinstance(r, dict)]
     if not records:
         return None
-    proc, _ = _rex_json(["api", "call", "-s", session, PROCESS_METHOD, '{"block_id":"%s"}' % block])
+    proc, _ = _block_process(session, block)
     if proc is None:
         return None
     # Compare the name as well as the pid: the system reuses pids.
-    alive = {(n.get("pid"), n.get("name")) for n in [proc.get("foreground"), proc.get("child")] + (proc.get("ancestors") or [])
-             if isinstance(n, dict)}
+    alive = {(n.get("pid"), n.get("name")) for n in _process_nodes(proc) if isinstance(n, dict)}
     states = {r["state"] if r.get("state") in STATE_RANK else "idle" for r in records
               if isinstance(r.get("owner"), dict) and (r["owner"].get("pid"), r["owner"].get("name")) in alive}
     worst = next((s for s in STATE_RANK if s in states), None)
@@ -319,6 +331,7 @@ def _statuses(views) -> dict:
 def _snapshot(views, with_seq, statuses=None) -> dict:
     """The herdr-shaped snapshot the sweep and the remit watcher read; every block carries its session's revision."""
     panes, agents, tabs = [], [], []
+    statuses = statuses or {}
     for view in views:
         space = _segment(view.get("session_id")) or "?"
         for window in view.get("windows") or []:
@@ -326,7 +339,7 @@ def _snapshot(views, with_seq, statuses=None) -> dict:
         for window, entry in _blocks(view):
             pane = {"pane_id": entry["block_id"], "workspace_id": space,
                     "tab_id": window.get("window_id"), "label": entry.get("label"), "terminal_id": None}
-            if (statuses or {}).get(entry["block_id"]):
+            if statuses.get(entry["block_id"]):
                 pane["agent_status"] = statuses[entry["block_id"]]
             panes.append(pane)
             if with_seq:
@@ -369,12 +382,12 @@ def _probe(row, installed) -> dict:
                     why=f"block {block} that ran the driving session is closed")
     named = dict(base, pane_in_snapshot=True, pane_id=block, pane_label=found[1].get("label"),
                  tab_label=found[0].get("label"))
-    proc, why = _rex_json(["api", "call", "-s", session, PROCESS_METHOD, '{"block_id":"%s"}' % block])
+    proc, why = _block_process(session, block)
     if proc is None:
         return dict(named, why=f"the processes in block {block} could not be read ({why})")
     if proc.get("last_exit") is not None:
         return dict(named, state="gone", why=f"the program in block {block} has exited")
-    if any(_names_process(p) for p in [proc.get("foreground"), proc.get("child")] + (proc.get("ancestors") or [])):
+    if any(_names_process(p) for p in _process_nodes(proc)):
         return dict(named, state="present", why=f"a claude process runs in block {block}; Rex does not say which session")
     return dict(named, why=f"block {block} is open and runs no claude process Rex can see, which may be a quit session")
 
