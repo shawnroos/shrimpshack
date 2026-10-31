@@ -218,21 +218,46 @@ def _command_positions(tokens: list) -> tuple:
     assignment there. One left-to-right pass, because the hook runs on every command under a 10 s limit and a hook
     that times out or raises lets the command through. Redirections keep the position; a precommand's flags and
     assignments keep it too."""
-    runs, assigns = [False] * len(tokens), [False] * len(tokens)
-    at_cmd, prefix, skip = True, None, 0
+    runs, assigns, globbed, stack = [False] * len(tokens), [False] * len(tokens), set(), []
+    at_cmd, prefix, skip, glob_next = True, None, 0, False
     for k, tok in enumerate(tokens):
         if skip:
             skip -= 1
             continue
         nxt = tokens[k + 1] if k + 1 < len(tokens) else None
+        glued, glob_next = glob_next, False
         if tok in _REDIRECT_OPS:
             skip = 1
             continue
         if tok.isdigit() and len(tok) <= 2 and nxt in _REDIRECT_OPS:
             continue
         runs[k] = at_cmd
-        if tok in _SHELL_BREAKS or tok in _COMMAND_PREFIX:
-            at_cmd, prefix = True, (tok if tok in _COMMAND_PREFIX else None)
+        if _OPERATOR_ONLY.match(tok):
+            # The lexer joins neighbouring operators (`);`, `;>`, `<(`), so read them one character at a time.
+            prev = tokens[k - 1] if k else ""
+            for idx, ch in enumerate(tok):
+                before = tok[idx - 1] if idx else prev[-1:]
+                if ch == "(":
+                    kind = "sub" if before in ("$", "<", ">") else "array" if before == "=" else "group"
+                    # [kind, position the enclosing word left, saw an alternation `|` inside]
+                    stack.append([kind, at_cmd, False])
+                    at_cmd, prefix = kind != "array", None
+                elif ch == ")":
+                    kind, saved, alternation = stack.pop() if stack else ["group", True, False]
+                    at_cmd, prefix = (True if kind == "group" else saved), None
+                    glob_next = kind == "group" and alternation
+                elif ch in ";|&":
+                    if ch == "|" and stack:
+                        stack[-1][2] = True
+                    at_cmd, prefix, glob_next = True, None, False
+            if tok[-1] in "<>":
+                skip = 1
+            continue
+        if glued and at_cmd:
+            # A word glued to a closing `)` is a zsh glob such as `(re|zz)x`, built when the shell runs it.
+            globbed.add(k)
+        if tok in _COMMAND_PREFIX:
+            at_cmd, prefix = True, tok
         elif at_cmd and _ASSIGNMENT.match(tok) and not (k and tokens[k - 1] in _RUNS_NEXT_WORD):
             assigns[k] = True
         elif at_cmd and prefix and tok.startswith("-"):
@@ -242,7 +267,7 @@ def _command_positions(tokens: list) -> tuple:
                 skip = 1
         else:
             at_cmd, prefix = False, None
-    return runs, assigns
+    return runs, assigns, globbed
 
 
 def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven, positions):
@@ -252,10 +277,11 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven,
     shape = host.send_class(segment, piped)
     if shape is None:
         word = tokens[start]
-        runs, assigns = positions
+        runs, assigns, globbed = positions
         if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or assigns[start]:
             return None
-        return ("runtime-built command", "") if _RUNTIME_WORD.search(word) and runs[start] else None
+        built = _RUNTIME_WORD.search(word) or start in globbed
+        return ("runtime-built command", "") if built and runs[start] else None
     kind, targets = shape
     if kind == "read":
         return None

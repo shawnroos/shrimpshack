@@ -214,6 +214,13 @@ denied 'sudo -u root A=1 $H pane send-text $P hi'
 denied 'nohup env -u X A=1 $H pane send-text $P hi'
 denied 'sudo -u root $H pane send-text $P hi'
 denied 'nice -n 5 $H pane send-text $P hi'
+denied 'A=(pane send-text $P hi); $H "${A[@]}"'
+denied '(re|zz)x send -b "$T" hi'
+denied 'X=$(echo y) $H pane send-text $P hi'
+denied 'echo hi;>f $H pane send-text $P hi'
+allowed 'echo $(date) $X'
+allowed '(cd /tmp && ls) && echo "$X"'
+allowed 'diff <(sort a) <(sort b) > "$OUT"'
 it "denied: a thousand assignment prefixes do not crash the guard open"
 check deny "$(verdict "$(hook sess-worker "$(printf 'a=1 %.0s' $(seq 1000))\$H pane send-text \$P hi")")"
 it "denied fast: twenty thousand assignment prefixes are judged well inside the hook's 10 s limit"
