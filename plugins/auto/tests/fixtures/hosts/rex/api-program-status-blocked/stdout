@@ -1,0 +1,1 @@
+{"records":[{"state":"blocked","app":"claude-code","effective_app":"claude-code","kind":"permission","msg":"approve Bash: touch /tmp/rxs/permtest.txt","updated_at":"2026-10-31T10:59:37.202356+02:00","owner":{"pid":51336,"name":"2.1.316"}}]}

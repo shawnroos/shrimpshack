@@ -5,10 +5,14 @@ It needs the rex command on PATH and nothing else (R18). REX_SESSION and REX_BLO
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import threading
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -27,6 +31,17 @@ MAX_SESSIONS = 32
 # A poll must never start a Rex server.
 NO_AUTOSTART = "--autostart=false"
 PROCESS_METHOD = "com.superlogical.terminal.process"
+STATUS_METHOD = "com.superlogical.terminal.program_status"
+# Rex's state names, worst first. "done" is a finished turn, which the sweep treats as idle.
+STATE_RANK = ("blocked", "error", "working", "done", "idle")
+STATE_WORD = {"done": "idle"}
+# One status call and at most one process call per block, each up to REX_TIMEOUT.
+MAX_STATUS_BLOCKS = 64
+_OFFERED: dict = {}
+# Bounds how long a missed event can hide: the watcher reads at least this often while the stream is healthy.
+SAFETY_NET_SECONDS = 300.0
+# Only these leave or join the remit. Every CLI call, the watcher's own included, also raises client events.
+JOIN_LEAVE_EVENTS = frozenset({"block_created", "block_closed", "session_created", "session_destroyed"})
 SESSION_PREFIX = "session:"
 BIN_TOKENS = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", "--color"})
@@ -89,7 +104,7 @@ class RexHost(terminal_host.TerminalHost):
         views, why = _all_views(_rex_json)
         if views is None:
             return refuse(why)
-        return native(_snapshot(views, with_seq=False))
+        return native(_snapshot(views, with_seq=False, statuses=_statuses(views)))
 
     def start_pane(self, argv, timeout, **_):
         missing = self._needs_rex("start_pane")
@@ -130,6 +145,9 @@ class RexHost(terminal_host.TerminalHost):
         if views is None:
             return refuse(why)
         return native(_snapshot(views, with_seq=True))
+
+    def wake_source(self):
+        return _EventWake() if self.installed() else None
 
     def notify(self, title, body, **_):
         return degraded("Rex has no notification command, so the ask stays in the journal and the tracker",
@@ -175,6 +193,14 @@ def _rex_json(args):
     return _json(_rex(args, REX_TIMEOUT), "rex " + " ".join(args[:3]))
 
 
+def _block_process(session, block):
+    return _rex_json(["api", "call", "-s", session, PROCESS_METHOD, json.dumps({"block_id": block})])
+
+
+def _process_nodes(proc) -> list:
+    return [proc.get("foreground"), proc.get("child")] + (proc.get("ancestors") or [])
+
+
 def _segment(value):
     """A Rex id as a path-safe space segment: the id without its kind prefix, or None when it is not safe."""
     text = value.split(":", 1)[-1] if isinstance(value, str) else ""
@@ -210,16 +236,117 @@ def _all_views(call):
     return views, None
 
 
-def _snapshot(views, with_seq) -> dict:
+class _EventWake:
+    """Wakes the remit watcher from `rex events`: a block or session joining or leaving makes it due.
+    Healthy only while the stream runs; once it ends the watcher reads on every poll, as it did before."""
+
+    def __init__(self):
+        self._proc, self._flag, self._last_read = None, threading.Event(), None
+        self._flag.set()
+
+    def start(self) -> bool:
+        try:
+            self._proc = subprocess.Popen(["rex", "events", "--json", NO_AUTOSTART], stdin=subprocess.DEVNULL,
+                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        except OSError:
+            return False
+        threading.Thread(target=self._read, args=(self._proc,), daemon=True).start()
+        return True
+
+    def _read(self, proc):
+        for line in proc.stdout:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            inner = ((event.get("payload") or {}).get("event") or {}).get("type")
+            if event.get("type") in JOIN_LEAVE_EVENTS or inner in JOIN_LEAVE_EVENTS:
+                self._flag.set()
+        self._flag.set()
+
+    def healthy(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def due(self) -> bool:
+        """True when the watcher must read now: an event came, the stream is down, or the safety net is due."""
+        return (not self.healthy() or self._flag.is_set()
+                or time.monotonic() - self._last_read >= SAFETY_NET_SECONDS)
+
+    def begin_read(self) -> None:
+        # Cleared before the read, so an event that lands during it still makes the next poll due.
+        self._flag.clear()
+        self._last_read = time.monotonic()
+
+    def close(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+
+
+def _offers(method) -> bool:
+    """True when the connected server offers `method`. The server's answer is kept for the process; a describe
+    that could not run (a timeout) reads as no this time and is asked again."""
+    if method not in _OFFERED:
+        asked = _rex(["api", "describe", method], REX_TIMEOUT)
+        if not asked["ran"]:
+            return False
+        _OFFERED[method] = asked["code"] == 0
+    return _OFFERED[method]
+
+
+def _owner_alive(owner, alive) -> bool:
+    # A program writes its own report, so the owner's shape is not trusted: a list would not even hash.
+    return (isinstance(owner, dict) and isinstance(owner.get("pid"), int) and isinstance(owner.get("name"), str)
+            and (owner["pid"], owner["name"]) in alive)
+
+
+def _block_status(session, block):
+    """The one status word for a block, or None. A report counts only while its reporter still runs in the block."""
+    reported, _ = _rex_json(["api", "call", "-s", session, STATUS_METHOD, json.dumps({"block_id": block})])
+    records = [r for r in (reported or {}).get("records") or [] if isinstance(r, dict)]
+    if not records:
+        return None
+    proc, _ = _block_process(session, block)
+    if proc is None:
+        return None
+    # Compare the name as well as the pid: the system reuses pids.
+    alive = {(n.get("pid"), n.get("name")) for n in _process_nodes(proc) if isinstance(n, dict)}
+    states = {r["state"] if r.get("state") in STATE_RANK else "idle" for r in records if _owner_alive(r.get("owner"), alive)}
+    worst = next((s for s in STATE_RANK if s in states), None)
+    return STATE_WORD.get(worst, worst)
+
+
+def _statuses(views) -> dict:
+    """block id -> status word for the blocks whose program reported one; empty on a server without the method."""
+    if not _offers(STATUS_METHOD):
+        return {}
+    found, budget = {}, MAX_STATUS_BLOCKS
+    for view in views:
+        for _, entry in _blocks(view):
+            if budget <= 0:
+                return found
+            budget -= 1
+            word = _block_status(view.get("session_id"), entry["block_id"])
+            if word:
+                found[entry["block_id"]] = word
+    return found
+
+
+def _snapshot(views, with_seq, statuses=None) -> dict:
     """The herdr-shaped snapshot the sweep and the remit watcher read; every block carries its session's revision."""
     panes, agents, tabs = [], [], []
+    statuses = statuses or {}
     for view in views:
         space = _segment(view.get("session_id")) or "?"
         for window in view.get("windows") or []:
             tabs.append({"tab_id": window.get("window_id"), "label": window.get("label")})
         for window, entry in _blocks(view):
-            panes.append({"pane_id": entry["block_id"], "workspace_id": space,
-                          "tab_id": window.get("window_id"), "label": entry.get("label"), "terminal_id": None})
+            pane = {"pane_id": entry["block_id"], "workspace_id": space,
+                    "tab_id": window.get("window_id"), "label": entry.get("label"), "terminal_id": None}
+            if statuses.get(entry["block_id"]):
+                pane["agent_status"] = statuses[entry["block_id"]]
+            panes.append(pane)
             if with_seq:
                 agents.append({"pane_id": entry["block_id"], "state_change_seq": view["revision"]})
     return {"panes": panes, "agents": agents, "tabs": tabs}
@@ -260,12 +387,12 @@ def _probe(row, installed) -> dict:
                     why=f"block {block} that ran the driving session is closed")
     named = dict(base, pane_in_snapshot=True, pane_id=block, pane_label=found[1].get("label"),
                  tab_label=found[0].get("label"))
-    proc, why = _rex_json(["api", "call", "-s", session, PROCESS_METHOD, '{"block_id":"%s"}' % block])
+    proc, why = _block_process(session, block)
     if proc is None:
         return dict(named, why=f"the processes in block {block} could not be read ({why})")
     if proc.get("last_exit") is not None:
         return dict(named, state="gone", why=f"the program in block {block} has exited")
-    if any(_names_process(p) for p in [proc.get("foreground"), proc.get("child")] + (proc.get("ancestors") or [])):
+    if any(_names_process(p) for p in _process_nodes(proc)):
         return dict(named, state="present", why=f"a claude process runs in block {block}; Rex does not say which session")
     return dict(named, why=f"block {block} is open and runs no claude process Rex can see, which may be a quit session")
 

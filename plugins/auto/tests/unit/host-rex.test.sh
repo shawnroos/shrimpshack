@@ -381,6 +381,116 @@ it "revision 53 to 54 alone does not wake the PM: the watcher wakes on a block j
 check "" "$(cat "${WORK}/watch.out")"
 kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
 
+echo "host-rex: the event stream wakes the remit watcher, and a dropped stream falls back to polling (R4, R5)"
+EVFAKE="${WORK}/evfake"
+mkdir -p "$EVFAKE"
+EVFILE="${WORK}/events.in"
+: > "$EVFILE"
+# A rex whose `events` command stays open and prints every line appended to $EVFILE, like the real stream.
+cat > "${EVFAKE}/rex" <<EOF
+#!/bin/bash
+case "\$1" in
+  events) tail -n +1 -f "$EVFILE" ;;
+  *) exec "${FAKEBIN}/rex" "\$@" ;;
+esac
+EOF
+chmod +x "${EVFAKE}/rex"
+EVPATH="${EVFAKE}:${NOREX_PATH}"
+BLOCK_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"block_created","payload":{"block_id":"block:x"}}}}'
+CLOSE_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"block_closed","payload":{"block_id":"block:x"}}}}'
+NOISE_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"client_connected","payload":{"client_id":"client:x"}}}}'
+REV_LINE='{"type":"session_event","payload":{"session_id":"'$SID'","event":{"type":"session_view_changed","payload":{"revision":9}}}}'
+SESSION_LINE='{"type":"session_destroyed","payload":{"session_id":"'$SID'"}}'
+wake_py() { # wake_py <path> <python body>: runs the body with `w` a started wake source
+  env PATH="$1" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+import time
+w = rex.wake_source()
+started = w is not None and w.start()
+$2
+if w is not None:
+    w.close()
+PYEOF
+}
+it "a fresh wake source is due once, then quiet until an event arrives"
+OUT="$(wake_py "$EVPATH" '
+first = w.due(); w.begin_read(); time.sleep(0.3)
+print(started, first, w.due())')"
+check "True True False" "$OUT"
+
+it "a block joining, a block leaving and a session ending each make it due"
+OUT="$(for line in "$BLOCK_LINE" "$CLOSE_LINE" "$SESSION_LINE"; do : > "$EVFILE"
+  wake_py "$EVPATH" "
+w.due(); w.begin_read(); time.sleep(0.3)
+open('$EVFILE', 'a').write('''$line''' + chr(10)); time.sleep(0.6)
+print(w.due())"; done | tr '\n' ' ')"
+check "True True True " "$OUT"
+
+it "a client connecting and a revision change alone never make it due (the watcher's own reads cause the first)"
+: > "$EVFILE"
+OUT="$(wake_py "$EVPATH" "
+w.due(); w.begin_read(); time.sleep(0.3)
+f = open('$EVFILE', 'a'); f.write('''$NOISE_LINE''' + chr(10)); f.write('''$REV_LINE''' + chr(10)); f.flush(); time.sleep(0.6)
+print(w.due())")"
+check "False" "$OUT"
+
+it "an event that arrives while a read is under way is not lost"
+: > "$EVFILE"
+OUT="$(wake_py "$EVPATH" "
+w.due(); w.begin_read()
+open('$EVFILE', 'a').write('''$BLOCK_LINE''' + chr(10)); time.sleep(0.6)
+print(w.due())")"
+check "True" "$OUT"
+
+it "the safety net makes it due even when no event came"
+OUT="$(wake_py "$EVPATH" "
+import sys
+sys.modules[type(rex).__module__].SAFETY_NET_SECONDS = 0.2
+w = rex.wake_source(); w.start(); w.due(); w.begin_read(); time.sleep(0.5)
+print(w.due())")"
+check "True" "$OUT"
+
+it "a stream that ends is never healthy again: the watcher reads on every poll as before"
+OUT="$(env PATH="$WITHREX_PATH" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+import time
+w = rex.wake_source(); w.start(); time.sleep(0.5)
+w.begin_read()
+print(w.due(), w.due())
+w.close()
+PYEOF
+)"
+check "True True" "$OUT"
+
+it "close stops the event reader"
+OUT="$(wake_py "$EVPATH" "
+p = w._proc; w.close(); time.sleep(0.5)
+print(p.poll() is not None)")"
+check "True" "$OUT"
+
+it "rex missing from PATH: no wake source, the watcher polls"
+OUT="$(env PATH="$NOREX_PATH" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+print(rex.wake_source())
+PYEOF
+)"
+check "None" "$OUT"
+
+echo "host-rex: the remit watcher skips its host read on a quiet poll (R4)"
+WCALLS="${WORK}/wake.calls"
+run_watch() { # run_watch <path> <polls>: a remit watcher on a 0.3s poll; CALLS records every rex call it makes
+  : > "$WCALLS"
+  env PATH="$1" CALLS="$WCALLS" HOST_FAKE_OVERLAY="session-ls-json-one" CLAUDE_CODE_SESSION_ID=pm-rex REX_SESSION=$SID \
+    bash "$WATCH" --run "$RUN_PM" --max-polls "$2" > "${WORK}/wake.out" 2>/dev/null
+}
+: > "$EVFILE"
+run_watch "$EVPATH" 6
+it "a healthy stream and no events: the session view is read once, not on every poll"
+check "1" "$(grep -c 'session.view' "$WCALLS")"
+it "the same polls with no stream read the view on every poll, as today"
+run_watch "$WITHREX_PATH" 6
+[ "$(grep -c 'session.view' "$WCALLS")" -ge 6 ] && pass || fail "view reads: $(grep -c 'session.view' "$WCALLS")"
+
 echo "host-rex: notify is degraded to a journal line"
 OUT="$("$PY" - "$AUTO_ROOT" <<PYEOF
 $HEAD_PY
@@ -506,6 +616,128 @@ PYEOF
 )"
 it "the item is still open and has no done time"
 check "open None" "$STATE"
+
+echo "host-rex: a pane's agent_status is read from the status its program reports, only where the server offers it (R1, R2, R3, R6)"
+# Fixtures api-program-status-* and api-process-claude-live were captured on a Rex server of API revision 8
+# (the proof run); a `handwritten` file in a directory marks the ones that change one captured field.
+OVERLAY_ONE="session-ls-json-one api-process-claude-live"
+panes_status() { # overlay words as $1; prints the pane's agent_status, or "-" when the key is absent
+  env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$1" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+r = rex.list_panes(); p = [x for x in r.value["panes"] if x["pane_id"] == "$BID"][0]
+print(r.status, p.get("agent_status", "-"))
+PYEOF
+}
+it "a working Claude reads working"
+check "native working" "$(panes_status "$OVERLAY_ONE")"
+it "a Claude blocked on a permission reads blocked"
+check "native blocked" "$(panes_status "$OVERLAY_ONE api-program-status-blocked")"
+it "a finished turn (done) reads idle, which is what the sweep treats as settled"
+check "native idle" "$(panes_status "$OVERLAY_ONE api-program-status-done")"
+it "a state this host does not know reads idle, as the Rex schema says"
+check "native idle" "$(panes_status "$OVERLAY_ONE api-program-status-unknown-state")"
+it "a root record that works and a child that is blocked: the worst state wins"
+check "native blocked" "$(panes_status "$OVERLAY_ONE api-program-status-tree")"
+it "a record whose reporter is not in the block reads unknown (AE2)"
+check "native -" "$(panes_status "$OVERLAY_ONE api-program-status-dead-owner")"
+it "a pid that now belongs to a program with another name reads unknown"
+check "native -" "$(panes_status "session-ls-json-one api-process-reused-pid")"
+it "a record with no owner cannot be checked, so it reads unknown"
+check "native -" "$(panes_status "$OVERLAY_ONE api-program-status-no-owner")"
+it "a record whose owner pid or name is not a number and a string reads unknown and never raises"
+check "native -" "$(panes_status "$OVERLAY_ONE api-program-status-malformed-owner")"
+it "a block with no records reads unknown and makes no process call"
+: > "$CALLS"
+OUT="$(panes_status "$OVERLAY_ONE api-program-status-empty")"
+check "native -" "$OUT"
+lacks "terminal.process" "$(cat "$CALLS")"
+
+it "the reported text never reaches the snapshot: not the message, not an escape sequence (AE5)"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE api-program-status-hostile-message" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+r = rex.list_panes(); text = json.dumps(r.value)
+print(r.status, "IGNORE" in text, "\\\\u001b" in text, len(text) < 5000)
+PYEOF
+)"
+check "native False False True" "$OUT"
+
+it "an older server (no status method): no status call, no agent_status, the panes as before (AE3)"
+: > "$CALLS"
+OUT="$(panes_status "session-ls-json-one api-describe-program-status-missing")"
+check "native -" "$OUT"
+lacks "program_status {" "$(cat "$CALLS")"
+has "api describe com.superlogical.terminal.program_status" "$(cat "$CALLS")"
+
+it "the probe runs once per process however many snapshots are read"
+: > "$CALLS"
+env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE" "$PY" - "$AUTO_ROOT" <<PYEOF >/dev/null 2>&1
+$HEAD_PY
+rex.list_panes(); rex.list_panes(); rex.list_panes()
+PYEOF
+check "1" "$(grep -c 'api describe' "$CALLS")"
+
+it "a probe that cannot run counts as not offered, never as a refusal"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="session-ls-json-one" HOST_FAKE_FORCE="command-not-found" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+print(sys.modules[type(rex).__module__]._offers("com.superlogical.terminal.program_status"))
+PYEOF
+)"
+check "False" "$OUT"
+
+it "the number of blocks read per snapshot is capped"
+: > "$CALLS"
+env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE" "$PY" - "$AUTO_ROOT" <<PYEOF >/dev/null 2>&1
+$HEAD_PY
+sys.modules[type(rex).__module__].MAX_STATUS_BLOCKS = 0
+rex.list_panes()
+PYEOF
+lacks "program_status {" "$(cat "$CALLS")"
+
+it "a host read that fails while the stream is healthy is read again on the next poll, never answered from the old state"
+OUT="$("$PY" - "$AUTO_ROOT" <<PYEOF
+import importlib.util, os, sys
+lib = os.path.join(sys.argv[1], "lib"); sys.path.insert(0, lib)
+spec = importlib.util.spec_from_file_location("pw", os.path.join(lib, "programme-watch.py"))
+pw = importlib.util.module_from_spec(spec); spec.loader.exec_module(pw)
+class Wake:
+    due_now = True
+    def due(self): return self.due_now
+    def begin_read(self): self.due_now = False
+reads = [({"panes": {"a"}}, None), (None, "boom"), ({"panes": {"a", "b"}}, None)]
+calls = []
+pw._read_host = lambda ctx: (calls.append(1), reads[len(calls) - 1])[1]
+ctx = {"workspaces": {"w"}, "wake": Wake()}
+first = pw._read_herdr(ctx)
+ctx["wake"].due_now = True
+failed = pw._read_herdr(ctx)
+third = pw._read_herdr(ctx)
+print(first[0] == {"panes": {"a"}}, failed[0] is None, sorted(third[0]["panes"]) if third[0] else None, len(calls))
+PYEOF
+)"
+check "True True ['a', 'b'] 3" "$OUT"
+
+it "the change token stays free of status, so a status change never wakes the PM (R5)"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="session-ls-json-one api-program-status-blocked" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+import subprocess
+def read_json(argv):
+    done = subprocess.run(argv, capture_output=True, text=True)
+    return (json.loads(done.stdout), None) if done.returncode == 0 else (None, "exit=%d" % done.returncode)
+r = rex.change_token(read_json)
+print(sorted(set(k for a in r.value["agents"] for k in a)), any("agent_status" in p for p in r.value["panes"]))
+PYEOF
+)"
+check "['pane_id', 'state_change_seq'] False" "$OUT"
+
+it "a Rex pane that reads idle lets the permission settle see the owner pane as idle, as it does for herdr"
+OUT="$(env PATH="$WITHREX_PATH" HOST_FAKE_OVERLAY="$OVERLAY_ONE api-program-status-done" "$PY" - "$AUTO_ROOT" <<PYEOF
+$HEAD_PY
+settle = load_lib_module("programme_permission_settle")
+snap = rex.list_panes().value
+print(settle._pane_status(snap, "$BID"), settle._pane_status(snap, "$NOB"))
+PYEOF
+)"
+check "idle gone" "$OUT"
 
 echo "host-rex.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
