@@ -178,3 +178,20 @@ def load_files(shipped_dir=None, personal_dir=None) -> dict:
     _load_dir(globals()["shipped_dir"]() if shipped_dir is None else shipped_dir, "shipped", out)
     _load_dir(globals()["personal_dir"]() if personal_dir is None else personal_dir, "personal", out)
     return out
+
+
+def load_into(out) -> None:
+    loaded = load_files()
+    stored = {e["id"] for e in out["personal"]}
+    out["shipped"], out["files"] = [], []
+    rejected = list(loaded["rejected"])
+    for entry in loaded["entries"]:
+        if entry["layer"] == "personal" and entry["id"] in stored:
+            rejected.append({"layer": "personal", "key": None, "id": entry["id"], "reason": "shadowed",
+                             "detail": "a stored personal entry has this id"})
+        else:
+            out["shipped" if entry["layer"] == "shipped" else "files"].append(entry)
+    out["rejected"] += rejected
+    clean = programme_behaviours.programme_sanitize.clean
+    out["notices"] += [clean(f"behaviour file {r['layer']}/{r['id']}.md rejected: {r['reason']}"
+                             + (f" ({r['detail']})" if r["detail"] else ""), cap=0) for r in rejected]

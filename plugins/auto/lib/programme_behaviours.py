@@ -38,8 +38,10 @@ STORE_LOCK = ".behaviours.lock"
 STORE_FORMAT = 1
 APPROVAL_KIND = "rule_adopted"
 
-LAYERS = ("programme", "repo", "personal")
+LAYERS = ("programme", "repo", "personal", "shipped")
 STORED_LAYERS = ("repo", "personal")
+# Same id: the higher rank replaces the lower. "shipped" is only ever loaded from files.
+LAYER_RANK = {"shipped": 0, "personal": 1, "repo": 2, "programme": 3}
 AUDIENCES = ("pm", "workers", "both")
 STATES = ("active", "proposed", "retired")
 ACTIVE = "active"
@@ -325,7 +327,7 @@ def _admit(out, layer, key, entry, lookup) -> None:
     out["rejected"].append({"layer": layer, "key": key, "id": name, "reason": reason[0], "detail": reason[1]})
 
 
-def load_store(lookup=None) -> dict:
+def _load_stored(lookup) -> dict:
     out = {"personal": [], "repos": {}, "rejected": [], "notices": []}
     try:
         doc = read_store()
@@ -338,6 +340,13 @@ def load_store(lookup=None) -> dict:
     for key, rows in doc["repos"].items():
         for entry in rows:
             _admit(out, "repo", key, entry, lookup)
+    return out
+
+
+def load_store(lookup=None) -> dict:
+    out = _load_stored(lookup)
+    # Loaded here, not at import: the file loader imports this module.
+    load_lib_module("programme_behaviour_files").load_into(out)
     return out
 
 
@@ -393,15 +402,27 @@ def shown_programme_entries(programme, loaded) -> list:
     return [e for e in _programme_entries(programme, []) if not all(_held_for(loaded, e, k) for k in keys)]
 
 
+def _from_file(entry) -> bool:
+    return entry.get("layer") == "shipped" or entry.get("source") == "file"
+
+
 def resolve(record, item, repo=None, *, audience=None, lookup=None, store=None) -> dict:
     programme = (record or {}).get("programme") or {}
     loaded = store if store is not None else load_store(lookup)
     rejected = list(loaded["rejected"])
     key = repo_key_for(programme, repo if repo is not None else (item or {}).get("repo"))
-    candidates = [e for e in _programme_entries(programme, rejected) if not _held_for(loaded, e, key)]
-    candidates += (loaded["repos"].get(key) or []) if key else []
-    candidates += loaded["personal"]
-    candidates = [e for e in candidates if e.get("state", ACTIVE) == ACTIVE]
+    ranked = [(LAYER_RANK["programme"], e) for e in _programme_entries(programme, rejected)
+              if not _held_for(loaded, e, key)]
+    ranked += [(LAYER_RANK["repo"], e) for e in (loaded["repos"].get(key) or []) if key]
+    ranked += [(LAYER_RANK["personal"], e) for e in loaded["personal"] + loaded.get("files", [])]
+    ranked += [(LAYER_RANK["shipped"], e) for e in loaded.get("shipped", [])]
+    top = {}
+    for rank, e in ranked:
+        top[e["id"]] = max(top.get(e["id"], 0), rank)
+    # Only file-sourced entries are replaced by a higher layer; stored layers keep coexisting as before.
+    # A retired winner still hides the file entries below it: retiring is how a default is switched off.
+    candidates = [e for rank, e in ranked if (rank == top[e["id"]] or not _from_file(e))
+                  and e.get("state", ACTIVE) == ACTIVE]
     overridden = {name for e in candidates for name in e.get("overrides") or ()}
     in_force = [e for e in candidates if e["id"] not in overridden and _reaches(e, audience)]
     return {"in_force": in_force, "rejected": rejected, "notices": list(loaded["notices"])}
@@ -750,7 +771,7 @@ def _after_store(seen, how) -> None:
 
 def _h_move(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt", "to", "repo"))
-    if len(positional) != 1 or opts.get("to") not in LAYERS or (opts.get("repo") and opts["to"] != "repo"):
+    if len(positional) != 1 or opts.get("to") not in LAYERS[:3] or (opts.get("repo") and opts["to"] != "repo"):
         raise ValueError("usage: move-behaviour <id> --to programme|repo|personal --prompt <id> "
                          "[--repo <key>] (--repo only with --to repo)")
     bid, to = positional[0], opts["to"]
