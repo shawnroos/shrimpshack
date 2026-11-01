@@ -19,6 +19,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 
 RANKS = ("needs_shawn", "unknown_state", "claims_merge", "idle", "working")
 SHAWN_WAITERS = ("shawn",)
+IDLE_STATUSES = ("idle", "done")
 UNKNOWN_STATUS = ("", "unknown")
 FOLDER_GONE = "folder_gone"
 OUTSIDE_CAP = 40
@@ -51,7 +52,7 @@ def rank(pane, item) -> int:
         return 1
     if _claims_merge(item):
         return 2
-    if status == "idle" and (item is None or item.get("state") == "open"):
+    if status in IDLE_STATUSES and (item is None or item.get("state") == "open"):
         return 3
     return 4
 

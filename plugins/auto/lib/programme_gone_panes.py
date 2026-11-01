@@ -21,7 +21,7 @@ programme_readiness = load_lib_module("programme_readiness")
 programme_sources = load_lib_module("programme_sources")
 terminal_host = load_lib_module("terminal_host")
 
-IDLE = "idle"
+IDLE = ("idle", "done")
 ALREADY_MERGED = "already merged"
 
 
@@ -46,7 +46,7 @@ def _merged(programme, item_key, check=None) -> tuple:
 def decide(programme, entry, check=None) -> tuple:
     """(eligible, why) for one folder_gone entry."""
     status = entry.get("agent_status")
-    if status != IDLE:
+    if status not in IDLE:
         return False, f"the agent is {status or 'in an unknown state'}, not idle"
     return _merged(programme, entry.get("item"), check)
 

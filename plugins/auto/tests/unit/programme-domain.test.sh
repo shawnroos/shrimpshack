@@ -61,6 +61,11 @@ prog = {'items': {'issue:A': {'state': 'open', 'owner': {'pane': 'p1'}}}}
 e = d.gone_entry(prog, {'pane_id': 'p1', 'cwd': gone})
 print(e['item'], e['why'])")"
 
+it "a done agent ranks as idle, not working"
+check "p2 p1" "$(run_py "
+panes = [{'pane_id': 'p1', 'agent_status': 'working'}, {'pane_id': 'p2', 'agent_status': 'done'}]
+print(' '.join(r['pane'] for r in d.order({'items': {}}, panes)))")"
+
 SNAP_PY="
 snap = {'panes': [
   {'pane_id': 'w2:p1', 'workspace_id': 'w2', 'tab_id': 't1', 'agent': 'claude', 'terminal_title': 'in remit'},

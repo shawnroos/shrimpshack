@@ -45,6 +45,10 @@ check "closed $(printf 'w2:pR')" "$(run_py "
 out = g.close_if_eligible({'programme': prog()}, entry(), check=merged_gates)
 print(out['status'], open(os.environ['AUTO_TEST_STUB_CLOSE_LOG']).read().strip())")"
 
+it "a done agent counts as idle"
+check "closed" "$(run_py "
+print(g.close_if_eligible({'programme': prog()}, entry('done'), check=merged_gates)['status'])")"
+
 it "a working agent is reported and nothing is closed"
 : > "$WORK/closed.log"
 check "reported 0" "$(run_py "
