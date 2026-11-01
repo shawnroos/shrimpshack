@@ -706,7 +706,8 @@ def _h_set_now(host, argv):
         key = _resolve(programme, item_id) if item_id else None
         doing = {"text": text, "item": key, "at": _now()} if text else None
         programme["working_model"]["doing"] = doing
-        return {"doing": doing}
+        # sweep-inputs reads item history by position from this row; whole-second timestamps cannot order a same-second change.
+        return {"doing": doing, "history_seen": {k: len(item.get("history") or []) for k, item in programme["items"].items()}}
 
     return host._write(opts, change, "working_now")
 

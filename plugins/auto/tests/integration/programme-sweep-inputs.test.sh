@@ -104,6 +104,30 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     check('a new working_now row resets the comparison point for journal rows and item history',
           ('journal_rows' in again['why'], 'items_changed' in again['why']), (False, False))
 
+    # Timestamps are whole seconds; pin the sweep row to the item's second so the race is not left to the clock.
+    verb('add-item', 'test:two', '--title', 'Added in the second the sweep ran')
+    record_path = subprocess.run(['/usr/bin/python3', '-c',
+                                  'import sys; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; '
+                                  'print(load_lib_module("run_record_core").run_record_path(sys.argv[2], sys.argv[3]))',
+                                  lib, home, run], capture_output=True, text=True, env=env).stdout.strip()
+    added_at = json.load(open(record_path))['programme']['items']['test:two']['history'][-1]['at']
+    journal = os.path.join(home, 'journal.jsonl')
+    rows = [json.loads(line) for line in open(journal)]
+    last_sweep = max(n for n, row in enumerate(rows) if row.get('kind') == 'working_now')
+    rows[last_sweep]['at'] = added_at
+    with open(journal, 'w') as fh:
+        fh.writelines(json.dumps(row, sort_keys=True) + '\n' for row in rows)
+    code, same_second = inputs()
+    check('an item changed in the same second as the last sweep is still listed',
+          [m['item'] for m in same_second['items_changed']], ['test:two'])
+    rows[last_sweep].get('payload', {}).pop('history_seen', None)
+    with open(journal, 'w') as fh:
+        fh.writelines(json.dumps(row, sort_keys=True) + '\n' for row in rows)
+    code, old_row = inputs()
+    check('a sweep row from before history_seen still lists a same-second change',
+          [m['item'] for m in old_row['items_changed']], ['test:two'])
+    verb('set-now', 'working on test:two')
+
     digest = os.path.join(home, 'sweep-digest.md')
     open(digest, 'w').write('# stale digest')
     code, resaved = inputs('--save')
