@@ -49,7 +49,9 @@ GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", 
 READ_VERBS = frozenset({"capture", "ls", "list", "whoami", "version", "wait", "events", "actions", "keymap",
                         "help", "completion", "terminfo"})
 READ_NOUNS = frozenset({"session", "window", "block", "client", "server", "hosts", "config", "skill", "home", "api"})
-READ_SUBVERBS = frozenset({"ls", "list", "inspect", "status", "logs", "describe", "show"})
+# rename only changes a label and cannot type into a block, so it sits with the reads on purpose.
+READ_SUBVERBS = frozenset({"ls", "list", "inspect", "status", "logs", "describe", "show", "rename"})
+TYPING_VERBS = frozenset({"send", "send-key", "run", "split", "do"})
 # Rex accepts the end of an id as a target; 4 characters is the shortest tail worth treating as naming a block.
 MIN_ID_TAIL = 4
 _FRAGMENT_SPLIT = re.compile(r"[\s=,;:\"'{}\[\]]+")
@@ -160,9 +162,7 @@ class RexHost(terminal_host.TerminalHost):
         verb = _verb_words(rest)
         if not verb or _reads_only(verb):
             return "read", []
-        blocks = [rest[i + 1] for i, tok in enumerate(rest[:-1]) if tok in ("-b", "--block")]
-        blocks += [tok.split("=", 1)[1] for tok in rest if tok.startswith("--block=")]
-        return "send", blocks or None
+        return ("send" if _types(verb) else "unknown"), _blocks_of(rest) or None
 
     def is_host_command(self, argv, pane_ids=()):
         if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
@@ -409,6 +409,15 @@ def _verb_words(rest) -> list:
             break
         i += 1
     return words
+
+
+def _types(verb) -> bool:
+    return verb[0] in TYPING_VERBS or list(verb[:2]) == ["api", "call"]
+
+
+def _blocks_of(rest) -> list:
+    blocks = [rest[i + 1] for i, tok in enumerate(rest[:-1]) if tok in ("-b", "--block")]
+    return blocks + [tok.split("=", 1)[1] for tok in rest if tok.startswith("--block=")]
 
 
 def _reads_only(verb) -> bool:

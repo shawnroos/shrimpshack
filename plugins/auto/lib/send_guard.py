@@ -7,6 +7,7 @@ proves a pane or a host (KTD3).
 from __future__ import annotations
 
 import codecs
+import json
 import os
 import re
 import shlex
@@ -21,6 +22,8 @@ _SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
 _SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 MAX_DEPTH = 4
+# Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
+SEEN_CAP = 8
 SEGMENT_CAP = 256
 _ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
 _LOCALE_DOLLAR = re.compile(r"\$(?=\")")
@@ -28,6 +31,19 @@ _HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
 _ID_EDGE = "A-Za-z0-9_"
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
 _RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
+# A command word holding any of these may become a different program at run time (a leading `=` is zsh's path
+# lookup) and is denied whatever follows it: three review rounds broke every rule that tried to tell from the rest of
+# the command whether it types into a pane. A token made only of shell operators is punctuation the lexer split out
+# (the `)` and `>` of quoted JavaScript), never a program.
+_RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=")
+_OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
+# After these an `a=b` word is the program they run, not an assignment.
+_RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "xargs", "builtin"})
+# A quoted `">"` lexes the same as the operator, so stripping it could drop a real target.
+_QUOTED_REDIRECT = re.compile(r"([\"'])\s*\d*(?:[<>]+&?|&>+)\d*\s*\1")
+_TEST_WORDS = frozenset({"[", "[[", "{", "}"})
+_REDIRECT_OPS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
 _TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
 _TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
 # A word after one of these (or after an assignment) is the command being run.
@@ -36,7 +52,19 @@ _INTERPRETERS = re.compile(r"^(?:python[\d.]*|ruby|perl|node|php|osascript|lua|d
 _STRING_LITERAL = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 _UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
-                             "elif", "if", "while", "until"})
+                             "elif", "if", "while", "until", "{", "!", "noglob", "nocorrect", "doas", "stdbuf",
+                             "caffeinate", "nice"})
+# Options of a precommand that take the next word as their value; any other option keeps the command position.
+_PREFIX_VALUE_OPTS = {
+    "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-r", "-t", "-U", "-D", "-R", "-T"}),
+    "doas": frozenset({"-u", "-C"}),
+    "env": frozenset({"-u", "-C", "-S", "-P"}),
+    "xargs": frozenset({"-I", "-i", "-n", "-P", "-a", "-d", "-E", "-L", "-s", "-J", "-R", "-S"}),
+    "nice": frozenset({"-n"}),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+    "exec": frozenset({"-a"}),
+    "time": frozenset({"-o", "-f"}),
+}
 
 
 def _shell_script(rest: list):
@@ -126,6 +154,23 @@ def _segment(tokens: list, start: int) -> list:
     return tokens[start:end]
 
 
+def _strip_redirects(words: list) -> list:
+    """The words with every redirection removed; the lexer splits `2>&1` into `2`, `>&`, `1`, so the fd digit goes too."""
+    if _REDIRECT_OPS.isdisjoint(words):
+        return words
+    out, i = [], 0
+    while i < len(words):
+        if words[i] in _REDIRECT_OPS:
+            # A file descriptor is one or two digits; a longer number is an argument (a Rex id tail) and stays.
+            if len(out) > 1 and out[-1].isdigit() and len(out[-1]) <= 2:
+                out.pop()
+            i += 2
+            continue
+        out.append(words[i])
+        i += 1
+    return out
+
+
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     if depth < MAX_DEPTH:
@@ -134,6 +179,9 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             _scan(script, depth + 1, hosts, pane_ids, found, proven)
     tokens = _lex(main)
     piped = main + "\n" + "\n".join(bodies)
+    strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
+    positions = _command_positions(tokens)
+    runs = positions[0]
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
         script = None
@@ -143,11 +191,11 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             script = " ".join(_segment(tokens, start + 1)) or None
         elif token == "<<<" and rest:
             script = rest[0]
-        if _INTERPRETERS.match(os.path.basename(token)) and depth < MAX_DEPTH and _is_command_word(tokens, start):
+        if _INTERPRETERS.match(os.path.basename(token)) and depth < MAX_DEPTH and runs[start]:
             # Inline code of another language can call the host command through a string; scan every string in it.
             for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
                 _scan(literal, depth + 1, hosts, pane_ids, found, proven)
-        if script is None and os.path.basename(token) in _SHELL_BINS and depth < MAX_DEPTH and _is_command_word(tokens, start):
+        if script is None and os.path.basename(token) in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
             # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be that script.
             for quoted in {t for t in tokens if " " in t}:
                 _scan(quoted, depth + 1, hosts, pane_ids, found, proven)
@@ -155,38 +203,85 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             if depth < MAX_DEPTH:
                 _scan(script, depth + 1, hosts, pane_ids, found, proven)
             continue
-        segment = _segment(tokens, start)
+        segment = strip(_segment(tokens, start))
         for host in hosts:
             if proven is not None:
-                hit = _unproven(host, tokens, start, segment, piped, proven)
+                hit = _unproven(host, tokens, start, segment, piped, proven, positions)
             else:
                 hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
             if hit:
                 found.append((host.name, hit[0], hit[1]))
 
 
-def _is_command_word(tokens: list, start: int) -> bool:
-    before = tokens[start - 1] if start else None
-    return before is None or before in _SHELL_BREAKS or before in _COMMAND_PREFIX or ("=" in before and before[:1] != "-")
+def _command_positions(tokens: list) -> tuple:
+    """(runs, assigns): per token, whether it sits where the shell runs a program, and whether it is a `NAME=value`
+    assignment there. One left-to-right pass, because the hook runs on every command under a 10 s limit and a hook
+    that times out or raises lets the command through. Redirections keep the position; a precommand's flags and
+    assignments keep it too."""
+    runs, assigns, globbed, stack = [False] * len(tokens), [False] * len(tokens), set(), []
+    at_cmd, prefix, skip, glob_next = True, None, 0, False
+    for k, tok in enumerate(tokens):
+        if skip:
+            skip -= 1
+            continue
+        nxt = tokens[k + 1] if k + 1 < len(tokens) else None
+        glued, glob_next = glob_next, False
+        if tok in _REDIRECT_OPS:
+            skip = 1
+            continue
+        if tok.isdigit() and len(tok) <= 2 and nxt in _REDIRECT_OPS:
+            continue
+        runs[k] = at_cmd
+        if _OPERATOR_ONLY.match(tok):
+            # The lexer joins neighbouring operators (`);`, `;>`, `<(`), so read them one character at a time.
+            prev = tokens[k - 1] if k else ""
+            for idx, ch in enumerate(tok):
+                before = tok[idx - 1] if idx else prev[-1:]
+                if ch == "(":
+                    kind = "sub" if before in ("$", "<", ">") else "array" if before == "=" else "group"
+                    # [kind, position the enclosing word left, saw an alternation `|` inside]
+                    stack.append([kind, at_cmd, False])
+                    at_cmd, prefix = kind != "array", None
+                elif ch == ")":
+                    kind, saved, alternation = stack.pop() if stack else ["group", True, False]
+                    at_cmd, prefix = (True if kind == "group" else saved), None
+                    glob_next = kind == "group" and alternation
+                elif ch in ";|&":
+                    if ch == "|" and stack:
+                        stack[-1][2] = True
+                    at_cmd, prefix, glob_next = True, None, False
+            if tok[-1] in "<>":
+                skip = 1
+            continue
+        if glued and at_cmd:
+            # A word glued to a closing `)` is a zsh glob such as `(re|zz)x`, built when the shell runs it.
+            globbed.add(k)
+        if tok in _COMMAND_PREFIX:
+            at_cmd, prefix = True, tok
+        elif at_cmd and _ASSIGNMENT.match(tok) and not (k and tokens[k - 1] in _RUNS_NEXT_WORD):
+            assigns[k] = True
+        elif at_cmd and prefix and tok.startswith("-"):
+            if prefix == "command" and tok in ("-v", "-V"):
+                at_cmd, prefix = False, None
+            elif tok in _PREFIX_VALUE_OPTS.get(prefix, ()):
+                skip = 1
+        else:
+            at_cmd, prefix = False, None
+    return runs, assigns, globbed
 
 
-def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven):
+def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven, positions):
     """The one policy for a session that is not the PM. Hosts only say what a send is (send_class) and which targets
     a call names; a send, or a call that cannot be told from one, passes only when every target is a literal id that
-    the registry proves is another session's pane. A command word built at run time is a hit whenever what follows
-    is a send."""
+    the registry proves is another session's pane. A command word built at run time is always a hit."""
     shape = host.send_class(segment, piped)
     if shape is None:
-        if not (_RUNTIME.search(tokens[start]) and _is_command_word(tokens, start)):
+        word = tokens[start]
+        runs, assigns, globbed = positions
+        if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or assigns[start]:
             return None
-        tail = []
-        for tok in tokens[start + 1:start + SEGMENT_CAP]:
-            if tok in _LIST_BREAKS:
-                break
-            tail.append(tok)
-        binary = list(host.binaries[:1])
-        sends = (host.send_class(binary + tail[k:], piped) for k in range(len(tail)))
-        return ("runtime-built command", "") if any(c and c[0] == "send" for c in sends) else None
+        built = _RUNTIME_WORD.search(word) or start in globbed
+        return ("runtime-built command", "") if built and runs[start] else None
     kind, targets = shape
     if kind == "read":
         return None
@@ -212,18 +307,22 @@ def _sender_workspace(session_id):
     return row["workspace"] if row and row.get("workspace") else None
 
 
+def _ids(driver: dict) -> list:
+    return [i for i in driver.get("ids") or (driver.get("pane_id"), driver.get("terminal_id")) if i]
+
+
 def _targets_pane(target: str, driver: dict, workspace) -> bool:
-    pane = driver.get("pane_id") or ""
-    if target in (pane, driver.get("terminal_id")):
-        return True
-    if ":" in target or not pane.endswith(":" + target):
-        return False
-    return workspace is None or pane.split(":", 1)[0] == workspace
+    for ident in _ids(driver):
+        if target == ident:
+            return True
+        if ":" not in target and ident.endswith(":" + target) and (workspace is None or ident.split(":", 1)[0] == workspace):
+            return True
+    return False
 
 
 def _names_pane(command: str, driver: dict):
     text = _HIDING_CHARS.sub("", _unquote_dollar(command)).casefold()
-    for ident in (driver.get("pane_id"), driver.get("terminal_id")):
+    for ident in _ids(driver):
         if ident and re.search(r"(?<![%s])%s(?![%s])" % (_ID_EDGE, re.escape(ident.casefold()), _ID_EDGE), text):
             return ident
     return None
@@ -234,7 +333,7 @@ def _proven_other(sender: dict, session_id, drivers: list):
     if "proven" not in sender:
         if "workspace" not in sender:
             sender["workspace"] = _sender_workspace(session_id)
-        driver_ids = {str(v).casefold() for d in drivers for v in (d.get("pane_id"), d.get("terminal_id"), d.get("tty")) if v}
+        driver_ids = {str(v).casefold() for d in drivers for v in _ids(d) + [d.get("tty")] if v}
         sender["proven"] = load_lib_module("session_registry").known_panes() - driver_ids
     workspace = sender["workspace"]
 
@@ -251,8 +350,7 @@ def _tty_write(command: str) -> bool:
 
 
 def _driver_hit(command: str, session_id, driver: dict, sender: dict):
-    ids = [driver.get("pane_id"), driver.get("terminal_id")]
-    sends = host_sends(command, ids)
+    sends = host_sends(command, _ids(driver))
     if sends:
         # One session sends, so every driver shares one workspace lookup, made only when a send was found.
         if "workspace" not in sender:
@@ -271,15 +369,86 @@ def _strict_hit(command: str, session_id, drivers: list, sender: dict):
     target is another session's pane, and may not write to a tty device."""
     if any(d.get("session_id") == session_id for d in drivers):
         return None
-    ids = [i for d in drivers for i in (d.get("pane_id"), d.get("terminal_id"))]
+    ids = [i for d in drivers for i in _ids(d)]
     unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers))
     if unproven:
         return unproven[0][0], unproven[0][1], drivers[0]["pane_id"]
     return (None, "tty write", drivers[0]["pane_id"]) if _tty_write(command) else None
 
 
+def _seen_path(driver: dict) -> str:
+    return os.path.join(load_lib_module("programme_home").programmes_dir(), "live-panes", f"{driver['lease']}.json")
+
+
+def _seen_ids(driver: dict) -> list:
+    try:
+        with open(_seen_path(driver)) as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("session_id") == driver.get("session_id"):
+            return [i for i in data.get("ids") or [] if isinstance(i, str) and i]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return []
+
+
+def _remember(driver: dict, ids: list) -> None:
+    path = _seen_path(driver)
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        payload = {"session_id": driver.get("session_id"), "ids": ids[:SEEN_CAP]}
+        load_lib_module("programme_home").atomic_write(path, lambda fh: json.dump(payload, fh), ".live.")
+    except Exception:
+        # The live ids still guard this call; only the fallback for a later failed lookup is lost.
+        pass
+
+
+def _live_ids(driver: dict, snap: dict, server) -> list:
+    sr = load_lib_module("session_registry")
+    row = sr.lookup(driver.get("session_id"), driver.get("server"), driver.get("workspace"), include_headless=True)
+    found = load_lib_module("terminal_host").host_named("herdr").presence(
+        driver.get("session_id"), row, snap, load_lib_module("programme_sources").session_of,
+        current_server=server, clean=sr._clean)
+    facts = found.value if found.ok else None
+    if not isinstance(facts, dict) or facts.get("state") == "gone" or not facts.get("pane_in_snapshot"):
+        return []
+    pane = facts.get("pane_id")
+    terminal = next((p.get("terminal_id") for p in snap["panes"] if isinstance(p, dict) and p.get("pane_id") == pane), None)
+    return [i for i in (pane, terminal) if isinstance(i, str) and i]
+
+
+def _with_live_ids(drivers: list) -> None:
+    """Guard each herdr driver by the pane herdr reports it in now: `herdr pane move` gives a pane a new id, and the
+    registry keeps the id from session start. Ids seen once stay guarded when a later lookup fails."""
+    herdr_drivers = [d for d in drivers if d.get("host") == "herdr"]
+    if not herdr_drivers:
+        return
+    server = load_lib_module("programme_sources").current_server()
+    local = [d for d in herdr_drivers if d.get("server") == server]
+    snap = load_lib_module("host_herdr").guard_snapshot() if local else None
+    for driver in herdr_drivers:
+        live = []
+        if snap is not None and driver in local:
+            try:
+                live = _live_ids(driver, snap, server)
+            except Exception:
+                # One driver's bad row must not drop the live ids of the others.
+                pass
+        seen = _seen_ids(driver)
+        if live and not set(live) <= set(seen):
+            _remember(driver, live + [i for i in seen if i not in live])
+        driver["ids"] = list(dict.fromkeys(_ids(driver) + live + seen))
+        if live:
+            # The denial and the journal name the pane the PM is in now.
+            driver["pane_id"] = live[0]
+
+
 def denial(session_id, command):
     drivers = load_lib_module("session_registry").driver_panes()
+    try:
+        _with_live_ids(drivers)
+    except Exception:
+        # A hook error fails open, so a broken live lookup must leave the registry ids guarding, not raise.
+        pass
     sender = {}
     for driver in drivers:
         hit = _driver_hit(command, session_id, driver, sender)
