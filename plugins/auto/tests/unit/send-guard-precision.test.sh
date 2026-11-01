@@ -285,6 +285,16 @@ denied 'which herdr && herdr pane send-text $P hi'
 denied 'which rex herdr | xargs herdr pane send-text $P hi'
 denied 'which x $(herdr pane send-text $P hi)'
 denied 'type herdr rex >(herdr pane send-text $P hi)'
+denied 'which x
+herdr pane send-text $P hi'
+denied 'type x
+rex send $P hi'
+denied 'command -v x
+herdr pane send-text w9:zz hi'
+denied 'whereis x
+osascript -e '\''tell application "Ghostty" to input text "x" in terminal 1'\'''
+allowed 'which herdr
+herdr pane list'
 denied 'echo which herdr pane send-text $P hi | sh'
 denied 'echo herdr pane send-text $P hi | sh'
 denied 'echo "herdr pane send-text $P hi" | bash'

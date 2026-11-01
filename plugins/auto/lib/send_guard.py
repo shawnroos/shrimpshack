@@ -138,6 +138,24 @@ def _substitutions(text: str) -> list:
     return out
 
 
+def _newlines_as_breaks(text: str) -> str:
+    """The shell ends a command at a newline, but the lexer reads one as a space; a quoted or escaped newline stays."""
+    out, quote, escaped = [], None, False
+    for ch in text:
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "\n":
+            ch = " ;\n"
+        out.append(ch)
+    return "".join(out)
+
+
 def _lex(text: str) -> list:
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
@@ -193,7 +211,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         nested = _substitutions(main) + bodies + [ln for body in bodies for ln in body.splitlines()]
         for script in nested:
             _scan(script, depth + 1, hosts, pane_ids, found, proven)
-    tokens = _lex(main)
+    tokens = _lex(_newlines_as_breaks(main))
     piped = main + "\n" + "\n".join(bodies)
     strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
     positions = _command_positions(tokens)
