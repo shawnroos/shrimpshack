@@ -27,6 +27,7 @@ cat > "${FAKES}/herdr" <<'EOF'
 #!/bin/bash
 echo "$*" >> "$FAKE_HERDR_LOG"
 [ -n "${FAKE_HERDR_FAIL:-}" ] && { echo "no such pane" >&2; exit 1; }
+[ -n "${FAKE_HERDR_SLEEP:-}" ] && sleep "$FAKE_HERDR_SLEEP"
 exit 0
 EOF
 chmod +x "${FAKES}/herdr"
@@ -45,8 +46,11 @@ unmerged = lambda ref, repos: {'result': 'ready', 'gates': [], 'pr': ref}
 def prog():
     return {'items': {'issue:A': {'state': 'open', 'owner': {'pane': 'w9:p1'},
                                   'deliverables': {'merged': {'ref': 'o/r#7', 'result': 'pending'}}}}}
-def entry(status='idle'):
-    return {'pane': 'w9:p1', 'item': 'issue:A', 'agent_status': status, 'why': 'folder_gone'}
+def entry(status='idle', item='issue:A'):
+    return {'pane': 'w9:p1', 'item': item, 'agent_status': status, 'terminal_id': 'T1', 'why': 'folder_gone'}
+live = lambda pane_id: {'pane_id': pane_id, 'agent_status': 'idle', 'terminal_id': 'T1', 'cwd': '/nonexistent/gone'}
+_close = g.close_if_eligible
+g.close_if_eligible = lambda rec, ent, **kw: _close(rec, ent, **{'live': live, **kw})
 $1
 "
 }
@@ -58,34 +62,80 @@ check "True w9:p1|pane close w9:p1" "$(run_py "r = host.close_pane('w9:p1'); pri
 
 it "a failing herdr refuses with its failure text and claims nothing closed"
 : > "$FAKE_HERDR_LOG"
-check "False True" "$(FAKE_HERDR_FAIL=1 run_py "r = host.close_pane('w9:p1'); print(r.ok, 'herdr pane close' in r.why)")"
+check "False True False" "$(FAKE_HERDR_FAIL=1 run_py "r = host.close_pane('w9:p1'); print(r.ok, 'herdr pane close' in r.why, 'may have happened' in r.why)")"
 
-for bad in "-x" "" "a b" "w1:p1;rm" '$(x)'; do
+it "a close that outlives the bound says it may have happened and to run P sweep"
+: > "$FAKE_HERDR_LOG"
+check "False True True" "$(FAKE_HERDR_SLEEP=3 CLAUDE_AUTO_SOURCE_TIMEOUT=1 run_py "
+r = host.close_pane('w9:p1'); print(r.ok, 'the close may have happened' in r.why, 'run P sweep to confirm' in r.why)")"
+
+for bad in "-x" "" "a b" "w1:p1;rm" '$(x)' $'w9:p1\n' "w９:p1" "." ".."; do
   it "pane id [$bad] is refused and herdr is never called"
   : > "$FAKE_HERDR_LOG"
   check "False|" "$(PANE_ARG="$bad" run_py "r = host.close_pane(os.environ['PANE_ARG']); print(r.ok, end='')")|$(calls)"
 done
 
-it "send_class and is_host_command class 'pane close <pane>' as a send aimed at that pane"
-check "('send', ['w1:pV']) ('pane close', 'w1:pV')" "$(run_py "
-print(host.send_class(['herdr','pane','close','w1:pV']), host.is_host_command(['herdr','pane','close','w1:pV']))")"
+it "send_class gives 'pane close <pane>' no target, so a worker session is denied; is_host_command still names the pane"
+check "('send', None) ('pane close', 'w9:p4')" "$(run_py "
+print(host.send_class(['herdr','pane','close','w9:p4']), host.is_host_command(['herdr','pane','close','w9:p4']))")"
 
 it "pane close --help is not read as a target"
 check "('send', None)" "$(run_py "print(host.send_class(['herdr','pane','close','--help']), end='')")"
 
-it "close-gone-pane path: eligible pane is closed through the herdr host, journal status is gone_pane_closed"
+it "an eligible pane is closed through the herdr host"
 : > "$FAKE_HERDR_LOG"
-check "closed gone_pane_closed|pane close w9:p1" "$(run_py "
+check "closed|pane close w9:p1" "$(run_py "
 out = g.close_if_eligible({'programme': prog()}, entry(), check=merged_gates, host=host)
-print(out['status'], 'gone_pane_' + out['status'], end='')")|$(calls)"
+print(out['status'], end='')")|$(calls)"
 
 it "a working agent is reported and herdr is not called"
 : > "$FAKE_HERDR_LOG"
 check "reported|" "$(run_py "print(g.close_if_eligible({'programme': prog()}, entry('working'), check=merged_gates, host=host)['status'], end='')")|$(calls)"
 
+for status in None unknown Idle; do
+  it "agent_status [$status] is reported and herdr is not called"
+  : > "$FAKE_HERDR_LOG"
+  check "reported|" "$(ST="$status" run_py "
+st = None if os.environ['ST'] == 'None' else os.environ['ST']
+print(g.close_if_eligible({'programme': prog()}, entry(st), check=merged_gates, host=host)['status'], end='')")|$(calls)"
+done
+
 it "an unmerged PR is reported and herdr is not called"
 : > "$FAKE_HERDR_LOG"
 check "reported|" "$(run_py "print(g.close_if_eligible({'programme': prog()}, entry(), check=unmerged, host=host)['status'], end='')")|$(calls)"
+
+it "an entry with no item is reported and herdr is not called"
+: > "$FAKE_HERDR_LOG"
+check "reported|" "$(run_py "print(g.close_if_eligible({'programme': prog()}, entry(item=None), check=merged_gates, host=host)['status'], end='')")|$(calls)"
+
+it "a host that refuses the close is reported with the reason and its fix"
+: > "$FAKE_HERDR_LOG"
+check "reported True True" "$(run_py "
+class Refusing:
+    def close_pane(self, pane):
+        return load_lib_module('terminal_host').refuse('no close here', fix='close it by hand')
+out = g.close_if_eligible({'programme': prog()}, entry(), check=merged_gates, host=Refusing())
+print(out['status'], 'cannot close it: no close here' in out['why'], out.get('fix') == 'close it by hand', end='')")"
+
+for case in "'working', 'T1', '/nonexistent/gone'" "'idle', 'T2', '/nonexistent/gone'" "'idle', 'T1', '/tmp'"; do
+  it "a pane that is now [$case] is reported as changed and herdr is not called"
+  : > "$FAKE_HERDR_LOG"
+  check "reported|pane changed since the sweep|" "$(run_py "
+st, term, cwd = ($case)
+fresh = lambda pane_id: {'pane_id': pane_id, 'agent_status': st, 'terminal_id': term, 'cwd': cwd}
+out = g.close_if_eligible({'programme': prog()}, entry(), check=merged_gates, host=host, live=fresh)
+print(out['status'], out['why'], sep='|', end='')")|$(calls)"
+done
+
+it "a pane that is no longer listed is reported as changed and herdr is not called"
+: > "$FAKE_HERDR_LOG"
+check "reported|" "$(run_py "print(g.close_if_eligible({'programme': prog()}, entry(), check=merged_gates, host=host, live=lambda p: None)['status'], end='')")|$(calls)"
+
+it "an entry recorded with no terminal id is reported, never closed"
+: > "$FAKE_HERDR_LOG"
+check "reported|" "$(run_py "
+e = entry(); e['terminal_id'] = None
+print(g.close_if_eligible({'programme': prog()}, e, check=merged_gates, host=host)['status'], end='')")|$(calls)"
 
 echo
 echo "Passed: $PASS  Failed: $FAIL"

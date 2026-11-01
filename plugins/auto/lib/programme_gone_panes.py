@@ -16,6 +16,8 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
+programme_domain = load_lib_module("programme_domain")
+programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_readiness = load_lib_module("programme_readiness")
 programme_sources = load_lib_module("programme_sources")
@@ -51,13 +53,32 @@ def decide(programme, entry, check=None) -> tuple:
     return _merged(programme, entry.get("item"), check)
 
 
-def close_if_eligible(record, entry, *, check=None, host=None) -> dict:
+def _live_view(record, host, pane_id):
+    found = host.list_panes()
+    if not found.ok:
+        return None
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    views = programme_sources.pane_views(found.value, programme_sources.remit(programme), with_branch=False)
+    return next((v for v in views if v["pane_id"] == pane_id), None)
+
+
+def _unchanged(entry, fresh) -> bool:
+    """The sweep's verdict was about one terminal; a pane id can be reused or its agent can start working before the close lands."""
+    return bool(fresh and entry.get("terminal_id") and fresh.get("terminal_id") == entry["terminal_id"]
+                and fresh.get("agent_status") == IDLE and programme_domain.folder_gone(fresh))
+
+
+def close_if_eligible(record, entry, *, check=None, host=None, live=None) -> dict:
     programme = record.get("programme") or {}
     eligible, why = decide(programme, entry, check)
     out = {"pane": entry["pane"], "item": entry.get("item"), "why": why}
     if not eligible:
         return dict(out, status="reported")
-    closed = (host or terminal_host.current()).close_pane(entry["pane"])
+    host = host or terminal_host.current()
+    fresh = (live or functools.partial(_live_view, record, host))(entry["pane"])
+    if not _unchanged(entry, fresh):
+        return dict(out, status="reported", why="pane changed since the sweep")
+    closed = host.close_pane(entry["pane"])
     if not closed.ok:
         return dict(out, status="reported", why=f"{why}; but the host cannot close it: {closed.why}", fix=closed.fix)
     return dict(out, status="closed")

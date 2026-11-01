@@ -147,12 +147,17 @@ class HerdrHost(terminal_host.TerminalHost):
 
     def close_pane(self, pane, **_):
         # herdr pane close takes no flags, so a pane id that starts with "-" would be read as an option.
-        if not isinstance(pane, str) or pane.startswith("-") or not PANE_TOKEN.fullmatch(pane):
+        if (not isinstance(pane, str) or pane.startswith("-") or pane in (".", "..")
+                or not PANE_TOKEN.fullmatch(pane)):
             return refuse(f"{pane!r} is not a herdr pane id, so no close was attempted")
         result = _herdr(["pane", "close", pane])
         if result["ran"] and result["code"] == 0:
             return native({"closed": pane})
-        return refuse(programme_exec.failure(result, "herdr pane close"), value=result)
+        why = programme_exec.failure(result, "herdr pane close")
+        if result["timed_out"]:
+            # The kill can land after herdr already closed the pane, so a timeout does not prove it stayed open.
+            why += "; the close may have happened; run P sweep to confirm"
+        return refuse(why, value=result)
 
     def presence(self, session_id, row, snap, reported, *, current_server, clean, **_):
         out = terminal_host.presence_facts(session_id, (row or {}).get("pane_id"), reachable=snap is not None)
@@ -245,6 +250,9 @@ class HerdrHost(terminal_host.TerminalHost):
             return "read", []
         if words not in SEND_VERBS and words != ("agent", "start"):
             return "unknown", None
+        if words == ("pane", "close"):
+            # Naming a target would let a peer worker close another worker's pane; only the driving session may.
+            return "send", None
         j = i + 2
         while j < len(rest):
             if rest[j] in VALUE_OPTS:

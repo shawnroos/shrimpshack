@@ -450,7 +450,9 @@ session.
   top-level asks list carries every open ask and every answered, unrelayed one.
 - **Domain**: `sweep` also lists the remit order, the folder_gone panes and the domain (the sessions outside the remit).
   `close-gone-pane` (args: pane) closes a `folder_gone` pane only when its item's PR is merged and its agent
-  is idle, otherwise reports why, and refuses a pane the current sweep did not list. `recommendations-shown`
+  is idle, otherwise reports why, and refuses a pane the current sweep did not list. It reads herdr again
+  before closing and reports `pane changed since the sweep` when the pane is gone, working, in another
+  terminal (each `folder_gone` entry carries its `terminal_id`) or has a folder again. `recommendations-shown`
   (args: `--fingerprint`) records that the outside-session list was shown and refuses a fingerprint that is
   not current. `answer-domain-behaviour` (args: behaviour id, `--as`, `--why`) answers a behaviour owed on
   the domain.
