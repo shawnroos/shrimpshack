@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,8 +29,9 @@ POLL_SECONDS = 1.0
 BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
 SEND_VERBS = frozenset({
     ("agent", "prompt"), ("agent", "send"), ("agent", "send-keys"),
-    ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"),
+    ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"), ("pane", "close"),
 })
+PANE_TOKEN = re.compile(r"[A-Za-z0-9:_.\-]+")
 # Everything that is neither listed here nor in SEND_VERBS is "unknown" and treated as a send.
 READ_VERBS = frozenset({
     ("agent", "list"), ("agent", "get"), ("agent", "read"), ("agent", "wait"), ("agent", "explain"),
@@ -142,6 +144,15 @@ class HerdrHost(terminal_host.TerminalHost):
         if sent["ran"] and sent["code"] == 0:
             return native(sent)
         return refuse(programme_exec.failure(sent, "herdr agent prompt"), value=sent)
+
+    def close_pane(self, pane, **_):
+        # herdr pane close takes no flags, so a pane id that starts with "-" would be read as an option.
+        if not isinstance(pane, str) or pane.startswith("-") or not PANE_TOKEN.fullmatch(pane):
+            return refuse(f"{pane!r} is not a herdr pane id, so no close was attempted")
+        result = _herdr(["pane", "close", pane])
+        if result["ran"] and result["code"] == 0:
+            return native({"closed": pane})
+        return refuse(programme_exec.failure(result, "herdr pane close"), value=result)
 
     def presence(self, session_id, row, snap, reported, *, current_server, clean, **_):
         out = terminal_host.presence_facts(session_id, (row or {}).get("pane_id"), reachable=snap is not None)
