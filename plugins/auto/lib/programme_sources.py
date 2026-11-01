@@ -410,9 +410,10 @@ def sweep(record) -> dict:
     if panes is not None:
         result.update(propose(programme, panes, drivers, found, verified, scope, info))
         result["order"] = programme_domain.order(programme, workers)
-        outside = programme_domain.outside_views(
-            snap, scope, lambda row, agent: _owner(row, agent, None), lambda pane: role(pane, drivers))
-        result["domain"] = [programme_domain.recommendation(p) for p in outside]
+        if not scope["unreached"]:
+            outside = programme_domain.outside_views(
+                snap, scope, lambda row, agent: _owner(row, agent, None), lambda pane: role(pane, drivers))
+            result["domain"] = [programme_domain.recommendation(p) for p in outside]
     result["source_changes"] = source_changes(programme, result["sources"])
     return result
 
