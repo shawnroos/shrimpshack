@@ -37,7 +37,7 @@
       "ghostty": {"status": "degraded", "how": "Ghostty has no change feed, so the terminal list is polled and each terminal carries a hash of its name and foreground pid, with the PM's own terminal left out; Claude session messages (SendMessage) reach a session through a per-process socket whatever its host, but no process outside the model can read them, so chat on Ghostty is degraded to the programme inbox", "fix": "run Claude inside a Ghostty window or tab, and allow Automation: System Settings > Privacy & Security > Automation, switch on Ghostty under the app that runs Claude (macOS asks once, and remembers a denial); a session in tmux, screen, ssh or another terminal app cannot be found", "version": "Ghostty b2c78c9bd (build 18488)"}
     },
     "close_pane": {
-      "herdr": {"status": "refuse", "how": "no close call is verified yet", "fix": "run herdr pane --help yourself, then add the verified close verb to host_herdr.py close_pane and to its send-guard class; until then the PM reports a gone-folder pane and you close it"},
+      "herdr": {"status": "native", "how": "herdr pane close <pane>"},
       "rex": {"status": "refuse", "how": "no close call is verified yet", "fix": "find Rex's block-close command (rex --help), then add it to host_rex.py close_pane; until then the PM reports a gone-folder block and you close it"},
       "ghostty": {"status": "refuse", "how": "no close call is verified yet", "fix": "check whether Ghostty's AppleScript dictionary has a close command for a terminal, then add it to host_ghostty.py close_pane; until then the PM reports a gone-folder terminal and you close it"}
     },

@@ -28,7 +28,7 @@ POLL_SECONDS = 1.0
 BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
 SEND_VERBS = frozenset({
     ("agent", "prompt"), ("agent", "send"), ("agent", "send-keys"),
-    ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"),
+    ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"), ("pane", "close"),
 })
 # Everything that is neither listed here nor in SEND_VERBS is "unknown" and treated as a send.
 READ_VERBS = frozenset({
@@ -220,6 +220,12 @@ class HerdrHost(terminal_host.TerminalHost):
         except OSError:
             return refuse("herdr notification could not run", value=None)
         return native(done.returncode)
+
+    def close_pane(self, pane, **_):
+        result = _herdr(["pane", "close", pane])
+        if not result["ran"] or result["code"] != 0:
+            return refuse(programme_exec.failure(result, "herdr pane close"))
+        return native({"closed": pane})
 
     def send_class(self, argv, text=""):
         if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "herdr"):
