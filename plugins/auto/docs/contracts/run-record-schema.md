@@ -753,7 +753,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`,
 `item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`, `item_aliased`,
 `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`, `item_handed`,
-`handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `ask_relayed`, `pm_decided`,
+`handed_answered`, `ask_updated`, `ask_answer_voided`, `ask_shown`, `recommendations_shown`,
+`domain_behaviour_answered`, `gone_pane_closed`, `gone_pane_reported`, `ask_relayed`, `pm_decided`,
 `claim`, `claims_read`, `working_now`, `queue_changed`, `tested_build_recorded`,
 `source_changed`, `evidence_checked`, `evidence_refuted`, `validate_pass`, `merge_pinned`,
 `worker_started`, `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
@@ -831,7 +832,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - Request lines (`takeover_request`, `handover_request`, `end_request`) carry
   `{verb, text, origin, space, lease_status, driving}`.
 - `pm_decided` carries `{decision_id, item, decision_kind, term, silent, outcome, state, why}`;
-  `item_handed` adds `{ask, ask_kind, op?, title, fingerprint, replies}`; `ask_updated` and `ask_answer_voided` carry `{item, ask, fingerprint, changed, voided, replies?}` (`voided` is the voided decision id or null); `ask_shown` carries `{item, ask, fingerprint}` and `ask_relayed` `{item, ask, choice, decision_id}`; `handed_answered` and `agreement_accepted` add
+  `item_handed` adds `{ask, ask_kind, op?, title, fingerprint, replies}`; `ask_updated` and `ask_answer_voided` carry `{item, ask, fingerprint, changed, voided, replies?}` (`voided` is the voided decision id or null); `ask_shown` carries `{item, ask, fingerprint}`; `recommendations_shown` carries `{fingerprint, sessions}`; `domain_behaviour_answered` carries `{behaviour, answer}`; `gone_pane_closed` and `gone_pane_reported` carry `{pane, item, why, fix?}`; and `ask_relayed` `{item, ask, choice, decision_id}`; `handed_answered` and `agreement_accepted` add
   `decision_id`, the id of the decision they recorded. `agreement_accepted` also carries
   `contract_version`.
 - `agreement_proposed` adds `{project_terms: [{id, area, value, reserved}], source}` when the

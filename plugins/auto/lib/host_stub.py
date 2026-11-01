@@ -51,6 +51,15 @@ class StubHost(terminal_host.TerminalHost):
                                      "terminal_id": env.get("AUTO_TEST_STUB_TERMINAL"),
                                      "tab_space_name": env.get("AUTO_TEST_STUB_TAB")})
 
+    def close_pane(self, pane, **_):
+        """AUTO_TEST_STUB_CLOSE_LOG names a file; a close appends the pane id to it, and without it the stub refuses."""
+        path = os.environ.get("AUTO_TEST_STUB_CLOSE_LOG")
+        if not path:
+            return terminal_host.refuse("the stub host does not close panes here", fix="set AUTO_TEST_STUB_CLOSE_LOG")
+        with open(path, "a") as fh:
+            fh.write(f"{pane}\n")
+        return terminal_host.native({"closed": pane})
+
     def presence(self, session_id, row, snap, reported, **_):
         """AUTO_TEST_STUB_PRESENCE_SEQ names a file of one state per line; each call consumes the first line."""
         path = os.environ.get("AUTO_TEST_STUB_PRESENCE_SEQ")

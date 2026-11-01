@@ -448,6 +448,12 @@ session.
   sets `answered.relayed_at` after the PM relays Shawn's answer to the worker,
   and refuses an ask with no recorded answer or one already relayed. The view's
   top-level asks list carries every open ask and every answered, unrelayed one.
+- **Domain**: `sweep` also lists the remit order, the folder_gone panes and the domain (the sessions outside the remit).
+  `close-gone-pane` (args: pane) closes a `folder_gone` pane only when its item's PR is merged and its agent
+  is idle, otherwise reports why, and refuses a pane the current sweep did not list. `recommendations-shown`
+  (args: `--fingerprint`) records that the outside-session list was shown and refuses a fingerprint that is
+  not current. `answer-domain-behaviour` (args: behaviour id, `--as`, `--why`) answers a behaviour owed on
+  the domain.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the Rulings kept under

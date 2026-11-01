@@ -48,6 +48,12 @@ why: <the inputs' why codes, copied exactly>
 - item <id> | behaviour <id> | trigger <trigger> | PM checks: <pm_checks or none> | <mark: judge, pm_applies, or blank> | <when>
 - more: <overflow> not listed: <overflow_ids, comma separated>
 - behaviours could not be read: <behaviours_due.error>   (only when it is set)
+## Behaviours due on the domain (source: domain_behaviours_due; list every row, the PM answers each)
+- behaviour <id> | trigger <trigger> | PM checks: <pm_checks or none> | <when>
+- behaviours could not be read: <domain_behaviours_due.error>   (only when it is set)
+## Outside sessions            (source: recommendations; list every session in recommendations.set)
+- pane <pane> (<workspace_id>) | <reason>
+- list shown: <recommendations.shown_current>; fingerprint <recommendations.fingerprint>
 ## Merge readiness             (source: prs, prs_unchecked)
 - <pr>: <result> (<note>)
 ## Journal since the last sweep (source: journal_since)

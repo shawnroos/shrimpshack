@@ -55,6 +55,11 @@ with tempfile.TemporaryDirectory(prefix='auto-noop-chain-') as work:
     first = json.loads(verb('sweep-inputs').stdout)
     check('the first pass records the sources, so a sweep that records a source change is not quiet',
           first['verdict'], 'changed')
+    recs = first['recommendations']
+    check('the first pass lists the fixture\'s outside session as a recommendation, not yet shown',
+          [bool(recs['set']), recs['shown_current']], [True, False])
+    shown = verb('recommendations-shown', '--fingerprint', recs['fingerprint'])
+    check('the PM marks the list shown with the current fingerprint', (shown.returncode, shown.stderr[-300:]), (0, ''))
     verb('set-now', 'idle')
     verb('focus-note', '--agents', '0')
     subprocess.run(['bash', os.path.join(lib, 'programme.sh'), 'record-trajectories', '--run', run], input='[]',
