@@ -37,6 +37,7 @@ _RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
 # (the `)` and `>` of quoted JavaScript), never a program.
 _RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=")
 _OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
+_LOOKUPS = frozenset({"which", "whereis", "type"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 # After these an `a=b` word is the program they run, not an assignment.
 _RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "xargs", "builtin"})
@@ -171,6 +172,21 @@ def _strip_redirects(words: list) -> list:
     return out
 
 
+def _lookup_names(tokens: list, runs: list) -> set:
+    """Indices of words that only name a program for `which`, `type`, `whereis` or `command -v` to look up, so
+    `which rex herdr` is not read as a `rex` call with the verb `herdr`. The words end at the next shell break."""
+    names = set()
+    for k, tok in enumerate(tokens):
+        lookup = os.path.basename(tok) in _LOOKUPS or (tok == "command" and tokens[k + 1:k + 2] in (["-v"], ["-V"]))
+        if not (lookup and runs[k]):
+            continue
+        j = k + 1
+        while j < len(tokens) and tokens[j] not in _SHELL_BREAKS and not _OPERATOR_ONLY.match(tokens[j]):
+            names.add(j)
+            j += 1
+    return names
+
+
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     if depth < MAX_DEPTH:
@@ -182,6 +198,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
     strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
     positions = _command_positions(tokens)
     runs = positions[0]
+    looked_up = _lookup_names(tokens, runs)
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
         script = None
@@ -202,6 +219,8 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         if script is not None:
             if depth < MAX_DEPTH:
                 _scan(script, depth + 1, hosts, pane_ids, found, proven)
+            continue
+        if start in looked_up:
             continue
         segment = strip(_segment(tokens, start))
         for host in hosts:
