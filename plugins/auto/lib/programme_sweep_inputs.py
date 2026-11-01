@@ -106,15 +106,18 @@ def _stalled(programme):
             for key, pane in waiting if panes is None or status.get(pane) != "working"]
 
 
-def _moved_items(programme, last_at):
+def _moved_items(programme, last_row):
+    seen = ((last_row or {}).get("payload") or {}).get("history_seen")
+    last_at = run_record_core.parse_iso(last_row.get("at")) if last_row else None
     moved = []
     for key, item in sorted((programme.get("items") or {}).items()):
-        for event in item.get("history") or []:
-            if event.get("kind") == "tracker_synced":
-                continue
-            stamp = run_record_core.parse_iso(event.get("at"))
-            if last_at is None or stamp is None or stamp > last_at:
-                moved.append({"item": key, "kind": event.get("kind"), "at": event.get("at")})
+        history = item.get("history") or []
+        if isinstance(seen, dict):
+            fresh = history[seen.get(key, 0):]
+        else:
+            # A sweep row from before history_seen: >= re-reports a same-second change once rather than miss it.
+            fresh = [e for e in history if last_at is None or (run_record_core.parse_iso(e.get("at")) or last_at) >= last_at]
+        moved.extend({"item": key, "kind": e.get("kind"), "at": e.get("at")} for e in fresh if e.get("kind") != "tracker_synced")
     return moved
 
 
@@ -146,7 +149,6 @@ def _facts(host, run_id, home, record):
     view = host.build_view(run_id, home, record)
     rows = programme_journal.read(run_id)
     last = _last_index(rows, ("working_now",))
-    last_at = run_record_core.parse_iso(rows[last].get("at")) if last is not None else None
     claim_rows, claim_offset, _ = programme_resume.claims_state(run_id, home, record)
     refs = _open_prs(programme)
     reread = _last_index(rows, ("reread_requested",))
@@ -160,7 +162,7 @@ def _facts(host, run_id, home, record):
         "asks": view.get("asks") or [],
         "claim_total": len(claim_rows),
         "claims": [dict(row, index=n) for n, row in enumerate(claim_rows) if n >= claim_offset],
-        "moved": _moved_items(programme, last_at), "stalled": _stalled(programme),
+        "moved": _moved_items(programme, rows[last] if last is not None else None), "stalled": _stalled(programme),
         "refs": refs, "prs": _readiness(programme, refs), "armed": _armed(programme, record),
         "reread_requested": reread is not None and (acked is None or reread > acked),
         "rules": host.rules_in_force(record).get("rules") or [],
