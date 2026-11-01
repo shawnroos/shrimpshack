@@ -18,7 +18,7 @@ programme_home = load_lib_module("programme_home")
 programme_sanitize = load_lib_module("programme_sanitize")
 
 RANKS = ("needs_shawn", "unknown_state", "claims_merge", "idle", "working")
-SHAWN_WAITERS = ("shawn", "user", "human")
+SHAWN_WAITERS = ("shawn",)
 UNKNOWN_STATUS = ("", "unknown")
 FOLDER_GONE = "folder_gone"
 OUTSIDE_CAP = 40
