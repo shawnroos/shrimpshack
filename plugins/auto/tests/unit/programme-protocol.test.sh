@@ -362,8 +362,10 @@ check "['personal/prod_deploy/protected_kind'] personal None False False" "$OUT"
 
 OLD="${WORK}/base-snapshot"
 mkdir -p "${OLD}/lib" "${OLD}/protocol"
-git -C "$AUTO_ROOT" show 33dd8573:plugins/auto/lib/programme_protocol.py > "${OLD}/lib/programme_protocol_base.py"
-git -C "$AUTO_ROOT" show 33dd8573:plugins/auto/protocol/defaults.json > "${OLD}/protocol/defaults.json"
+# The commit PR #141 was built on. Pin a commit on main: a squash-merge discards the branch's own commits.
+BASE_SHA=20c6657228efb0f5566d4fc2dc244a5c37290002
+git -C "$AUTO_ROOT" show "${BASE_SHA}:plugins/auto/lib/programme_protocol.py" > "${OLD}/lib/programme_protocol_base.py"
+git -C "$AUTO_ROOT" show "${BASE_SHA}:plugins/auto/protocol/defaults.json" > "${OLD}/protocol/defaults.json"
 export OLD
 OLD_LOAD='
 import importlib.util
