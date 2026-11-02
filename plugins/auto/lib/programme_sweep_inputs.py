@@ -19,6 +19,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_behaviours_due = load_lib_module("programme_behaviours_due")
+programme_rituals_due = load_lib_module("programme_rituals_due")
 programme_domain_state = load_lib_module("programme_domain_state")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
@@ -36,7 +37,7 @@ ROW_CAP = 300
 PR_CAP = 8
 TEXT_CAP = 240
 # The sweep's own bookkeeping, written on every pass; a row of one of these kinds changes nothing.
-BOOKKEEPING_KINDS = ("stop_quiet", "prompts_pruned", "working_now", "focus_noted")
+BOOKKEEPING_KINDS = ("stop_quiet", "prompts_pruned", "working_now", "focus_noted", "ritual_offered")
 
 
 def _quiet_row(row) -> bool:
@@ -129,6 +130,20 @@ def _due(host, run_id, record):
         return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": [], "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _rituals_due(host, run_id, record, rows):
+    try:
+        return programme_rituals_due.due(record, run_id, rows=rows, lookup=host.prompt_lookup)
+    except Exception as exc:  # noqa: BLE001 — same rule as _due: a bad store degrades the sweep, never ends it
+        return {"due": [], "missed": [], "in_flight": [], "total": 0, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _rituals_unsettled(rituals) -> bool:
+    """A due ritual needs the PM; a missed or in-flight one counts only until it has been offered once."""
+    rituals = rituals or {}
+    waiting = (rituals.get("missed") or []) + (rituals.get("in_flight") or [])
+    return bool(rituals.get("due") or any(not r.get("offered") for r in waiting))
+
+
 def _domain_due(host, record):
     try:
         return programme_domain_state.domain_due(record, lookup=host.prompt_lookup)
@@ -166,7 +181,7 @@ def _facts(host, run_id, home, record):
         "refs": refs, "prs": _readiness(programme, refs), "armed": _armed(programme, record),
         "reread_requested": reread is not None and (acked is None or reread > acked),
         "rules": host.rules_in_force(record).get("rules") or [],
-        "due": due, "domain_due": _domain_due(host, record),
+        "due": due, "domain_due": _domain_due(host, record), "rituals": _rituals_due(host, run_id, record, rows),
         "recommendations": programme_domain_state.recommendations(programme),
     }
 
@@ -191,6 +206,8 @@ def _verdict(f):
         ("behaviours_due", bool(f["due"]["total"])),
         ("behaviours_store_unreadable", bool(f["due"]["error"] or f["domain_due"]["error"])),
         ("domain_behaviours_due", bool(f["domain_due"]["total"])),
+        ("rituals_due", _rituals_unsettled(f.get("rituals"))),
+        ("rituals_store_unreadable", bool((f.get("rituals") or {}).get("error"))),
         ("recommendations_not_shown", bool(f["recommendations"]["set"]) and not f["recommendations"]["shown_current"]),
     )
     return [code for code, hit in checks if hit] + ["watcher_missing:" + name for name, ok in f["armed"].items() if not ok]
@@ -216,7 +233,7 @@ def build(host, run_id, home, record):
         "items_changed": f["moved"], "stalled": f["stalled"],
         "prs": f["prs"], "prs_unchecked": [ref for _, _, ref in f["refs"][PR_CAP:]],
         "watchers_armed": f["armed"], "behaviours_due": f["due"],
-        "domain_behaviours_due": f["domain_due"], "recommendations": f["recommendations"],
+        "domain_behaviours_due": f["domain_due"], "rituals": f["rituals"], "recommendations": f["recommendations"],
         "rules": {"count": len(f["rules"]), "ids": [r.get("id") for r in f["rules"] if isinstance(r, dict)],
                   "reread_requested": f["reread_requested"]},
         "journal_since": [{"line": n, "kind": row.get("kind"), "at": row.get("at"), "quiet": _quiet_row(row)}

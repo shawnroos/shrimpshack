@@ -288,6 +288,11 @@ def promoting(run_id, home, verb, attempt):
     return attempt()
 
 
+# Every beating write calls these after it commits, with the beat it replaced; a gap seen by one
+# write is gone for the next, so the hook cannot sit on the beat verb alone.
+AFTER_BEAT = []
+
+
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
            journal=True, after=None, verb=None, target=None, beat=True, names_change=True, promote=True):
     run_id, home, _ = _locate(opts, finish_move=promote)
@@ -296,7 +301,9 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
     def mutate(rec):
         seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt)
         if beat:
-            rec.setdefault("loop", {})["last_beat_at"] = run_record_core.now_iso()
+            loop = rec.setdefault("loop", {})
+            seen["previous_beat"] = loop.get("last_beat_at")
+            loop["last_beat_at"] = run_record_core.now_iso()
         prompt = _typed_prompt(run_id, rec, prompt_id, verb) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
@@ -323,7 +330,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
                                              recheck=programme_rulings.recheck_approval,
                                              legacy_refuses=programme_rulings.changes_ruling)
         except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
-                programme_behaviours.BehaviourError) as exc:
+                programme_behaviours.BehaviourError, programme_rituals.RitualError) as exc:
             if (needs_prompt or prompt_id) and "sid" in seen:
                 _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
             raise
@@ -335,6 +342,9 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
                "revision": out["revision"], **(row.get("payload") or {})})
         return 0
     payload = seen["full"]
+    if beat:
+        for hook in AFTER_BEAT:
+            hook(run_id, seen["sid"], seen.get("previous_beat"), seen["record"])
     extra = (after(payload) or {}) if after is not None else {}
     if extra:
         payload.update(extra)
@@ -914,12 +924,18 @@ _VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_behaviours_skip").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_behaviour_file_verbs").build_verbs(sys.modules[__name__]))
 
+programme_rituals = load_lib_module("programme_rituals")
+_VERBS.update(programme_rituals.build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_ritual_run").build_verbs(sys.modules[__name__]))
+AFTER_BEAT.append(programme_rituals.note_gap)
+
 _ERRORS = (
     ProgrammeError,
     programme_record.RecordError,
     programme_decisions.DecisionError,
     programme_terms.TermsError,
     programme_behaviours.BehaviourError,
+    programme_rituals.RitualError,
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,

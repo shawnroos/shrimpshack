@@ -17,6 +17,8 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_home = load_lib_module("programme_home")
 programme_permission_rules = load_lib_module("programme_permission_rules")
 programme_behaviours = load_lib_module("programme_behaviours")
+programme_rituals = load_lib_module("programme_rituals")
+programme_rituals_due = load_lib_module("programme_rituals_due")
 programme_carryover = load_lib_module("programme_carryover")
 programme_journal = load_lib_module("programme_journal")
 programme_decisions = load_lib_module("programme_decisions")
@@ -396,6 +398,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
     }
     model["agreement"] = programme_view_agreement.build(block, journal_entries, model["rules_in_force"], protocol, now)
     model["agreement"]["behaviours"] = model["rules_in_force"].get("behaviours") or []
+    model["agreement"]["rituals"] = rituals_view(record, journal_entries or [])
     model = _clean(model)
     parts = _clean(programme_view_work.build(record, block, journal_entries, now,
                                              model["rules_in_force"].get("rulings"),
@@ -544,6 +547,40 @@ def behaviours_view(record, lookup) -> dict:
     if base["notices"]:
         out["behaviour_notices"] = base["notices"]
     return out
+
+
+def rituals_view(record, journal_entries) -> list:
+    """Rituals in force with their state, read from the record and journal alone so a programme with no live PM still shows a miss."""
+    try:
+        loaded = programme_rituals.load_store()
+        got = programme_rituals_due.due(record, record.get("run_id"), rows=journal_entries, store=loaded)
+        in_force = programme_rituals.resolve(record, store=loaded)["in_force"]
+    except Exception as exc:  # noqa: BLE001 — a bad rituals store degrades the view, never blocks it
+        return [{"id": "rituals", "state": "unreadable", "detail": f"{type(exc).__name__}: {exc}"}]
+    pending = {r["ritual"]: r for bucket in ("due", "missed", "in_flight") for r in got[bucket]}
+    clock = _dict(_dict(record.get("programme")).get("ritual_clock"))
+    live = {e["id"] for e in in_force}
+    parked = [e for e in _dict(record.get("programme")).get("rituals") or []
+              if isinstance(e, dict) and e.get("id") not in live and e.get("state") in ("proposed", "retired")]
+    rows = [{"id": e["id"], "layer": e.get("layer"), "trigger": _dict(e.get("when")).get("trigger"),
+             "when": _dict(e.get("when")).get("text"), "steps": list(e.get("steps") or []), "state": e["state"]}
+            for e in parked]
+    rows += [{"id": r.get("id"), "layer": r.get("layer"), "state": "rejected", "when": r.get("reason")}
+             for r in programme_rituals.resolve(record, store=loaded)["rejected"]]
+    for e in in_force:
+        hit = pending.get(e["id"])
+        rows.append({"id": e["id"], "layer": e["layer"], "trigger": e["when"]["trigger"], "when": e["when"]["text"],
+                     "steps": list(e["steps"]), "state": hit["state"] if hit else "scheduled",
+                     "pending_at": hit and hit["pending_at"], "offered": bool(hit and hit.get("offered")),
+                     "next_due_at": _dict(clock.get(e["id"])).get("next_due_at")})
+    return rows
+
+
+def _ritual_text(r) -> str:
+    when = f"{r.get('trigger')}: {r.get('when')}"
+    due = f", since {r['pending_at']}" if r.get("pending_at") else (f", next {r['next_due_at']}" if r.get("next_due_at") else "")
+    flag = {"missed": " [MISSED, ask Shawn]", "in_flight": " [IN FLIGHT, finish or offer]", "due": " [due]"}.get(r.get("state"), "")
+    return f"ritual {r.get('id')} ({r.get('layer')}, {r.get('state')}{due}){flag}: {when}"
 
 
 def _behaviour_text(b) -> str:
@@ -749,6 +786,8 @@ def agreement_rows(model) -> list:
     if model["agreement"].get("behaviours"):
         _section(out, "Behaviours", [_row(f"  {_behaviour_text(_dict(b))}") for b in model["agreement"]["behaviours"]],
                  "none")
+    if model["agreement"].get("rituals"):
+        _section(out, "Rituals", [_row(f"  {_ritual_text(_dict(r))}") for r in model["agreement"]["rituals"]], "none")
     return out
 
 
