@@ -83,7 +83,7 @@ Shawn reads the Programme view for status. The chat is for what needs him.
   it starts and once when it clears, not every sweep.
 - When you speak, follow section 12 of [references/judgment.md](references/judgment.md).
 
-Routine reads may run on pinned agents (read-only):
+Routine reads may use pinned agents (read-only):
 `auto:programme-status-reader` (status), `auto:programme-inbox-reader`
 (unread claims), `auto:programme-evidence-reader` (merge readiness) and
 `auto:programme-tracker-updater` (the tracker writes you found due). Pass each
@@ -102,7 +102,7 @@ and `P watcher-beat remit --task-id <Monitor task id> --kind monitor`. If the
 stream printed no other line since your last wake, stop there: run no other
 step and no status read, and send no message. If it printed change lines (the
 watcher prints its held lines as it stops), handle them as a normal wake after
-re-arming. Next sweep reads changes since expiry.
+re-arming. Next sweep reads the changes.
 
 1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
    Bash call of the form `{ echo SWEEP-START; <step 2's prune, which finds the run

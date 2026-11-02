@@ -354,12 +354,13 @@ check '[[], null]' "$(jq_py '[d["contracts"]["changed"], d["contracts"]["error"]
 echo "── start-worker with no contract is unchanged (R20) ──"
 
 : > "$CALLS"
-prog start-worker linear:AI-701 --run "$RUN" -- --name plain --handoff /tmp/h.md --target tab
+printf 'handoff\n' > "${WORK}/h.md"
+prog start-worker linear:AI-701 --run "$RUN" -- --name plain --handoff "${WORK}/h.md" --target tab
 it "a start with no contract exits 0"
 check 0 "$CODE"
 SID="$(grep '^spinoff ' "$CALLS" | sed -E 's/.*--session-id ([^ ]+).*/\1/')"
 it "spinoff gets exactly the caller's arguments plus the minted session id, and no kickoff override"
-check "spinoff --name plain --handoff /tmp/h.md --target tab --session-id ${SID}" "$(grep '^spinoff ' "$CALLS")"
+check "spinoff --name plain --handoff BRIEF --target tab --session-id ${SID}" "$(grep '^spinoff ' "$CALLS" | sed -E 's# --handoff [^ ]+# --handoff BRIEF#')"
 it "the receipt carries exactly the pre-contract keys"
 check '["attempt", "behaviour_ids", "behaviours_held_back", "decision_ids", "folder", "item", "kind", "late", "ok", "operation_state", "outcome", "output_tail", "pane", "reason", "remit_added", "remit_reason", "restrictions", "run", "session_id", "spinoff_exit", "started", "terminal_id", "worktree"]' "$(jq_py 'sorted(d.keys())')"
 it "the item gains no auto_run block and keeps the pre-contract keys"
