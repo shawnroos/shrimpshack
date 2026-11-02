@@ -838,6 +838,85 @@ print(got["due"][0]["offers_rule"])
 EOF
 )"
 
+# ---- ritual checks: C1 the check field ----
+def_check='{"name": "versions-bumped", "repo_key": "acme/alpha"}'
+run_chk() {
+  run_py "$1" "${2:-\{\}}" <<'EOF'
+import json
+c = json.loads(args[0]); extra = json.loads(args[1])
+e = ritual("rc", **extra); e["check"] = c
+v = pr.verdict(e)
+print(v["reason"], v["detail"])
+EOF
+}
+
+it "C1: a known check on a calendar programme-layer ritual with a remit repo is accepted"
+check "None None" "$(run_chk "$def_check")"
+
+it "C1: an unknown check name, an unknown key and a base with .. are refused"
+check "bad_value check.name" "$(run_chk '{"name": "rm-everything", "repo_key": "acme/alpha"}')"
+check "unknown_key" "$(run_chk '{"name": "versions-bumped", "repo_key": "acme/alpha", "cmd": "ls"}' | cut -d' ' -f1)"
+check "bad_value check.base" "$(run_chk '{"name": "versions-bumped", "repo_key": "acme/alpha", "base": "a..b"}')"
+check "bad_value check.base" "$(run_chk '{"name": "versions-bumped", "repo_key": "acme/alpha", "base": "--upload-pack=x"}')"
+
+it "C1: a check on the personal layer, or on an event ritual, is refused"
+check "bad_value check.layer" "$(run_chk "$def_check" '{"layer": "personal"}')"
+check "bad_value check.trigger" "$(run_chk "$def_check" '{"when": {"text": "at start", "trigger": "start"}}')"
+
+it "C1: a programme-layer check must carry a repo key, and a repo-layer check must not"
+check "missing_field check.repo_key" "$(run_chk '{"name": "versions-bumped"}')"
+check "bad_value check.repo_key" "$(run_chk "$def_check" '{"layer": "repo"}')"
+check "None None" "$(run_chk '{"name": "versions-bumped"}' '{"layer": "repo"}')"
+
+it "C1: a hand-edited store entry with a bad check is rejected at load"
+check "check.name" "$(run_py <<'EOF'
+store = os.environ["CLAUDE_AUTO_RITUALS_STORE"]
+os.makedirs(os.path.dirname(store), exist_ok=True)
+e = ritual("rbad", layer="personal"); e["check"] = {"name": "versions-bumped"}
+json.dump({"format": 1, "personal": [e], "repos": {}}, open(store, "w"))
+print(pr.load_store()["rejected"][0]["detail"] if pr.load_store()["rejected"] else "none rejected")
+EOF
+)"
+rm -f "$CLAUDE_AUTO_RITUALS_STORE"
+
+RUN_C="$(new_run)"
+run_py "$RUN_C" <<'EOF'
+def mutate(rec):
+    rec["programme"]["remit"]["repos"] = [{"path": os.path.join(os.environ["WORK"], "alpha"), "github": "acme/alpha"}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+PC="$(tprompt "$RUN_C" "record the versions bumped check")"
+PCX="$(tprompt "$RUN_C" "record the weekly report")"
+
+it "C1: record-ritual --check needs a prompt that names the check, and defaults the repo from a one-repo remit"
+prog record-ritual --run "$RUN_C" --prompt "$PCX" --when "daily" --schedule "daily 09:00" --step "check versions" --check versions-bumped
+check 1 "$CODE"
+has "versions bumped" "$OUT"
+prog record-ritual --run "$RUN_C" --prompt "$PC" --when "daily" --schedule "daily 09:00" --step "check versions" --check versions-bumped
+check 0 "$CODE"
+CK="$(jfield "$OUT" 'd["ritual"]')"
+check "{'name': 'versions-bumped', 'repo_key': 'acme/alpha'}" "$(q "$RUN_C" "[e for e in prog['rituals'] if e['id'] == '$CK'][0]['check']")"
+
+it "C1: --check-base .. is refused and a missing remit repo is a clear refusal"
+prog record-ritual --run "$RUN_C" --prompt "$PC" --when "daily" --schedule "daily 09:00" --step "check versions" --check versions-bumped --check-base "a..b"
+check 1 "$CODE"
+RUN_C0="$(new_run)"
+PC0="$(tprompt "$RUN_C0" "record the versions bumped check")"
+prog record-ritual --run "$RUN_C0" --prompt "$PC0" --when "daily" --schedule "daily 09:00" --step "check versions" --check versions-bumped
+check 1 "$CODE"
+has "--check-repo" "$OUT"
+
+it "C1: propose-ritual --check stores a proposal without a prompt"
+prog propose-ritual --run "$RUN_C" --when "daily" --schedule "daily 09:00" --step "check versions" --check versions-bumped
+check 0 "$CODE"
+check "proposed" "$(jfield "$OUT" 'd["state"]')"
+
+it "C1: move-ritual and keep-rituals refuse a ritual that carries a check"
+PM1="$(tprompt "$RUN_C" "move ${CK} to personal use everywhere")"
+prog move-ritual "$CK" --to personal --prompt "$PM1" --run "$RUN_C"
+check 1 "$CODE"
+has "check" "$OUT"
+
 echo
 echo "${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
