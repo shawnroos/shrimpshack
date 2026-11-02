@@ -63,7 +63,7 @@ from this session's lease.
   one of the protocol's Authority kinds (`product_call`, `merge_at_gate`, ...) or
   `technical_approach`, `work_sequencing`, `worker_coordination`,
   `tool_choice`, `optimisation_depth`, `product_scope`, `acceptance`,
-  `denied_operation`, `goal_amend` or `workflow_change`. An unknown kind refuses and lists them all.
+  `denied_operation`, `goal_amend` or `workflow_change`. An unknown kind refuses and lists all.
 
 ## When to speak
 
@@ -83,7 +83,7 @@ Shawn reads the Programme view for status. The chat is for what needs him.
   it starts and once when it clears, not every sweep.
 - When you speak, follow section 12 of [references/judgment.md](references/judgment.md).
 
-Routine reads may run on the pinned agents (read only):
+Routine reads may run on pinned agents (read-only):
 `auto:programme-status-reader` (status), `auto:programme-inbox-reader`
 (unread claims), `auto:programme-evidence-reader` (merge readiness) and
 `auto:programme-tracker-updater` (the tracker writes you found due). Pass each
