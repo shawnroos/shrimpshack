@@ -14,7 +14,7 @@ import re
 import shlex
 import sys
 
-READ_VERBS = frozenset({"status", "inbox", "describe", "check-mergeable"})
+READ_VERBS = frozenset({"status", "inbox", "describe", "check-mergeable", "contract-status"})
 VIEWERS = frozenset({"cat", "head", "tail", "less", "grep", "rg", "wc", "ls", "file", "stat", "diff"})
 GIT_READS = frozenset({"show", "diff", "log", "blame", "status", "grep"})
 GH_PR_READS = frozenset({"view", "list", "checks", "diff", "status"})

@@ -464,6 +464,46 @@ session.
   to another item, an item that already has a bound run, and a run that predates contracts. It copies the
   seed into the run record, then marks the item "bound"; a repeat after a crash between the two completes
   the bind with no duplicate.
+- **Contract write**: `set-contract` (args: `--item`, optional `--run`; changes `--authority <kind>=<mode>[:<asks>]`
+  (repeatable), `--drop-authority <kind>` (repeatable), `--done-internal`, `--done-external` (the word none for empty),
+  `--workflow`, `--fan-out-cap`; optional `--bite` pulse or step) is the only way to change a worker's contract
+  after it starts. Only the programme's driving session that holds its lease may call it, for a worker in the
+  remit, and both checks run again inside the run-record lock. It never goes to a subagent (it is not a read
+  verb) and no picker answer approves it. It refuses an item with no contracted run or a launch-blocked one, a
+  done run (and says to start a follow-up run from a copy), a run that predates contracts, and an authority
+  entry above the programme's Authority table and active Rulings; narrowing and widening up to that ceiling are
+  accepted. With no `--bite`, a change that narrows any authority binds at the next pulse and every other
+  change at the next step boundary. While the item is "launched" it edits the item's seed contract and bumps
+  its version; once "bound" it bumps the run record's contract version and queues one pending entry for the
+  engine. Each accepted change journals `contract_set`; each refusal journals one `request_refused`.
+- **Worker questions**: `open-worker-questions` (args: optional `--run`, `--limit`) is read-only and lists the
+  open questions routed to the PM or Shawn. `escalate-worker-questions` (args: optional `--run`, `--limit`)
+  raises one Shawn ask for each open question that is routed to Shawn or past the limit; a second call raises
+  none. `answer-worker-question` (args: `--question`, `--text`, optional `--run`) returns the PM's answer to
+  the worker as a pending contract entry that bites at the next pulse. A PM answer is never a Shawn approval.
+  The last two refuse any caller but the driving session.
+- **Goal doc**: `write-goal` (args: the item, optional `--plan`, `--title`, repeated `--outcome`, `--out-of-scope`
+  and `--manual-step`, optional `--done-internal`, `--done-external`, `--bite` (pulse or step), `--approved` (an
+  ask id) and `--run`) creates the worker's goal doc at `<repo>/.claude/auto/goals/<run>.md`, or amends it in
+  place, and bumps the contract version and the goal version in one write. It refuses a caller that is not the
+  programme's driving session holding the lease, a worker outside the remit, an item with no bound Auto run,
+  a run with no contract, a done run, and a done bar that includes a step only a human can do (a non-terminal
+  step with a human verification criterion, or a manual step the PM names); the refusal names the step. An
+  amendment reads the goal_amend authority: act_and_tell writes and journals a tell, propose hands Shawn an ask
+  and writes nothing until the PM returns with the ask id for that same amendment, and never refuses.
+  `goal-status` (args: the item, optional `--run`) is read-only and reports none, current or goal-stale,
+  computed at read time.
+- **Contract status**: `contract-status` (args: optional item, optional `--run`) is read-only. For each
+  Auto-run worker it reads the run record the item's `auto_run` block names, never a pane: step counts by
+  state, the cached exit predicate (never recomputed), the last beat, the contract's version, applied
+  version and pending versions, "stale" computed at read time, the open worker questions with the oldest's
+  age, and `unverified_external`, the done bar's external kinds (`pr_merged`, `ci_green`) that no confirmed
+  merged deliverable on the item backs. `counts_as_done` is true only when the cached predicate is met and
+  `unverified_external` is empty, so a worker's claim or recorded verdicts never finish an item alone. An
+  item with no contract reads "no contract"; a record that is missing or moved reads "unresolvable". The
+  `sweep-inputs` verdict gains `contract_changed` (a contracted item's version, last beat, record mtime or
+  open-question count or oldest question moved since the last `--save`), `worker_question_due` (an open
+  question past its limit, or one owed to Shawn, not yet escalated) and `contract_status_unreadable`.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the Rulings kept under

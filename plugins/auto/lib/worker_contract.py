@@ -32,7 +32,7 @@ BITES = ("pulse", "step")
 DONE_INTERNAL = ("steps_terminal", "gaps_closed", "phase_reached")
 DONE_EXTERNAL = ("pr_merged", "ci_green")
 REQUIRED = ("version", "set_at", "set_by", "authority", "done_bar", "workflow", "fan_out_cap")
-OPTIONAL = ("pending_versions", "applied_version")
+OPTIONAL = ("pending_versions", "applied_version", "goal_version", "goal_bound_version")
 _WORKFLOW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _NO_LEVEL = "propose"
 
@@ -108,6 +108,15 @@ def _check_pending(version, pending, applied) -> None:
                             "bad_applied")
 
 
+def _check_goal(block) -> None:
+    goal, bound = block.get("goal_version", 0), block.get("goal_bound_version", 0)
+    if not _is_int(goal) or goal < 0:
+        raise ContractError(f"goal_version {goal!r} must be an integer of at least 0", "bad_goal")
+    if not _is_int(bound) or bound < 0 or bound > goal:
+        raise ContractError(f"goal_bound_version {bound!r} must be an integer from 0 to goal_version {goal}",
+                            "bad_goal")
+
+
 def validate(block) -> dict:
     if not isinstance(block, dict):
         raise ContractError("contract must be a map", "bad_shape")
@@ -133,6 +142,7 @@ def validate(block) -> dict:
     if not _is_int(cap) or cap < 1:
         raise ContractError(f"contract fan_out_cap {cap!r} must be an integer of at least 1", "bad_cap")
     _check_pending(version, block.get("pending_versions", []), block.get("applied_version", 0))
+    _check_goal(block)
     return copy.deepcopy(block)
 
 

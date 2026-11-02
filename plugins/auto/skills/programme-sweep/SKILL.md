@@ -84,7 +84,7 @@ Shawn reads the Programme view for status. The chat is for what needs him.
 - When you do speak, follow the reporting rules in section 12 of
   [references/judgment.md](references/judgment.md).
 
-Routine reads may run on the pinned agents, which return data and never write:
+Routine reads may run on the pinned agents (data only, no writes):
 `auto:programme-status-reader` (status), `auto:programme-inbox-reader`
 (unread claims), `auto:programme-evidence-reader` (merge readiness) and
 `auto:programme-tracker-updater` (the tracker writes you found due). Pass each
@@ -103,8 +103,7 @@ and `P watcher-beat remit --task-id <Monitor task id> --kind monitor`. If the
 stream printed no other line since your last wake, stop there: run no other
 step and no status read, and send no message. If it printed change lines (the
 watcher prints its held lines as it stops), handle them as a normal wake after
-re-arming. Changes made
-between the expiry and the re-arm are not reported; the next sweep reads them.
+re-arming. The next sweep reads changes since the expiry.
 
 1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
    Bash call of the form `{ echo SWEEP-START; <step 2's prune, which finds the run
@@ -269,9 +268,10 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      tracker` line is expected: the watcher cannot read through the MCP. Do not
      record it; record the issues through the MCP again instead.
    The sweep records the changes it saw itself, including unsupported sources.
-7. **Read the inbox.** The digest lists unread claims; read the
-   ones you act on with `P inbox`, then `P mark-read --offset <n>` with `next_offset` from the verdict.
-   A `worker_question` row is no claim: [references/worker-questions.md](references/worker-questions.md).
+7. **Read the inbox.** The digest lists the unread claims with their index, each
+   cut to one line; read the ones you act on in full with `P inbox`. Act on them,
+   then `P mark-read --offset <n>` with `next_offset` from the verdict. Never read `claims.jsonl`: it is an export and can be stale.
+   Rows: references/worker-{questions,contracts}.md.
 8. **Check claims.** First send back work that skips a behaviour. For each
    claim, take each worker behaviour in force for the item that names evidence
    and whose checks held for this work. Look for that evidence in the claim's

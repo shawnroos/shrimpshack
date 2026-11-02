@@ -212,6 +212,23 @@ check allow "$(decision a1 "cat lib/programme.py; grep -n def lib/programme.py; 
 it "an unrelated command is allowed"
 check allow "$(decision a1 "ls -la && echo done")"
 
+for verb in set-contract open-worker-questions escalate-worker-questions answer-worker-question; do
+  it "a sub-agent (agent_id present) running $verb is denied"
+  check deny "$(decision a1 "$P $verb --run prog-1 --item linear:AI-1 --workflow a4")"
+  it "$verb is not a read verb"
+  check absent "$("$PY" - "$AUTO_ROOT" "$verb" <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("hook", sys.argv[1] + "/lib/on-pretooluse-subagent.py")
+hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
+print("present" if sys.argv[2] in hook.READ_VERBS else "absent")
+EOF
+)"
+done
+it "a sub-agent running set-contract through bash -c is denied"
+check deny "$(decision a1 "bash -c '$P set-contract --run prog-1 --item linear:AI-1 --workflow a4'")"
+it "the PM itself (no agent_id) running set-contract is allowed"
+check allow "$(decision "" "$P set-contract --run prog-1 --item linear:AI-1 --workflow a4")"
+
 it "the PM itself (no agent_id) running answer-handed is allowed"
 check allow "$(decision "" "$P answer-handed herdr:w2/p7G --choice ship --prompt p1")"
 it "a sub-agent of a session that drives no programme is not this hook's business"

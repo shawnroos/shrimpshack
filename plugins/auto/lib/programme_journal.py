@@ -162,6 +162,8 @@ KINDS = (
     "worker_question",
     "worker_question_answered",
     "worker_question_escalated",
+    "contract_set",
+    "goal_written",
 )
 
 _TOKEN_PATTERNS = [
