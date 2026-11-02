@@ -25,6 +25,9 @@ export CLAUDE_AUTO_MACHINE="studio"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
 export CLAUDE_CODE_SESSION_ID="sess-pm"
 export CLAUDE_AUTO_BEHAVIOURS_STORE="${WORK}/behaviours.json"
+export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="${WORK}/files/shipped-empty"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="${WORK}/files/personal-empty"
+mkdir -p "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" "$CLAUDE_AUTO_BEHAVIOURS_DIR"
 unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH CLAUDE_AUTO_REPO 2>/dev/null || true
 : > "$CLAUDE_AUTO_SECRETS_FILE"
 export WORK
@@ -38,6 +41,20 @@ ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
 bd = load_lib_module("programme_behaviours_due")
+pb = load_lib_module("programme_behaviours")
+import calendar, subprocess, time
+def files():
+    n = os.path.join(os.environ["WORK"], "files")
+    k = len(os.listdir(n)) if os.path.isdir(n) else 0
+    shipped, personal = os.path.join(n, "s%d" % k), os.path.join(n, "p%d" % k)
+    os.makedirs(shipped); os.makedirs(personal)
+    os.environ["CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR"], os.environ["CLAUDE_AUTO_BEHAVIOURS_DIR"] = shipped, personal
+    return personal
+def wfile(folder, bid, frontmatter, at):
+    path = os.path.join(folder, bid + ".md")
+    open(path, "w").write("---\nwhen: when the work is a bug\n%s\n---\nDo:\n- reproduce it first\n" % frontmatter)
+    stamp = calendar.timegm(time.strptime(at, "%Y-%m-%dT%H:%M:%SZ"))
+    os.utime(path, (stamp, stamp))
 BEFORE, TRIGGER, AFTER = "2026-10-30T09:00:00Z", "2026-10-30T10:00:00Z", "2026-10-30T11:00:00Z"
 def beh(bid, trigger=None, checks=(("the item is a bug", "pm"),), at=BEFORE, **kw):
     when = {"text": "when the work is a bug", "checks": [{"text": t, "by": by} for t, by in checks]}
@@ -225,6 +242,69 @@ print(due(run, cap=2)["total"])
 EOF
 )"
 
+it "a claim-trigger PM file is due after the first claim and clears after skip-behaviour --applied"
+check "test:a/pmfile/claim/pm_applies|" "$(run_py <<'EOF'
+folder = files()
+wfile(folder, "pmfile", "applies_to: pm\ntrigger: claim", BEFORE)
+run = setup([], a={"claim": TRIGGER})
+first = lines(run)
+cmd = [sys.executable, os.path.join(sys.argv[1], "lib", "programme.py"), "skip-behaviour", "test:a", "pmfile",
+       "--why", "done by hand", "--applied", "--run", run]
+subprocess.run(cmd, capture_output=True, text=True)
+print(first + "|" + lines(run))
+EOF
+)"
+
+it "a personal file made before its trigger times as send_back; one made after times as remind_only"
+check "send_back remind_only before_trigger" "$(run_py <<'EOF'
+folder = files()
+wfile(folder, "early", "trigger: claim", BEFORE)
+wfile(folder, "late", "trigger: claim", AFTER)
+rec = {"programme": {}}
+got = {e["id"]: e for e in pb.in_force(rec, None, None)}
+print(pb.timing(got["early"], TRIGGER), pb.timing(got["late"], TRIGGER), pb.timing(got["early"], None))
+EOF
+)"
+
+it "a file entry made before its trigger is due; one made after is not"
+check "test:a/early/claim/None" "$(run_py <<'EOF'
+folder = files()
+wfile(folder, "early", "trigger: claim", BEFORE)
+wfile(folder, "late", "trigger: claim", AFTER)
+print(lines(setup([], a={"claim": TRIGGER})))
+EOF
+)"
+
+it "R10: the one-line rendering names skills, formats and comms"
+check "e1: when when the work is a bug. do: reproduce it first. skills: slate-editor-testing. formats: a short list. comms: be plain" "$(run_py <<'EOF'
+folder = files()
+wfile(folder, "e1", "skills: slate-editor-testing\nformats: a short list\ncomms: be plain", BEFORE)
+rec = {"programme": {}}
+print(pb.brief_lines(pb.in_force(rec, None, None))[1][2:])
+EOF
+)"
+
+it "a broken personal file does not set due()['error'], which sweep-inputs reports as an unreadable store"
+check "None" "$(run_py <<'EOF'
+os.environ["CLAUDE_AUTO_BEHAVIOURS_STORE"] = os.path.join(os.environ["WORK"], "clean-store.json")
+folder = files()
+open(os.path.join(folder, "broken.md"), "w").write("not frontmatter\n")
+run = setup([], a={"claim": TRIGGER})
+rec = core.read_run_record(ph.home_path(run), run)
+print(bd.due(rec, run)["error"])
+EOF
+)"
+
+it "a plain-started item whose shipped start rule was answered not_briefed is not due"
+check "" "$(run_py <<'EOF'
+folder = files()
+open(os.path.join(os.environ["CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR"], "s1.md"), "w").write(
+    "---\nwhen: when the work starts\ntrigger: start\napplies-to: workers\n---\nDo:\n- send your claim first\n")
+run = setup([], a={"started": TRIGGER, "deliveries": [("s1", "not_briefed")]})
+print(lines(run))
+EOF
+)"
+
 echo ""
-echo "programme-behaviours-due.test.sh: ${PASS} passed, ${FAIL} failed"
+echo "programme-behaviours-due.test.sh:${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

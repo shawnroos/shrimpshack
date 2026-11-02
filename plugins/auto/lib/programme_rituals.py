@@ -107,7 +107,7 @@ def _check_layer(entry) -> None:
 
 def protected_kind(entry):
     for line in entry.get("steps") or ():
-        kind = programme_behaviours._line_kind(line)
+        kind = programme_behaviours.line_kind(line)
         if kind:
             return kind
     return None

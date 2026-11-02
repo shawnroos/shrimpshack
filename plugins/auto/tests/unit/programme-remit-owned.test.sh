@@ -28,6 +28,9 @@ export CLAUDE_CODE_SESSION_ID="sess-pm"
 export CLAUDE_AUTO_SOURCE_TIMEOUT="2"
 export CLAUDE_AUTO_WORKER_WAIT="1"
 export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
+# The shipped default would put a brief in force, and the start below passes a --handoff file that does not exist.
+export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="${WORK}/shipped-behaviours"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="${WORK}/personal-behaviours"
 unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH HERDR_ENV CLAUDE_AUTO_REPO LINEAR_API_KEY 2>/dev/null || true
 : > "$CLAUDE_AUTO_SECRETS_FILE"
 

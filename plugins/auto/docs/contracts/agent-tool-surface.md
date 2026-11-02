@@ -337,6 +337,22 @@ session.
   entry with the same id, so a second run adds nothing; the programme copy is
   marked moved. It journals `behaviours_kept` and is refused once the programme
   has ended.
+  Three verbs write the personal behaviours folder, and are the only sanctioned
+  writers of it. `adopt-behaviour-file` (`<id> --file <path> --prompt <id>`; `--file -`
+  reads stdin) validates the drafted file with the behaviour file loader and writes
+  `<id>.md` only when Shawn's typed prompt names the id and carries the hash of exactly
+  that content (or an approval row keyed to `behaviour-file:<id>@<hash>` cites the
+  prompt); a refusal prints the hash. It refuses an id that already has a personal
+  file, and an id outside lowercase letters, digits, `-` and `_`.
+  `copy-default` (`<id> --prompt <id>`) copies a shipped file into the personal folder
+  under a typed prompt that names the id, and records the seen hash in `behaviours-seen.json`
+  beside `behaviours.json`. `settle-default-update` (`<id> --as shown|keep|take|merge`)
+  answers a shipped default that changed after a copy: mode shown records the displayed
+  shipped hash as the shown hash with no prompt; keep records the seen hash; take removes the
+  personal file and records the seen hash; merge (`--file <path>`) writes content under the
+  same hash approval as `adopt-behaviour-file` and records the seen hash. Keep, take and
+  merge need a typed prompt naming the id and the mode. Each approved write
+  journals `rule_adopted` (how file); shown journals nothing.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
   proposal. Repeated `--item <id>` options link it to known programme items;
   raw rule JSON cannot carry those links. Links cover only the missing-proposal
@@ -952,6 +968,12 @@ session and for sessions on unfinished items, it denies a Write, Edit, MultiEdit
 or Bash call that names the `.claude/settings.local.json` of any proposal's
 destination, and journals `blocked_settings_write`. The Bash check is a text
 match. Other settings files are not checked (programme-permission-proposals.md).
+
+Under the same scope the hook also denies a Write, Edit, MultiEdit or Bash call that
+names the personal behaviours folder or the stored `behaviours.json`, and journals
+`blocked_behaviours_write`. The Bash check is a text match; a neighbour such as
+`behaviours.json.bak` is not checked. A programme verb that Shawn approves is the
+only way to change those files.
 
 The pane guard and the prompt binding stop accidents and casual misuse. A
 determined process running as the same user can still append journal rows or
