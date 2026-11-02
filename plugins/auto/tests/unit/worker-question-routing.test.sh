@@ -370,7 +370,7 @@ it "a crash after the contract write and before the journal row re-runs without 
 OUT="$(run_py <<'EOF'
 qid = questions()[1]["payload"]["qid"]
 def plant(rec):
-    wq.append_pending(rec["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": qid, "text": "planted", "by": "pm"}})
+    wq.worker_contract.append_pending(rec["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": qid, "text": "planted", "by": "pm"}})
 core._with_locked_run_record(REPO, "wrun", plant)
 wq.answer(RUN, qid, "planted", caller="sess-pm", space_of=space_of)
 held = [e for e in core.read_run_record(REPO, "wrun")["contract"]["pending_versions"] if e.get("answer", {}).get("question_id") == qid]

@@ -191,6 +191,15 @@ def bump(block, set_by, now=None) -> None:
     block["set_by"] = set_by
 
 
+def append_pending(block, *, bite, set_by, extra=None, now=None) -> dict:
+    """Bump the contract version and queue one pending entry; the caller holds the record lock."""
+    bump(block, set_by, now)
+    entry = {"version": block["version"], "bite": bite}
+    entry.update(extra or {})
+    block.setdefault("pending_versions", []).append(entry)
+    return entry
+
+
 def run_is_done(record) -> bool:
     return phase_grammar.current_phase(record) == "done"
 
@@ -207,7 +216,7 @@ def lenient_block(record):
 
 
 def hand_item(programme_run, item_key, *, kind, question, if_nothing, evidence=None) -> None:
-    """Run ``programme.py hand-item``; raise RuntimeError with the stripped failure text when it exits non-zero."""
+    """Run ``programme.py hand-item``; raise ContractError ``hand_failed`` with the stripped failure text when it exits non-zero."""
     argv = [sys.executable, os.path.join(_LIB_DIR, "programme.py"), "hand-item", item_key, "--run", programme_run,
             "--kind", kind, "--question", question]
     if evidence is not None:
@@ -215,7 +224,7 @@ def hand_item(programme_run, item_key, *, kind, question, if_nothing, evidence=N
     argv += ["--if-nothing", if_nothing]
     done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
     if done.returncode != 0:
-        raise RuntimeError((done.stderr or done.stdout).strip())
+        raise ContractError(f"hand-item failed: {(done.stderr or done.stdout).strip()}", "hand_failed")
 
 
 def is_stale(block) -> bool:

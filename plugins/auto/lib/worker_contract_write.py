@@ -28,7 +28,6 @@ programme_authority = load_lib_module("programme_authority")
 programme_journal = load_lib_module("programme_journal")
 programme_decisions = load_lib_module("programme_decisions")
 worker_contract = load_lib_module("worker_contract")
-worker_question = load_lib_module("worker_question")
 worker_register = load_lib_module("worker_register")
 worker_rebake = load_lib_module("worker_rebake")
 workflow_design = load_lib_module("workflow_design")
@@ -90,7 +89,7 @@ def _revise(block, change, bite, programme, key, sid, now, queue):
     if chosen not in worker_contract.BITES:
         raise worker_contract.ContractError(f"bite {chosen!r} is not one of {list(worker_contract.BITES)}", "bad_bite")
     if queue:
-        worker_question.append_pending(new, bite=chosen, set_by=sid, now=now)
+        worker_contract.append_pending(new, bite=chosen, set_by=sid, now=now)
     else:
         worker_contract.bump(new, sid, now)
     worker_contract.validate(new)

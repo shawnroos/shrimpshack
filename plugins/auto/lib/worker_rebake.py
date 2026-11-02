@@ -50,7 +50,7 @@ def _differs(record, block) -> bool:
 
 def _due(record):
     block = worker_contract.lenient_block(record)
-    if block is None or record.get(phase_grammar.LOOP_PHASE_KEY) == "done":
+    if block is None or worker_contract.run_is_done(record):
         return None
     applied = block.get("applied_version", 0)
     if applied < block["version"] or block.get("pending_versions"):

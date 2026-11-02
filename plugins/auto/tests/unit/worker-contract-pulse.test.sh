@@ -315,7 +315,7 @@ OUT="$(run_py <<'EOF'
 wq = load_lib_module("worker_question")
 new_run("ans-it", 1)
 def put(r):
-    wq.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": "q1", "text": "use the existing parser", "by": "pm"}})
+    wq.worker_contract.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": "q1", "text": "use the existing parser", "by": "pm"}})
 core._with_locked_run_record(REPO, "ans-it", put)
 pulse.pulse_advance.advance_iteration_loop = lambda *a, **k: {"action": "iterate"}
 r = pulse.dispatch_pulse(REPO, "ans-it")
@@ -331,7 +331,7 @@ OUT="$(run_py <<'EOF'
 wq = load_lib_module("worker_question")
 new_run("ans-hp", 1)
 def put(r):
-    wq.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": "q2", "text": "keep the old schema", "by": "pm"}})
+    wq.worker_contract.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": "q2", "text": "keep the old schema", "by": "pm"}})
 core._with_locked_run_record(REPO, "ans-hp", put)
 real = pulse._dispatch_phase_advance
 pulse._dispatch_phase_advance = lambda *a, **k: ({"handoff_pause": True}, None)
@@ -352,7 +352,7 @@ wq = load_lib_module("worker_question")
 new_run("ans-late", 1)
 def add(qid, text):
     def put(r):
-        wq.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": qid, "text": text, "by": "pm"}})
+        wq.worker_contract.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": qid, "text": text, "by": "pm"}})
     core._with_locked_run_record(REPO, "ans-late", put)
 add("q3", "first answer")
 real = apply_mod.apply_at_pulse

@@ -238,11 +238,8 @@ def due(question) -> bool:
 
 def _hand_via_programme(programme_run, question, row_text) -> None:
     kind = question["kind"] if question["kind"] in programme_decisions.DECISION_KINDS else _ESCALATION_KIND
-    try:
-        worker_contract.hand_item(programme_run, question["item"], kind=kind, question="Worker question: " + row_text,
-                                  if_nothing="the worker parks the step that depends on this answer")
-    except RuntimeError as exc:
-        raise QuestionError(f"hand-item for question {question['qid']} failed: {exc}", "hand_failed") from None
+    worker_contract.hand_item(programme_run, question["item"], kind=kind, question="Worker question: " + row_text,
+                              if_nothing="the worker parks the step that depends on this answer")
 
 
 def _plain_text(programme_run, qid) -> str:
@@ -280,15 +277,6 @@ def escalate_due(programme_run, *, now=None, limit=LIMIT_SECONDS, hand=None, cal
     return done
 
 
-def append_pending(block, *, bite, set_by, extra=None, now=None) -> dict:
-    """Bump the contract version and queue one pending entry; the caller holds the record lock."""
-    worker_contract.bump(block, set_by, now)
-    entry = {"version": block["version"], "bite": bite}
-    entry.update(extra or {})
-    block.setdefault("pending_versions", []).append(entry)
-    return entry
-
-
 def pending_answers(block) -> list:
     applied = block.get("applied_version", 0)
     return [{"question_id": e["answer"]["question_id"], "text": e["answer"]["text"], "version": e["version"],
@@ -322,7 +310,7 @@ def answer(programme_run, qid, text, *, caller=None, space_of=None, now=None) ->
         if held:
             landed["version"] = held[0]["version"]
             return
-        entry = append_pending(block, bite="pulse", set_by=sid, now=now,
+        entry = worker_contract.append_pending(block, bite="pulse", set_by=sid, now=now,
                                extra={"answer": {"question_id": qid, "text": clean, "by": "pm"}})
         worker_contract.validate(block)
         landed["version"] = entry["version"]

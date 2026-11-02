@@ -11,7 +11,6 @@ refuses. ``goal-status`` computes ``goal-stale`` at read time; nothing stores it
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import hashlib
 import json
@@ -30,7 +29,6 @@ programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_decisions = load_lib_module("programme_decisions")
 worker_contract = load_lib_module("worker_contract")
-worker_question = load_lib_module("worker_question")
 worker_register = load_lib_module("worker_register")
 worker_contract_status = load_lib_module("worker_contract_status")
 
@@ -51,18 +49,12 @@ _EXTERNAL = {"pr_merged": "the PR merge", "ci_green": "the CI result"}
 _FOOTER = "<!-- note: model-judged goal, independent of auto's Stop hook; release with `/goal clear`. -->"
 
 
-class GoalError(Exception):
+class GoalError(worker_contract.ContractError):
     def __init__(self, message, code="refused"):
-        super().__init__(message)
-        self.code = code
+        super().__init__(message, code)
 
 
-@contextlib.contextmanager
-def refusals(host):
-    try:
-        yield
-    except (GoalError, worker_contract.ContractError, worker_question.QuestionError) as exc:
-        raise host.ProgrammeError(f"refused ({exc.code}): {exc}") from None
+refusals = worker_contract.refusals
 
 
 def goal_path(repo, run_id) -> str:
@@ -157,11 +149,8 @@ def _approved(item, ask_id, token) -> bool:
 
 
 def _hand_via_programme(programme_run, item_key, question, token) -> None:
-    try:
-        worker_contract.hand_item(programme_run, item_key, kind=GOAL_KIND, question=question,
-                                  evidence=f"amendment {token}", if_nothing="the goal doc stays as it is")
-    except RuntimeError as exc:
-        raise GoalError(f"hand-item for the goal amendment failed: {exc}", "hand_failed") from None
+    worker_contract.hand_item(programme_run, item_key, kind=GOAL_KIND, question=question,
+                              evidence=f"amendment {token}", if_nothing="the goal doc stays as it is")
 
 
 def _bound_run(item, key) -> tuple:
@@ -189,6 +178,10 @@ def _inputs(opts, block, default_plan, run_id) -> dict:
             "manual": [m for m in (_flat(x, TEXT_CAP) for x in opts.get("manual-step") or []) if m]}
 
 
+def _next_goal_version(block, path) -> int:
+    return max(block.get("goal_version", 0), (read_header(path) or {}).get("goal_version", 0)) + 1
+
+
 def _refuse_human(record, inputs) -> None:
     steps = human_only_steps(record, inputs["manual"]) if "steps_terminal" in inputs["done_bar"]["internal"] \
         else list(inputs["manual"])
@@ -211,10 +204,9 @@ def _commit(repo, run_id, programme_run, worker_session, inputs, *, caller, spac
         path = goal_path(repo, run_id)
         if os.path.exists(path) != existed:
             raise GoalError("the goal doc changed while this write waited; run it again", "changed_under_write")
-        head = read_header(path) or {}
-        goal_version = max(block.get("goal_version", 0), head.get("goal_version", 0)) + 1
+        goal_version = _next_goal_version(block, path)
         block["done_bar"] = inputs["done_bar"]
-        entry = worker_question.append_pending(block, bite=bite, set_by=caller, now=now)
+        entry = worker_contract.append_pending(block, bite=bite, set_by=caller, now=now)
         block["goal_version"] = goal_version
         worker_contract.validate(block)
         _atomic_write(path, render(title=inputs["title"], plan=inputs["plan"], done_bar=inputs["done_bar"],
@@ -256,8 +248,7 @@ def write_goal(programme_run, item_key, opts, *, caller=None, space_of=None, han
             if programme_decisions.waits_on_shawn(item):
                 raise GoalError(f"item {item_key!r} already waits on Shawn's answer; the goal doc stays as it is",
                                 "item_handed")
-            question = (f"Amend the goal doc of {item_key} to goal version "
-                        f"{max(block.get('goal_version', 0), (read_header(path) or {}).get('goal_version', 0)) + 1}?")
+            question = f"Amend the goal doc of {item_key} to goal version {_next_goal_version(block, path)}?"
             (hand or _hand_via_programme)(programme_run, item_key, question, token)
             return {"state": "waiting_on_shawn", "written": False, "path": path, "amendment": token,
                     "authority": verdict["mode"]}

@@ -64,12 +64,8 @@ def _approved(item, ask_id, token) -> bool:
 
 
 def _hand_via_programme(programme_run, item_key, question, token) -> None:
-    try:
-        worker_contract.hand_item(programme_run, item_key, kind=KIND, question=question,
-                                  evidence=f"workflow {token}", if_nothing="the contract keeps its current workflow")
-    except RuntimeError as exc:
-        raise worker_contract.ContractError(
-            f"hand-item for the workflow change failed: {exc}", "hand_failed") from None
+    worker_contract.hand_item(programme_run, item_key, kind=KIND, question=question,
+                              evidence=f"workflow {token}", if_nothing="the contract keeps its current workflow")
 
 
 def _current(item, state):
