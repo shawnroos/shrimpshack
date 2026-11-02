@@ -411,6 +411,28 @@ EOF
 check "accepted|" "$(echo "$OUT" | sed -n 1p)"
 refused "not_driving" "only the programme's driving session" "$(echo "$OUT" | sed -n 2p)"
 
+it "a failed hand-item is a hand_failed refusal, not a crash"
+OUT="$(run_py "$RUN" <<EOF
+import types
+real = wc.subprocess.run
+wc.subprocess.run = lambda *a, **k: types.SimpleNamespace(returncode=1, stderr="boom", stdout="")
+try:
+    print(refusal(lambda: wc.hand_item("run-x", "linear:AI-1", kind="goal_amend", question="q", if_nothing="n")))
+finally:
+    wc.subprocess.run = real
+EOF
+)"
+refused "hand_failed" "hand-item failed: boom" "$OUT"
+
+it "RegisterError, QuestionError and GoalError are ContractErrors, so the one refusals wrapper catches all three"
+OUT="$(run_py "$RUN" <<EOF
+from _bootstrap import load_lib_module
+print([issubclass(load_lib_module(m).__dict__[c], wc.ContractError)
+       for m, c in (("worker_register", "RegisterError"), ("worker_question", "QuestionError"), ("goal_doc", "GoalError"))])
+EOF
+)"
+check "[True, True, True]" "$OUT"
+
 echo ""
 echo "worker-contract.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

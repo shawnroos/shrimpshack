@@ -356,11 +356,11 @@ mk pg-free 1 '[]'
 bound_to linear:AI-806 pg
 run_py <<'EOF'
 def add(r):
-    wq.append_pending(r["contract"], bite="pulse", set_by="sess-pm",
+    wq.worker_contract.append_pending(r["contract"], bite="pulse", set_by="sess-pm",
                       extra={"answer": {"question_id": "qabc123", "text": "use the wrapper", "by": "pm"}})
     wc.validate(r["contract"])
 core._with_locked_run_record(REPO, "pg", add)
-core._with_locked_run_record(REPO, "pg-free", lambda r: wq.append_pending(
+core._with_locked_run_record(REPO, "pg-free", lambda r: wq.worker_contract.append_pending(
     r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": "qfree99", "text": "free answer", "by": "pm"}}))
 EOF
 it "the extras read before the pulse carry the pending PM answer"
