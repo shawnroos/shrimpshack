@@ -62,3 +62,45 @@ Authority and Rulings, and acceptance stays with Done standards.
   typed reply names with `--from-proposal`, and retire the rest with
   `--as retired`, citing the same reply. The term itself stays as it is; from
   then on, read the preferred tool from the behaviour.
+
+## Guided flow: a standing preference as a file
+
+Offer it when Shawn types a standing preference ("always", "never", "from now
+on") or asks to change a default. After two corrections for the same thing you
+may suggest a behaviour, but only as a proposal: nothing is written. A proposal
+is not an adoption, and you cannot write the personal behaviours folder or
+`behaviours.json` yourself: a direct Write, Edit or shell write there is denied.
+The files get written by the verbs below, after his typed approval.
+
+1. Draft the whole file from his words: id (the file name), `when`, `trigger`,
+   `applies_to`, the checks (`pm:` or `agent:`), the Do and Don't lines, and a
+   `why`. Say which choices you inferred.
+2. Ask with the picker only when you are unsure: personal, repo or programme,
+   or which trigger fits. Otherwise decide and say so.
+3. Show the finished file once. Run `P adopt-behaviour-file <id> --file <path>
+   --prompt <id>` only after he types approval that names the id and carries
+   the content hash. The refusal prints that hash, so run the verb first
+   without his approval to get it, show it, then run it again on his reply.
+4. Edit a default: run `P copy-default <id> --prompt <id>` once his words name
+   the id. Draft the edited file at a scratch path, show the difference against
+   the shipped file, and on his typed approval write it with
+   `P settle-default-update <id> --as merge --file <path>` (the adopt verb
+   refuses to overwrite a file that exists).
+5. Update notice: a copy made with `copy-default` is flagged `update available`
+   when the shipped default changed. Raise the update prompt only when the row
+   also says `not yet shown`. Show the shipped difference once, then record it
+   with `P settle-default-update <id> --as shown` (no approval needed); the
+   row stops saying `not yet shown`, so later sweeps stay quiet. Then offer
+   keep mine, take theirs or merge. Settle on his typed choice:
+   `--as keep`, `--as take`, or `--as merge --file <path>` carrying the merged
+   file's hash.
+
+To switch a shipped default off, no verb retires it: write a personal file whose
+`overrides` names its id, or record a programme behaviour with
+`--conflicts-with <id>`. A broken behaviour file is reported to Shawn once; do
+not repeat it every sweep.
+
+Shipped files and personal files carry no adoption record: shipped ones count
+by install, personal ones by where they sit. A file's start time is its last
+edit, so an edited file reaches work in progress as a reminder only; never send
+back work that already passed its trigger.

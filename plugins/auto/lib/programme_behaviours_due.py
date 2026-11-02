@@ -24,6 +24,9 @@ CAP = 20
 ANSWERS = ("relevant", "sent_back", "skipped", "applied_by_pm")
 REMINDERS = ("relevant", "sent_back")
 TEXT_CAP = 160
+# A broken behaviour file is Shawn's to hear once; as "error" it would be reported as an unreadable
+# store on every sweep. The prefix is the one programme_behaviour_files.load_into writes.
+FILE_NOTICE = "behaviour file "
 
 
 def _answered(item, entry, trigger) -> bool:
@@ -31,7 +34,7 @@ def _answered(item, entry, trigger) -> bool:
     reasons = {d.get("reason") for d in item.get("behaviour_deliveries") or []
                if isinstance(d, dict) and d.get("id") == entry["id"]
                and (d.get("reason") not in REMINDERS or d.get("trigger", programme_behaviours.TRIGGERS[0]) == trigger)}
-    return bool(reasons & set(ANSWERS)) or (trigger == "start" and "brief" in reasons)
+    return bool(reasons & set(ANSWERS)) or (trigger == "start" and bool(reasons & {"brief", "not_briefed"}))
 
 
 def _in_force_when(entry, passed) -> bool:
@@ -81,4 +84,4 @@ def due(record, run_id, *, lookup=None, store=None, cap=CAP) -> dict:
     rest = rows[cap:]
     return {"total": len(rows), "rows": rows[:cap], "overflow": len(rest),
             "overflow_ids": [f"{r['item']}/{r['behaviour']}" for r in rest],
-            "error": "; ".join(loaded["notices"]) or None}
+            "error": "; ".join(n for n in loaded["notices"] if not n.startswith(FILE_NOTICE)) or None}

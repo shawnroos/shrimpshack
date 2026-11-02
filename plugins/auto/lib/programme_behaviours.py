@@ -40,8 +40,11 @@ STORE_LOCK = ".behaviours.lock"
 STORE_FORMAT = 1
 APPROVAL_KIND = "rule_adopted"
 
-LAYERS = ("programme", "repo", "personal")
+LAYERS = ("programme", "repo", "personal", "shipped")
 STORED_LAYERS = ("repo", "personal")
+MOVE_LAYERS = ("programme", "repo", "personal")
+# Same id: the higher rank replaces the lower. "shipped" is only ever loaded from files.
+LAYER_RANK = {"shipped": 0, "personal": 1, "repo": 2, "programme": 3}
 AUDIENCES = ("pm", "workers", "both")
 STATES = ("active", "proposed", "retired")
 ACTIVE = "active"
@@ -61,8 +64,15 @@ PROTECTED_FIELDS = ("do", "skills", "tools", "agents")
 # is ordinary guidance here, unlike in a project term.
 UNPROTECTED_KINDS = ("risk_or_cost_limit", "settled_human_choice")
 
-_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+ID_RE = re.compile(r"[a-z][a-z0-9-]*")
 _Reject = programme_protocol._Reject
+
+
+def check_id(bid) -> str:
+    # fullmatch, not "$": "$" accepts a trailing newline, and an id also names a file in the behaviours folders.
+    if not isinstance(bid, str) or not ID_RE.fullmatch(bid):
+        raise ValueError("a behaviour id is lowercase letters, digits and -, and starts with a letter")
+    return bid
 
 
 BehaviourError = behaviour_check.BehaviourError
@@ -124,7 +134,7 @@ def _check_extras(entry) -> None:
     if "source" in entry:
         _sub(entry["source"], (), ("prompt_id", "quote"), "source")
     overrides = entry.get("overrides", [])
-    if not isinstance(overrides, list) or not all(isinstance(o, str) and _ID_RE.match(o) for o in overrides):
+    if not isinstance(overrides, list) or not all(isinstance(o, str) and ID_RE.fullmatch(o) for o in overrides):
         raise _Reject("bad_value", "overrides")
     for field in ("relates_to", "unrelated"):
         if not behaviour_check.answers_valid(entry, field):
@@ -137,7 +147,7 @@ def _check_extras(entry) -> None:
 
 # Unlike programme_terms.protected_kind, a stem counts only where a word starts, so
 # "reproduction" does not match "production" while "deployed" still matches "deploy".
-def _line_kind(line):
+def line_kind(line):
     words = programme_naming.name_words(line)
     tails = ["".join(words[i:]) for i in range(len(words))]
     for kind, stems in programme_terms.PROTECTED_STEMS.items():
@@ -149,7 +159,7 @@ def _line_kind(line):
 def protected_kind(entry):
     for field in PROTECTED_FIELDS:
         for line in entry.get(field) or ():
-            kind = _line_kind(line)
+            kind = line_kind(line)
             if kind:
                 return kind
     return None
@@ -157,7 +167,7 @@ def protected_kind(entry):
 
 def _validate(entry, *, allow_adoption=True) -> None:
     programme_protocol._keys(entry, REQUIRED, OPTIONAL + (("adoption",) if allow_adoption else ()))
-    if not isinstance(entry["id"], str) or not _ID_RE.match(entry["id"]):
+    if not isinstance(entry["id"], str) or not ID_RE.fullmatch(entry["id"]):
         raise _Reject("bad_value", "id")
     _check_layer(entry)
     _check_when(entry["when"])
@@ -198,7 +208,7 @@ store_path = _S.path
 _read = _S._read
 read_store = _S.read
 write_store = _S.write
-load_store = _S.load
+_load_stored = _S.load
 _is, _without, _place = programme_layered_store._is, programme_layered_store._without, programme_layered_store._place
 _default_lookup = programme_layered_store._default_lookup
 adopt = programme_carryover.adopt
@@ -212,6 +222,13 @@ def target(entry) -> str:
 
 def store(adopted, prompt, run_id, session_id, how="behaviour") -> None:
     _S.store(adopted, prompt, run_id, session_id, how)
+
+
+def load_store(lookup=None) -> dict:
+    out = _load_stored(lookup)
+    # Loaded here, not at import: the file loader imports this module.
+    load_lib_module("programme_behaviour_files").load_into(out)
+    return out
 
 
 def repo_key_for(programme, repo):
@@ -266,15 +283,30 @@ def shown_programme_entries(programme, loaded) -> list:
     return [e for e in _programme_entries(programme, []) if not all(_held_for(loaded, e, k) for k in keys)]
 
 
+def from_file(entry) -> bool:
+    return entry.get("layer") == "shipped" or entry.get("source") == "file"
+
+
 def resolve(record, item, repo=None, *, audience=None, lookup=None, store=None) -> dict:
     programme = (record or {}).get("programme") or {}
     loaded = store if store is not None else load_store(lookup)
     rejected = list(loaded["rejected"])
     key = repo_key_for(programme, repo if repo is not None else (item or {}).get("repo"))
-    candidates = [e for e in _programme_entries(programme, rejected) if not _held_for(loaded, e, key)]
-    candidates += (loaded["repos"].get(key) or []) if key else []
-    candidates += loaded["personal"]
-    candidates = [e for e in candidates if e.get("state", ACTIVE) == ACTIVE]
+    ranked = [(LAYER_RANK["programme"], e) for e in _programme_entries(programme, rejected)
+              if not _held_for(loaded, e, key)]
+    ranked += [(LAYER_RANK["repo"], e) for e in (loaded["repos"].get(key) or []) if key]
+    ranked += [(LAYER_RANK["personal"], e) for e in loaded["personal"] + loaded.get("files", [])]
+    ranked += [(LAYER_RANK["shipped"], e) for e in loaded.get("shipped", [])]
+    top = {}
+    for rank, e in ranked:
+        # A proposal is not a decision yet, so it must not hide the file entry it would replace.
+        if e.get("state", ACTIVE) in (ACTIVE, "retired"):
+            top[e["id"]] = max(top.get(e["id"], 0), rank)
+    # Only file-sourced entries are replaced by a higher layer; stored layers keep coexisting as before.
+    # A retired winner still hides the file entries below it. No verb retires a file id: a shipped
+    # default is switched off by a personal file or a --conflicts-with record whose overrides name it.
+    candidates = [e for rank, e in ranked if (rank == top.get(e["id"]) or not from_file(e))
+                  and e.get("state", ACTIVE) == ACTIVE]
     overridden = {name for e in candidates for name in e.get("overrides") or ()}
     in_force = [e for e in candidates if e["id"] not in overridden and _reaches(e, audience)]
     return {"in_force": in_force, "rejected": rejected, "notices": list(loaded["notices"])}
@@ -309,6 +341,15 @@ def brief_entries(record, item, chosen=(), *, lookup=None) -> tuple:
     return taken, [e["id"] for e in rows if e not in taken]
 
 
+# Shipped defaults are optional context: a plain start (no handoff, nothing chosen) has no brief to carry
+# them, and they must not make it refuse. Stored and personal behaviours still do.
+def brief_for_start(record, item, chosen=(), *, has_handoff, lookup=None) -> tuple:
+    taken, held_back = brief_entries(record, item, chosen, lookup=lookup)
+    if not has_handoff and not chosen and all(e.get("layer") == "shipped" for e in taken):
+        return [], held_back, [e["id"] for e in taken]
+    return taken, held_back, []
+
+
 def _short(entry) -> str:
     parts = [f"{entry['id']}: when {entry['when']['text']}"]
     for label, field in (("do", "do"), ("don't", "dont")):
@@ -316,6 +357,7 @@ def _short(entry) -> str:
             parts.append(f"{label}: {'; '.join(entry[field])}")
     if entry.get("evidence"):
         parts.append(f"evidence: {entry['evidence']}")
+    parts += [f"{field}: {', '.join(entry[field])}" for field in ("skills", "formats", "comms") if entry.get(field)]
     judged = [c["text"] for c in entry["when"].get("checks") or [] if c["by"] == "agent"]
     if judged:
         parts.append(f"you judge: {'; '.join(judged)}")
@@ -441,7 +483,12 @@ def _stored_entry(loaded, bid):
 def _active(programme, loaded) -> list:
     rows = [e for e in _programme_entries(programme, []) if not _held(loaded, e)]
     rows += _stored_rows(loaded)
+    rows += _file_rows(loaded)
     return [e for e in rows if e.get("state", ACTIVE) == ACTIVE]
+
+
+def _file_rows(loaded) -> list:
+    return list(loaded.get("shipped") or []) + list(loaded.get("files") or [])
 
 
 def _overrides(entry, conflicts, known) -> list:
@@ -583,7 +630,8 @@ def _placed(entry, to, key, loaded) -> tuple:
     if to == "repo":
         out["repo_key"] = key
     wanted = list(entry.get("overrides") or ())
-    broader = {e["id"] for e in loaded["personal"]} if to == "repo" else set()
+    broader = ({e["id"] for e in loaded["personal"]}
+               | {e["id"] for e in _file_rows(loaded) if e.get("state", ACTIVE) == ACTIVE}) if to == "repo" else set()
     kept = wanted if to == "programme" else [b for b in wanted if b in broader]
     if kept:
         out["overrides"] = kept
@@ -633,7 +681,7 @@ def _after_store(seen, how) -> None:
 
 def _h_move(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt", "to", "repo"))
-    if len(positional) != 1 or opts.get("to") not in LAYERS or (opts.get("repo") and opts["to"] != "repo"):
+    if len(positional) != 1 or opts.get("to") not in MOVE_LAYERS or (opts.get("repo") and opts["to"] != "repo"):
         raise ValueError("usage: move-behaviour <id> --to programme|repo|personal --prompt <id> "
                          "[--repo <key>] (--repo only with --to repo)")
     bid, to = positional[0], opts["to"]

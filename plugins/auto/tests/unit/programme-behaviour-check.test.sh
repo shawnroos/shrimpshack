@@ -170,6 +170,15 @@ EOF
 )"
 check "['same_trigger', 'shared_tool']" "$OUT"
 
+it "a shipped default is compared like any other layer"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+rows = pbc.check(worker_done(), [sweep(layer="shipped")])
+print([[r["ref"], r["layer"]] for r in rows])
+EOF
+)"
+check "[['bc3f80d', 'shipped']]" "$OUT"
+
 it "a retired or proposed behaviour is not listed, and the entry itself is never listed against itself"
 OUT="$(py <<'EOF'
 pbc = load_lib_module("programme_behaviour_check")

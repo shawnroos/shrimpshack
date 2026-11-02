@@ -28,6 +28,9 @@ export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
 export CLAUDE_CODE_SESSION_ID="sess-pm"
 unset CLAUDE_AUTO_BEHAVIOURS_STORE HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH CLAUDE_AUTO_REPO 2>/dev/null || true
 : > "$CLAUDE_AUTO_SECRETS_FILE"
+export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="${WORK}/files/shipped-empty"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="${WORK}/files/personal-empty"
+mkdir -p "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" "$CLAUDE_AUTO_BEHAVIOURS_DIR"
 
 ALPHA="${WORK}/repos/alpha"
 BETA="${WORK}/repos/beta"
@@ -741,6 +744,19 @@ print(" ".join(e["id"] for e in got) + "|" + " ".join(held))
 EOF
 )"
 
+it "brief_for_start keeps a stored behaviour whether or not a handoff is passed, and reports nothing as not briefed"
+check "wnone|0 wnone|0" "$(run_py <<'EOF'
+run = setup([beh("wnone", applies_to="workers", when={"text": "always", "checks": []})])
+rec = record(run)
+item = rec["programme"]["items"]["linear:AI-1"]
+out = []
+for handoff in (False, True):
+    got, held, nb = pb.brief_for_start(rec, item, has_handoff=handoff, lookup=lambda r, p: None)
+    out.append(" ".join(e["id"] for e in got) + "|" + str(len(nb)))
+print(" ".join(out))
+EOF
+)"
+
 it "a PM-checked behaviour the PM names with --behaviour joins the brief"
 check "wpm wag" "$(run_py <<'EOF'
 run = setup([beh("wpm", applies_to="workers"),
@@ -1001,6 +1017,187 @@ it "a session that does not drive the programme is refused"
 OUT="$(CLAUDE_CODE_SESSION_ID=sess-other "$PY" "$PROG" skip-behaviour linear:AI-2 "$PMB" --why "x" --run "$RUN" 2>&1)"; CODE=$?
 check 1 "$CODE"
 
+F=0
+fresh_files() {
+  F=$((F + 1))
+  export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="${WORK}/files/${F}/shipped"
+  export CLAUDE_AUTO_BEHAVIOURS_DIR="${WORK}/files/${F}/personal"
+  mkdir -p "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" "$CLAUDE_AUTO_BEHAVIOURS_DIR"
+}
+# wf <dir> <id> <do line> [extra frontmatter line]
+wf() {
+  printf -- '---\nwhen: when the work is a bug\n%s\n---\nDo:\n- %s\n' "${4:-}" "$3" > "$1/$2.md"
+}
+reset_files() {
+  export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="${WORK}/files/shipped-empty"
+  export CLAUDE_AUTO_BEHAVIOURS_DIR="${WORK}/files/personal-empty"
+}
+
+# Characterization: pinned before the file layers existed.
+fresh_store; fresh_files
+it "characterization: programme, repo and personal entries resolve in programme, repo, personal order"
+check "g1 r1 p1" "$(run_py <<'EOF'
+run = setup([beh("g1")])
+keep(run, [beh("p1", "personal"), beh("r1", "repo")])
+rec = record(run)
+print(" ".join(b["id"] for b in pb.in_force(rec, rec["programme"]["items"]["linear:AI-1"], None)))
+EOF
+)"
+
+fresh_store; fresh_files
+it "characterization: a loaded store has no rejections or notices when both folders are empty"
+check "[] [] [] []" "$(run_py <<'EOF'
+rec_store = pb.load_store()
+print(json.dumps(rec_store["rejected"]), json.dumps(rec_store["notices"]), json.dumps(rec_store["shipped"]), json.dumps(rec_store["files"]))
+EOF
+)"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+it "AE1: a personal file with a shipped id is in force and the shipped one is not"
+wf "$CLAUDE_AUTO_BEHAVIOURS_DIR" ship1 "my own take"
+check "ship1@personal|my own take" "$(run_py <<'EOF'
+run = setup([])
+rec = record(run)
+got = pb.in_force(rec, rec["programme"]["items"]["linear:AI-1"], None)
+print(" ".join("%s@%s" % (b["id"], b["layer"]) for b in got) + "|" + got[0]["do"][0])
+EOF
+)"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+it "a shipped behaviour alone is in force with layer shipped"
+check "ship1@shipped" "$(run_py <<'EOF'
+run = setup([])
+print(ids(run))
+EOF
+)"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_BEHAVIOURS_DIR" same "from a file"
+it "a repo entry with the same id as a personal file wins over it"
+check "same@repo|from a stored repo entry" "$(run_py <<'EOF'
+run = setup([])
+keep(run, [beh("same", "repo", do=["from a stored repo entry"])])
+rec = record(run)
+got = pb.in_force(rec, rec["programme"]["items"]["linear:AI-1"], None)
+print(" ".join("%s@%s" % (b["id"], b["layer"]) for b in got) + "|" + got[0]["do"][0])
+EOF
+)"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" same "shipped"
+wf "$CLAUDE_AUTO_BEHAVIOURS_DIR" same "from a file"
+it "a programme entry replaces a personal file and a shipped file of its id, and a stored repo entry still coexists"
+check "same@programme same@repo|from the programme" "$(run_py <<'EOF'
+run = setup([beh("same", do=["from the programme"])])
+keep(run, [beh("same", "repo")])
+rec = record(run)
+got = pb.in_force(rec, rec["programme"]["items"]["linear:AI-1"], None)
+print(" ".join("%s@%s" % (b["id"], b["layer"]) for b in got) + "|" + got[0]["do"][0])
+EOF
+)"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_BEHAVIOURS_DIR" same "from a file"
+it "AE5: a stored personal entry and a personal file with one id keep the stored one and report the file shadowed"
+check "same@personal|stored|shadowed 1" "$(run_py <<'EOF'
+run = setup([])
+keep(run, [beh("same", "personal", do=["stored"])])
+rec = record(run)
+res = pb.resolve(rec, rec["programme"]["items"]["linear:AI-1"], None)
+got = res["in_force"]
+shadow = [r for r in res["rejected"] if r["reason"] == "shadowed"]
+print(" ".join("%s@%s" % (b["id"], b["layer"]) for b in got) + "|" + got[0]["do"][0] + "|shadowed " + str(len(shadow)))
+EOF
+)"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+it "overrides in a personal file remove a shipped entry"
+wf "$CLAUDE_AUTO_BEHAVIOURS_DIR" mine "my own take" "overrides:
+  - ship1"
+check "mine@personal" "$(run_py <<'EOF'
+run = setup([])
+print(ids(run))
+EOF
+)"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+RUN="$(new_run)"
+P1="$(tprompt "$RUN" "here, do not follow the shipped default")"
+it "record-behaviour --conflicts-with a shipped id succeeds and the shipped entry drops out of force"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "the work is a bug" --do "do my own thing" --conflicts-with ship1
+BID="$(jfield "$OUT" 'd["behaviour"]')"
+check "0 ['ship1'] ${BID}@programme" "$CODE $(q "$RUN" "str(beh_of('$BID')['overrides']) + ' ' + ids(run)")"
+
+fresh_store; fresh_files
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+it "a proposed entry with a shipped id leaves the shipped default in force, in the programme and in the store"
+check "ship1@shipped|ship1@shipped" "$(run_py <<'EOF'
+run = setup([beh("ship1", state="proposed")])
+first = ids(run)
+keep(run, [beh("ship1", "repo", state="proposed")])
+print(first + "|" + ids(run))
+EOF
+)"
+
+fresh_store; fresh_files
+it "AE2: a broken personal file leaves the shipped default in force and raises one notice naming the file"
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+printf 'not frontmatter\n' > "$CLAUDE_AUTO_BEHAVIOURS_DIR/broken.md"
+check "ship1@shipped|1|true" "$(run_py <<'EOF'
+run = setup([])
+rec = record(run)
+res = pb.resolve(rec, rec["programme"]["items"]["linear:AI-1"], None)
+print(" ".join("%s@%s" % (b["id"], b["layer"]) for b in res["in_force"]) + "|" + str(len(res["notices"])) + "|" + str("broken.md" in res["notices"][0]).lower())
+EOF
+)"
+
+fresh_store; fresh_files
+it "a retired repo entry with a shipped id switches the shipped default off"
+wf "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" ship1 "shipped default"
+check "" "$(run_py <<'EOF'
+run = setup([])
+keep(run, [beh("ship1", "repo", state="retired")])
+print(ids(run))
+EOF
+)"
+
+fresh_store; fresh_files
+it "a stored entry with layer shipped is refused everywhere it could be stored"
+check "programme|store|personal-list|programme-list" "$(run_py <<'EOF'
+out = []
+for name, fn in (("programme", lambda: pb.put_programme_entry({}, beh("s1", "shipped"))),
+                 ("store", lambda: pb.store([beh("s1", "shipped")], None, "r", "s"))):
+    try:
+        fn()
+        out.append("accepted")
+    except pb.BehaviourError:
+        out.append(name)
+raw_store({"format": 1, "personal": [beh("s2", "shipped")], "repos": {}})
+loaded = pb.load_store()
+out.append("personal-list" if not loaded["personal"] and loaded["rejected"][0]["reason"] == "wrong_layer" else "accepted")
+run = setup([beh("s3", "shipped")])
+rec = record(run)
+res = pb.resolve(rec, rec["programme"]["items"]["linear:AI-1"], None)
+out.append("programme-list" if not res["in_force"] and any(r["id"] == "s3" for r in res["rejected"]) else "accepted")
+print("|".join(out))
+EOF
+)"
+
+fresh_store; fresh_files
+it "with both folders empty a mixed set resolves exactly as it did before the file layers"
+reset_files
+check "g1@programme p1@personal r1@repo" "$(run_py <<'EOF'
+run = setup([beh("g1")])
+keep(run, [beh("p1", "personal"), beh("r1", "repo")])
+print(ids(run))
+EOF
+)"
+
+reset_files
 echo ""
 echo "programme-behaviours.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
