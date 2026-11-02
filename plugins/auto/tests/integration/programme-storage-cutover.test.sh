@@ -351,6 +351,7 @@ subprocess.run([sys.executable, "-c", code], check=True)
 def shape(repo):
     d = json.load(open(core.run_record_path(repo, "task-1")))
     d["loop"].pop("last_beat_at", None)
+    d.pop("contract_capable", None)  # the one additive key the worker contract stamps on new task records
     return d
 new, old = shape(repo_new), shape(repo_old)
 core._with_locked_run_record(repo_new, "task-1", lambda r: None)
