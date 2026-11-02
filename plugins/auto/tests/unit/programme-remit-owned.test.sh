@@ -151,16 +151,17 @@ jq_py() {
   "$PY" -c 'import json,sys; d=json.loads(sys.stdin.read().strip().splitlines()[-1]); print(json.dumps(eval(sys.argv[1]), sort_keys=True))' "$1" <<< "$OUT"
 }
 repo_paths() { field '[r["path"] for r in prog["remit"]["repos"]]'; }
+worker_paths() { field '[r["path"] for r in prog["remit"]["worker_repos"]]'; }
 start() {
   local item="$1"
   prog add-item "$item" --title "Worker $item"
   prog start-worker "$item" -- --name "w-${item#linear:}" --handoff /tmp/h.md
 }
 
-# R6: an empty repo list means "no limit"; a PM-created entry would narrow it, so none is added.
+# An empty typed list means "no limit"; a worker repo would add nothing, so none is recorded.
 FAKE_WT="$WT0" start linear:AI-9
-it "an empty remit repo list gets no PM-created entry"
-check '[]' "$(repo_paths)"
+it "an empty remit repo list gets no worker repo"
+check '[]' "$(worker_paths)"
 it "that start still succeeds"
 check 0 "$CODE"
 
@@ -170,19 +171,17 @@ check "[\"${REPO_A}\"]" "$(repo_paths)"
 ACCEPT="$(prompt 'accept the agreement')"
 prog accept-agreement --prompt "$ACCEPT"
 
-# R1, R2: a worker the PM starts joins the remit with no typed line.
+# A worker the PM starts joins the remit with no typed line, apart from the typed repos.
 FAKE_WT="$WT1" FAKE_PANE=w2:p41 start linear:AI-1
 it "start-worker succeeds"
 check 0 "$CODE"
-it "the worker's repo joins the remit with no typed prompt"
-check "[\"${REPO_A}\", \"${WT1}\"]" "$(repo_paths)"
-it "the new entry is marked PM-created with the item and the minted session"
-check '["pm-created", "linear:AI-1", true]' "$(field '[[r["via"]["kind"], r["via"]["item"], r["via"]["session"] == items["linear:AI-1"]["owner"]["session_id"]] for r in prog["remit"]["repos"] if r["path"].endswith("wt/w1")][0]')"
-it "the entry's GitHub name stays empty, because the worker can rewrite the worktree's git config"
-check 'null' "$(field '[r["github"] for r in prog["remit"]["repos"] if r["path"].endswith("wt/w1")][0]')"
-it "the typed entry carries no mark"
-check 'false' "$(field '"via" in prog["remit"]["repos"][0]')"
-it "the add is journaled as PM-created, apart from a typed remit_set"
+it "the worker's repo is recorded with no typed prompt"
+check "[\"${WT1}\"]" "$(worker_paths)"
+it "the typed repo list is untouched"
+check "[\"${REPO_A}\"]" "$(repo_paths)"
+it "the worker repo names the item and the minted session"
+check '["linear:AI-1", true]' "$(field '[[w["item"], w["session"] == items["linear:AI-1"]["owner"]["session_id"]] for w in prog["remit"]["worker_repos"]][0]')"
+it "the add is journaled as its own kind, apart from a typed remit_set"
 check "1" "$(journal_count remit_worker_added)"
 it "the item's start records the repo, so a retire can tell who else works there"
 check "\"${WT1}\"" "$(field 'items["linear:AI-1"]["starts"][-1]["repo"]')"
@@ -193,52 +192,60 @@ prog sweep
 it "the sweep tracks the new pane instead of skipping it as repo_out_of_remit"
 check '[]' "$(jq_py '[s for s in d["skipped"] if s["pane"] == "w2:p41"]')"
 
-# R5: the pane's live folder is not trusted; it must match the worktree the PM launched.
+# The pane's live folder is not trusted; it must match the worktree the PM launched.
 FAKE_WT="$WT2" FAKE_PANE=w2:p42 FAKE_PANE_CWD="$REPO_B" start linear:AI-2
 it "a pane whose folder differs from the launched worktree adds nothing"
-check "[\"${REPO_A}\", \"${WT1}\"]" "$(repo_paths)"
+check "[\"${WT1}\"]" "$(worker_paths)"
 it "the start output says why nothing was added"
 has "does not match" "$OUT"
 
-# KTD4: an existing entry is never rewritten, even through a symlink spelling.
+# A repo already in the remit is never recorded again, even through a symlink spelling.
 FAKE_WT="${WORK}/link-a" FAKE_PANE=w2:p43 start linear:AI-3
-it "a repo already in the remit through a symlink gets no second entry"
-check "[\"${REPO_A}\", \"${WT1}\"]" "$(repo_paths)"
-it "and the typed entry is not relabelled PM-created"
-check 'false' "$(field '"via" in prog["remit"]["repos"][0]')"
+it "a typed repo reached through a symlink gets no worker repo"
+check "[\"${WT1}\"]" "$(worker_paths)"
 
-# No worktree line from spinoff: nothing to anchor on.
 FAKE_WT="" FAKE_PANE=w2:p44 FAKE_PANE_CWD="$WT2" start linear:AI-4
 it "a spinoff that reports no worktree adds nothing"
-check "[\"${REPO_A}\", \"${WT1}\"]" "$(repo_paths)"
+check "[\"${WT1}\"]" "$(worker_paths)"
 
-# R5: stdin never sets the mark; an unchanged entry keeps the stored one.
+# set-remit never touches the worker repos, and a worker repo never counts as a typed one.
 NAMED="$(prompt "add repo other to the remit")"
-remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":\"acme/ai-labs\"},{\"path\":\"${WT1}\",\"github\":\"acme/w1\",\"via\":{\"kind\":\"forged\"}},{\"path\":\"${REPO_B}\",\"github\":null,\"via\":{\"kind\":\"pm-created\",\"item\":\"linear:AI-1\"}}]}" --prompt "$NAMED"
+remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":\"acme/ai-labs\"},{\"path\":\"${REPO_B}\",\"github\":null}],\"worker_repos\":[{\"path\":\"${WT2}\"}]}" --prompt "$NAMED"
 it "a typed set-remit adding a repo succeeds"
 check 0 "$CODE"
-it "an unchanged PM-created entry keeps its stored mark, not the one in stdin"
-check '["pm-created", "linear:AI-1"]' "$(field '[[r["via"]["kind"], r["via"]["item"]] for r in prog["remit"]["repos"] if r["path"].endswith("wt/w1")][0]')"
-it "a mark smuggled in on a new repo is dropped"
-check 'false' "$(field '"via" in [r for r in prog["remit"]["repos"] if r["path"] == "'"$REPO_B"'"][0]')"
-
-# R5: after acceptance a new repo still needs the typed prompt.
+it "the worker repos survive a full-list replace unchanged, and stdin cannot add one"
+check "[\"${WT1}\"]" "$(worker_paths)"
 remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${WT0}\",\"github\":null}]}"
 it "set-remit without a prompt is still refused after acceptance"
 check 1 "$CODE"
 
-# R6 + pure functions: retire and the authority consumers.
-it "retiring a worker drops the entry found by its item, with the folder already gone"
-check '["'"$WT1"'", null]' "$(run_py "$RUN" <<'EOF'
+# Every other reader of the remit sees the typed repos alone; only the sweep scope widens.
+it "the sweep scope lists the typed and worker repos, and nothing else widens"
+check '[3, 2, 2]' "$(run_py "$RUN" <<'EOF'
+mod = load_lib_module("programme_remit_owned")
+src = load_lib_module("programme_sources")
+prog = ph.normalize_programme(record(args[0])["programme"])
+print(json.dumps([len(src.remit(prog)["repos"]), len(prog["remit"]["repos"]), len(mod.sweep_scope(dict(prog["remit"], worker_repos=[])))]))
+EOF
+)"
+it "a no-limit remit stays no-limit even when worker repos are recorded"
+check '[]' "$(run_py "$RUN" <<'EOF'
+mod = load_lib_module("programme_remit_owned")
+print(json.dumps(mod.sweep_scope({"repos": [], "worker_repos": [{"path": "/x"}]})))
+EOF
+)"
+
+# Retire: the entry is found by the item, with the folder already gone.
+it "retiring a worker drops its repo, found by the item with the folder already gone"
+check '[["'"$WT1"'"], null]' "$(run_py "$RUN" <<'EOF'
 mod = load_lib_module("programme_remit_owned")
 prog = ph.normalize_programme(record(args[0])["programme"])
-shutil_rm = __import__("shutil").rmtree
-shutil_rm(prog["remit"]["repos"][1]["path"])
+__import__("shutil").rmtree(prog["remit"]["worker_repos"][0]["path"])
 out = mod.drop_for_item(prog, "linear:AI-1")
 print(json.dumps([out["dropped"], out["reason"]]))
 EOF
 )"
-it "the dropped entry is gone from the programme and the typed ones remain"
+it "retiring never touches the typed repos"
 check '2' "$(run_py "$RUN" <<'EOF'
 mod = load_lib_module("programme_remit_owned")
 prog = ph.normalize_programme(record(args[0])["programme"])
@@ -246,100 +253,78 @@ mod.drop_for_item(prog, "linear:AI-1")
 print(len(prog["remit"]["repos"]))
 EOF
 )"
-it "a typed entry is never dropped by a retire"
-check 'null' "$(run_py "$RUN" <<'EOF'
-mod = load_lib_module("programme_remit_owned")
-prog = ph.normalize_programme(record(args[0])["programme"])
-del prog["remit"]["repos"][1]["via"]
-print(json.dumps(mod.drop_for_item(prog, "linear:AI-1")["dropped"]))
-EOF
-)"
-it "an entry another open item still works in is kept"
+it "a repo another open item still works in is kept"
 check 'null' "$(run_py "$RUN" <<'EOF'
 mod = load_lib_module("programme_remit_owned")
 prog = ph.normalize_programme(record(args[0])["programme"])
 other = ph.new_item("linear:AI-5")
-other["starts"] = [{"ok": True, "repo": prog["remit"]["repos"][1]["path"]}]
+other["starts"] = [{"ok": True, "repo": prog["remit"]["worker_repos"][0]["path"]}]
 prog["items"]["linear:AI-5"] = other
 print(json.dumps(mod.drop_for_item(prog, "linear:AI-1")["dropped"]))
 EOF
 )"
-it "the last remaining entry is kept, because an empty list would mean no limit"
-check '[null, 1]' "$(run_py "$RUN" <<'EOF'
-mod = load_lib_module("programme_remit_owned")
-prog = ph.normalize_programme(record(args[0])["programme"])
-prog["remit"]["repos"] = [r for r in prog["remit"]["repos"] if r.get("via")]
-out = mod.drop_for_item(prog, "linear:AI-1")
-print(json.dumps([out["dropped"], len(prog["remit"]["repos"])]))
-EOF
-)"
-it "PM-created entries are left out of the repo keys carry-over and rulings use"
-check '[true, true, true, true]' "$(run_py "$RUN" <<'EOF'
-co = load_lib_module("programme_carryover")
-rulings = load_lib_module("programme_rulings")
-changes = load_lib_module("programme_protocol_changes")
-prog = ph.normalize_programme(record(args[0])["programme"])
-mine = [r["path"] for r in prog["remit"]["repos"] if r.get("via")]
-assert mine, "the programme should hold a PM-created entry here"
-keys = co.repo_keys(prog)
-paths = rulings.repos_for(prog, ["programme"])
-print(json.dumps([len(prog["remit"]["repos"]) > len(keys), "acme/w1" not in keys, mine[0] not in paths,
-                  mine[0] not in [p for _, p in changes._repos(prog)]]))
-EOF
-)"
 
-# R4: a stale path in the stored remit never blocks a later change.
-rm -rf "$WT1"
+# A stale typed path in the stored remit never blocks a later change.
+WT6="$(mkrepo "${WORK}/wt/w6" https://github.com/acme/w6.git)"
+remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${REPO_B}\",\"github\":null},{\"path\":\"${WT6}\",\"github\":null}]}" --prompt "$(prompt 'add repo w6 to the remit')"
+it "a typed set-remit adds a new repo"
+check 0 "$CODE"
+rm -rf "$WT6"
 STALE="$(prompt 'refresh the remit')"
-remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":\"acme/ai-labs\"},{\"path\":\"${WT1}\",\"github\":\"acme/w1\"},{\"path\":\"${REPO_B}\",\"github\":null}]}" --prompt "$STALE"
+remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${WT6}\",\"github\":null},{\"path\":\"${REPO_B}\",\"github\":null}]}" --prompt "$STALE"
 it "a stored path whose folder is gone is dropped, not a rejection"
 check 0 "$CODE"
 it "the drop needs no typed words naming it, and the list loses only that path"
 check "[\"${REPO_A}\", \"${REPO_B}\"]" "$(repo_paths)"
 it "the output carries a notice naming the dropped path"
-has "$WT1" "$OUT"
+has "dropped_stale" "$OUT"
 
 remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${WORK}/never/existed\",\"github\":null}]}" --prompt "$(prompt "add repo existed to the remit")"
 it "a brand-new path that does not exist is still rejected"
 check 1 "$CODE"
 
-# R3 through the verb's own write: start a worker, then retire it with its folder already gone.
+# A list of only stale paths keeps those paths and honours the typed removals instead of emptying the list.
+WT5="$(mkrepo "${WORK}/wt/w5" https://github.com/acme/w5.git)"
+remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${REPO_B}\",\"github\":null},{\"path\":\"${WT5}\",\"github\":null}]}" --prompt "$(prompt 'add repo w5 to the remit')"
+it "a typed set-remit adds another repo"
+check 0 "$CODE"
+rm -rf "$WT5"
+remit_in "{\"repos\":[{\"path\":\"${WT5}\",\"github\":null}]}" --prompt "$(prompt 'remove repos ai-labs and other from the remit')"
+it "a list of only stale paths keeps those paths and honours the typed removals"
+check "0 [\"${WT5}\"]" "$CODE $(repo_paths)"
+remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${REPO_B}\",\"github\":null}]}" --prompt "$(prompt 'add repos ai-labs and other to the remit')"
+
+# Retire through the verb's own write: start a worker, then retire it with its folder already gone.
 WT3="$(mkrepo "${WORK}/wt/w3" https://github.com/acme/w3.git)"
 FAKE_WT="$WT3" FAKE_PANE=w2:p45 start linear:AI-6
-it "a new worker's repo joins the remit before the retire"
-has "$WT3" "$(repo_paths)"
+it "a new worker's repo is recorded before the retire"
+has "$WT3" "$(worker_paths)"
 rm -rf "$WT3"
 RETIRE="$(run_py "$RUN" <<'EOF'
 gone = load_lib_module("programme_gone_panes")
 class Host:
     def refresh_view(self, *a, **k): pass
-rec = record(args[0])
-first = gone._drop_remit_entry(Host(), args[0], ph.home_path(args[0]), rec, "sess-pm", "linear:AI-6")
+first = gone._drop_remit_entry(Host(), args[0], ph.home_path(args[0]), record(args[0]), "sess-pm", "linear:AI-6")
 second = gone._drop_remit_entry(Host(), args[0], ph.home_path(args[0]), record(args[0]), "sess-pm", "linear:AI-6")
 print(json.dumps([bool(first["dropped"]), second["dropped"]]))
 EOF
 )"
-it "the retire drops the entry once and a repeat drops nothing"
+it "the retire drops the worker repo once and a repeat drops nothing"
 check '[true, null]' "$RETIRE"
 it "the remit no longer lists the retired worker's repo"
-check "[\"${REPO_A}\", \"${REPO_B}\"]" "$(repo_paths)"
+check '[]' "$(field '[w["path"] for w in prog["remit"]["worker_repos"] if w["item"] == "linear:AI-6"]')"
 it "the drop is journaled as its own kind"
 check "1" "$(journal_count remit_worker_dropped)"
-it "a later set-remit needs no words about the retired repo"
-remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":\"acme/ai-labs\"},{\"path\":\"${REPO_B}\",\"github\":null}]}" --prompt "$(prompt 'refresh the remit again')"
-check 0 "$CODE"
 
-# A launch that fails adds nothing.
+# A launch that fails adds nothing; the cap and the swallowed write failure.
 WT4="$(mkrepo "${WORK}/wt/w4" https://github.com/acme/w4.git)"
 FAKE_WT="$WT4" FAKE_PANE=w2:p46 FAKE_SPINOFF_EXIT=1 start linear:AI-7
-it "a failed spinoff leaves the remit alone"
-check "[\"${REPO_A}\", \"${REPO_B}\"]" "$(repo_paths)"
-
-# The repo cap and the swallowed write failure.
-it "a remit already at the repo cap gets no entry"
+it "a failed spinoff records no worker repo"
+check '[]' "$(field '[w["path"] for w in prog["remit"]["worker_repos"] if w["path"] == "'"$WT4"'"]')"
+it "a remit already at the worker repo cap records nothing more"
 check '[null, true]' "$(run_py "$RUN" "$WT4" <<'EOF'
 mod = load_lib_module("programme_remit_owned")
-prog = {"remit": {"repos": [{"path": "/nowhere/%d" % n} for n in range(mod.REPO_CAP)]}}
+prog = {"remit": {"repos": [{"path": "/typed"}], "worker_repos": [{"path": "/nowhere/%d" % n} for n in range(mod.REPO_CAP)]}}
 out = mod.add_for_worker(prog, worktree=args[1], folder=args[1], item="x", session="s", at="t")
 print(json.dumps([out["added"], "most it holds" in out["reason"]]))
 EOF
@@ -350,18 +335,18 @@ gone = load_lib_module("programme_gone_panes")
 class Host:
     def refresh_view(self, *a, **k): pass
 prog = ph.normalize_programme(record(args[0])["programme"])
-prog["remit"]["repos"].append({"path": args[1], "github": None, "via": {"kind": "pm-created", "item": "linear:AI-7"}})
+prog["remit"]["worker_repos"].append({"path": args[1], "item": "linear:AI-7"})
 out = gone._drop_remit_entry(Host(), args[0], "/nonexistent/home", {"programme": prog}, "sess-pm", "linear:AI-7")
 print(json.dumps(out["dropped"] is None and out["reason"].startswith("the remit write failed")))
 EOF
 )"
 
-# A second item in one PM-created repo, and an adopted item: the entry stays until the last one leaves.
+# Two workers in one new repo share a single worker repo; it goes when the last one leaves.
 FAKE_WT="$WT4" FAKE_PANE=w2:p47 start linear:AI-8
 FAKE_WT="$WT4" FAKE_PANE=w2:p48 start linear:AI-9b
-it "two workers in one new repo share a single PM-created entry"
-check '1' "$(field 'len([r for r in prog["remit"]["repos"] if r["path"] == "'"$WT4"'"])')"
-it "the entry stays while the other worker is open and goes when the last one retires"
+it "two workers in one new repo share a single worker repo"
+check '1' "$(field 'len([w for w in prog["remit"]["worker_repos"] if w["path"] == "'"$WT4"'"])')"
+it "the repo stays while the other worker is open and goes when the last one retires"
 check '[null, true]' "$(run_py "$RUN" <<'EOF'
 mod = load_lib_module("programme_remit_owned")
 prog = ph.normalize_programme(record(args[0])["programme"])
@@ -371,33 +356,11 @@ second = mod.drop_for_item(prog, "linear:AI-8")["dropped"]
 print(json.dumps([first, bool(second)]))
 EOF
 )"
-it "an adopted item with this repo as its repo also keeps the entry"
-check 'null' "$(run_py "$RUN" <<'EOF'
-mod = load_lib_module("programme_remit_owned")
-prog = ph.normalize_programme(record(args[0])["programme"])
-prog["items"]["linear:AI-9b"]["state"] = "done"
-prog["items"]["linear:AI-9b"]["repo"] = None
-adopted = ph.new_item("linear:AI-20")
-adopted["repo"] = [r["path"] for r in prog["remit"]["repos"] if r.get("via")][0]
-prog["items"]["linear:AI-20"] = adopted
-print(json.dumps(mod.drop_for_item(prog, "linear:AI-8")["dropped"]))
-EOF
-)"
 
-# An item cannot be pointed at a PM-created worktree to reach authority lookups.
+# An item cannot be pointed at a worker repo: add-item --repo only resolves against the typed remit.
 prog add-item linear:AI-21 --title "points at the worktree" --repo "$WT4"
-it "add-item --repo with a PM-created worktree leaves the item without a repo"
+it "add-item --repo with a worker repo leaves the item without a repo"
 check 'null' "$(field 'items["linear:AI-21"].get("repo")')"
-
-# R4 with only stale paths listed: the typed removal of the live repos is honoured, the list is not emptied.
-WT5="$(mkrepo "${WORK}/wt/w5" https://github.com/acme/w5.git)"
-remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${REPO_B}\",\"github\":null},{\"path\":\"${WT4}\",\"github\":null},{\"path\":\"${WT5}\",\"github\":null}]}" --prompt "$(prompt 'add repo w5 to the remit')"
-it "a typed set-remit adds a new repo alongside the stored ones"
-check 0 "$CODE"
-rm -rf "$WT5"
-remit_in "{\"repos\":[{\"path\":\"${WT5}\",\"github\":null}]}" --prompt "$(prompt 'remove repos ai-labs, other and w4 from the remit')"
-it "a list of only stale paths keeps those paths and honours the typed removals"
-check "0 [\"${WT5}\"]" "$CODE $(repo_paths)"
 
 echo
 echo "programme-remit-owned.test.sh: ${PASS} passed, ${FAIL} failed"

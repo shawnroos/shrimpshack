@@ -19,7 +19,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 programme_context = load_lib_module("programme_context")
 programme_carryover = load_lib_module("programme_carryover")
-programme_remit_owned = load_lib_module("programme_remit_owned")
 
 ACK_KEY = "protocol_ack"
 NO_REPO = "personal"
@@ -28,8 +27,8 @@ SECTION_NAMES = {"autonomy": "Authority", "rules": "Done standard", "checks": "c
 
 def _repos(programme) -> list:
     out = {}
-    for repo in programme_remit_owned.authority_repos(programme):
-        if repo.get("path"):
+    for repo in (programme.get("remit") or {}).get("repos") or []:
+        if isinstance(repo, dict) and repo.get("path"):
             out.setdefault(programme_carryover.key_of(repo), repo["path"])
     return list(out.items()) or [(NO_REPO, None)]
 

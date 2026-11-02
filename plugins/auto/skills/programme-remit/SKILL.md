@@ -59,14 +59,17 @@ removing one releases it. A space another programme holds is refused.
   that message must name each space, repo, team, project or initiative added or
   removed. If it does not, the verb lists the missing names. Ask Shawn to
   confirm in words that name them, then cite that reply.
-- **Workers you start yourself need no typed line.** `P start-worker` adds the
-  worker's repo to the remit and marks it PM-created (`via`), and `P
-  close-gone-pane` removes that entry when it closes the worker's pane. Start
-  workers with `start-worker`, not by running spinoff yourself; a direct run
-  adds nothing and keeps the typed line. A start's output names what it added
-  (`remit_added`) or why it added nothing (`remit_reason`). Nothing a worker
-  says or does adds to the remit. A takeover or handover keeps these entries
-  and their marks, because the remit moves with the programme.
+- **Workers you start yourself need no typed line.** `P start-worker` records
+  the worker's repo in the remit's `worker_repos`, apart from the typed
+  `repos`, and `P close-gone-pane` removes it when it closes the worker's
+  pane. Start workers with `start-worker`, not by running spinoff yourself; a
+  direct run adds nothing and keeps the typed line. A start's output names what
+  it recorded (`remit_added`) or why it recorded nothing (`remit_reason`).
+  Worker repos widen the sweep only: authority, rulings, PR checks and
+  `set-remit` read the typed repos alone, so a worker in a repo that no typed
+  entry names cannot confirm a merge until you type that repo in. Nothing a
+  worker says or does adds to the remit. A takeover or handover keeps
+  `worker_repos`, because the remit moves with the programme.
 - **A repo whose folder is gone never blocks `set-remit`.** The verb drops it
   and says so (`dropped_stale`) with no typed words naming it, unless that
   would empty the list: an empty list means no limit, so it is kept.

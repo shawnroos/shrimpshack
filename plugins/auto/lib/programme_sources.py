@@ -91,7 +91,7 @@ def remit(programme) -> dict:
     tracker = block.get("tracker") if isinstance(block.get("tracker"), dict) else {}
     return {"server": server, "workspaces": reached, "unreached": unreached,
             "tabs": list(tabs) if term.get("value") == "tabs" and tabs else None,
-            "repos": [r for r in block.get("repos") or [] if isinstance(r, dict) and r.get("path")],
+            "repos": programme_remit_owned.sweep_scope(block),
             "tracker": {part: list(tracker.get(part) or []) for part in programme_home.TRACKER_SCOPE_PARTS}}
 
 
@@ -689,6 +689,7 @@ def _join_remit(prog, op, entry, started, payload) -> None:
     if result["repo"]:
         entry["repo"] = result["repo"]
     if payload is not None:
+        # settle composes its journal row from this dict after assign runs, so the row carries the result atomically.
         payload["remit_added"] = result["added"]
         payload["remit_reason"] = result["reason"]
 

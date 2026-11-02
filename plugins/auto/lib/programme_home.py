@@ -526,6 +526,7 @@ def normalize_programme(block: dict) -> dict:
     remit.setdefault("spaces", [])
     remit.setdefault("tabs", [])
     remit.setdefault("repos", [])
+    remit.setdefault("worker_repos", [])
     tracker = dict(remit.get("tracker") or {})
     for part in TRACKER_SCOPE_PARTS:
         tracker.setdefault(part, [])

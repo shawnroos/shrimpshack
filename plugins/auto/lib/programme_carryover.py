@@ -20,7 +20,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
-programme_remit_owned = load_lib_module("programme_remit_owned")
 programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_context = load_lib_module("programme_context")
@@ -52,8 +51,8 @@ def key_of(repo) -> str:
 
 def repo_keys(programme) -> list:
     keys = []
-    for repo in programme_remit_owned.authority_repos(programme):
-        if repo.get("path") and key_of(repo) not in keys:
+    for repo in (programme.get("remit") or {}).get("repos") or []:
+        if isinstance(repo, dict) and repo.get("path") and key_of(repo) not in keys:
             keys.append(key_of(repo))
     return keys
 

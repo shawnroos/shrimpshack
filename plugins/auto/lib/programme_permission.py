@@ -20,7 +20,6 @@ run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 programme_record = load_lib_module("programme_record")
-programme_remit_owned = load_lib_module("programme_remit_owned")
 rules = load_lib_module("programme_permission_rules")
 state = load_lib_module("programme_permission_state")
 transcript = load_lib_module("permission_transcript")
@@ -128,7 +127,7 @@ def _destination(programme, key):
     if not item.get("repo"):
         state.note(item, "no_repo", "the item has no recorded repository; set it with add-item --repo")
         return None
-    remit = [r.get("path") for r in programme_remit_owned.authority_repos(programme)]
+    remit = [r.get("path") for r in programme["remit"].get("repos") or [] if isinstance(r, dict)]
     dest = rules.destination(item["repo"], remit)
     if not dest["ok"]:
         state.note(item, "bad_destination", dest["reason"])
