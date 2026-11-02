@@ -167,7 +167,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    | Shawn's answer | Verb |
    | --- | --- |
    | Ship or decline a handed item | `P answer-handed <item> --choice ship\|decline --prompt <id>` (ship also needs `--kind <change-kind>`) |
-   | How work is done ("always X", "never Y", "when X, do Y") | `P record-behaviour --prompt <id> --when "<the situation>" --do <line> --dont <line> [--pm-check <text>] [--agent-check <text>]`, then see "Behaviours" below |
+   | How work is done ("always X", "never Y", "when X, do Y") | `P check-behaviour` first, then `P record-behaviour --prompt <id> --when "<the situation>" --do <line> --dont <line> [--pm-check <text>] [--agent-check <text>]`; see "Behaviours" below |
    | A dated or scoped order or decision ("until Friday", "skip the full eval on AI-753", "you decide tool choice on AI-1050") | `P record-ruling <id> --effect decided\|grant\|restrict --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>] --prompt <id>`; for a new grant or decided Ruling his prompt must name the id, the kind and every item (or "programme"), otherwise it waits for `accept-context` |
    | Withdraw a Ruling | `P close-ruling <ruling-id> --as withdrawn --prompt <id>` |
    | Accept a proposed term change | `P amend-term <key> <proposed value> --prompt <id>` (add `--seconds <n>` for a fixed cadence) |

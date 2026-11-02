@@ -31,6 +31,8 @@ programme_naming = load_lib_module("programme_naming")
 programme_carryover = load_lib_module("programme_carryover")
 programme_layered_store = load_lib_module("programme_layered_store")
 programme_terms = load_lib_module("programme_terms")
+behaviour_check = load_lib_module("programme_behaviour_check")
+contract_check = load_lib_module("programme_contract_check")
 
 STORE_PATH_ENV = "CLAUDE_AUTO_BEHAVIOURS_STORE"
 STORE_NAME = "behaviours.json"
@@ -50,6 +52,7 @@ TEXT_FIELDS = ("evidence", "stop", "why")
 REQUIRED = ("id", "layer", "when", "applies_to")
 OPTIONAL = LIST_FIELDS + TEXT_FIELDS + (
     "repo_key", "examples", "source", "state", "overrides", "moved_to", "moved_repo_key", "history", "at",
+    "relates_to", "unrelated",
 )
 # The other fields stay unscanned: stop conditions and "don't" lines need words such as
 # "cost", "limit" and "publish", which are protected stems.
@@ -124,6 +127,9 @@ def _check_extras(entry) -> None:
     overrides = entry.get("overrides", [])
     if not isinstance(overrides, list) or not all(isinstance(o, str) and _ID_RE.match(o) for o in overrides):
         raise _Reject("bad_value", "overrides")
+    for field in ("relates_to", "unrelated"):
+        if not behaviour_check.answers_valid(entry, field):
+            raise _Reject("bad_value", field)
     if not isinstance(entry.get("history", []), list):
         raise _Reject("bad_value", "history")
     if "at" in entry and run_record_core.parse_iso(entry["at"]) is None:
@@ -367,8 +373,6 @@ _LIST_OPTS = (("do", "do"), ("dont", "dont"), ("skill", "skills"), ("tool", "too
               ("format", "formats"), ("comm", "comms"))
 _FIELD_VALUES = ("when", "trigger", "applies-to", "evidence", "stop", "why", "good", "bad")
 _FIELD_MULTI = ("pm-check", "agent-check") + tuple(opt for opt, _ in _LIST_OPTS)
-_COMMON = ("stop", "the", "and", "for", "when", "with", "that", "this", "its", "from", "into", "are", "was",
-           "not", "all", "any", "each", "work", "item")
 _FIELDS_DOC = ("--when <text> [--trigger claim|merge|block|start] [--pm-check <text>]... [--agent-check <text>]... "
                "[--applies-to pm|workers|both] "
                "[--do <line>]... [--dont <line>]... [--skill <name>]... [--tool <name>]... [--agent <name>]... "
@@ -441,22 +445,6 @@ def _active(programme, loaded) -> list:
     return [e for e in rows if e.get("state", ACTIVE) == ACTIVE]
 
 
-def _topic(entry) -> set:
-    text = " ".join([entry["when"]["text"]] + list(entry.get("tools") or []) + list(entry.get("skills") or []))
-    return {w for w in programme_naming.name_words(text) if len(w) >= 3 and w not in _COMMON}
-
-
-# Code cannot tell that two behaviours disagree; this only points the PM at the ones worth
-# reading, so it can name a conflict to Shawn and re-record with --conflicts-with.
-def _related(entry, others) -> list:
-    out = []
-    for other in others:
-        shared = sorted(_topic(entry) & _topic(other))
-        if other["id"] != entry["id"] and shared:
-            out.append({"id": other["id"], "layer": other["layer"], "shared": shared})
-    return out
-
-
 def _overrides(entry, conflicts, known) -> list:
     for other in conflicts:
         if other == entry["id"] or other not in known:
@@ -472,28 +460,77 @@ def _from_proposal(host, programme, prompt, proposal) -> dict:
     return dict(entry, state=ACTIVE)
 
 
+def _answers(opts) -> tuple:
+    related = list(dict.fromkeys(opts.get("relates-to") or []))
+    unrelated = []
+    for raw in opts.get("unrelated") or []:
+        ref, sep, reason = raw.partition("=")
+        if not sep or not reason.strip() or not ref.strip():
+            raise BehaviourError(f"--unrelated needs <id>=<reason>, got {raw!r}")
+        unrelated.append({"id": ref.strip(), "reason": programme_sanitize.clean(reason)})
+    return related, unrelated
+
+
+def _check(host, rec, entry, others, *, lines, answers=((), ())) -> dict:
+    snapshot = host.rules_in_force(rec, changes=False, behaviours=False)
+    peers = behaviour_check.check(entry, others)
+    contract = contract_check.check(entry, snapshot)
+    known = {o["id"] for o in others} | contract_check.refs(snapshot) | {r["ref"] for r in peers + contract}
+    related, unrelated = answers
+    for ref in list(related) + [u["id"] for u in unrelated]:
+        if ref not in known:
+            raise BehaviourError(f"no behaviour or contract part {ref!r} to answer for")
+    answered = set(related) | {u["id"] for u in unrelated}
+    if not lines:
+        peers = [{k: v for k, v in r.items() if k != "lines"} for r in peers]
+    return {"behaviours": peers, "contract": contract,
+            "unanswered": sum(r["ref"] not in answered for r in peers + contract),
+            "checked": {"reasons": list(behaviour_check.REASONS), "not_detected": behaviour_check.NOT_DETECTED}}
+
+
+def _h_check(host, argv):
+    positional, opts = host._parse(argv, values=("run",) + _FIELD_VALUES, multi=_FIELD_MULTI)
+    if positional:
+        raise ValueError("usage: check-behaviour " + _FIELDS_DOC + " [--run <id>]")
+    run_id, _, record = host._locate(opts)
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    entry = _draft(opts, "bcheck")
+    _refuse(entry, verdict(entry, allow_adoption=False))
+    others = _active(programme, load_store(host.prompt_lookup))
+    host._emit({"ok": True, "run": run_id, "kind": "behaviour_checked", "when": entry["when"]["text"],
+                **_check(host, dict(record, programme=programme), entry, others, lines=True)})
+    return 0
+
+
 def _h_record(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal") + _FIELD_VALUES,
-                                   multi=_FIELD_MULTI + ("conflicts-with",))
+                                   multi=_FIELD_MULTI + ("conflicts-with", "relates-to", "unrelated"))
     proposal = opts.get("from-proposal")
     if positional or (proposal and _has_fields(opts)):
-        raise ValueError("usage: record-behaviour --prompt <id> " + _FIELDS_DOC + " [--conflicts-with <id>]..., "
-                         "or record-behaviour --from-proposal <id> --prompt <id> [--conflicts-with <id>]...")
+        raise ValueError("usage: record-behaviour --prompt <id> " + _FIELDS_DOC + " [--conflicts-with <id>]... "
+                         "[--relates-to <id>]... [--unrelated <id>=<reason>]..., or record-behaviour "
+                         "--from-proposal <id> --prompt <id> [--conflicts-with <id>]... [--relates-to <id>]... "
+                         "[--unrelated <id>=<reason>]...")
     bid = proposal or "b" + secrets.token_hex(3)
     if not proposal:
         _draft(opts, bid)
+    answers = _answers(opts)
 
     def change(programme, prompt, rec):
         entry = _from_proposal(host, programme, prompt, proposal) if proposal else _draft(opts, bid)
         loaded = load_store(host.prompt_lookup)
         others = _active(programme, loaded)
         entry["overrides"] = _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
+        result = _check(host, rec, entry, others, lines=False, answers=answers)
+        if answers[0]:
+            entry["relates_to"] = answers[0]
+        if answers[1]:
+            entry["unrelated"] = answers[1]
         entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
         entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
         return {"behaviour": bid, "layer": "programme", "when": entry["when"]["text"],
                 "trigger": trigger_of(entry), "checks": entry["when"]["checks"], "overrides": entry["overrides"],
-                "from_proposal": proposal,
-                "related": _related(entry, others), "undo": f"retire-behaviour {bid} --as undone --prompt <id>"}
+                "from_proposal": proposal, **result, "undo": f"retire-behaviour {bid} --as undone --prompt <id>"}
 
     return host._write(opts, change, RECORDED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="record-behaviour", target=bid)
@@ -775,12 +812,19 @@ def _h_remind(host, argv):
 
 _SPECS = (
     ("record-behaviour", _h_record,
-     "--prompt <id> " + _FIELDS_DOC + " [--conflicts-with <id>]... [--run <id>], or --from-proposal <id> "
-     "--prompt <id> [--conflicts-with <id>]... [--run <id>]",
+     "--prompt <id> " + _FIELDS_DOC + " [--conflicts-with <id>]... [--relates-to <id>]... "
+     "[--unrelated <id>=<reason>]... [--run <id>], or --from-proposal <id> --prompt <id> "
+     "[--conflicts-with <id>]... [--relates-to <id>]... [--unrelated <id>=<reason>]... [--run <id>]",
      "no typed prompt from the driving session; no --when, or neither --do nor --dont; a bad --applies-to; a "
      "do line, skill, tool or agent that names a protected escalation; a --conflicts-with id that is not a "
-     "behaviour in force; with --from-proposal, any field option, an id that is not a proposal, or a prompt "
-     "that does not name the proposal id. Applies at once at the programme layer."),
+     "behaviour in force; a --relates-to or --unrelated id that is neither a behaviour in force nor a part of the "
+     "contract; an --unrelated with no reason; with --from-proposal, any field option, an id that is not a "
+     "proposal, or a prompt that does not name the proposal id. Applies at once at the programme layer and "
+     "prints the behaviour and contract check beside the checks. The check never refuses."),
+    ("check-behaviour", _h_check,
+     _FIELDS_DOC + " [--run <id>]",
+     "no --when, or neither --do nor --dont; a bad --applies-to; a do line, skill, tool or agent that names a "
+     "protected escalation. Reads only: it needs no prompt, records nothing and journals nothing."),
     ("propose-behaviour", _h_propose,
      _FIELDS_DOC + " [--run <id>], or --from-term <term-id> [--run <id>]",
      "no --when (unless --from-term), or neither --do nor --dont; an unknown project term; a protected "
@@ -811,6 +855,9 @@ _SPECS = (
 )
 
 
+READ_VERBS = ("check-behaviour",)
+
+
 def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
+    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects, reads=name in READ_VERBS)
             for name, handler, args, rejects in _SPECS}
