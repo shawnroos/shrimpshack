@@ -12,7 +12,6 @@ rebound to the pulse, so the new worker's first pulse applies them all. ``start-
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import functools
 import os
@@ -63,7 +62,7 @@ def _close_old(run_id, repo, auto_run, worker, sid, space_of) -> dict:
         block = worker_contract.contract_of(rec)
         if block is None:
             raise worker_contract.ContractError("the run record has no contract to hand over", "no_contract")
-        rec.setdefault("loop", {})["phase"] = "done"
+        worker_contract.close_run(rec)
         return copy.deepcopy(block)
 
     return run_record_core._with_locked_run_record(repo, auto_run, close)
@@ -115,29 +114,12 @@ def handover(run_id, item_id, *, caller=None, space_of=None, now=None) -> dict:
     return _move_pointer(run_id, home, key, repo, auto_run, worker, next_seed(block, sid, now), sid, space_of)
 
 
-def _log_refusal(run_id, sid, item_id, exc) -> None:
-    try:
-        programme_journal.append(run_id, worker_contract_write.REFUSED_KIND, sid or "",
-                                 {"verb": VERB, "item": item_id, "code": exc.code, "reason": str(exc)})
-    except Exception as err:
-        sys.stderr.write(f"programme.py: could not journal the refusal: {err}\n")
-
-
-@contextlib.contextmanager
-def _refusals(host, run_id, item_id):
-    try:
-        yield
-    except worker_contract.ContractError as exc:
-        _log_refusal(run_id, driver_session.driving_session_id(), item_id, exc)
-        raise host.ProgrammeError(f"refused ({exc.code}): {exc}") from None
-
-
 def _h_handover_contract(host, argv):
     positional, opts = host._parse(argv, values=("run", "item"))
     if positional or not opts.get("item"):
         raise ValueError("usage: handover-contract --item <id> [--run <programme run>]")
     run_id, home, _record = host._locate(opts)
-    with _refusals(host, run_id, opts["item"]):
+    with worker_contract_write._refusals(host, run_id, opts["item"], VERB):
         out = handover(run_id, opts["item"])
     host.refresh_view(run_id, home)
     host._emit(dict(out, ok=True, run=run_id, kind=HANDOVER_KIND,

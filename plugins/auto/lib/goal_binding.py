@@ -23,7 +23,7 @@ driver_session = load_lib_module("driver_session")
 
 MODE_REBIND = "rebind"
 MODE_BIND_ONCE = "bind-once"
-# U1 did not probe whether a bound goal re-reads its file; flip to MODE_BIND_ONCE only on a recorded probe.
+# Not probed: whether a bound goal re-reads its file; flip to MODE_BIND_ONCE only on a recorded probe.
 REREAD_MODE = MODE_REBIND
 
 BIND_TAG = "GOAL BIND:"

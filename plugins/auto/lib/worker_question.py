@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Question routing for a programme worker run (KTD9).
+"""Question routing for a programme worker run.
 
 The AskUserQuestion hook calls ``route``. A worker whose run record carries a contract has its
 question classified, clamped against the effective authority, and sent to the advisor, the PM or
@@ -11,12 +11,9 @@ pending entry.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import json
 import os
 import re
-import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -237,20 +234,17 @@ def open_questions(programme_run, *, now=None, limit=LIMIT_SECONDS) -> list:
     return out
 
 
-def _due(question) -> bool:
+def due(question) -> bool:
     return not question["escalated"] and (question["route"] == SHAWN or question["past_limit"])
 
 
 def _hand_via_programme(programme_run, question, row_text) -> None:
     kind = question["kind"] if question["kind"] in programme_decisions.DECISION_KINDS else _ESCALATION_KIND
-    argv = [sys.executable, os.path.join(_LIB_DIR, "programme.py"), "hand-item", question["item"],
-            "--run", programme_run, "--kind", kind,
-            "--question", "Worker question: " + row_text,
-            "--if-nothing", "the worker parks the step that depends on this answer"]
-    done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
-    if done.returncode != 0:
-        raise QuestionError(f"hand-item for question {question['qid']} failed: {(done.stderr or done.stdout).strip()}",
-                            "hand_failed")
+    try:
+        worker_contract.hand_item(programme_run, question["item"], kind=kind, question="Worker question: " + row_text,
+                                  if_nothing="the worker parks the step that depends on this answer")
+    except RuntimeError as exc:
+        raise QuestionError(f"hand-item for question {question['qid']} failed: {exc}", "hand_failed") from None
 
 
 def _plain_text(programme_run, qid) -> str:
@@ -276,10 +270,10 @@ def escalate_due(programme_run, *, now=None, limit=LIMIT_SECONDS, hand=None, cal
     items = (record.get("programme") or {}).get("items") or {}
     done = []
     for question in open_questions(programme_run, now=now, limit=limit):
-        if not _due(question):
+        if not due(question):
             continue
         item = items.get(question["item"]) or {}
-        joined = item.get("state") == "handed" and not programme_decisions.handed(item).get("answered")
+        joined = programme_decisions.waits_on_shawn(item)
         if not joined:
             (hand or _hand_via_programme)(programme_run, question, _plain_text(programme_run, question["qid"]))
         programme_journal.append(programme_run, ESCALATED_KIND, sid,
@@ -342,44 +336,3 @@ def answer(programme_run, qid, text, *, caller=None, space_of=None, now=None) ->
                              {"qid": qid, "item": p["item"], "by": "pm", "version": landed["version"],
                               "answer_id": "a" + qid[1:]})
     return {"qid": qid, "version": landed["version"], "bite": "pulse"}
-
-
-def _run_of(args) -> str:
-    if args.run:
-        return args.run
-    sid = load_lib_module("driver_session").driving_session_id()
-    runs = [hold["run"] for hold in programme_home.driven_runs(sid)] if sid else []
-    if len(runs) != 1:
-        raise QuestionError("pass --run <id>: this session does not drive exactly one programme", "no_run")
-    return runs[0]
-
-
-def _cli(argv) -> int:
-    parser = argparse.ArgumentParser(prog="worker_question")
-    sub = parser.add_subparsers(dest="verb", required=True)
-    for name in ("open", "escalate", "answer"):
-        p = sub.add_parser(name)
-        p.add_argument("--run")
-        if name != "answer":
-            p.add_argument("--limit", type=int, default=LIMIT_SECONDS)
-    sub.choices["answer"].add_argument("--question", required=True)
-    sub.choices["answer"].add_argument("--text", required=True)
-    args = parser.parse_args(argv)
-    try:
-        run_id = _run_of(args)
-        if args.verb == "open":
-            out = {"questions": open_questions(run_id, limit=args.limit)}
-        elif args.verb == "escalate":
-            out = {"escalated": escalate_due(run_id, limit=args.limit)}
-        else:
-            out = answer(run_id, args.question, args.text)
-    except (QuestionError, worker_contract.ContractError, run_record_core.RunRecordError,
-            programme_journal.JournalError) as exc:
-        sys.stderr.write(f"worker_question: {exc}\n")
-        return 1
-    print(json.dumps(out))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(_cli(sys.argv[1:]))

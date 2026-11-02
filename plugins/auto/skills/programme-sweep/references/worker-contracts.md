@@ -15,4 +15,4 @@ For a worker that runs under a contract, read its progress from its run record. 
 
 ## Quiet sweep
 
-A contracted item whose version, last beat, record mtime, open-question count and oldest question are unchanged since the last sweep adds no reason. A change in any of them adds `contract_changed`. A question past its limit adds `worker_question_due` even when nothing else moved, until `worker_question.py escalate` has raised it.
+A contracted item whose version, last beat, record mtime, open-question count and oldest question are unchanged since the last sweep adds no reason. A change in any of them adds `contract_changed`. A question past its limit adds `worker_question_due` even when nothing else moved, until `P escalate-worker-questions` has raised it.

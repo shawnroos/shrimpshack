@@ -145,10 +145,6 @@ def _owns_session(led, *, run_record, session_id, skip_staleness, stale_threshol
     return is_driving or is_agent
 
 
-def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:
-    return _owned_run(repo_root, session_id, now) is not None
-
-
 def _owned_run(repo_root: str, session_id, now=None):
     """Scan <repo>/.claude/auto/*.json for a live self-driven run owning ``session_id``.
 

@@ -186,6 +186,9 @@ check '[2, 2, false]' "$(jq_py '(lambda s: [s["version"], s["applied_version"], 
 
 echo "── AE3: a done claim is not evidence ──"
 
+it "contract-status reports the run's top-level loop_phase, not null"
+check '"work"' "$(jq_py 'd["items"]["linear:AI-800"]["loop_phase"]')"
+
 it "the predicate is met and the worker claims done, but the PR evidence is unconfirmed: the item does not count as done"
 check '[true, false, ["pr_merged"], ["external_evidence_unverified"]]' "$(jq_py '(lambda s: [s["exit_predicate"]["met"], s["counts_as_done"], s["unverified_external"], s["done_blocked_by"]])(d["items"]["linear:AI-800"])')"
 edit 'items["linear:AI-800"]["deliverables"]["merged"] = {"result": "refuted", "ref": "o/r#1"}' ""

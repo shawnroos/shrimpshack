@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What a PM-designed workflow must satisfy before a worker's contract may name it (R17, KTD13).
+"""What a PM-designed workflow must satisfy before a worker's contract may name it.
 
 A workflow file can carry no key from the contract's authority vocabulary, so it cannot grant a worker
 authority the contract does not. ``gate`` is the ``workflow_change`` decision kind applied to
@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,20 +60,16 @@ def digest(item_key, workflow) -> str:
 
 
 def _approved(item, ask_id, token) -> bool:
-    ask = programme_decisions.handed(item)
-    answered = ask.get("answered")
-    return (ask.get("id") == ask_id and ask.get("kind") == KIND and isinstance(answered, dict)
-            and answered.get("choice") == "ship" and f"workflow {token}" in (ask.get("evidence") or []))
+    return programme_decisions.ship_approved(item, ask_id, KIND, f"workflow {token}")
 
 
 def _hand_via_programme(programme_run, item_key, question, token) -> None:
-    argv = [sys.executable, os.path.join(_LIB_DIR, "programme.py"), "hand-item", item_key, "--run", programme_run,
-            "--kind", KIND, "--question", question, "--evidence", f"workflow {token}",
-            "--if-nothing", "the contract keeps its current workflow"]
-    done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
-    if done.returncode != 0:
+    try:
+        worker_contract.hand_item(programme_run, item_key, kind=KIND, question=question,
+                                  evidence=f"workflow {token}", if_nothing="the contract keeps its current workflow")
+    except RuntimeError as exc:
         raise worker_contract.ContractError(
-            f"hand-item for the workflow change failed: {(done.stderr or done.stdout).strip()}", "hand_failed")
+            f"hand-item for the workflow change failed: {exc}", "hand_failed") from None
 
 
 def _current(item, state):
@@ -107,7 +102,7 @@ def gate(record, programme_run, item_key, state, name, *, approved=None, hand=No
     if verdict["mode"] == "propose":
         token = digest(item_key, workflow)
         if not _approved(item, approved, token):
-            if item.get("state") == "handed" and not programme_decisions.handed(item).get("answered"):
+            if programme_decisions.waits_on_shawn(item):
                 raise worker_contract.ContractError(
                     f"item {item_key!r} already waits on Shawn's answer; the contract keeps its current workflow",
                     "item_handed")

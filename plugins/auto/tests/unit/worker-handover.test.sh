@@ -55,8 +55,9 @@ from _bootstrap import load_lib_module
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
+rr = load_lib_module("run_record")
 wc = load_lib_module("worker_contract")
-wh = load_lib_module("worker_handover")
+wh =load_lib_module("worker_handover")
 wcw = load_lib_module("worker_contract_write")
 wa = load_lib_module("worker_contract_apply")
 wr = load_lib_module("worker_register")
@@ -74,7 +75,7 @@ def item_state(key):
     prog = core.read_run_record(ph.home_path(RUN), RUN)["programme"]
     return prog["items"][key].get("auto_run")
 def phase(repo, run):
-    return (core.read_run_record(repo, run).get("loop") or {}).get("phase")
+    return core.read_run_record(repo, run).get("loop_phase")
 def open_runs(key):
     state = item_state(key) or {}
     if state.get("state") == "bound" and phase(state["path"], state["run_id"]) != "done":
@@ -97,9 +98,9 @@ def make_worker(repo, run_id, session, *, stamp=True, done=False):
             rec["contract"] = wc.new_contract(set_by="sess-pm", authority=AUTH, done_bar=BAR, workflow="a2", fan_out_cap=3)
         else:
             rec.pop("contract_capable", None)
-        if done:
-            rec.setdefault("loop", {})["phase"] = "done"
     core._with_locked_run_record(repo, run_id, put)
+    if done:
+        rr.set_loop(repo, run_id, loop_phase="done", driver="manual")
 make_worker(REPO, "wrun", "sess-w")
 make_worker(REPO, "wold", "sess-old", stamp=False)
 make_worker(REPO, "wdone", "sess-done", done=True)
@@ -227,6 +228,12 @@ EOF
 it "the old run is closed (phase done) and keeps its own contract unchanged at version 3"
 check '["done", 3]' "$(run_py <<'EOF'
 print(json.dumps([phase(REPO, "wrun"), core.read_run_record(REPO, "wrun")["contract"]["version"]]))
+EOF
+)"
+it "the closed old run reads as done to the engine's own accessors and carries the end path's driver"
+check '[true, "manual", true]' "$(run_py <<'EOF'
+old = core.read_run_record(REPO, "wrun")
+print(json.dumps([wc.run_is_done(old), old["loop"]["driver"], "phase" not in old.get("loop", {})]))
 EOF
 )"
 it "after the hand-over no bound open run remains for the item"
@@ -391,7 +398,7 @@ B4="$(snap "$REPO" wold linear:AI-5)"
 as sess-pm "${HC[@]}" --item linear:AI-5
 refuses predates_contracts "$B4" "$REPO" wold linear:AI-5 "$HO"
 it "refused (predates_contracts): the run was not closed"
-check 'null' "$(expr x 'phase(REPO, "wold")')"
+check '"plan"' "$(expr x 'phase(REPO, "wold")')"
 
 echo "── a non-PM caller is refused ──"
 
@@ -413,7 +420,7 @@ B5="$(snap "$REPO" wguard linear:AI-10)"
 as sess-g "${HC[@]}" --item linear:AI-10
 refuses not_driving "$B5" "$REPO" wguard linear:AI-10 "$HO"
 it "the worker's own session cannot close its run or move the pointer"
-check 'null' "$(expr x 'phase(REPO, "wguard")')"
+check '"plan"' "$(expr x 'phase(REPO, "wguard")')"
 as sess-nobody "${HC[@]}" --item linear:AI-10
 refuses not_driving "$B5" "$REPO" wguard linear:AI-10 "$HO"
 
@@ -470,7 +477,7 @@ B6="$(snap "$REPO" wmis linear:AI-11)"
 as sess-pm "${HC[@]}" --item linear:AI-11
 refuses session_mismatch "$B6" "$REPO" wmis linear:AI-11 "$HO"
 it "refused (session_mismatch): the run was not closed"
-check 'null' "$(expr x 'phase(REPO, "wmis")')"
+check '"plan"' "$(expr x 'phase(REPO, "wmis")')"
 
 run_py <<'EOF'
 open(os.path.join(ph.home_path(RUN), ph.COMPACT_FLAG), "w").close()

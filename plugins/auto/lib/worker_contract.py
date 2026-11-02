@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import os
 import re
+import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +23,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
 programme_decisions = load_lib_module("programme_decisions")
+phase_grammar = load_lib_module("phase-grammar")
 
 CONTRACT_KEY = "contract"
 NO_CONTRACT = "no_contract"
@@ -163,6 +165,33 @@ def contract_of(record):
     return block
 
 
+def run_is_done(record) -> bool:
+    return phase_grammar.current_phase(record) == "done"
+
+
+def close_run(record) -> None:
+    # The engine reads the top-level loop_phase; these are the two writes run_record_mutators.set_loop makes for an end.
+    record[phase_grammar.LOOP_PHASE_KEY] = "done"
+    record.setdefault("loop", {})["driver"] = "manual"
+
+
+def lenient_block(record):
+    block = record.get(CONTRACT_KEY) if isinstance(record, dict) else None
+    return block if isinstance(block, dict) else None
+
+
+def hand_item(programme_run, item_key, *, kind, question, if_nothing, evidence=None) -> None:
+    """Run ``programme.py hand-item``; raise RuntimeError with the stripped failure text when it exits non-zero."""
+    argv = [sys.executable, os.path.join(_LIB_DIR, "programme.py"), "hand-item", item_key, "--run", programme_run,
+            "--kind", kind, "--question", question]
+    if evidence is not None:
+        argv += ["--evidence", evidence]
+    argv += ["--if-nothing", if_nothing]
+    done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise RuntimeError((done.stderr or done.stdout).strip())
+
+
 def is_stale(block) -> bool:
     return block["version"] > block.get("applied_version", 0)
 
@@ -204,10 +233,17 @@ def programme_inputs(programme, item, prompt_lookup=None, now=None) -> dict:
     stamp = now or run_record_core.now_iso()
     levels = protocol.AuthorityLevels(prompt_lookup)
     repos = rulings.repos_for(programme, [item])
+    rows = []
+
+    def rulings_of(kind):
+        if not rows:
+            rows.append(rulings.pc.rulings(programme, stamp))
+        return rulings.pc.rulings_for(programme, item, kind, stamp, rows=rows[0])
+
     return {
         "item": item, "now": stamp, "accepted": programme_decisions.stamped(programme),
         "level_of": lambda kind: levels.level(kind, repos),
-        "rulings_of": lambda kind: rulings.pc.rulings_for(programme, item, kind, stamp),
+        "rulings_of": rulings_of,
     }
 
 

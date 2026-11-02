@@ -105,7 +105,7 @@ def _open_for_writes(record) -> None:
 
 
 def _refuse_done(rec, key, auto_run) -> None:
-    if (rec.get("loop") or {}).get("phase") == "done":
+    if worker_contract.run_is_done(rec):
         raise worker_contract.ContractError(
             f"run {auto_run} for item {key} is done and its contract is closed; start a follow-up run for the item "
             "from a copy of this contract (start-worker --contract) and register it", "run_done")
@@ -229,20 +229,20 @@ def parse_change(opts) -> dict:
     return change
 
 
-def _log_refusal(run_id, sid, item_id, exc) -> None:
+def _log_refusal(run_id, sid, item_id, exc, verb=VERB) -> None:
     try:
         programme_journal.append(run_id, REFUSED_KIND, sid or "",
-                                 {"verb": VERB, "item": item_id, "code": exc.code, "reason": str(exc)})
+                                 {"verb": verb, "item": item_id, "code": exc.code, "reason": str(exc)})
     except Exception as err:
         sys.stderr.write(f"programme.py: could not journal the refusal: {err}\n")
 
 
 @contextlib.contextmanager
-def _refusals(host, run_id, item_id):
+def _refusals(host, run_id, item_id, verb=VERB):
     try:
         yield
     except worker_contract.ContractError as exc:
-        _log_refusal(run_id, driver_session.driving_session_id(), item_id, exc)
+        _log_refusal(run_id, driver_session.driving_session_id(), item_id, exc, verb)
         raise host.ProgrammeError(f"refused ({exc.code}): {exc}") from None
 
 

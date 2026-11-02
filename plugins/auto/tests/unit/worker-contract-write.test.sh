@@ -57,6 +57,7 @@ from _bootstrap import load_lib_module
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
+rr = load_lib_module("run_record")
 wc = load_lib_module("worker_contract")
 ROOT = sys.argv[1]
 args = sys.argv[2:]
@@ -85,9 +86,9 @@ def make_worker(repo, run_id, session, *, stamp=True, done=False, contract=True)
             rec["contract"] = wc.new_contract(set_by="sess-pm", authority=AUTH, done_bar=BAR, workflow="a2", fan_out_cap=3)
         if not stamp:
             rec.pop("contract_capable", None)
-        if done:
-            rec.setdefault("loop", {})["phase"] = "done"
     core._with_locked_run_record(repo, run_id, put)
+    if done:
+        rr.set_loop(repo, run_id, loop_phase="done", driver="manual")
 make_worker(REPO, "wrun", "sess-w")
 make_worker(REPO, "wold", "sess-old", stamp=False)
 make_worker(REPO, "wdone", "sess-done", done=True)
@@ -474,8 +475,8 @@ check '{"seed_version": 1, "verdict": "state_changed"}' "$OUT"
 
 echo "── the verb is not a read verb and no picker answer approves it ──"
 
-it "set-contract and the question verbs are in neither READ_VERBS nor PICK_VERBS"
-check '{"pick": [], "read": []}' "$(run_py <<'EOF'
+it "the write verbs are in neither READ_VERBS nor PICK_VERBS, and the read-only open-worker-questions is in READ_VERBS only"
+check '{"pick": [], "read": ["open-worker-questions"]}' "$(run_py <<'EOF'
 import importlib.util
 spec = importlib.util.spec_from_file_location("hook", os.path.join(ROOT, "lib", "on-pretooluse-subagent.py"))
 hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)

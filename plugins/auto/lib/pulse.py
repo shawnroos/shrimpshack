@@ -77,7 +77,6 @@ phase_grammar = load_lib_module("phase-grammar")
 pulse_advance = load_lib_module("pulse_advance")
 pulse_guidance = load_lib_module("pulse_guidance")
 worker_contract_apply = load_lib_module("worker_contract_apply")
-goal_binding = load_lib_module("goal_binding")
 
 # Re-arm delay between pulses. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
@@ -389,12 +388,13 @@ def _pulse_body_inner(
     before = run_record.read_run_record(repo_root, run_id)
     extras = _guidance_extras(repo_root, run_id, before)
     led = worker_contract_apply.apply_at_pulse(repo_root, run_id, before)
-    led = load_lib_module("worker_rebake").complete_due(repo_root, run_id, led)
+    if "contract" in led:
+        led = load_lib_module("worker_rebake").complete_due(repo_root, run_id, led)
     phase = phase_grammar.current_phase(led)
 
     intent, led = _try_iteration_check(
         repo_root, run_id, led, phase=phase, delay=delay,
-        rearm_prompt=rearm_prompt, now_iso=now_iso,
+        rearm_prompt=rearm_prompt, now_iso=now_iso, extras=extras,
     )
     if intent is not None:
         return intent
@@ -433,10 +433,16 @@ def _pulse_body_inner(
 
 
 def _guidance_extras(repo_root, run_id, record):
-    # The answers must be read before apply_at_pulse removes the entries that carry them.
     if not isinstance(record.get("contract"), dict):
         return {}
     return load_lib_module("worker_contract_status").guidance_extras(repo_root, run_id, record)
+
+
+def _deliver_answers(repo_root, run_id, extras):
+    # Only a rearm intent carries the text; a stop leaves the entry pending for the pulse that resumes the run.
+    answers = (extras or {}).get("answers")
+    if answers:
+        worker_contract_apply.deliver_answers(repo_root, run_id, {a["version"] for a in answers})
 
 
 def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
@@ -479,7 +485,7 @@ def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
 
 
 def _try_iteration_check(
-    repo_root, run_id, led, *, phase, delay, rearm_prompt, now_iso
+    repo_root, run_id, led, *, phase, delay, rearm_prompt, now_iso, extras=None
 ):
     """Step 0 — the iteration check (KTD §A). Returns (intent_or_None, led).
 
@@ -564,7 +570,7 @@ def _try_iteration_check(
             led = run_record.read_run_record(repo_root, run_id)
             run_record.set_loop(repo_root, run_id, driver="self", beat=True)
             led_now = run_record.read_run_record(repo_root, run_id)
-            return _rearm_intent(
+            intent = _rearm_intent(
                 run_id,
                 delay=delay,
                 prompt=rearm_prompt,
@@ -574,8 +580,13 @@ def _try_iteration_check(
                 },
                 stalled=[],
                 halted=[],
-                operator_guidance=pulse_guidance._operator_guidance_for(phase, None, led_now),
-            ), led
+                operator_guidance=worker_contract_apply.append_guidance(
+                    pulse_guidance._operator_guidance_for(phase, None, led_now), led_now,
+                    (extras or {}).get("effective"), (extras or {}).get("answers"),
+                ),
+            )
+            _deliver_answers(repo_root, run_id, extras)
+            return intent, led
         # action == "advance": fall through to the standard flow. The gate
         # said "advance"; the existing predicate-met short-circuit (now
         # suppressed only by iteration_pending=True) will fire normally
@@ -782,10 +793,12 @@ def _build_rearm_intent(
             (extras or {}).get("effective"), (extras or {}).get("answers"),
         ),
     )
-    goal_binding.annotate(intent, repo_root, run_id, led_now)
+    if "contract" in led_now:
+        load_lib_module("goal_binding").annotate(intent, repo_root, run_id, led_now)
     gap_guard = pulse_guidance._gaps_open_guard(phase, led_now)
     if gap_guard is not None:
         intent["gaps_open_guard"] = gap_guard
+    _deliver_answers(repo_root, run_id, extras)
     return intent
 
 

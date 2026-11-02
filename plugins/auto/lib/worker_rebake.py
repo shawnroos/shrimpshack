@@ -23,7 +23,7 @@ worker_contract = load_lib_module("worker_contract")
 workflows = load_lib_module("workflows")
 phase_grammar = load_lib_module("phase-grammar")
 
-NO_CONTRACT = "no_contract"
+NO_CONTRACT = worker_contract.NO_CONTRACT
 CURRENT = "current"
 WAITING = "waiting"
 NEEDS = "needs-re-bake"
@@ -35,11 +35,6 @@ DEFAULT_PHASES = ["plan", "handoff", "work"]
 
 class RebakeError(Exception):
     pass
-
-
-def _block(record):
-    block = record.get("contract") if isinstance(record, dict) else None
-    return block if isinstance(block, dict) else None
 
 
 def _baked(record) -> int:
@@ -54,7 +49,7 @@ def _differs(record, block) -> bool:
 
 
 def _due(record):
-    block = _block(record)
+    block = worker_contract.lenient_block(record)
     if block is None or record.get(phase_grammar.LOOP_PHASE_KEY) == "done":
         return None
     applied = block.get("applied_version", 0)
@@ -66,7 +61,7 @@ def _due(record):
 
 
 def state(record) -> dict:
-    block = _block(record)
+    block = worker_contract.lenient_block(record)
     if block is None:
         return {"state": NO_CONTRACT}
     due = _due(record)

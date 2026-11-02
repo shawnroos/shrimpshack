@@ -65,6 +65,17 @@ def handed(item) -> dict:
     return handed if isinstance(handed, dict) else {}
 
 
+def waits_on_shawn(item) -> bool:
+    return item.get("state") == "handed" and not handed(item).get("answered")
+
+
+def ship_approved(item, ask_id, kind, evidence_line) -> bool:
+    ask = handed(item)
+    answered = ask.get("answered")
+    return (ask.get("id") == ask_id and ask.get("kind") == kind and isinstance(answered, dict)
+            and answered.get("choice") == "ship" and evidence_line in (ask.get("evidence") or []))
+
+
 def ask_kind(item) -> str:
     return handed(item).get("kind") or UNKNOWN_KIND
 

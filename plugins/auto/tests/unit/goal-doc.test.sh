@@ -272,13 +272,13 @@ check "lease_lost True 2" "$OUT"
 
 it "a run that is done is refused and names the follow-up run"
 run_py <<'EOF'
-core._with_locked_run_record(REPO, "wrun", lambda rec: rec.setdefault("loop", {}).update(loop_phase="done"))
+load_lib_module("run_record").set_loop(REPO, "wrun", loop_phase="done", driver="manual")
 EOF
 BEFORE="$(frozen)"
 prog write-goal linear:AI-1 --run "$RUN" --outcome "late"
 refuses run_done "start a follow-up run" "$BEFORE"
 run_py <<'EOF'
-core._with_locked_run_record(REPO, "wrun", lambda rec: rec["loop"].update(loop_phase="work"))
+load_lib_module("run_record").set_loop(REPO, "wrun", loop_phase="work", driver="self")
 EOF
 
 echo "── subagents ──"

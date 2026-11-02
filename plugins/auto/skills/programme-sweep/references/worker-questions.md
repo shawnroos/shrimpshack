@@ -11,6 +11,6 @@ A programme worker that runs under a contract does not ask Shawn or the advisor 
 
 ## Each sweep
 
-1. `python3 "${CLAUDE_PLUGIN_ROOT}/lib/worker_question.py" open` lists the open questions with `past_limit` and `escalated`.
-2. Answer a `pm` question with `python3 "${CLAUDE_PLUGIN_ROOT}/lib/worker_question.py" answer --question <qid> --text <answer>`. The answer reaches the worker's contract at its next pulse. It is your answer: it never approves anything Shawn must approve.
-3. Run `python3 "${CLAUDE_PLUGIN_ROOT}/lib/worker_question.py" escalate`. It raises one Shawn ask with `hand-item` for each `shawn` question and for each `pm` question past the time limit. A question already escalated is skipped, so it is safe to run every sweep.
+1. `P open-worker-questions` lists the open questions with `past_limit` and `escalated`.
+2. Answer a `pm` question with `P answer-worker-question --question <qid> --text <answer>`. The answer reaches the worker's contract at its next pulse. It is your answer: it never approves anything Shawn must approve.
+3. Run `P escalate-worker-questions`. It raises one Shawn ask with `hand-item` for each `shawn` question and for each `pm` question past the time limit. A question already escalated is skipped, so it is safe to run every sweep.

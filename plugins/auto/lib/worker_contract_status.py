@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The PM's read of a contracted Auto-run worker: ``contract-status`` and the quiet-sweep inputs (R11, R12, R13).
+"""The PM's read of a contracted Auto-run worker: ``contract-status`` and the quiet-sweep inputs.
 
 Status reads the worker's run record from the item's ``auto_run`` block and never scrapes a pane. The exit
 predicate is the cached ``exit_predicate_result``, never recomputed. An item counts as done only when that
@@ -73,11 +73,7 @@ def _questions(rows) -> dict:
     oldest = min(rows, key=lambda q: q["at"] or "", default=None)
     return {"open": len(rows), "oldest_at": oldest and oldest["at"],
             "oldest_age_seconds": max((q["age_seconds"] for q in rows), default=None),
-            "past_limit": any(q["past_limit"] for q in rows), "due": [q["qid"] for q in rows if is_due(q)]}
-
-
-def is_due(question) -> bool:
-    return not question["escalated"] and (question["route"] == worker_question.SHAWN or question["past_limit"])
+            "past_limit": any(q["past_limit"] for q in rows), "due": [q["qid"] for q in rows if worker_question.due(q)]}
 
 
 def _pending(block) -> list:
@@ -125,7 +121,7 @@ def item_status(key, item, questions) -> dict:
         "applied_version": block.get("applied_version", 0), "stale": worker_contract.is_stale(block),
         "pending_versions": _pending(block), "steps": _steps(record), "exit_predicate": cached,
         "last_beat_at": (record.get("loop") or {}).get("last_beat_at"),
-        phase_grammar.LOOP_PHASE_KEY: (record.get("loop") or {}).get(phase_grammar.LOOP_PHASE_KEY), "mtime_ns": _mtime(path, run_id),
+        phase_grammar.LOOP_PHASE_KEY: phase_grammar.current_phase(record), "mtime_ns": _mtime(path, run_id),
         "unverified_external": missing, "questions": _questions(questions),
     }, **_done(cached, missing))
 
@@ -180,6 +176,9 @@ def _compact(status) -> dict:
 def sweep_facts(programme_run, home, programme, now=None) -> dict:
     """What the quiet-sweep verdict needs: which contracted items moved since the last committed look, and due questions."""
     try:
+        items = programme.get("items") or {}
+        if not any(not isinstance(i, dict) or i.get(worker_register.ITEM_KEY) for i in items.values()):
+            return {"error": None, "changed": [], "due": [], "items": {}, "fingerprints": {}}
         statuses = {k: s for k, s in read_all(programme_run, programme, now=now).items() if s["state"] != NO_CONTRACT}
     except Exception as exc:  # noqa: BLE001 — one unreadable store must degrade the sweep, never end it
         return {"error": f"{type(exc).__name__}: {exc}", "changed": [], "due": [], "items": {}, "fingerprints": {}}
@@ -210,8 +209,8 @@ def find_item(repo_root, run_id):
 
 def guidance_extras(repo_root, run_id, record) -> dict:
     """Effective authority and pending PM answers for the pulse's guidance; read before the engine trims applied entries."""
-    block = record.get("contract") if isinstance(record, dict) else None
-    if not isinstance(block, dict):
+    block = worker_contract.lenient_block(record)
+    if block is None:
         return {}
     out = {"answers": [a for a in worker_question.pending_answers(block) if not a["applied"]]}
     try:

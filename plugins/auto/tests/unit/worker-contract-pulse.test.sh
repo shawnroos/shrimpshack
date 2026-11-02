@@ -308,6 +308,65 @@ check "block" "$(stop_verdict "")"
 it "a stop from another session is allowed, so the hold is the session scope and not a blanket block"
 check "allow" "$(stop_verdict sess-Z)"
 
+echo "── a pending PM answer reaches the worker ──"
+
+it "a pulse that returns the iterate rearm carries the answer text and then retires the entry"
+OUT="$(run_py <<'EOF'
+wq = load_lib_module("worker_question")
+new_run("ans-it", 1)
+def put(r):
+    wq.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": "q1", "text": "use the existing parser", "by": "pm"}})
+core._with_locked_run_record(REPO, "ans-it", put)
+pulse.pulse_advance.advance_iteration_loop = lambda *a, **k: {"action": "iterate"}
+r = pulse.dispatch_pulse(REPO, "ans-it")
+c = rec("ans-it")["contract"]
+print(json.dumps({"advanced": r["advance"]["advanced"], "says": "PM answer to question q1: use the existing parser" in r["operator_guidance"],
+                  "pending": c["pending_versions"], "applied": c["applied_version"] == c["version"]}, sort_keys=True))
+EOF
+)"
+check '{"advanced": "iterate-step", "applied": true, "pending": [], "says": true}' "$OUT"
+
+it "a pulse that returns handoff-pause keeps the answer pending, and the next rearm pulse delivers it"
+OUT="$(run_py <<'EOF'
+wq = load_lib_module("worker_question")
+new_run("ans-hp", 1)
+def put(r):
+    wq.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": "q2", "text": "keep the old schema", "by": "pm"}})
+core._with_locked_run_record(REPO, "ans-hp", put)
+real = pulse._dispatch_phase_advance
+pulse._dispatch_phase_advance = lambda *a, **k: ({"handoff_pause": True}, None)
+first = pulse.dispatch_pulse(REPO, "ans-hp")
+kept = [e["answer"]["question_id"] for e in rec("ans-hp")["contract"]["pending_versions"] if "answer" in e]
+pulse._dispatch_phase_advance = real
+second = pulse.dispatch_pulse(REPO, "ans-hp")
+print(json.dumps({"first": [first["action"], first["reason"]], "kept": kept, "second": second["action"],
+                  "delivered": "PM answer to question q2: keep the old schema" in second["operator_guidance"],
+                  "left": [e for e in rec("ans-hp")["contract"]["pending_versions"] if "answer" in e]}, sort_keys=True))
+EOF
+)"
+check '{"delivered": true, "first": ["stop", "handoff-pause"], "kept": ["q2"], "left": [], "second": "rearm"}' "$OUT"
+
+it "an answer queued after the pulse read its own is not trimmed unseen"
+OUT="$(run_py <<'EOF'
+wq = load_lib_module("worker_question")
+new_run("ans-late", 1)
+def add(qid, text):
+    def put(r):
+        wq.append_pending(r["contract"], bite="pulse", set_by="sess-pm", extra={"answer": {"question_id": qid, "text": text, "by": "pm"}})
+    core._with_locked_run_record(REPO, "ans-late", put)
+add("q3", "first answer")
+real = apply_mod.apply_at_pulse
+def late(repo, run, record=None):
+    add("q4", "late answer")
+    return real(repo, run, record)
+apply_mod.apply_at_pulse = late
+r = pulse.dispatch_pulse(REPO, "ans-late")
+left = [e["answer"]["question_id"] for e in rec("ans-late")["contract"]["pending_versions"] if "answer" in e]
+print(json.dumps({"first": "first answer" in r["operator_guidance"], "late_seen": "late answer" in r["operator_guidance"], "left": left}, sort_keys=True))
+EOF
+)"
+check '{"first": true, "late_seen": false, "left": ["q4"]}' "$OUT"
+
 echo "── size ──"
 
 it "dispatch_batch gains exactly one line of contract code and the size-budget lint passes"

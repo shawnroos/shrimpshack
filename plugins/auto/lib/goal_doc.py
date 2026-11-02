@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The goal doc for a contracted worker: generated from the contract's done bar, amended in place (KTD10).
+"""The goal doc for a contracted worker: generated from the contract's done bar, amended in place.
 
 ``write-goal`` creates or amends ``<repo>/.claude/auto/goals/<run>.md``. A Markdown file never reads as a
 run record, because sweeps read every ``*.json`` under ``.claude/auto/``. Each write bumps the contract
@@ -17,9 +17,7 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
-import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -33,13 +31,15 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_decisions = load_lib_module("programme_decisions")
 worker_contract = load_lib_module("worker_contract")
 worker_question = load_lib_module("worker_question")
-phase_grammar = load_lib_module("phase-grammar")
+worker_register = load_lib_module("worker_register")
+worker_contract_status = load_lib_module("worker_contract_status")
 
 GOAL_KIND = "goal_amend"
 JOURNAL_KIND = "goal_written"
 GOALS_DIR = os.path.join(".claude", "auto", "goals")
 HEADER_RE = re.compile(r"\A<!-- goal-version: (\d+); contract-version: (\d+); run: ([A-Za-z0-9._-]+) -->\n")
-STALE, CURRENT, NONE, NO_CONTRACT = "goal-stale", "current", "none", "no_contract"
+STALE, CURRENT, NONE = "goal-stale", "current", "none"
+NO_CONTRACT = worker_contract.NO_CONTRACT
 TEXT_CAP, OUTCOME_CAP, OUTCOMES_MAX = 300, 300, 12
 _CLAUSES = {
     "steps_terminal": "every step in the plan is implemented and reviewed, and only P3 review findings remain "
@@ -134,17 +134,8 @@ def render(*, title, plan, done_bar, outcomes, out_of_scope, goal_version, contr
 
 
 def _atomic_write(path, text) -> None:
-    folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".goal-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    programme_home.atomic_write(path, lambda fh: fh.write(text), ".goal-", encoding="utf-8")
 
 
 def _names(raw, known, label) -> list:
@@ -162,27 +153,22 @@ def digest(inputs) -> str:
 
 
 def _approved(item, ask_id, token) -> bool:
-    ask = programme_decisions.handed(item)
-    answered = ask.get("answered")
-    return (ask.get("id") == ask_id and ask.get("kind") == GOAL_KIND and isinstance(answered, dict)
-            and answered.get("choice") == "ship" and f"amendment {token}" in (ask.get("evidence") or []))
+    return programme_decisions.ship_approved(item, ask_id, GOAL_KIND, f"amendment {token}")
 
 
 def _hand_via_programme(programme_run, item_key, question, token) -> None:
-    argv = [sys.executable, os.path.join(_LIB_DIR, "programme.py"), "hand-item", item_key, "--run", programme_run,
-            "--kind", GOAL_KIND, "--question", question, "--evidence", f"amendment {token}",
-            "--if-nothing", "the goal doc stays as it is"]
-    done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
-    if done.returncode != 0:
-        raise GoalError(f"hand-item for the goal amendment failed: {(done.stderr or done.stdout).strip()}",
-                        "hand_failed")
+    try:
+        worker_contract.hand_item(programme_run, item_key, kind=GOAL_KIND, question=question,
+                                  evidence=f"amendment {token}", if_nothing="the goal doc stays as it is")
+    except RuntimeError as exc:
+        raise GoalError(f"hand-item for the goal amendment failed: {exc}", "hand_failed") from None
 
 
 def _bound_run(item, key) -> tuple:
-    state = item.get("auto_run") or {}
-    if state.get("state") != "bound" or not state.get("run_id") or not state.get("path"):
+    if worker_contract_status.bound_run(item) is None:
         raise GoalError(f"item {key!r} has no bound Auto run; the worker registers its run first (register-run)",
                         "not_bound")
+    state = item[worker_register.ITEM_KEY]
     session = (item.get("owner") or {}).get("session_id") or state.get("session_id")
     return state["path"], state["run_id"], session, state.get("plan")
 
@@ -220,7 +206,7 @@ def _commit(repo, run_id, programme_run, worker_session, inputs, *, caller, spac
         block = worker_contract.contract_of(rec)
         if block is None:
             raise GoalError("the worker's run record has no contract", "no_contract")
-        if (rec.get("loop") or {}).get(phase_grammar.LOOP_PHASE_KEY) == "done":
+        if worker_contract.run_is_done(rec):
             raise GoalError(f"run {run_id} is done; start a follow-up run from a copy of its contract", "run_done")
         path = goal_path(repo, run_id)
         if os.path.exists(path) != existed:
@@ -267,7 +253,7 @@ def write_goal(programme_run, item_key, opts, *, caller=None, space_of=None, han
             raise GoalError(f"goal_amend is never for item {item_key!r} ({verdict['reason']}); the goal doc "
                             "stays as it is", "authority_never")
         if verdict["mode"] == "propose" and not _approved(item, opts.get("approved"), token):
-            if item.get("state") == "handed" and not programme_decisions.handed(item).get("answered"):
+            if programme_decisions.waits_on_shawn(item):
                 raise GoalError(f"item {item_key!r} already waits on Shawn's answer; the goal doc stays as it is",
                                 "item_handed")
             question = (f"Amend the goal doc of {item_key} to goal version "
