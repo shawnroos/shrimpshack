@@ -156,7 +156,7 @@ def _summarize(name, got):
     summary["checked"] = got.get("checked") if type(got.get("checked")) is int else None
     summary["failed"] = [{"plugin": f["plugin"], "reason": f.get("reason") if f.get("reason") in programme_ritual_checks.REASONS else "internal"}
                          for f in (got.get("failed") or [])[:10]
-                         if isinstance(f, dict) and isinstance(f.get("plugin"), str) and _PLUGIN_NAME.match(f["plugin"])]
+                         if isinstance(f, dict) and isinstance(f.get("plugin"), str) and _PLUGIN_NAME.fullmatch(f["plugin"])]
     if type(got.get("ref_age_seconds")) is int:
         summary["ref_age_seconds"] = got["ref_age_seconds"]
     return summary

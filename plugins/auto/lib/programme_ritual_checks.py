@@ -26,7 +26,7 @@ NAMES = ("versions-bumped",)
 RESULTS = ("pass", "fail", "error")
 REASONS = ("ok", "shipped_changed", "marketplace_mismatch", "not_a_repo", "ref_missing", "no_plugins",
            "marketplace_unreadable", "bad_plugin_name", "history_window", "git_missing", "git_failed",
-           "timeout", "unknown_check", "repo_not_in_remit", "internal")
+           "timeout", "unknown_check", "repo_not_in_remit", "shallow_clone", "manifest_unreadable", "internal")
 DEFAULT_BASE = "origin/main"
 BUDGET_SECONDS = 30.0
 CALL_SECONDS = 10.0
@@ -91,7 +91,8 @@ def _version(repo, commit, rel):
 
 def _bump_commit(repo, sha, rel):
     """The newest commit that changed the plugin's version, or the one that added it; None when the window ends first."""
-    commits = repo.text(["log", f"-n{BUMP_WINDOW}", "--format=%H", sha, "--", rel]).split()
+    # rev-list, not log: log would run a repo-configured gpg.program to show a signature.
+    commits = repo.text(["rev-list", f"-n{BUMP_WINDOW}", sha, "--", rel]).split()
     versions = {commit: _version(repo, commit, rel) for commit in commits}
     for index, commit in enumerate(commits):
         older = commits[index + 1] if index + 1 < len(commits) else None
@@ -120,7 +121,7 @@ def _plugin_names(repo, sha) -> list:
         if meta.split()[1:2] != ["tree"]:
             continue
         name = path[len("plugins/"):]
-        if not _PLUGIN_RE.match(name):
+        if not _PLUGIN_RE.fullmatch(name):
             raise _Stop("bad_plugin_name")
         names.append(name)
     if not names:
@@ -134,6 +135,9 @@ def _versions_bumped(repo, base) -> dict:
     if os.path.realpath(top) != repo.path:
         raise _Stop("not_a_repo")
     sha = repo.text(["rev-parse", "--verify", "--end-of-options", ref + "^{commit}"], reason="ref_missing")
+    # A shallow clone ends history at its boundary, which would read as "the commit that added the plugin".
+    if repo.text(["rev-parse", "--is-shallow-repository"]) != "false":
+        raise _Stop("shallow_clone")
     age = _fetch_age(repo)
     names = _plugin_names(repo, sha)
     try:
@@ -144,14 +148,17 @@ def _versions_bumped(repo, base) -> dict:
     checked, failed = 0, []
     for name in names:
         rel = f"plugins/{name}/.claude-plugin/plugin.json"
+        if not repo.run(["ls-tree", "-z", sha, "--", rel]):
+            continue
         now = _version(repo, sha, rel)
         if now is None:
-            continue
+            raise _Stop("manifest_unreadable")
         checked += 1
         bump = _bump_commit(repo, sha, rel)
         if bump is None:
             raise _Stop("history_window")
-        moved = repo.run(["diff", "--name-only", "-z", bump, sha, "--", f"plugins/{name}"]).split(b"\0")
+        moved = repo.run(["diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", bump, sha, "--",
+                          f"plugins/{name}"]).split(b"\0")
         shipped = [p for p in moved if p and p.decode("utf-8", "replace") != rel]
         if shipped:
             failed.append({"plugin": name, "reason": "shipped_changed", "files": len(shipped)})

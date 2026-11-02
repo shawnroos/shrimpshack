@@ -7,7 +7,9 @@ store module imports nothing from here.
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import io
 import os
 import sys
 import time
@@ -194,6 +196,13 @@ def _record_check(host, opts, entry, row, result) -> bool:
     rid = entry["id"]
 
     def change(programme, _prompt, rec):
+        if not opts.get("ritual"):
+            # Two sweeps can run the same check at once; the second to write finds the slot already recorded.
+            for old in programme_journal.read(rec["run_id"]):
+                body = old.get("payload") or {}
+                if old.get("kind") == programme_rituals.CHECKED and body.get("ritual") == rid \
+                        and body.get("pending_at") == row["pending_at"]:
+                    raise _NoLongerDue(f"ritual {rid!r} was already checked for this slot")
         # The check ran outside the lock; decide again here that this slot is still waiting.
         again = {r["ritual"]: r for state in ("due", "missed") for r in _due(host, programme, rec)[state]}
         if rid not in again or again[rid]["pending_at"] != row["pending_at"]:
@@ -214,9 +223,18 @@ def _h_checks(host, argv):
     positional, opts = host._parse(argv, values=("run", "ritual"))
     if positional:
         raise ValueError("usage: run-ritual-checks [--ritual <id>] [--run <id>]")
-    run_id, _home, record = host._locate(opts)
+    run_id, home, record = host._locate(opts)
     targets = _check_targets(host, record, run_id, opts.get("ritual"))
     programme = programme_home.normalize_programme(record.get("programme") or {})
+    # Refuse before any git read: a session that cannot write would run every check for nothing, and the
+    # guard's own output (the compaction rules) must not be repeated once per ritual.
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            host._guard(home, dict(record, run_id=run_id))
+    except host.ProgrammeError:
+        host._emit({"ok": True, "kind": "ritual_checks", "run": run_id, "ran": 0, "passed": 0, "failed": 0,
+                    "errors": 0, "not_recorded": [entry["id"] for entry, _ in targets], "left_over": []})
+        return 0
     deadline = time.monotonic() + SWEEP_BUDGET_SECONDS
     counts = {"pass": 0, "fail": 0, "error": 0}
     not_recorded, left_over = [], []
