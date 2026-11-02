@@ -795,6 +795,49 @@ print(pr.describe_clock())
 EOF
 )"
 
+it "review: --ran-now before today's slot skips that slot, and after it does not skip tomorrow's"
+check "2026-11-03T09:00:00Z 2026-11-03T09:00:00Z" "$(run_py <<'EOF'
+daily = ritual("rd", when={"text": "daily", "trigger": "calendar", "schedule": {"every": "day", "at": "09:00"}})
+def first(now_text):
+    programme = {}
+    pr.advance_clock(programme, daily, now=at(now_text), first_slot_done=True)
+    return programme["ritual_clock"]["rd"]["next_due_at"]
+print(first("2026-11-02T08:00:00Z"), first("2026-11-02T09:30:00Z"))
+EOF
+)"
+
+it "review: the zone label belongs to the due time, not to today"
+has "09:00 EDT" "$(run_py <<'EOF'
+import time
+os.environ["TZ"] = "America/New_York"; time.tzset()
+print(pr.local_text(at("2026-07-01T13:00:00Z")))
+EOF
+)"
+
+it "review: --outcome without --ran-now is refused instead of dropped"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --outcome "all bumped"
+check 2 "$CODE"
+has "--outcome" "$OUT"
+
+it "review: --from-proposal accepts --ran-now, as the skill tells the PM"
+prog propose-ritual --run "$RUN_I" --when "daily check" --schedule "daily 09:00" --step "check versions" --offer "ask whether to publish"
+check 0 "$CODE"
+has "ask whether to publish" "$OUT"
+PROP_I="$(jfield "$OUT" 'd["ritual"]')"
+PI2="$(tprompt "$RUN_I" "record ${PROP_I}")"
+prog record-ritual --run "$RUN_I" --from-proposal "$PROP_I" --prompt "$PI2" --ran-now --outcome "all bumped"
+check 0 "$CODE"
+check "True" "$(jfield "$OUT" 'd["ran_now"]')"
+
+it "review: start-ritual and a due row carry offers with the rule that they are questions"
+has "never actions" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-02T09:00:00Z"}})
+got = due.due(record(run), run, now=at("2026-11-02T09:30:00Z"), store={"personal": [], "repos": {}, "rejected": [], "notices": []}, rows=[])
+print(got["due"][0]["offers_rule"])
+EOF
+)"
+
 echo
 echo "${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

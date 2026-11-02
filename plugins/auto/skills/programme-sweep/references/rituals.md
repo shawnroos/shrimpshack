@@ -9,7 +9,7 @@ A ritual is a named workflow you run when a calendar rule or a programme moment 
 A `due` row means the trigger passed within the last two cadence periods and nothing has answered it.
 
 1. `P start-ritual <id>`. It prints the steps and records that the ritual is in flight.
-2. Do the steps, in order. A step is Shawn's plain words: a PM action, a message to a worker, or a report to Shawn. Do not do more than the steps say.
+2. Do the steps, in order. A step is Shawn's plain words: a PM action, a message to a worker, or a report to Shawn. Do not do more than the steps say. If the ritual has `offers`, they are questions for Shawn, never steps: ask him (picker or typed words), and act on one only on his typed pick.
 3. `P run-ritual <id> --outcome "<one line>"`. If you cannot finish, `P fail-ritual <id> --why "<one line>"`, and tell Shawn in the next report.
 
 ## Offer a missed ritual

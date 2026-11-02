@@ -558,7 +558,8 @@ def rituals_view(record, journal_entries) -> list:
     parked = [e for e in _dict(record.get("programme")).get("rituals") or []
               if isinstance(e, dict) and e.get("id") not in live and e.get("state") in ("proposed", "retired")]
     rows = [{"id": e["id"], "layer": e.get("layer"), "trigger": _dict(e.get("when")).get("trigger"),
-             "when": _dict(e.get("when")).get("text"), "steps": list(e.get("steps") or []), "state": e["state"]}
+             "when": _dict(e.get("when")).get("text"), "steps": list(e.get("steps") or []), "state": e["state"],
+             "offers": list(e.get("offers") or [])}
             for e in parked]
     rows += [{"id": r.get("id"), "layer": r.get("layer"), "state": "rejected", "when": r.get("reason")}
              for r in programme_rituals.resolve(record, store=loaded)["rejected"]]

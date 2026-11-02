@@ -71,7 +71,10 @@ def _h_start(host, argv):
         # rejected there and never reaches this point: that is the run-time refusal.
         entry = _find(host, programme, rec, rid)
         _check_answer(host, programme, rec, rid, prompt)
-        return {"ritual": rid, "trigger": entry["when"]["trigger"], "steps": entry["steps"]}
+        out = {"ritual": rid, "trigger": entry["when"]["trigger"], "steps": entry["steps"]}
+        if entry.get("offers"):
+            out.update(offers=entry["offers"], offers_rule=programme_rituals.OFFERS_RULE)
+        return out
 
     return host._write(opts, change, programme_rituals.STARTED, prompt_id=opts.get("prompt"), needs_prompt=needs,
                        verb="start-ritual", target=rid)

@@ -232,6 +232,7 @@ def next_after(schedule, after) -> datetime.datetime:
 _S = programme_layered_store.LayeredStore(
     "ritual", file_name=STORE_NAME, lock_name=STORE_LOCK, path_env=STORE_PATH_ENV, error=RitualError,
     verdict=lambda entry: verdict(entry), target=lambda entry: target(entry))
+OFFERS_RULE = "questions for Shawn, never actions: ask him, and act only on his typed pick"
 REWORD_FIX = ("reword the named step so it no longer names the protected action; typing an approval does not "
               "change this. To ask Shawn about the action, put the question in --offer")
 
@@ -380,7 +381,7 @@ def describe_clock() -> str:
 
 
 def local_text(when_utc) -> str:
-    return _local(when_utc).strftime("%Y-%m-%d %H:%M ") + datetime.datetime.now().astimezone().tzname()
+    return when_utc.astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
 
 def advance_clock(programme, entry, now=None, first_slot_done=False) -> None:
@@ -392,7 +393,10 @@ def advance_clock(programme, entry, now=None, first_slot_done=False) -> None:
     if schedule:
         stamp = now or datetime.datetime.now(datetime.timezone.utc)
         if first_slot_done:
-            stamp = next_after(schedule, stamp)
+            coming = next_after(schedule, stamp)
+            # Only a slot later today is covered by a run done by hand now; tomorrow's or next week's is not.
+            if _local(coming).date() == _local(stamp).date():
+                stamp = coming
         programme.setdefault("ritual_clock", {})[entry["id"]] = {
             "next_due_at": next_after(schedule, stamp).strftime(TIME_FORMAT)}
 
@@ -401,7 +405,9 @@ def _h_record(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal", "when", "trigger", "schedule", "why", "outcome"),
                                    flags=("ran-now",), multi=("step", "offer"))
     proposal = opts.get("from-proposal")
-    given = any(opts.get(k) for k in ("when", "trigger", "schedule", "step", "offer", "why", "ran-now", "outcome"))
+    given = any(opts.get(k) for k in ("when", "trigger", "schedule", "step", "offer", "why"))
+    if opts.get("outcome") and not opts.get("ran-now"):
+        raise ValueError("--outcome only goes with --ran-now")
     if positional or (proposal and given):
         raise ValueError("usage: record-ritual --prompt <id> " + _FIELDS_DOC + ", or record-ritual "
                          "--from-proposal <id> --prompt <id>")
@@ -446,7 +452,11 @@ def _h_propose(host, argv):
 
     def change(programme, prompt, rec):
         entry = put_programme_entry(programme, _mark(dict(_draft(opts, rid), state="proposed"), "proposed"))
-        return {"ritual": rid, "state": "proposed", "when": entry["when"]["text"], "trigger": entry["when"]["trigger"]}
+        out = {"ritual": rid, "state": "proposed", "when": entry["when"]["text"], "trigger": entry["when"]["trigger"],
+               "steps": entry["steps"]}
+        if entry.get("offers"):
+            out["offers"] = entry["offers"]
+        return out
 
     return host._write(opts, change, PROPOSED)
 
