@@ -164,6 +164,16 @@ stay separate; this skill orchestrates them). R3.
 Report the two artifacts written and how to run them: `/auto <plan> --workflow
 <name>` for the workflow, `/goal <doc-path.md>` to bind the goal.
 
+## When the PM designs a worker's workflow
+
+A programme PM uses this skill for a contracted worker's workflow (R17). Compile the workflow with
+`auto-author-workflow` into the worker's repo tier, so other items in that repo can name it. Write the
+matching goal doc with `programme.py write-goal` (via `auto-author-goal` for the wording); there is no second
+goal-doc writer. Then name the workflow in the contract with `programme.py set-contract --item <id> --workflow
+<name>`. The contract refuses a name that does not resolve, fails the validator, or carries authority keys, and
+a change reads the programme's workflow_change authority (propose waits on Shawn). Never put authority in the
+workflow; change it with `set-contract --authority`.
+
 ## What this skill does NOT do
 
 - It does not build a new spec format — no `loop.yaml` / `loop.resolved.json`.

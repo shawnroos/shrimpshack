@@ -31,6 +31,7 @@ worker_contract = load_lib_module("worker_contract")
 worker_question = load_lib_module("worker_question")
 worker_register = load_lib_module("worker_register")
 worker_rebake = load_lib_module("worker_rebake")
+workflow_design = load_lib_module("workflow_design")
 driver_session = load_lib_module("driver_session")
 
 SET_KIND = "contract_set"
@@ -173,7 +174,7 @@ def _edit_run(run_id, key, state, worker, change, bite, sid, space_of, now) -> d
     return landed
 
 
-def set_contract(run_id, item_id, change, *, bite=None, caller=None, space_of=None, now=None) -> dict:
+def set_contract(run_id, item_id, change, *, bite=None, caller=None, space_of=None, now=None, approved=None) -> dict:
     sid = caller or driver_session.driving_session_id()
     home = programme_home.home_path(run_id)
     key, state, worker = _locate_target(run_record_core.read_run_record(home, run_id), item_id)
@@ -185,9 +186,15 @@ def set_contract(run_id, item_id, change, *, bite=None, caller=None, space_of=No
         raise worker_contract.ContractError(
             "context was compacted or handed over: read the rules in force, then run `programme.py rules --ack`",
             "compacted")
+    waiting, tell = workflow_design.gate(record, run_id, key, state, change["workflow"], approved=approved,
+                                         now=now) if "workflow" in change else (None, None)
+    if waiting:
+        return waiting
     if state.get("state") == worker_register.LAUNCHED:
-        return _edit_seed(run_id, key, worker, change, bite, sid, space_of, now)
-    return _edit_run(run_id, key, state, worker, change, bite, sid, space_of, now)
+        out = _edit_seed(run_id, key, worker, change, bite, sid, space_of, now)
+    else:
+        out = _edit_run(run_id, key, state, worker, change, bite, sid, space_of, now)
+    return dict(out, tell=tell) if tell else out
 
 
 def _split(text) -> list:
@@ -241,15 +248,15 @@ def _refusals(host, run_id, item_id):
 
 def _h_set_contract(host, argv):
     positional, opts = host._parse(argv, values=("run", "item", "bite", "workflow", "fan-out-cap", "done-internal",
-                                                 "done-external"), multi=("authority", "drop-authority"))
+                                                 "done-external", "approved"), multi=("authority", "drop-authority"))
     if positional or not opts.get("item"):
         raise ValueError("usage: set-contract --item <id> [--run <programme run>] [--authority <kind>=<mode>[:<asks>]]... "
                          "[--drop-authority <kind>]... [--done-internal <a,b>] [--done-external <a,b|none>] "
-                         "[--workflow <name>] [--fan-out-cap <n>] [--bite pulse|step]")
+                         "[--workflow <name>] [--fan-out-cap <n>] [--bite pulse|step] [--approved <ask id>]")
     change = parse_change(opts)
     run_id, home, _record = host._locate(opts)
     with _refusals(host, run_id, opts["item"]):
-        out = set_contract(run_id, opts["item"], change, bite=opts.get("bite"))
+        out = set_contract(run_id, opts["item"], change, bite=opts.get("bite"), approved=opts.get("approved"))
     host.refresh_view(run_id, home)
     host._emit(dict(out, ok=True, run=run_id, kind=SET_KIND))
     return 0
@@ -259,11 +266,13 @@ _SPECS = (
     ("set-contract", _h_set_contract,
      "--item <id> [--run <programme run>] [--authority <kind>=<mode>[:<asks>]]... [--drop-authority <kind>]... "
      "[--done-internal <a,b>] [--done-external <a,b|none>] [--workflow <name>] [--fan-out-cap <n>] "
-     "[--bite pulse|step]",
+     "[--bite pulse|step] [--approved <ask id>]",
      "any caller but the programme's driving session that holds its lease, checked again inside the run-record "
      "lock; a worker outside the remit; an item with no contracted run or a launch-blocked one; a done run; a "
      "run that predates contracts; an authority change that widens a kind past the Authority table and active "
-     "Rulings; an unknown decision kind, mode, done-bar name, workflow name or bite. With no --bite, a change "
+     "Rulings; an unknown decision kind, mode, done-bar name, workflow name or bite; a workflow whose file carries an authority key; "
+     "a workflow change when workflow_change reads never, or propose, which hands a Shawn ask and changes "
+     "nothing until it returns with --approved <ask id>; act_and_tell adds a tell. With no --bite, a change "
      "that narrows any authority binds at the next pulse and every other change at the next step boundary. "
      "While the item is launched it edits the item's seed contract and bumps its version; once bound it bumps "
      "the run record's contract version and queues one pending entry. Journals contract_set."),
