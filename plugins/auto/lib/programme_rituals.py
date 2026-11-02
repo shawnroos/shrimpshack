@@ -32,6 +32,7 @@ programme_naming = load_lib_module("programme_naming")
 programme_carryover = load_lib_module("programme_carryover")
 programme_behaviours = load_lib_module("programme_behaviours")
 programme_layered_store = load_lib_module("programme_layered_store")
+programme_ritual_checks = load_lib_module("programme_ritual_checks")
 
 STORE_PATH_ENV = "CLAUDE_AUTO_RITUALS_STORE"
 STORE_NAME = "rituals.json"
@@ -52,9 +53,10 @@ EVERY = ("day", "week", "month")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 REQUIRED = ("id", "layer", "when", "steps")
-OPTIONAL = ("why", "offers", "source", "state", "repo_key", "moved_to", "moved_repo_key", "history", "at")
+OPTIONAL = ("why", "offers", "check", "source", "state", "repo_key", "moved_to", "moved_repo_key", "history", "at")
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+_BASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/_.-]{0,99}$")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _Reject = programme_protocol._Reject
 
@@ -85,6 +87,28 @@ def _check_when(when) -> None:
         raise _Reject("bad_value", "when.schedule")
     if "schedule" in when:
         _check_schedule(when["schedule"])
+
+
+def _check_check(entry) -> None:
+    check = entry["check"]
+    if not isinstance(check, dict):
+        raise _Reject("bad_value", "check")
+    programme_protocol._keys(check, ("name",), ("repo_key", "base"))
+    if check["name"] not in programme_ritual_checks.NAMES:
+        raise _Reject("bad_value", "check.name")
+    if entry["layer"] == "personal":
+        raise _Reject("bad_value", "check.layer")
+    if entry["when"]["trigger"] != "calendar":
+        raise _Reject("bad_value", "check.trigger")
+    if entry["layer"] == "repo" and "repo_key" in check:
+        raise _Reject("bad_value", "check.repo_key")
+    if entry["layer"] == "programme":
+        if "repo_key" not in check:
+            raise _Reject("missing_field", "check.repo_key")
+        programme_protocol._text(check["repo_key"], "check.repo_key")
+    base = check.get("base")
+    if "base" in check and (not isinstance(base, str) or not _BASE_RE.match(base) or ".." in base):
+        raise _Reject("bad_value", "check.base")
 
 
 def _check_layer(entry) -> None:
@@ -144,6 +168,8 @@ def _validate(entry, *, allow_adoption=True) -> None:
         raise _Reject("bad_value", "state")
     if "why" in entry:
         programme_protocol._text(entry["why"], "why")
+    if "check" in entry:
+        _check_check(entry)
     if "offers" in entry:
         offers = entry["offers"]
         if not isinstance(offers, list) or not offers or not all(isinstance(o, str) and o.strip() for o in offers):
@@ -333,13 +359,14 @@ OFFERED = "ritual_offered"
 ENDINGS = ("retired", "undone")
 LAYER_WORDS = {"programme": ("programme",), "repo": ("repo",), "personal": ("personal", "global", "all projects")}
 _FIELDS_DOC = ("--when <text> (--trigger start|takeover|handover|end|resume|quiet | --schedule 'daily HH:MM'|"
-               "'weekly mon HH:MM'|'monthly 1-31 HH:MM') --step <line>... [--offer <line>...] [--why <text>]")
+               "'weekly mon HH:MM'|'monthly 1-31 HH:MM') --step <line>... [--offer <line>...] [--check versions-bumped [--check-repo <key>] "
+               "[--check-base <ref>]] [--why <text>]")
 
 
 _clean = programme_behaviours._clean
 
 
-def _draft(opts, rid) -> dict:
+def _draft(opts, rid, programme=None) -> dict:
     if not opts.get("when"):
         raise ValueError("a ritual needs --when <text> describing when it runs")
     steps = [_clean(s, "--step") for s in opts.get("step") or []]
@@ -361,7 +388,24 @@ def _draft(opts, rid) -> dict:
     offers = [_clean(o, "--offer") for o in opts.get("offer") or []]
     if offers:
         entry["offers"] = offers
+    if opts.get("check"):
+        entry["check"] = _draft_check(opts, programme)
+    elif opts.get("check-repo") or opts.get("check-base"):
+        raise ValueError("--check-repo and --check-base only go with --check")
     return entry
+
+
+def _draft_check(opts, programme) -> dict:
+    check = {"name": opts["check"]}
+    if opts.get("check-base"):
+        check["base"] = _clean(opts["check-base"], "--check-base")
+    if programme is None:
+        return check
+    try:
+        check["repo_key"] = _repo_key(programme, opts.get("check-repo"))
+    except RitualError as exc:
+        raise RitualError(str(exc).replace("--repo", "--check-repo")) from None
+    return check
 
 
 _mark = programme_behaviours._mark
@@ -402,10 +446,12 @@ def advance_clock(programme, entry, now=None, first_slot_done=False) -> None:
 
 
 def _h_record(host, argv):
-    positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal", "when", "trigger", "schedule", "why", "outcome"),
+    positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal", "when", "trigger", "schedule", "why", "outcome",
+                                           "check", "check-repo", "check-base"),
                                    flags=("ran-now",), multi=("step", "offer"))
     proposal = opts.get("from-proposal")
-    given = any(opts.get(k) for k in ("when", "trigger", "schedule", "step", "offer", "why"))
+    given = any(opts.get(k) for k in ("when", "trigger", "schedule", "step", "offer", "why", "check", "check-repo",
+                                      "check-base"))
     if opts.get("outcome") and not opts.get("ran-now"):
         raise ValueError("--outcome only goes with --ran-now")
     if positional or (proposal and given):
@@ -423,7 +469,9 @@ def _h_record(host, argv):
             host.require_named(prompt, proposal)
             entry = dict(entry, state=ACTIVE)
         else:
-            entry = _draft(opts, rid)
+            entry = _draft(opts, rid, programme)
+        if entry.get("check"):
+            host.require_named(prompt, entry["check"]["name"].replace("-", " "))
         entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
         schedule = entry["when"].get("schedule")
         if opts.get("ran-now") and not schedule:
@@ -445,13 +493,14 @@ def _h_record(host, argv):
 
 
 def _h_propose(host, argv):
-    positional, opts = host._parse(argv, values=("run", "when", "trigger", "schedule", "why"), multi=("step", "offer"))
+    positional, opts = host._parse(argv, values=("run", "when", "trigger", "schedule", "why", "check", "check-repo", "check-base"),
+                                   multi=("step", "offer"))
     if positional:
         raise ValueError("usage: propose-ritual " + _FIELDS_DOC)
     rid = "r" + secrets.token_hex(3)
 
     def change(programme, prompt, rec):
-        entry = put_programme_entry(programme, _mark(dict(_draft(opts, rid), state="proposed"), "proposed"))
+        entry = put_programme_entry(programme, _mark(dict(_draft(opts, rid, programme), state="proposed"), "proposed"))
         out = {"ritual": rid, "state": "proposed", "when": entry["when"]["text"], "trigger": entry["when"]["trigger"],
                "steps": entry["steps"]}
         if entry.get("offers"):
@@ -483,6 +532,9 @@ def _repo_key(programme, wanted) -> str:
 
 
 def _placed(entry, to, key) -> dict:
+    if entry.get("check"):
+        raise RitualError(f"ritual {entry['id']!r} carries a check and cannot be moved; retire it and record it "
+                          "again at the layer you want, with a prompt that names the check")
     out = {k: v for k, v in entry.items() if k not in ("adoption", "moved_to", "moved_repo_key", "repo_key")}
     out["layer"] = to
     if to == "repo":

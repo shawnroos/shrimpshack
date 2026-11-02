@@ -841,7 +841,8 @@ EOF
 # ---- ritual checks: C1 the check field ----
 def_check='{"name": "versions-bumped", "repo_key": "acme/alpha"}'
 run_chk() {
-  run_py "$1" "${2:-\{\}}" <<'EOF'
+  local extra="${2-}"; [ -n "$extra" ] || extra='{}'
+  run_py "$1" "$extra" <<'EOF'
 import json
 c = json.loads(args[0]); extra = json.loads(args[1])
 e = ritual("rc", **extra); e["check"] = c
@@ -869,7 +870,7 @@ check "bad_value check.repo_key" "$(run_chk "$def_check" '{"layer": "repo"}')"
 check "None None" "$(run_chk '{"name": "versions-bumped"}' '{"layer": "repo"}')"
 
 it "C1: a hand-edited store entry with a bad check is rejected at load"
-check "check.name" "$(run_py <<'EOF'
+check "check.layer" "$(run_py <<'EOF'
 store = os.environ["CLAUDE_AUTO_RITUALS_STORE"]
 os.makedirs(os.path.dirname(store), exist_ok=True)
 e = ritual("rbad", layer="personal"); e["check"] = {"name": "versions-bumped"}

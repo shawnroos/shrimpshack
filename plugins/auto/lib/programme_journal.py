@@ -83,6 +83,7 @@ KINDS = (
     "ritual_failed",
     "ritual_skipped",
     "ritual_offered",
+    "ritual_checked",
     "ritual_event",
     "rule_proposed",
     "rule_adopted",
