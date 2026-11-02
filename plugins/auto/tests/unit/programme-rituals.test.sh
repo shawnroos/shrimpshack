@@ -918,6 +918,100 @@ prog move-ritual "$CK" --to personal --prompt "$PM1" --run "$RUN_C"
 check 1 "$CODE"
 has "check" "$OUT"
 
+# ---- ritual checks: C3 the run-ritual-checks verb ----
+mkrepo() {
+  local d="${WORK}/$1"
+  mkdir -p "$d/plugins/foo/.claude-plugin" "$d/plugins/foo/lib" "$d/.claude-plugin"
+  git -C "$d" init -q -b main
+  printf '{"name": "foo", "version": "1.0.0"}' > "$d/plugins/foo/.claude-plugin/plugin.json"
+  printf '{"plugins": [{"name": "foo", "version": "1.0.0", "source": "./plugins/foo"}]}' > "$d/.claude-plugin/marketplace.json"
+  printf 'x = 1\n' > "$d/plugins/foo/lib/code.py"
+  git -C "$d" add -A
+  git -C "$d" -c user.name=t -c user.email=t@t commit -q -m initial
+  if [ "${2:-ok}" = "unbumped" ]; then
+    printf 'x = 2\n' > "$d/plugins/foo/lib/code.py"
+    git -C "$d" -c user.name=t -c user.email=t@t commit -q -am "change code, no bump"
+  fi
+}
+check_run() {
+  run_py "$1" "$2" "$3" "$4" <<'EOF'
+run_name, repo_dir, minutes_ago, key = args[0], args[1], int(args[2]), args[3]
+entry = ritual("rchk", check={"name": "versions-bumped", "repo_key": key, "base": "main"})
+due_at = datetime.datetime.now(UTC) - datetime.timedelta(minutes=minutes_ago)
+run = setup([entry], clock={"rchk": {"next_due_at": iso(due_at)}})
+def mutate(rec):
+    rec["programme"]["remit"]["repos"] = [{"path": repo_dir, "github": "acme/gamma"}]
+core._with_locked_run_record(ph.home_path(run), run, mutate)
+print(run)
+EOF
+}
+
+mkrepo good ok
+mkrepo bad unbumped
+
+it "C3: a due ritual whose check passes is answered without the PM: clock moves, one row, counts recorded"
+RUNP="$(check_run x "${WORK}/good" 5 acme/gamma)"
+prog run-ritual-checks --run "$RUNP"
+check 0 "$CODE"
+check "1 pass 1" "$(q "$RUNP" "' '.join([str(count('ritual_checked')), [r for r in pj.read(run) if r['kind']=='ritual_checked'][0]['payload']['result'], str([r for r in pj.read(run) if r['kind']=='ritual_checked'][0]['payload']['checked'])])")"
+check "[]" "$(run_py "$RUNP" <<'EOF'
+rec = record(args[0])
+print([r["ritual"] for r in due.due(rec, args[0])["due"]])
+EOF
+)"
+
+it "C3: a failing check leaves the ritual due with the result in its row, and does not run again for the same slot"
+RUNF="$(check_run x "${WORK}/bad" 5 acme/gamma)"
+prog run-ritual-checks --run "$RUNF"
+check 0 "$CODE"
+prog run-ritual-checks --run "$RUNF"
+check "1" "$(q "$RUNF" "count('ritual_checked')")"
+check "rchk fail foo" "$(run_py "$RUNF" <<'EOF'
+rec = record(args[0])
+row = due.due(rec, args[0])["due"][0]
+print(row["ritual"], row["check"]["result"], row["check"]["failed"][0]["plugin"])
+EOF
+)"
+
+it "C3: --ritual re-runs a check that already ran for the slot"
+prog run-ritual-checks --run "$RUNF" --ritual rchk
+check "2" "$(q "$RUNF" "count('ritual_checked')")"
+
+it "C3: a check whose repo is not in the remit is an error row and the ritual stays due"
+RUNE="$(check_run x "${WORK}/good" 5 acme/elsewhere)"
+prog run-ritual-checks --run "$RUNE"
+check "error repo_not_in_remit" "$(q "$RUNE" "' '.join([[r for r in pj.read(run) if r['kind']=='ritual_checked'][0]['payload'][k] for k in ('result','reason')])")"
+
+it "C3: a missed slot is checked too, and a pass moves the clock and marks it late"
+RUNM="$(check_run x "${WORK}/good" 300 acme/gamma)"
+prog run-ritual-checks --run "$RUNM"
+check "pass True" "$(q "$RUNM" "' '.join([[r for r in pj.read(run) if r['kind']=='ritual_checked'][0]['payload']['result'], str([r for r in pj.read(run) if r['kind']=='ritual_checked'][0]['payload']['late'])])")"
+
+it "C3: a session that is not the driver writes nothing and the ritual stays due"
+RUNN="$(check_run x "${WORK}/good" 5 acme/gamma)"
+CLAUDE_CODE_SESSION_ID=sess-other prog run-ritual-checks --run "$RUNN"
+check 0 "$CODE"
+has '"not_recorded": ["rchk"]' "$OUT"
+check "0" "$(q "$RUNN" "count('ritual_checked')")"
+
+it "C3: a pass row is quiet bookkeeping for the sweep and a fail row is not"
+check "True False" "$(run_py <<'EOF'
+psi = load_lib_module("programme_sweep_inputs")
+print(psi._quiet_row({"kind": "ritual_checked", "payload": {"result": "pass"}}),
+      psi._quiet_row({"kind": "ritual_checked", "payload": {"result": "fail"}}))
+EOF
+)"
+
+it "C3: a ritual with no check is never run by the verb"
+RUNQ="$(run_py <<'EOF'
+print(setup([ritual("rplain")], clock={"rplain": {"next_due_at": iso(datetime.datetime.now(UTC) - datetime.timedelta(minutes=5))}}))
+EOF
+)"
+prog run-ritual-checks --run "$RUNQ"
+check 0 "$CODE"
+has '"ran": 0' "$OUT"
+check "0" "$(q "$RUNQ" "count('ritual_checked')")"
+
 echo
 echo "${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
