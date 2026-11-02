@@ -108,7 +108,7 @@ Authority lists every decision kind. The plugin layer sets:
 | Level | Decision kinds |
 | --- | --- |
 | `act` | `merge_at_gate`, `prod_off_flag`, `file_issue`, `product_call`, `technical_approach`, `work_sequencing`, `worker_coordination`, `tool_choice`, `optimisation_depth`, `product_scope`, `acceptance` |
-| `act_and_tell` | `eval_backed_prerelease`, `worker_session_approval` |
+| `act_and_tell` | `eval_backed_prerelease`, `worker_session_approval`, `goal_amend`, `workflow_change` |
 | `propose` | `eval_waiver` |
 | `never` | `fix_other_team_code` |
 

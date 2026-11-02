@@ -62,8 +62,8 @@ from this session's lease.
   On `hand-item`, `log-decision` and `record-ruling` it is a decision kind:
   one of the protocol's Authority kinds (`product_call`, `merge_at_gate`, ...) or
   `technical_approach`, `work_sequencing`, `worker_coordination`,
-  `tool_choice`, `optimisation_depth`, `product_scope`, `acceptance` or
-  `denied_operation`. An unknown kind refuses and lists them all.
+  `tool_choice`, `optimisation_depth`, `product_scope`, `acceptance`,
+  `denied_operation`, `goal_amend` or `workflow_change`. An unknown kind refuses and lists them all.
 
 ## When to speak
 

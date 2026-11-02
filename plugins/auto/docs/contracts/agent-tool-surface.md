@@ -462,8 +462,8 @@ session.
   silent when nothing covered it), and why. It journals `pm_decided`. The
   decision kinds are a closed list in `lib/programme_decisions.py`: the plugin
   Authority kinds plus technical_approach, work_sequencing, worker_coordination,
-  tool_choice, optimisation_depth, product_scope, acceptance and
-  denied_operation. Any other kind is refused. Before it writes, `log-decision`
+  tool_choice, optimisation_depth, product_scope, acceptance,
+  denied_operation, goal_amend and workflow_change. Any other kind is refused. Before it writes, `log-decision`
   asks one gate (`who_decides`) whether the PM may decide the kind for that
   item, in this order: a protected kind (prod_deploy, full_release,
   spend_over_cap, merge_around_gate, denied_operation) stays with Shawn;

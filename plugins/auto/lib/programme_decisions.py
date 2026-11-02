@@ -39,6 +39,7 @@ AUTONOMY_ACTIONS = (
 DECISION_KINDS = AUTONOMY_ACTIONS + (
     "technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
     "optimisation_depth", "product_scope", "acceptance", "denied_operation",
+    "goal_amend", "workflow_change",
 )
 PROTECTED_KINDS = ("prod_deploy", "full_release", "spend_over_cap", "merge_around_gate", DENIED_KIND)
 LEVEL_ORDER = ("never", "propose", "act_and_tell", "act")
