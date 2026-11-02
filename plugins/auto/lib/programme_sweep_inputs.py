@@ -26,6 +26,7 @@ programme_resume = load_lib_module("programme_resume")
 programme_readiness = load_lib_module("programme_readiness")
 programme_sources = load_lib_module("programme_sources")
 programme_predicate = load_lib_module("programme_predicate")
+worker_contract_status = load_lib_module("worker_contract_status")
 run_record_core = load_lib_module("run_record_core")
 
 INPUTS_NAME = "sweep-inputs.json"
@@ -168,6 +169,7 @@ def _facts(host, run_id, home, record):
         "rules": host.rules_in_force(record).get("rules") or [],
         "due": due, "domain_due": _domain_due(host, record),
         "recommendations": programme_domain_state.recommendations(programme),
+        "contracts": worker_contract_status.sweep_facts(run_id, home, programme),
     }
 
 
@@ -192,6 +194,9 @@ def _verdict(f):
         ("behaviours_store_unreadable", bool(f["due"]["error"] or f["domain_due"]["error"])),
         ("domain_behaviours_due", bool(f["domain_due"]["total"])),
         ("recommendations_not_shown", bool(f["recommendations"]["set"]) and not f["recommendations"]["shown_current"]),
+        ("contract_changed", bool(f.get("contracts", {}).get("changed"))),
+        ("worker_question_due", bool(f.get("contracts", {}).get("due"))),
+        ("contract_status_unreadable", bool(f.get("contracts", {}).get("error"))),
     )
     return [code for code, hit in checks if hit] + ["watcher_missing:" + name for name, ok in f["armed"].items() if not ok]
 
@@ -217,6 +222,7 @@ def build(host, run_id, home, record):
         "prs": f["prs"], "prs_unchecked": [ref for _, _, ref in f["refs"][PR_CAP:]],
         "watchers_armed": f["armed"], "behaviours_due": f["due"],
         "domain_behaviours_due": f["domain_due"], "recommendations": f["recommendations"],
+        "contracts": {k: f["contracts"][k] for k in ("changed", "due", "items", "fingerprints", "error")},
         "rules": {"count": len(f["rules"]), "ids": [r.get("id") for r in f["rules"] if isinstance(r, dict)],
                   "reread_requested": f["reread_requested"]},
         "journal_since": [{"line": n, "kind": row.get("kind"), "at": row.get("at"), "quiet": _quiet_row(row)}
@@ -254,6 +260,8 @@ def verb(host, argv) -> int:
         return 0
     if opts.get("save"):
         path = _save(home, inputs)
+        if not inputs["contracts"]["error"]:
+            worker_contract_status.commit_seen(home, inputs["contracts"]["fingerprints"])
         host._emit({"ok": True, "run": run_id, "home": home, "verdict": inputs["verdict"], "why": inputs["why"],
                     "generated": inputs["generated"], "inputs": path, "unread_claims": inputs["claims"]["unread"],
                     "next_offset": inputs["claims"]["next_offset"]})

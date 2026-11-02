@@ -385,7 +385,9 @@ def _pulse_body_inner(
     changed. Locals each branch needs (now_iso, pred, phase, …) are passed
     explicitly — no state smuggled via mutation.
     """
-    led = worker_contract_apply.apply_at_pulse(repo_root, run_id, run_record.read_run_record(repo_root, run_id))
+    before = run_record.read_run_record(repo_root, run_id)
+    extras = _guidance_extras(repo_root, run_id, before)
+    led = worker_contract_apply.apply_at_pulse(repo_root, run_id, before)
     phase = phase_grammar.current_phase(led)
 
     intent, led = _try_iteration_check(
@@ -424,8 +426,15 @@ def _pulse_body_inner(
 
     return _build_rearm_intent(
         repo_root, run_id, advance_result, halted_ids, newly_stalled,
-        phase=phase, delay=delay, rearm_prompt=rearm_prompt,
+        phase=phase, delay=delay, rearm_prompt=rearm_prompt, extras=extras,
     )
+
+
+def _guidance_extras(repo_root, run_id, record):
+    # The answers must be read before apply_at_pulse removes the entries that carry them.
+    if not isinstance(record.get("contract"), dict):
+        return {}
+    return load_lib_module("worker_contract_status").guidance_extras(repo_root, run_id, record)
 
 
 def _wedge_done_stop(repo_root, run_id, exc, *, exit_reason, reason_value,
@@ -746,7 +755,7 @@ def _try_post_advance_predicate_met(repo_root, run_id, advance_result, *, phase)
 
 def _build_rearm_intent(
     repo_root, run_id, advance_result, halted_ids, newly_stalled,
-    *, phase, delay, rearm_prompt,
+    *, phase, delay, rearm_prompt, extras=None,
 ):
     """Step 5 — re-arm the successor. The driver issues ScheduleWakeup(delay, prompt).
 
@@ -767,7 +776,8 @@ def _build_rearm_intent(
         stalled=newly_stalled,
         halted=halted_ids,
         operator_guidance=worker_contract_apply.append_guidance(
-            pulse_guidance._operator_guidance_for(phase, advance_result, led_now), led_now
+            pulse_guidance._operator_guidance_for(phase, advance_result, led_now), led_now,
+            (extras or {}).get("effective"), (extras or {}).get("answers"),
         ),
     )
     gap_guard = pulse_guidance._gaps_open_guard(phase, led_now)

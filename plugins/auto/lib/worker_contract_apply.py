@@ -75,7 +75,7 @@ def _names(label, names) -> str:
     return f"{label} {', '.join(names) if names else 'none'}"
 
 
-def guidance(block, effective=None) -> str:
+def guidance(block, effective=None, answers=None) -> str:
     """The contract text the worker reads; ``effective`` (kind -> verdict) replaces the stored modes."""
     done = block.get("done_bar") or {}
     lines = [
@@ -90,14 +90,16 @@ def guidance(block, effective=None) -> str:
                                               for kind, entry in sorted(authority.items())) + ".")
     lines.append("Decision kinds not listed follow the programme's Authority table. "
                  "Work to this contract; ask the named asker for any `propose` or `never` decision.")
+    lines += [f"PM answer to question {a['question_id']}: {a['text']}" for a in answers or []]
     return "\n".join(lines)
 
 
-def append_guidance(text, record, effective=None):
+def append_guidance(text, record, effective=None, answers=None):
     block = _block(record)
     if block is None:
         return text
-    return f"{text}\n\n{guidance(block, effective)}" if text else guidance(block, effective)
+    body = guidance(block, effective, answers)
+    return f"{text}\n\n{body}" if text else body
 
 
 def step_section(repo_root, run_id) -> str:
