@@ -192,19 +192,26 @@ class TerminalHost:
 
 TEST_HOST_ENV = "AUTO_TEST_HOST"
 FALLBACK_HOST = "herdr"
-_FIX_BOTH = "start Claude inside one multiplexer only: unset HERDR_PANE_ID and HERDR_ENV, or unset REX_SESSION"
+_FIX_AMBIGUOUS = ("prefix the command with `env -u REX_SESSION` to use herdr or `env -u HERDR_PANE_ID -u HERDR_ENV` to use Rex, "
+                  "or start Claude inside one multiplexer only")
+_PROOF_ENV = ("HERDR_PANE_ID", "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_WORKSPACE_ID", "REX_SESSION", "REX_BLOCK")
 _FIX_CMUX = "run Claude from a herdr pane, a Rex session or a Ghostty window; cmux is not supported"
 
 _hosts = {}
 _server_probe = []
+# Only a Detection that resolved to a host is kept: a refused one returns RefusedHost, which never reaches a host module.
+_proved = {}
 
 
 class Detection:
-    """What the session environment announces. A name of None means auto must refuse; `why` and `fix` then say how."""
-    __slots__ = ("name", "announced", "why", "fix")
+    """What the session environment announces. A name of None means auto must refuse; `why` and `fix` then say how.
 
-    def __init__(self, name=None, announced=False, why=None, fix=None):
-        self.name, self.announced, self.why, self.fix = name, announced, why, fix
+    `proof` is the own_pane answer that selected the host when two hosts were announced, so a caller does not probe twice.
+    """
+    __slots__ = ("name", "announced", "why", "fix", "proof")
+
+    def __init__(self, name=None, announced=False, why=None, fix=None, proof=None):
+        self.name, self.announced, self.why, self.fix, self.proof = name, announced, why, fix, proof
 
 
 def key_hosts() -> tuple:
@@ -218,16 +225,39 @@ def _herdr_server_up() -> bool:
     return _server_probe[0]
 
 
+def _proves(name, found) -> bool:
+    """herdr answers `resolved: env` when its own lookup failed, and that echo of the environment is not proof."""
+    if not found.ok or not isinstance(found.value, dict):
+        return False
+    return found.value.get("resolved") == "herdr" if name == "herdr" else True
+
+
+def _tell_apart(env) -> Detection:
+    key = tuple(env.get(k) for k in _PROOF_ENV) + (env.get("PATH"),)
+    if key in _proved:
+        return _proved[key]
+    answers = {name: host_named(name).own_pane(env) for name in ("herdr", "rex")}
+    proven = [name for name, found in answers.items() if _proves(name, found)]
+    if len(proven) == 1:
+        _proved[key] = Detection(proven[0], True, proof=answers[proven[0]])
+        return _proved[key]
+    why = ("both herdr and Rex prove this session's pane, so auto cannot tell which one to type into" if proven
+           else "this session announces both herdr and Rex, and neither herdr nor Rex could prove its pane")
+    return Detection(None, True, why, _FIX_AMBIGUOUS)
+
+
 def detect(env=None) -> Detection:
-    """Environment variables only SELECT a host module (KTD3); the host module then proves the pane from its own host."""
+    """Environment variables only SELECT a host module (KTD3); the host module then proves the pane from its own host.
+
+    When the environment announces both herdr and Rex, each host's own proof decides; only one proving selects it.
+    """
     env = os.environ if env is None else env
     if env.get(TEST_HOST_ENV) == "stub":
         return Detection("stub", True)
     announced = [name for name, hit in (("herdr", env.get("HERDR_PANE_ID") or env.get("HERDR_ENV")),
                                         ("rex", env.get("REX_SESSION"))) if hit]
     if len(announced) == 2:
-        return Detection(None, True, "this session announces both herdr and Rex, so auto cannot tell which host to type into",
-                         _FIX_BOTH)
+        return _tell_apart(env)
     if announced:
         return Detection(announced[0], True)
     if env.get("CMUX_WORKSPACE_ID"):
