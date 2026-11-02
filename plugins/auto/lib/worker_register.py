@@ -239,15 +239,14 @@ def _record_refusals(programme, key, repo, auto_run) -> dict:
     if record.get("driving_session_id") != owner:
         raise RegisterError(f"run record session {record.get('driving_session_id')} is not the item's owner "
                             f"session {owner}", "session_mismatch")
-    if (programme["items"][key].get(ITEM_KEY) or {}).get("contract") and not record.get("contract_capable"):
-        raise RegisterError("run predates contracts", "predates_contracts")
+    if (programme["items"][key].get(ITEM_KEY) or {}).get("contract"):
+        worker_contract.require_capable(record, RegisterError)
     return record
 
 
 def _copy_seed(repo, auto_run, seed) -> bool:
     def mutate(rec):
-        if not rec.get("contract_capable"):
-            raise RegisterError("run predates contracts", "predates_contracts")
+        worker_contract.require_capable(rec, RegisterError)
         have = rec.get("contract")
         if isinstance(have, dict) and have.get("version", 0) >= seed["version"]:
             return False

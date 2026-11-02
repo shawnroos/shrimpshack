@@ -284,9 +284,7 @@ def escalate_due(programme_run, *, now=None, limit=LIMIT_SECONDS, hand=None, cal
 
 def append_pending(block, *, bite, set_by, extra=None, now=None) -> dict:
     """Bump the contract version and queue one pending entry; the caller holds the record lock."""
-    block["version"] += 1
-    block["set_at"] = now or run_record_core.now_iso()
-    block["set_by"] = set_by
+    worker_contract.bump(block, set_by, now)
     entry = {"version": block["version"], "bite": bite}
     entry.update(extra or {})
     block.setdefault("pending_versions", []).append(entry)

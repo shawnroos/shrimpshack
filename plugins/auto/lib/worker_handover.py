@@ -53,8 +53,7 @@ def _close_old(run_id, repo, auto_run, worker, sid, space_of) -> dict:
     def close(rec):
         fresh = worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
         worker_contract_write._open_for_writes(fresh)
-        if not rec.get("contract_capable"):
-            raise worker_contract.ContractError("run predates contracts", "predates_contracts")
+        worker_contract.require_capable(rec)
         if rec.get("driving_session_id") != worker:
             raise worker_contract.ContractError(
                 f"run record session {rec.get('driving_session_id')} is not the item's owner session {worker}",

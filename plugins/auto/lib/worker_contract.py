@@ -165,6 +165,17 @@ def contract_of(record):
     return block
 
 
+def require_capable(record, exc=ContractError) -> None:
+    if not record.get("contract_capable"):
+        raise exc("run predates contracts", "predates_contracts")
+
+
+def bump(block, set_by, now=None) -> None:
+    block["version"] += 1
+    block["set_at"] = now or run_record_core.now_iso()
+    block["set_by"] = set_by
+
+
 def run_is_done(record) -> bool:
     return phase_grammar.current_phase(record) == "done"
 

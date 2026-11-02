@@ -92,9 +92,7 @@ def _revise(block, change, bite, programme, key, sid, now, queue):
     if queue:
         worker_question.append_pending(new, bite=chosen, set_by=sid, now=now)
     else:
-        new["version"] += 1
-        new["set_at"] = now or run_record_core.now_iso()
-        new["set_by"] = sid
+        worker_contract.bump(new, sid, now)
     worker_contract.validate(new)
     return new, {"version": new["version"], "bite": chosen, "fields": _fields(change), "queued": queue}
 
@@ -150,8 +148,7 @@ def _edit_run(run_id, key, state, worker, change, bite, sid, space_of, now) -> d
     def edit(rec):
         fresh = worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
         _open_for_writes(fresh)
-        if not rec.get("contract_capable"):
-            raise worker_contract.ContractError("run predates contracts", "predates_contracts")
+        worker_contract.require_capable(rec)
         _refuse_done(rec, key, auto_run)
         if rec.get("driving_session_id") != worker:
             raise worker_contract.ContractError(
