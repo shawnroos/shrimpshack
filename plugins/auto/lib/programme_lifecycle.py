@@ -29,6 +29,7 @@ terminal_host = load_lib_module("terminal_host")
 driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
+programme_rituals_due = load_lib_module("programme_rituals_due")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
@@ -609,10 +610,17 @@ def _h_become_pm(host, argv):
     return 0
 
 
+def _gate_rituals(run, trigger, status, opts) -> None:
+    waiting = programme_rituals_due.waiting_before(programme_home._read_record(run) or {}, run, trigger)
+    if waiting and not opts.get("without-rituals"):
+        raise _Refused(f"{trigger} ritual {', '.join(waiting)} has not run in this tenure", status,
+                       fix=programme_rituals_due.GATE_FIX)
+
+
 def _h_handover(host, argv):
-    positional, opts = host._parse(_tokens(argv), values=("run",))
+    positional, opts = host._parse(_tokens(argv), values=("run",), flags=("without-rituals",))
     if len(positional) != 1:
-        raise ValueError("usage: handover <session-id> [--run <id>]")
+        raise ValueError("usage: handover <session-id> [--without-rituals] [--run <id>]")
     target = programme_home.check_segment(positional[0])
     sid = _caller(host)
     lease = _lease_for(host, opts, sid)
@@ -631,6 +639,7 @@ def _h_handover(host, argv):
                  and target in str((r.get("payload") or {}).get("text") or "").split()]
         if not asked:
             raise _Refused(f"no typed /auto:programme-handover {target} in the driving session", status)
+        _gate_rituals(run, "handover", status, opts)
         cites = list(asked[-1]["cites"])
         moved = _move(run, target, "handed_over", sid,
                       lambda moved, rec: {"request": _request_ref(asked[-1])}, cites=cites)
@@ -682,7 +691,7 @@ def _watcher_ids(record) -> dict:
 
 
 def _h_end(host, argv):
-    stray, opts = host._parse(_tokens(argv), values=("run", "why"))
+    stray, opts = host._parse(_tokens(argv), values=("run", "why"), flags=("without-rituals",))
     if stray:
         raise ValueError(f"end takes no argument {stray[0]!r}; quote a --why of several words")
     sid = _caller(host)
@@ -697,6 +706,8 @@ def _h_end(host, argv):
             reason, request = EXPIRED_REASON, None
         else:
             reason, request = END_REASON, _end_request(run, sid, status)
+            if session_registry.caller_drives(programme_home._read_record(run), sid):
+                _gate_rituals(run, "end", status, opts)
         record = programme_home._read_record(run) or {}
         out = _watcher_ids(record)
         carryover = programme_carryover.offer(programme_home.normalize_programme(record.get("programme") or {}))
