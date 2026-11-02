@@ -20,6 +20,10 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 _SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
 _SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
+# Every shell that could read a heredoc body as a script. Wider than _SHELL_BINS, which also drives the `-c`
+# script extraction that each shell's own option grammar has to match.
+_SHELL_NAMES = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "pdksh", "ash", "busybox",
+                          "fish", "tcsh", "csh", "yash", "posh", "rc", "osh", "xonsh"})
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 MAX_DEPTH = 4
 # Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
@@ -102,11 +106,47 @@ def _unquote_dollar(command: str) -> str:
     return _LOCALE_DOLLAR.sub("", _ANSI_C.sub(lambda m: shlex.quote(_ansi_c(m)), command))
 
 
-def _heredoc_consumer(text: str, start: int, line_end: int) -> bool:
-    """Does a shell run this heredoc's body? `cat <<'EOF' | bash` does; `python3 - <<'PY'` does not."""
+def _code_mask(text: str) -> bytearray:
+    """1 for each character the shell reads as code: outside quotes, and outside a `#` comment."""
+    mask, quote, escaped, comment = bytearray(len(text)), None, False, False
+    for i, ch in enumerate(text):
+        if comment:
+            comment = ch != "\n"
+        elif escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+            comment = True
+        mask[i] = 0 if (comment or quote) else 1
+    return mask
+
+
+def _heredoc_reader_is_shell(text: str, start: int, line_end: int) -> bool:
+    """Could a shell run this heredoc's body?
+
+    Only a plain line whose own command is a named non-shell program proves it could not. A pipe, a list operator,
+    a variable or a substitution on that line can all hand the body to a shell (`cat <<'EOF' | ksh`, `| $S`), and
+    a shell that runs the body reads it as a script however the delimiter was quoted. So anything else is shell:
+    this is the direction that fails closed.
+    """
     line = text[text.rfind("\n", 0, start) + 1:line_end]
     words = _lex(line)
-    return any(os.path.basename(w) in _SHELL_BINS or w in ("eval", "source", ".") for w in words)
+    if not words:
+        return True
+    runs, assigns = _command_positions(words)[:2]
+    programs = [w for k, w in enumerate(words)
+                if runs[k] and not assigns[k] and not _OPERATOR_ONLY.match(w) and w not in _COMMAND_PREFIX]
+    if not programs:
+        return True
+    # Every program on the line, not only the first: the body goes to the pipeline, so `cat <<'EOF' | ksh` hands
+    # it to a shell. A program built at run time could be any of them.
+    return any(os.path.basename(w).casefold() in _SHELL_NAMES or w in ("eval", "source", ".")
+               or _RUNTIME_WORD.search(w) for w in programs)
 
 
 def _split_heredocs(text: str):
@@ -115,16 +155,20 @@ def _split_heredocs(text: str):
     A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) is the one case where the shell expands nothing in the
     body, so such a body cannot become a command through `$VAR` either.
     """
-    kept, bodies, pos = [], [], 0
+    kept, bodies, pos, code = [], [], 0, _code_mask(text)
     while True:
         found = _HEREDOC.search(text, pos)
+        while found is not None and not code[found.start()]:
+            # `# <<'EOF'` and `'<<\"EOF\"'` are not heredocs to any shell, and reading one as a heredoc would take
+            # the real commands after it out of the scanned text.
+            found = _HEREDOC.search(text, found.end())
         line_end = text.find("\n", found.end()) if found else -1
         if line_end == -1:
             kept.append(text[pos:])
             return "".join(kept), bodies
         kept.append(text[pos:line_end + 1])
-        quoted = bool(found.group(1)) or text[found.start(2) - 1:found.start(2)] == "\\"
-        shell = _heredoc_consumer(text, found.start(), line_end)
+        quoted = bool(found.group(1)) or text[max(0, found.start(2) - 1):found.start(2)] == "\\"
+        shell = _heredoc_reader_is_shell(text, found.start(), line_end)
         lines, cursor = [], line_end + 1
         while cursor < len(text):
             end = text.find("\n", cursor)
@@ -150,17 +194,26 @@ def _mark_substitutions(text: str):
         ch = text[i]
         # Quoting decides what the shell expands: single quotes expand nothing, double quotes expand `$( )` and
         # backticks but not a process substitution, and a backslash outside single quotes escapes the next char.
-        if escaped:
-            escaped, out, i = False, out + [ch], i + 1
-            continue
-        if ch == "\\" and quote != "'":
-            escaped, out, i = True, out + [ch], i + 1
+        if escaped or (ch == "\\" and quote != "'"):
+            escaped = not escaped
+            out.append(ch)
+            i += 1
             continue
         if quote == "'":
-            quote, out, i = (None if ch == "'" else quote), out + [ch], i + 1
+            # Single quotes expand nothing, so no span can open until they close.
+            quote = None if ch == "'" else quote
+            out.append(ch)
+            i += 1
             continue
-        if ch == "'" or ch == '"':
-            quote, out, i = (None if ch == quote else ch if quote is None else quote), out + [ch], i + 1
+        if ch == "'" and quote is None:
+            quote = "'"
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '"':
+            quote = None if quote == '"' else '"'
+            out.append(ch)
+            i += 1
             continue
         if text[i:i + 2] == "$(" or (text[i:i + 2] in ("<(", ">(") and quote is None):
             arithmetic = text[i:i + 3] == "$(("
@@ -182,14 +235,21 @@ def _mark_substitutions(text: str):
     return "".join(out), spans
 
 
-def _substitution_scripts(spans: list) -> list:
-    """The spans that hold commands. Arithmetic holds none, so only its own nested substitutions are returned."""
+def _substitution_scripts(spans: list, depth: int = 0) -> list:
+    """The spans that hold commands. Arithmetic holds none, so only its own nested substitutions are returned.
+
+    Bounded like `_scan`: nested arithmetic is attacker-controlled, and an unbounded walk here raises
+    RecursionError, which the hook swallows into an allow.
+    """
     scripts = []
     for contents, arithmetic in spans:
         if not arithmetic:
             scripts.append(contents)
-            continue
-        scripts.extend(_substitution_scripts(_mark_substitutions(contents)[1]))
+        elif depth < MAX_DEPTH:
+            scripts.extend(_substitution_scripts(_mark_substitutions(contents)[1], depth + 1))
+        else:
+            # Past the bound the arithmetic is scanned as a script rather than dropped: it fails closed.
+            scripts.append(contents)
     return scripts
 
 
@@ -282,15 +342,32 @@ def _literal_vars(tokens: list, assigns: list) -> list:
     return out
 
 
+# A word that means the shell may not reach what follows it in the order it was written. An assignment cannot be
+# read as naming a program once one of these stands between the start of the text and the use: `H=herdr; false &&
+# H=cat; $H …` runs `herdr` while the last assignment written says `cat`.
+_CONTROL_WORDS = frozenset({"&&", "||", "|", "if", "then", "else", "elif", "fi", "while", "until", "do", "done",
+                            "for", "case", "esac", "select", "!", "&"})
+
+
 def _resolver(tokens: list, assigns: list):
-    """Callable: the plain literal a `$NAME` command word was set to earlier in this same text, or None."""
+    """Callable: the plain literal a `$NAME` command word was certainly set to earlier in this same text, or None.
+
+    Resolution holds only in a straight-line command list. Any control word, group or pipeline before the use
+    means the shell's own order is not the written order, so the name stays unknown.
+    """
     pairs = _literal_vars(tokens, assigns)
+    branch = next((k for k, tok in enumerate(tokens)
+                   if tok in _CONTROL_WORDS or (_OPERATOR_ONLY.match(tok) and set(tok) & set("()|&"))), len(tokens))
+    # A name assigned anywhere the shell might skip, or might reach in another order, is unknown however many
+    # other assignments it has: both `H=cat; true && H=herdr; $H` and `H=herdr; false && H=cat; $H` run the
+    # assignment the written order does not end on.
+    unknown = {name for k, name, _value in pairs if k >= branch}
 
     def resolve(index: int, word: str):
         match = _VAR_WORD.match(word)
-        if match is None:
+        if match is None or match.group(1) in unknown:
             return None
-        seen = [value for k, name, value in pairs if k < index and name == match.group(1)]
+        seen = [value for k, name, value in pairs if k < min(index, branch) and name == match.group(1)]
         return seen[-1] if seen else None
 
     return resolve
@@ -371,6 +448,11 @@ def _command_positions(tokens: list) -> tuple:
         if skip:
             skip -= 1
             continue
+        if tok == "esac":
+            # Tested before the pattern branch below: `;;` arms the next branch's pattern, so `esac` arrives while
+            # that is armed and would be eaten as a pattern, latching every later word out of command position.
+            in_case, patterns, at_cmd, prefix = False, False, False, None
+            continue
         if patterns and not _OPERATOR_ONLY.match(tok):
             # A `case` pattern names no program: `*queued*)` is a glob the shell matches, not a command to run.
             runs[k] = False
@@ -417,9 +499,6 @@ def _command_positions(tokens: list) -> tuple:
         if tok == "case" and at_cmd:
             in_case, patterns, at_cmd, prefix = True, False, False, None
             continue
-        if in_case and tok == "esac":
-            in_case, patterns, at_cmd, prefix = False, False, False, None
-            continue
         if in_case and not patterns and tok == "in":
             patterns = True
             continue
@@ -457,7 +536,9 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven,
             # another program reads the text, which it does for $VAR and $( ) in an unquoted heredoc.
             return None
         literal = resolve(start, word)
-        if literal is not None and host.send_class([os.path.basename(literal)] + list(segment[1:]), piped) is None:
+        # Casefolded: this filesystem finds `heRdr` on PATH, so a mixed-case literal names the host program too.
+        if literal is not None and host.send_class(
+                [os.path.basename(literal).casefold()] + list(segment[1:]), piped) is None:
             return None
         built = _RUNTIME_WORD.search(word) or start in globbed
         return ("runtime-built command", "") if built else None

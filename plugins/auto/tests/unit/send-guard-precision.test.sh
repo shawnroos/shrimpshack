@@ -274,6 +274,45 @@ denied 'PY=python3; bash -c '\''"$PY" x.py'\'''
 denied 'for c in python3 py; do "$c" x.py; done'
 denied '$PY x.py'
 
+echo "send-guard-precision: an assignment the shell might skip never names a program (round-2 review)"
+# The written order is not the run order, so neither the first nor the last assignment can be trusted.
+denied 'H=herdr; false && H=cat; $H pane send-text w2:p9T hi'
+denied 'H=cat; true && H=herdr; $H pane send-text w2:p9T hi'
+denied 'H=herdr; false && H=cat; $H pane send-text w2:p77 hi'
+denied '(H=cat); $H pane send-text w2:p9T hi'
+denied 'H=herdr; if false; then H=cat; fi; $H pane send-text w2:p9T hi'
+denied '(H=ls); $H pane send-text $(cat /tmp/t) hi'
+# This filesystem finds a mixed-case name on PATH.
+denied 'A=heRdr; $A pane send-text w2:p77 hi'
+denied 'A=/opt/homebrew/bin/heRdr; $A pane send-text w2:p77 hi'
+# An assignment before the first branch still resolves, so the useful case keeps working.
+allowed 'PY=python3; [ -n "$PY" ] || { echo no; exit 1; }; "$PY" x.py'
+allowed 'PY=python3; cd /tmp && "$PY" x.py'
+
+echo "send-guard-precision: a case block does not latch the pattern state (round-2 review)"
+denied 'case x in a) :;; esac; $H pane send-text w2:p9T hi'
+denied 'case x in a) :;; esac; $H agent prompt w2:p77 go'
+denied 'for f in a; do case $f in b) :;; esac; done; $H pane send-text w2:p9T hi'
+denied 'case x in a) :;; esac; herdr pane send-text w2:p9T hi'
+allowed 'case x in a) echo one;; *) echo other;; esac; echo done'
+
+echo "send-guard-precision: a <<WORD that is not a heredoc does not hide the commands after it (round-2 review)"
+denied '# <<'\''EOF'\''
+H=herdr; $H pane send-text w2:p9T hi'
+denied 'echo '\''<<"EOF"'\''
+H=herdr; $H pane send-text w2:p9T hi'
+# A shell anywhere in the heredoc's pipeline reads the body as a script.
+denied 'S=bash; cat <<'\''EOF'\'' | $S
+herdr pane send-text w2:p9T hi
+EOF'
+denied 'cat <<'\''EOF'\'' | ksh
+herdr pane send-text w2:p9T hi
+EOF'
+# A variable in a path argument does not make a shell read the body.
+allowed 'cat > /tmp/$RUN/probe.mjs <<'\''EOF'\''
+const f = (a = {}) => ({ x: 1 });
+EOF'
+
 echo "send-guard-precision: text no shell runs still yields a send the shell expands into it"
 # A shell consumes the body, so the body is a script however its delimiter is quoted.
 denied 'cat <<'\''EOF'\'' | bash
@@ -286,6 +325,15 @@ EOF'
 # The same expansion inside an interpreter string literal.
 denied 'H=herdr; python3 -c "import os; os.system(\"$H pane send-text w2:p77 hi\")"'
 denied 'herdr pane send-text "$(echo w2:p9T)" hi'
+
+echo "send-guard-precision: a scan the hook cannot finish is a scan that fails open (round-2 review)"
+it "denied: deeply nested arithmetic is judged, not met with a recursion error"
+check deny "$(verdict "$(hook sess-worker "echo $(printf '$((%.0s' $(seq 1500))1$(printf '))%.0s' $(seq 1500)); \$H pane send-text \$P hi")")"
+it "fast: a long single-quoted payload is judged well inside the hook's 10 s limit"
+START=$(date +%s)
+V="$(verdict "$(hook sess-worker "python3 -c '$(printf 'a%.0s' $(seq 80000))'")")"
+ELAPSED=$(( $(date +%s) - START ))
+check "allow fast" "$V $([ "$ELAPSED" -lt 5 ] && echo fast || echo "slow:${ELAPSED}s")"
 
 echo "send-guard-precision: a pane herdr cannot confirm stays guarded and says so"
 cat > "$FAKE_HERDR_SNAPSHOT" <<'EOF'
