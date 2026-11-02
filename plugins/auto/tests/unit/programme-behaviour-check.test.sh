@@ -77,10 +77,6 @@ $(cat)
 PYEOF
 }
 
-reasons() { :; }
-
-# --- behaviour against behaviours: pure module -------------------------------------------------------------
-
 it "the live pair: the new retire-a-worker behaviour lists the sweep behaviour, for a stated reason"
 OUT="$(py <<'EOF'
 pbc = load_lib_module("programme_behaviour_check")
@@ -182,8 +178,6 @@ print(len(pbc.check(a, [sweep(state="retired"), sweep(state="proposed"), a])))
 EOF
 )"
 check "0" "$OUT"
-
-# --- behaviour against the contract: pure module -----------------------------------------------------------
 
 SNAP='snap = {
   "agreement": {"terms": {
@@ -296,8 +290,6 @@ print(sorted(r["ref"] for r in pcc.check(sweep(), snap)))
 EOF
 )"
 has 'term:cadence' "$OUT"
-
-# --- through the verbs --------------------------------------------------------------------------------------
 
 PROG="${AUTO_ROOT}/lib/programme.py"
 OUT=""

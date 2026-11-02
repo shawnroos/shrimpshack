@@ -514,7 +514,7 @@ def _h_record(host, argv):
     bid = proposal or "b" + secrets.token_hex(3)
     if not proposal:
         _draft(opts, bid)
-    answers = _answers(opts)
+    related, unrelated = answers = _answers(opts)
 
     def change(programme, prompt, rec):
         entry = _from_proposal(host, programme, prompt, proposal) if proposal else _draft(opts, bid)
@@ -522,10 +522,10 @@ def _h_record(host, argv):
         others = _active(programme, loaded)
         entry["overrides"] = _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
         result = _check(host, rec, entry, others, lines=False, answers=answers)
-        if answers[0]:
-            entry["relates_to"] = answers[0]
-        if answers[1]:
-            entry["unrelated"] = answers[1]
+        if related:
+            entry["relates_to"] = related
+        if unrelated:
+            entry["unrelated"] = unrelated
         entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
         entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
         return {"behaviour": bid, "layer": "programme", "when": entry["when"]["text"],

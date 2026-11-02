@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Which parts of the programme contract a new behaviour touches, and which it may contradict.
-
-The input is the ``rules_in_force`` snapshot. A behaviour carries no authority, so a row is
-information for the PM and Shawn: ``may_contradict`` marks a structural clash, never a refusal.
-The operating contract line is read but never becomes a row, because it applies to every behaviour.
+"""A behaviour carries no authority, so a row is information for the PM and Shawn: ``may_contradict`` marks a
+structural clash, never a refusal. The operating contract line applies to every behaviour, so it is read but
+never becomes a row.
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ behaviour_check = load_lib_module("programme_behaviour_check")
 PM_DECIDES = "act"
 NEGATIONS = ("not", "never", "avoid", "dont", "no")
 SKIPS = ("skip", "without", "ignore", "omit")
-CADENCE_WORDS = ("sweep", "every", "cadence", "wake")
+TERM_STEMS = {"cadence": ("sweep", "every", "cadence", "wake"), "remit": ("remit",)}
 STEM = 6
 # A kind such as merge_at_gate drops "at": a two-letter stem would match any word that starts with it.
 MIN_KIND_WORD = 3
@@ -32,7 +30,7 @@ CLAUSE_BREAKS = ",;.:"
 def _row(ref, kind, reason, detail, text, flag=False, **extra) -> dict:
     out = {"ref": ref, "kind": kind, "reasons": [{"reason": reason, "detail": detail}], "text": text, **extra}
     if flag:
-        out["flag"] = "may_contradict"
+        out["flag"] = behaviour_check.MAY_CONTRADICT
     return out
 
 
@@ -60,8 +58,8 @@ def _terms(entry, snapshot) -> list:
     terms = ((snapshot.get("agreement") or {}).get("terms")) or {}
     words = set(behaviour_check.tokens(_instruction_text(entry) + " " + entry["when"]["text"]))
     rows = []
-    for key in ("cadence", "remit"):
-        hit = [w for w in words if any(w.startswith(c) for c in (CADENCE_WORDS if key == "cadence" else ("remit",)))]
+    for key, stems in TERM_STEMS.items():
+        hit = [w for w in words if w.startswith(stems)]
         if key in terms and hit:
             rows.append(_row("term:" + key, "term", "names_subject", sorted(hit), f"{key}: {terms[key].get('value')}"))
     stop_rule = terms.get("stop_rule")
@@ -72,8 +70,8 @@ def _terms(entry, snapshot) -> list:
                          flag=len(shared) >= behaviour_check.WORD_FLOOR))
     of_record = terms.get("tools_of_record")
     if of_record:
-        named = set(behaviour_check._named(entry))
-        hit = sorted(named & {" ".join(behaviour_check.tokens(t)) for t in of_record.get("value") or []})
+        named = set(behaviour_check.named_tools(entry))
+        hit = sorted(named & {behaviour_check.phrase_key(t) for t in of_record.get("value") or []})
         if hit:
             rows.append(_row("term:tools_of_record", "term", "names_tool", hit, f"tools of record: {of_record.get('value')}"))
     return rows
@@ -81,7 +79,7 @@ def _terms(entry, snapshot) -> list:
 
 def _preferred_tools(entry, snapshot) -> list:
     rows = []
-    named = behaviour_check._named(entry)
+    named = behaviour_check.named_tools(entry)
     for term in ((snapshot.get("operating_contract") or {}).get("project_terms")) or []:
         clauses = _clauses(str(term.get("value")))
         hit, flagged = [], False
@@ -97,8 +95,12 @@ def _preferred_tools(entry, snapshot) -> list:
     return rows
 
 
+def _do_words(entry) -> set:
+    return set(behaviour_check.tokens(" ".join(entry.get("do") or [])))
+
+
 def _rulings(entry, snapshot) -> list:
-    words = set(behaviour_check.tokens(" ".join(entry.get("do") or [])))
+    words = _do_words(entry)
     rows = []
     for ruling in snapshot.get("rulings") or []:
         if ruling.get("kind") and _touches_kind(ruling["kind"], words):
@@ -109,7 +111,7 @@ def _rulings(entry, snapshot) -> list:
 
 
 def _authority(entry, snapshot) -> list:
-    words = set(behaviour_check.tokens(" ".join(entry.get("do") or [])))
+    words = _do_words(entry)
     return [_row("authority:" + a["action"], "authority", "reserved_kind", [a["action"]],
                  f"{a['action']}: {a['level']}", flag=True)
             for a in snapshot.get("autonomy") or []

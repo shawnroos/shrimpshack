@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Which behaviours in force a new behaviour applies alongside, and which it may compromise.
-
-Pure functions over behaviour entries. Code cannot tell that two behaviours disagree in meaning, so
-every row names the closed-set reason that listed it and carries both sides' lines for the PM to
-read; only the structural cases in ``FLAGGED`` are marked ``may_contradict``.
+"""Code cannot tell that two behaviours disagree in meaning, so every row names the closed-set reason that
+listed it and carries both sides' lines for the PM to read; only the structural cases in ``FLAGGED`` are
+marked ``may_contradict``.
 """
 
 from __future__ import annotations
@@ -22,12 +20,14 @@ programme_naming = load_lib_module("programme_naming")
 REASONS = ("same_trigger", "shared_when", "instruction_touches_situation", "shared_tool", "equal_do_dont",
            "tool_forbidden_in_dont")
 FLAGGED = ("equal_do_dont", "tool_forbidden_in_dont")
+MAY_CONTRADICT = "may_contradict"
 NOT_DETECTED = "opposite meaning is not detected: read each listed pair, and note that a short list is not a pass"
 # One shared word measured as noise: 43 of the 48 pairs the old rule listed shared exactly one.
 WORD_FLOOR = 2
 COMMON = ("stop", "the", "and", "for", "when", "with", "that", "this", "its", "from", "into", "are", "was",
           "not", "all", "any", "each", "work", "item")
 NAMED = ("tools", "skills", "agents")
+_REF_RE = re.compile(r"^[a-z][a-z0-9-]*(:[A-Za-z0-9_.-]+)?$")
 
 
 def content_words(text) -> set:
@@ -38,8 +38,8 @@ def tokens(text) -> list:
     return re.findall(r"[a-z0-9]+", (text or "").lower())
 
 
-def _line_key(line) -> str:
-    return " ".join(tokens(line))
+def phrase_key(text) -> str:
+    return " ".join(tokens(text))
 
 
 def _situation(entry) -> set:
@@ -50,8 +50,8 @@ def _instructions(entry) -> set:
     return content_words(" ".join((entry.get("do") or []) + (entry.get("dont") or [])))
 
 
-def _named(entry) -> dict:
-    return {" ".join(tokens(n)): n for field in NAMED for n in entry.get(field) or [] if tokens(n)}
+def named_tools(entry) -> dict:
+    return {phrase_key(n): n for field in NAMED for n in entry.get(field) or [] if phrase_key(n)}
 
 
 def _audiences(entry) -> set:
@@ -69,8 +69,13 @@ def co_apply(entry, other) -> bool:
 
 def _forbids(entry, other) -> list:
     banned = [set(tokens(line)) for line in other.get("dont") or []]
-    return sorted(name for key, name in _named(entry).items()
+    return sorted(name for key, name in named_tools(entry).items()
                   if any(set(key.split()) <= line for line in banned))
+
+
+def _equal(entry, other) -> set:
+    banned = {phrase_key(line) for line in other.get("dont") or []}
+    return {key for key in map(phrase_key, entry.get("do") or []) if key in banned}
 
 
 def _reasons(entry, other) -> list:
@@ -88,21 +93,16 @@ def _reasons(entry, other) -> list:
     touches = sorted((_situation(entry) & _instructions(other)) | (_situation(other) & _instructions(entry)))
     if len(touches) >= WORD_FLOOR:
         add("instruction_touches_situation", touches)
-    tools = sorted(set(_named(entry)) & set(_named(other)))
+    tools = sorted(set(named_tools(entry)) & set(named_tools(other)))
     if tools:
         add("shared_tool", tools)
-    mine, theirs = entry.get("do") or [], other.get("do") or []
-    equal = sorted({_line_key(a) for a in mine for b in other.get("dont") or [] if _line_key(a) == _line_key(b)}
-                   | {_line_key(a) for a in theirs for b in entry.get("dont") or [] if _line_key(a) == _line_key(b)})
+    equal = sorted(_equal(entry, other) | _equal(other, entry))
     if equal:
         add("equal_do_dont", equal)
     forbidden = sorted(set(_forbids(entry, other)) | set(_forbids(other, entry)))
     if forbidden:
         add("tool_forbidden_in_dont", forbidden)
     return out
-
-
-_REF_RE = re.compile(r"^[a-z][a-z0-9-]*(:[A-Za-z0-9_.-]+)?$")
 
 
 def answers_valid(entry, field) -> bool:
@@ -121,7 +121,7 @@ def row(entry, reasons) -> dict:
            "lines": {"do": list(entry.get("do") or []), "dont": list(entry.get("dont") or []),
                      "stop": entry.get("stop")}}
     if any(r["reason"] in FLAGGED for r in reasons):
-        out["flag"] = "may_contradict"
+        out["flag"] = MAY_CONTRADICT
     return out
 
 
