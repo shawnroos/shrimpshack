@@ -29,32 +29,6 @@ STORED_LAYERS = ("repo", "personal")
 _Reject = programme_protocol._Reject
 
 
-def _is(e, entry_id) -> bool:
-    return isinstance(e, dict) and e.get("id") == entry_id
-
-
-def _without(doc, entry_id) -> None:
-    doc["personal"] = [e for e in doc["personal"] if not _is(e, entry_id)]
-    doc["repos"] = {k: [e for e in rows if not _is(e, entry_id)] for k, rows in doc["repos"].items()}
-    doc["repos"] = {k: rows for k, rows in doc["repos"].items() if rows}
-
-
-def _place(doc, entry) -> None:
-    _without(doc, entry["id"])
-    if entry["layer"] == "personal":
-        doc["personal"].append(entry)
-    else:
-        doc["repos"].setdefault(entry["repo_key"], []).append(entry)
-
-
-def _default_lookup():
-    # Loaded here, not at import: programme.py imports the modules that import this one. A caller
-    # inside programme.py passes host.prompt_lookup, since its module is __main__ there.
-    programme = load_lib_module("programme")
-    journals = {}
-    return lambda run_id, prompt_id: programme.prompt_lookup(run_id, prompt_id, journals)
-
-
 class LayeredStore:
     """``verdict`` and ``target`` are passed as callables so the owning module can define them after the store."""
 
@@ -173,3 +147,29 @@ class LayeredStore:
             for entry in rows:
                 self._admit(out, "repo", key, entry, lookup)
         return out
+
+
+def _default_lookup():
+    # Loaded here, not at import: programme.py imports the modules that import this one. A caller
+    # inside programme.py passes host.prompt_lookup, since its module is __main__ there.
+    programme = load_lib_module("programme")
+    journals = {}
+    return lambda run_id, prompt_id: programme.prompt_lookup(run_id, prompt_id, journals)
+
+
+def _is(e, entry_id) -> bool:
+    return isinstance(e, dict) and e.get("id") == entry_id
+
+
+def _without(doc, entry_id) -> None:
+    doc["personal"] = [e for e in doc["personal"] if not _is(e, entry_id)]
+    doc["repos"] = {k: [e for e in rows if not _is(e, entry_id)] for k, rows in doc["repos"].items()}
+    doc["repos"] = {k: rows for k, rows in doc["repos"].items() if rows}
+
+
+def _place(doc, entry) -> None:
+    _without(doc, entry["id"])
+    if entry["layer"] == "personal":
+        doc["personal"].append(entry)
+    else:
+        doc["repos"].setdefault(entry["repo_key"], []).append(entry)
