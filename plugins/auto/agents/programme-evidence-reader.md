@@ -1,6 +1,6 @@
 ---
 name: programme-evidence-reader
-model: sonnet
+model: haiku
 color: green
 tools: ["Bash"]
 description: "Reads merge readiness and GitHub state for an auto programme's PRs and returns the facts as JSON. Writes nothing to the programme and never merges."
