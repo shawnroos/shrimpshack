@@ -704,6 +704,14 @@ def _needs_answer(host, opts, rid) -> bool:
     return _state_of(host, probe, dict(record, run_id=run_id), rid) == "missed"
 
 
+def _check_answer(host, programme, rec, rid, prompt) -> None:
+    """The unlocked probe only decides whether a prompt is demanded; this decides again under the lock."""
+    if prompt:
+        host.require_named(prompt, rid)
+    elif _state_of(host, programme, rec, rid) == "missed":
+        raise RitualError(f"ritual {rid!r} is missed: it needs Shawn's typed answer naming it (--prompt <id>)")
+
+
 def _h_start(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt"))
     if len(positional) != 1:
@@ -715,25 +723,23 @@ def _h_start(host, argv):
         # Resolution re-validates every entry, so a ritual stored before a protected word was added is
         # rejected there and never reaches this point: that is the run-time refusal.
         entry = _find(host, programme, rec, rid)
-        if prompt:
-            host.require_named(prompt, rid)
+        _check_answer(host, programme, rec, rid, prompt)
         return {"ritual": rid, "trigger": entry["when"]["trigger"], "steps": entry["steps"]}
 
     return host._write(opts, change, STARTED, prompt_id=opts.get("prompt"), needs_prompt=needs,
                        verb="start-ritual", target=rid)
 
 
-def _answer(host, argv, kind, verb, fields=()):
+def _answer(host, argv, kind, verb, fields=(), typed=False):
     positional, opts = host._parse(argv, values=("run", "prompt") + fields)
     if len(positional) != 1:
         raise ValueError(f"usage: {verb} <id> {' '.join('[--' + f + ' <text>]' for f in fields)} [--prompt <id>] [--run <id>]")
     rid = positional[0]
-    needs = _needs_answer(host, opts, rid)
+    needs = typed or _needs_answer(host, opts, rid)
 
     def change(programme, prompt, rec):
         entry = _find(host, programme, rec, rid)
-        if prompt:
-            host.require_named(prompt, rid)
+        _check_answer(host, programme, rec, rid, prompt)
         advance_clock(programme, entry)
         extra = {f: _clean(opts[f], "--" + f) for f in fields if opts.get(f)}
         return dict({"ritual": rid, "trigger": entry["when"]["trigger"]}, **extra)
@@ -746,7 +752,8 @@ def _h_run(host, argv):
 
 
 def _h_skip(host, argv):
-    return _answer(host, argv, SKIPPED, "skip-ritual", ("why",))
+    # Skipping is Shawn's call in every state; an unprompted skip would also satisfy the handover and end gates.
+    return _answer(host, argv, SKIPPED, "skip-ritual", ("why",), typed=True)
 
 
 def _h_fail(host, argv):
@@ -811,9 +818,9 @@ _SPECS = (
     ("fail-ritual", _h_fail, "<id> --why <line> [--run <id>]",
      "a session that does not drive the programme; a ritual not in force; no --why. Ends the in-flight state "
      "without answering the ritual."),
-    ("skip-ritual", _h_skip, "<id> [--why <text>] [--prompt <id>] [--run <id>]",
-     "a session that does not drive the programme; a ritual not in force; a missed ritual without a typed "
-     "prompt that names its id. Moves this programme's next-due time past now."),
+    ("skip-ritual", _h_skip, "<id> --prompt <id> [--why <text>] [--run <id>]",
+     "a session that does not drive the programme; a ritual not in force; no typed prompt that names the "
+     "ritual id, in any state. Moves this programme's next-due time past now."),
     ("offer-rituals", _h_offer, "<id>... [--run <id>]",
      "a session that does not drive the programme; an id that is not a missed or in-flight ritual. Records the "
      "offer once so an unanswered picker is not posted again."),

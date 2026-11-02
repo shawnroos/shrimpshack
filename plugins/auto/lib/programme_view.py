@@ -553,7 +553,14 @@ def rituals_view(record, journal_entries) -> list:
         return [{"id": "rituals", "state": "unreadable", "detail": f"{type(exc).__name__}: {exc}"}]
     pending = {r["ritual"]: r for bucket in ("due", "missed", "in_flight") for r in got[bucket]}
     clock = _dict(_dict(record.get("programme")).get("ritual_clock"))
-    rows = []
+    live = {e["id"] for e in in_force}
+    parked = [e for e in _dict(record.get("programme")).get("rituals") or []
+              if isinstance(e, dict) and e.get("id") not in live and e.get("state") in ("proposed", "retired")]
+    rows = [{"id": e["id"], "layer": e.get("layer"), "trigger": _dict(e.get("when")).get("trigger"),
+             "when": _dict(e.get("when")).get("text"), "steps": list(e.get("steps") or []), "state": e["state"]}
+            for e in parked]
+    rows += [{"id": r.get("id"), "layer": r.get("layer"), "state": "rejected", "when": r.get("reason")}
+             for r in programme_rituals.resolve(record, store=loaded)["rejected"]]
     for e in in_force:
         hit = pending.get(e["id"])
         rows.append({"id": e["id"], "layer": e["layer"], "trigger": e["when"]["trigger"], "when": e["when"]["text"],

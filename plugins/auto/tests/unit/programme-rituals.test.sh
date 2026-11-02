@@ -191,6 +191,9 @@ EOF
 it "a ritual with no clock yet becomes pending at the first slot after it came into force"
 check "r1:missed" "$(run_py <<'EOF'
 run = setup([ritual("r1")])
+def mutate(rec):
+    rec["programme"]["created_at"] = "2026-11-01T00:00:00Z"
+core._with_locked_run_record(ph.home_path(run), run, mutate)
 print(" ".join(states(due.due(record(run), run, now=at("2026-11-03T09:00:00Z"), rows=[]))))
 EOF
 )"
@@ -276,7 +279,7 @@ prog propose-ritual --run "$RUN" --when "on takeover" --trigger takeover --step 
 check 0 "$CODE"
 check "proposed" "$(jfield "$OUT" 'd["state"]')"
 
-it "run-ritual on a due ritual needs no prompt and moves the clock past now"
+it "start-ritual on a missed ritual is refused without a typed prompt"
 run_py "$RUN" "$RID" <<'EOF'
 def mutate(rec):
     rec["programme"]["ritual_clock"][args[1]] = {"next_due_at": "2026-01-05T09:00:00Z"}
@@ -444,6 +447,133 @@ pv = load_lib_module("programme_view")
 run = setup([ritual("a")], {"a": {"next_due_at": "2020-01-06T09:00:00Z"}})
 rows = pv.rituals_view(record(run), [])
 print(pv._ritual_text(rows[0]))
+EOF
+)"
+
+it "a due ritual that became missed under the lock is refused without a typed answer"
+check "RitualError" "$(run_py <<'EOF'
+run = setup([ritual("a")], {"a": {"next_due_at": "2020-01-06T09:00:00Z"}})
+class Host:
+    prompt_lookup = pr._default_lookup()
+try:
+    pr._check_answer(Host, record(run)["programme"], dict(record(run), run_id=run), "a", None)
+    print("allowed")
+except pr.RitualError:
+    print("RitualError")
+EOF
+)"
+
+it "skip-ritual needs a typed prompt even for a ritual that is only due"
+RUN5="$(new_run)"
+run_py "$RUN5" <<'EOF'
+def mutate(rec):
+    rec["programme"]["rituals"].append(ritual("dd"))
+    rec["programme"]["ritual_clock"]["dd"] = {"next_due_at": core.now_iso()}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+prog skip-ritual dd --run "$RUN5"
+check 1 "$CODE"
+has "prompt" "$OUT"
+
+it "start-ritual then fail-ritual ends the in-flight state without answering the ritual"
+sleep 1
+prog start-ritual dd --run "$RUN5"
+check 0 "$CODE"
+prog fail-ritual dd --why "worker gone" --run "$RUN5"
+check 0 "$CODE"
+check "False due" "$(q "$RUN5" "str('dd' in [r['ritual'] for r in due.due(rec, run)['in_flight']]) + ' ' + ','.join(sorted(set(r['state'] for r in due.due(rec, run)['due'])))")"
+
+it "a stored calendar ritual older than the programme does not read as missed in it"
+check "" "$(run_py <<'EOF'
+run = setup([])
+old = ritual("o", "personal", at="2020-01-01T00:00:00Z")
+store = {"personal": [old], "repos": {}, "rejected": [], "notices": []}
+soon = datetime.datetime.now(UTC) + datetime.timedelta(minutes=1)
+print(" ".join(states(due.due(record(run), run, now=soon, rows=[], store=store))))
+EOF
+)"
+
+it "a quiet ritual is pending once per active-to-quiet change, and its own rows are not activity"
+check "q:due||q:due" "$(run_py <<'EOF'
+run = setup([event_ritual("q", "quiet")])
+now = at("2026-11-02T10:05:00Z")
+first = [jrow("stop_quiet", "2026-11-02T10:00:00Z")]
+repeat = first + [jrow("ritual_ran", "2026-11-02T10:01:00Z", ritual="q"), jrow("stop_quiet", "2026-11-02T10:02:00Z")]
+again = repeat + [jrow("claim", "2026-11-02T10:03:00Z"), jrow("stop_quiet", "2026-11-02T10:04:00Z")]
+f = lambda rows: " ".join(states(due.due(record(run), run, now=now, rows=rows)))
+print(f(first) + "|" + f(repeat) + "|" + f(again))
+EOF
+)"
+
+it "an offered in-flight ritual does not keep the sweep unsettled, and an offer from an earlier tenure does not count"
+check "True False | False True" "$(run_py <<'EOF'
+si = load_lib_module("programme_sweep_inputs")
+run = setup([event_ritual("h")])
+rows = [jrow("programme_started", "2026-11-02T08:00:00Z"), jrow("handed_over", "2026-11-02T10:00:00Z"),
+        jrow("ritual_started", "2026-11-02T10:01:00Z", ritual="h")]
+offer = jrow("ritual_offered", "2026-11-02T10:30:00Z", offered=[{"ritual": "h", "pending_at": "2026-11-02T10:00:00Z"}])
+now = at("2026-11-02T11:00:00Z")
+before = due.due(record(run), run, now=now, rows=rows)
+after = due.due(record(run), run, now=now, rows=rows + [offer])
+cal = setup([ritual("m")], {"m": {"next_due_at": "2026-11-02T09:00:00Z"}})
+stale = [jrow("programme_started", "2026-11-01T08:00:00Z"), jrow("ritual_offered", "2026-11-02T09:30:00Z", offered=[{"ritual": "m", "pending_at": "2026-11-02T09:00:00Z"}]),
+         jrow("taken_over", "2026-11-02T10:00:00Z")]
+fresh = stale[:2]
+n = at("2026-11-02T20:00:00Z")
+a = due.due(record(cal), cal, now=n, rows=stale)["missed"][0]["offered"]
+b = due.due(record(cal), cal, now=n, rows=fresh)["missed"][0]["offered"]
+print(si._rituals_unsettled(before), si._rituals_unsettled(after), "|", a, b)
+EOF
+)"
+
+it "the handover gate refuses while a handover ritual is unanswered, passes with --without-rituals, and passes once it ran"
+RUN6="$(new_run)"
+run_py "$RUN6" <<'EOF'
+def mutate(rec):
+    rec["programme"]["rituals"].append(event_ritual("hh"))
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+check "refused ok" "$(run_py "$RUN6" <<'EOF'
+lc = load_lib_module("programme_lifecycle")
+run = args[0]
+try:
+    lc._gate_rituals(run, "handover", "live", {})
+    first = "passed"
+except lc._Refused as exc:
+    first = "refused" if "hh" in exc.reason and exc.fix else "wrong"
+lc._gate_rituals(run, "handover", "live", {"without-rituals": True})
+print(first, "ok")
+EOF
+)"
+prog run-ritual hh --run "$RUN6"
+check 0 "$CODE"
+check "passed" "$(run_py "$RUN6" <<'EOF'
+lc = load_lib_module("programme_lifecycle")
+try:
+    lc._gate_rituals(args[0], "handover", "live", {})
+    print("passed")
+except lc._Refused:
+    print("refused")
+EOF
+)"
+
+it "offer-rituals records an offer for a missed ritual and the due list then marks it offered"
+RUN7="$(new_run)"
+run_py "$RUN7" <<'EOF'
+def mutate(rec):
+    rec["programme"]["rituals"].append(ritual("mm"))
+    rec["programme"]["ritual_clock"]["mm"] = {"next_due_at": "2020-01-06T09:00:00Z"}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+prog offer-rituals mm --run "$RUN7"
+check 0 "$CODE"
+check "True" "$(q "$RUN7" "str(due.due(rec, run)['missed'][0]['offered'])")"
+
+it "the ritual verbs a pick can approve are in PICK_VERBS, and record-ritual is not"
+check "True True False" "$(run_py <<'EOF'
+pa = load_lib_module("programme_approval")
+print(all(v in pa.PICK_VERBS for v in ("start-ritual", "run-ritual", "skip-ritual", "retire-ritual", "move-ritual", "keep-rituals")),
+      pa.label(["start-ritual", "r1"]) == "Approve start-ritual r1", "record-ritual" in pa.PICK_VERBS)
 EOF
 )"
 

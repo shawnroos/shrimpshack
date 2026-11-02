@@ -138,8 +138,8 @@ def _rituals_due(host, run_id, record, rows):
 
 
 def _rituals_unsettled(rituals) -> bool:
-    """Due and in-flight rituals need the PM; a missed one counts only until it has been offered once."""
-    return bool(rituals["due"] or rituals["in_flight"] or any(not r.get("offered") for r in rituals["missed"]))
+    """A due ritual needs the PM; a missed or in-flight one counts only until it has been offered once."""
+    return bool(rituals["due"] or any(not r.get("offered") for r in rituals["missed"] + rituals["in_flight"]))
 
 
 def _domain_due(host, record):

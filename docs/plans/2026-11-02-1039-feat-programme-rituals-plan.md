@@ -324,6 +324,6 @@ U1 → U2 → U3 → (U4, U6 in parallel) → U5. U4 and U5 both touch `lib/prog
 
 ## Risks
 
-- **Verb-surface growth.** Seven new verbs enlarge the tool surface and its doc fence; keep names parallel to Behaviours.
+- **Verb-surface growth.** Ten new verbs enlarge the tool surface and its doc fence; keep names parallel to Behaviours.
 - **Grace-window mistuning.** Two cadence periods is borrowed from the lease; if it prompts too often or too late, adjust the one constant.
 - **Month and weekday edge cases in the calendar grammar.** Covered by U3 edge tests; a richer grammar stays deferred.

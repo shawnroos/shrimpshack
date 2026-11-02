@@ -266,9 +266,11 @@ session.
   the commit; `CLAUDE_AUTO_RITUALS_STORE` overrides the path). A due ritual runs as `start-ritual <id>`, the
   steps, then `run-ritual <id> [--outcome <text>]`; `fail-ritual <id> --why <line>` ends a run that did not
   finish. A missed ritual is never run silently late: `offer-rituals <id>...` records that the PM put it to Shawn
-  once, and his typed answer then goes to `start-ritual`, `run-ritual`, `skip-ritual` or `retire-ritual`, one
-  call per ritual, each prompt naming that ritual's id. `run-ritual`, `skip-ritual` and `retire-ritual` move the programme's next-due time past
-  now. `handover` and `end` refuse once while a ritual for their trigger is unanswered in the tenure that is
+  once, and his answer then goes to `start-ritual`, `run-ritual`, `skip-ritual` or `retire-ritual`, one
+  call per ritual, each prompt naming that ritual's id. `skip-ritual` needs a typed prompt in every state, so an
+  unprompted skip cannot satisfy a gate. Those four, `move-ritual` and `keep-rituals` also accept a pick of the
+  exact label `approval-label` prints; `record-ritual` and `propose-ritual` do not. `run-ritual`, `skip-ritual` and `retire-ritual` move the programme's next-due time past
+  now. `handover` and `end` refuse while a ritual for their trigger is unanswered in the tenure that is
   ending; `--without-rituals` goes ahead and leaves it missed. The ritual verbs, in the order a run uses them:
   `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`.
 - **Behaviours**: standing guidance on how the PM and its workers do the work. A

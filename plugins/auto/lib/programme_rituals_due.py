@@ -31,7 +31,11 @@ GATE_FIX = ("run it (start-ritual <id>, perform its steps, run-ritual <id>) or s
 PRE_VERB = ("handover", "end")
 MOVES = ("programme_started", "taken_over", "handed_over")
 TEXT_CAP = 160
-_TRIGGER_OF_ROW = {kind: trigger for trigger, kind in programme_rituals.EVENT_ROWS.items()}
+# Rows a quiet programme writes about itself. A quiet ritual's own rows are among them: running it is not activity.
+QUIET_BOOKKEEPING = ("stop_quiet", "prompts_pruned", "working_now", "focus_noted", programme_rituals.OFFERED,
+                     programme_rituals.STARTED, programme_rituals.RAN, programme_rituals.FAILED,
+                     programme_rituals.SKIPPED)
+_TRIGGER_OF_ROW ={kind: trigger for trigger, kind in programme_rituals.EVENT_ROWS.items()}
 
 
 def _later(table, key, at) -> None:
@@ -44,13 +48,21 @@ class _Index:
 
     def __init__(self, rows):
         self.answered, self.started, self.ended, self.events = {}, {}, {}, {}
-        self.moves, self.offered = [], set()
+        self.moves, self.offered = [], {}
+        active_since_quiet = True
         for row in rows:
             at = run_record_core.parse_iso(row.get("at"))
             if at is None:
                 continue
             kind, payload = row.get("kind"), row.get("payload") or {}
             rid = payload.get("ritual")
+            # The Stop hook writes a stop_quiet row on every repeated stop, but going quiet is one change.
+            if kind == "stop_quiet":
+                if active_since_quiet:
+                    _later(self.events, "quiet", at)
+                active_since_quiet = False
+            elif kind not in QUIET_BOOKKEEPING:
+                active_since_quiet = True
             if kind in ANSWERS:
                 _later(self.answered, rid, at)
             if kind == programme_rituals.STARTED:
@@ -60,10 +72,17 @@ class _Index:
             if kind in MOVES:
                 self.moves.append(at)
             if kind == programme_rituals.OFFERED:
-                self.offered.update((i.get("ritual"), i.get("pending_at")) for i in payload.get("offered") or [])
+                for item in payload.get("offered") or []:
+                    _later(self.offered, (item.get("ritual"), item.get("pending_at")), at)
             trigger = _TRIGGER_OF_ROW.get(kind)
-            if trigger and (trigger != "resume" or payload.get("trigger") == "resume"):
+            if trigger and trigger != "quiet" and (trigger != "resume" or payload.get("trigger") == "resume"):
                 _later(self.events, trigger, at)
+
+    def was_offered(self, rid, pending_at) -> bool:
+        """An offer from an earlier tenure does not count: the PM that made it may have died before Shawn saw it."""
+        at = self.offered.get((rid, pending_at))
+        began = self.tenure_start()
+        return at is not None and (began is None or at >= began)
 
     def tenure_start(self, before=None):
         return max((m for m in self.moves if before is None or m < before), default=None)
@@ -74,11 +93,12 @@ def _calendar_time(programme, entry):
     clock = ((programme.get("ritual_clock") or {}).get(entry["id"]) or {}).get("next_due_at")
     stamp = run_record_core.parse_iso(clock)
     if stamp is None:
-        began = run_record_core.parse_iso(programme_rituals.since(entry) or "") \
-            or run_record_core.parse_iso(programme.get("created_at") or "")
-        if began is None:
+        # A stored ritual can be older than this programme: its pending slot starts at whichever came later.
+        began = [t for t in (run_record_core.parse_iso(programme_rituals.since(entry) or ""),
+                             run_record_core.parse_iso(programme.get("created_at") or "")) if t]
+        if not began:
             return None
-        stamp = programme_rituals.next_after(entry["when"]["schedule"], began)
+        stamp = programme_rituals.next_after(entry["when"]["schedule"], max(began))
     return stamp
 
 
@@ -134,7 +154,9 @@ def due(record, run_id, *, now=None, lookup=None, store=None, rows=None, cap=CAP
             continue
         started, ended = index.started.get(rid), index.ended.get(rid)
         if started and (ended is None or started > ended):
-            out["in_flight"].append(_row(entry, "in_flight", pending))
+            row = _row(entry, "in_flight", pending)
+            row["offered"] = index.was_offered(rid, row["pending_at"])
+            out["in_flight"].append(row)
             continue
         # A handover or end ritual runs before the verb, in the tenure that is ending, so an answer
         # anywhere in that tenure answers it.
@@ -148,7 +170,7 @@ def due(record, run_id, *, now=None, lookup=None, store=None, rows=None, cap=CAP
             out["due"].append(_row(entry, "due", pending))
             continue
         row = _row(entry, "missed", pending)
-        row["offered"] = (rid, row["pending_at"]) in index.offered
+        row["offered"] = index.was_offered(rid, row["pending_at"])
         out["missed"].append(row)
     total = sum(len(v) for v in out.values())
     for bucket in out:

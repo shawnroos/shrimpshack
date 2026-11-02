@@ -43,7 +43,7 @@ For each ritual in force, the due function returns one state. Answers are `ritua
 | `due` | pending, with no answer since, and at most two cadence periods old |
 | `missed` | pending, with no answer since, and older than two cadence periods |
 
-Two cadence periods is the lease's own orphan threshold. A missed ritual is only ever offered, never run silently late: `start-ritual`, `run-ritual` and `skip-ritual` need Shawn's typed answer naming the ritual when it is missed. `offer-rituals` records the offer, and the due function then marks the miss `offered`, so an unanswered picker is not posted again. A `missed` or `in_flight` ritual is computed from the record, the store and the journal alone, so `P status` shows it when no PM is alive.
+Two cadence periods is the lease's own orphan threshold. A missed ritual is only ever offered, never run silently late: `start-ritual` and `run-ritual` need Shawn's answer naming the ritual when it is missed, and `skip-ritual` needs it in every state. The state is checked again under the programme lock, because a due ritual can become missed between the probe and the write. `offer-rituals` records the offer, and the due function then marks the miss `offered`, so an unanswered picker is not posted again. A `missed` or `in_flight` ritual is computed from the record, the store and the journal alone, so `P status` shows it when no PM is alive.
 
 ## 5. Rejection reasons
 

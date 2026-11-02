@@ -16,15 +16,15 @@ A `due` row means the trigger passed within the last two cadence periods and not
 
 A `missed` row means no PM ran it in time. Never run it silently late.
 
-1. Collect every `missed` row with `offered` false, and every `in_flight` row (a ritual a previous PM began and did not finish).
+1. Collect every `missed` or `in_flight` row with `offered` false (an in-flight ritual is one a previous PM began and did not finish). An offer from a previous PM's tenure does not count: ask again once.
 2. `P offer-rituals <id>...` for all of them in one call. This is what stops the next sweep from asking again.
-3. Ask Shawn once, in one AskUserQuestion picker, listing every ritual by id and what it does. Per ritual the options are: run now, skip this time, retire. For an in-flight ritual, "run now" reads "finish it".
-4. On his typed answer, make one call per ritual, each citing the answer and naming that ritual's id. For "run now": `P start-ritual <id> --prompt <id>`, the steps, then `P run-ritual <id> --prompt <id>`. For "skip this time": `P skip-ritual <id> --prompt <id>`. For "retire": `P retire-ritual <id> --as retired --prompt <id>`.
+3. Ask Shawn in AskUserQuestion pickers, one picker per ritual (a picker holds one decision), posted together. Each option is the exact text `P approval-label <command>` prints for the command it approves: `start-ritual <id>` for run now (for an in-flight ritual, finishing it), `skip-ritual <id>` for skip this time, `retire-ritual <id> --as retired` for retire. A pick approves only that exact label; free text such as "Skip r1" approves nothing.
+4. On his answer, make one call per ritual citing that ritual's pick: `P start-ritual <id> --prompt <pick id>`, the steps, then `P run-ritual <id> --prompt <pick id>`; or `P skip-ritual <id> --prompt <pick id>`; or `P retire-ritual <id> --as retired --prompt <pick id>`. A typed reply naming the ritual id works the same way.
 5. Do not ask again for a miss that is already offered. Ask again only when a new miss appears.
 
 ## Handover and end
 
-`P handover` and `P end` refuse once while a handover or end ritual is unanswered in your tenure. Run it (`start-ritual`, the steps, `run-ritual`), or ask Shawn to skip it, then retry. If you cannot (you are about to lose the session), pass `--without-rituals`: the ritual stays missed and the next PM offers it. Only the driving session is gated: an orphaned programme has no PM to run a ritual, so `end` from another session is never refused.
+`P handover` and `P end` refuse while a handover or end ritual is unanswered in your tenure. Run it (`start-ritual`, the steps, `run-ritual`), or ask Shawn to skip it, then retry. If you cannot (you are about to lose the session), pass `--without-rituals`: the ritual stays missed and the next PM offers it. Only the driving session is gated: an orphaned programme has no PM to run a ritual, so `end` from another session is never refused.
 
 ## Resume after a gap and going quiet
 
