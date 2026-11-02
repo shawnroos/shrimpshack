@@ -456,7 +456,7 @@ run = setup([ritual("a")], {"a": {"next_due_at": "2020-01-06T09:00:00Z"}})
 class Host:
     prompt_lookup = pr._default_lookup()
 try:
-    pr._check_answer(Host, record(run)["programme"], dict(record(run), run_id=run), "a", None)
+    load_lib_module("programme_ritual_run")._check_answer(Host, record(run)["programme"], dict(record(run), run_id=run), "a", None)
     print("allowed")
 except pr.RitualError:
     print("RitualError")
@@ -576,6 +576,95 @@ print(all(v in pa.PICK_VERBS for v in ("start-ritual", "run-ritual", "skip-ritua
       pa.label(["start-ritual", "r1"]) == "Approve start-ritual r1", "record-ritual" in pa.PICK_VERBS)
 EOF
 )"
+
+it "propose-ritual with a production-deploy step is refused and stores nothing"
+RUN8="$(new_run)"
+prog propose-ritual --run "$RUN8" --when "at start" --trigger start --step "deploy to production"
+check 1 "$CODE"
+has "protected_escalation" "$OUT"
+check "0" "$(q "$RUN8" "len(prog['rituals'])")"
+
+it "record-ritual --from-proposal refuses an id that is not a proposal"
+T1="$(tprompt "$RUN8" "record nothing")"
+prog record-ritual --run "$RUN8" --from-proposal nothing --prompt "$T1"
+check 1 "$CODE"
+has "no proposed ritual" "$OUT"
+
+it "record-ritual --from-proposal refuses a prompt that does not name the proposal id"
+prog propose-ritual --run "$RUN8" --when "on takeover" --trigger takeover --step "read the journal"
+PROP="$(jfield "$OUT" 'd["ritual"]')"
+T2="$(tprompt "$RUN8" "yes go ahead")"
+prog record-ritual --run "$RUN8" --from-proposal "$PROP" --prompt "$T2"
+check 1 "$CODE"
+check "proposed" "$(q "$RUN8" "next(r for r in prog['rituals'] if r['id']=='$PROP')['state']")"
+
+it "record-ritual --from-proposal refuses a field option beside the proposal"
+prog record-ritual --run "$RUN8" --from-proposal "$PROP" --prompt "$T2" --when "something else"
+check 2 "$CODE"
+
+it "record-ritual --from-proposal activates the proposal when the prompt names its id"
+T3="$(tprompt "$RUN8" "record ${PROP}")"
+prog record-ritual --run "$RUN8" --from-proposal "$PROP" --prompt "$T3"
+check 0 "$CODE"
+check "active" "$(q "$RUN8" "next(r for r in prog['rituals'] if r['id']=='$PROP')['state']")"
+
+it "keep-rituals --to repo stores the ritual under the one remit repo and it resolves at the repo layer"
+mkdir -p "${WORK}/alpha" "${WORK}/beta"
+run_py "$RUN8" <<'EOF'
+def mutate(rec):
+    rec["programme"]["remit"]["repos"] = [{"path": os.path.join(os.environ["WORK"], "alpha"), "github": "acme/alpha"}]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+T4="$(tprompt "$RUN8" "keep ${PROP} for this repo")"
+prog keep-rituals "$PROP" --to repo --prompt "$T4" --run "$RUN8"
+check 0 "$CODE"
+check "acme/alpha $PROP@repo" "$(q "$RUN8" "' '.join(pr.read_store()['repos']) + ' ' + ' '.join('%s@%s' % (r['id'], r['layer']) for r in pr.in_force(rec))")"
+
+it "keep-rituals --to repo with two remit repos and no --repo is refused, and a --repo outside the remit is refused"
+prog record-ritual --run "$RUN8" --prompt "$T1" --when "at end" --trigger end --step "write the wrap-up"
+SECOND="$(jfield "$OUT" 'd["ritual"]')"
+run_py "$RUN8" <<'EOF'
+def mutate(rec):
+    rec["programme"]["remit"]["repos"].append({"path": os.path.join(os.environ["WORK"], "beta"), "github": "acme/beta"})
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+T5="$(tprompt "$RUN8" "keep ${SECOND} for this repo")"
+prog keep-rituals "$SECOND" --to repo --prompt "$T5" --run "$RUN8"
+check 1 "$CODE"
+has "pass --repo" "$OUT"
+prog keep-rituals "$SECOND" --to repo --repo acme/other --prompt "$T5" --run "$RUN8"
+check 1 "$CODE"
+has "not a remit repo" "$OUT"
+
+it "a stored ritual whose steps were edited after approval is rejected on load and not in force"
+T6="$(tprompt "$RUN8" "keep ${SECOND} for personal use everywhere")"
+prog keep-rituals "$SECOND" --to personal --prompt "$T6" --run "$RUN8"
+check 0 "$CODE"
+"$PY" - "$CLAUDE_AUTO_RITUALS_STORE" <<'EOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+for entry in doc["personal"]:
+    entry["steps"] = ["tampered step"]
+json.dump(doc, open(sys.argv[1], "w"))
+EOF
+check "True True" "$(q "$RUN8" "str(any(r['id'] == '$SECOND' for r in pr.load_store()['rejected'])) + ' ' + str(not any('tampered step' in r['steps'] for r in pr.in_force(rec)))")"
+
+it "an unreadable rituals store makes keep-rituals and move-ritual refuse and leaves the file alone"
+printf '{ not json' > "$CLAUDE_AUTO_RITUALS_STORE"
+RUN9="$(new_run)"
+U1="$(tprompt "$RUN9" "record a start ritual")"
+prog record-ritual --run "$RUN9" --prompt "$U1" --when "at start" --trigger start --step "read the handover"
+UID1="$(jfield "$OUT" 'd["ritual"]')"
+U2="$(tprompt "$RUN9" "keep ${UID1} for personal use everywhere")"
+prog keep-rituals "$UID1" --to personal --prompt "$U2" --run "$RUN9"
+check 1 "$CODE"
+has "unreadable" "$OUT"
+U3="$(tprompt "$RUN9" "move ${UID1} to personal use everywhere")"
+prog move-ritual "$UID1" --to personal --prompt "$U3" --run "$RUN9"
+check 1 "$CODE"
+has "unreadable" "$OUT"
+check "{ not json" "$(cat "$CLAUDE_AUTO_RITUALS_STORE")"
+rm -f "$CLAUDE_AUTO_RITUALS_STORE"
 
 echo
 echo "${PASS} passed, ${FAIL} failed"

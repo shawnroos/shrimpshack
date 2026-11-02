@@ -13,7 +13,6 @@ from __future__ import annotations
 import calendar
 import datetime
 import functools
-import json
 import os
 import re
 import secrets
@@ -32,6 +31,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_naming = load_lib_module("programme_naming")
 programme_carryover = load_lib_module("programme_carryover")
 programme_behaviours = load_lib_module("programme_behaviours")
+programme_layered_store = load_lib_module("programme_layered_store")
 
 STORE_PATH_ENV = "CLAUDE_AUTO_RITUALS_STORE"
 STORE_NAME = "rituals.json"
@@ -141,14 +141,7 @@ def verdict(entry, *, allow_adoption=True) -> dict:
     return programme_protocol._verdict(lambda: _validate(entry, allow_adoption=allow_adoption))
 
 
-def _refuse(entry, check) -> None:
-    if not check["ok"]:
-        name = entry.get("id") if isinstance(entry, dict) else None
-        detail = f" ({check['detail']})" if check["detail"] else ""
-        raise RitualError(f"ritual {name!r} refused: {check['reason']}{detail}")
-
-
-_is = programme_behaviours._is
+_is = programme_layered_store._is
 
 
 def put_programme_entry(programme, entry) -> dict:
@@ -212,61 +205,17 @@ def next_after(schedule, after) -> datetime.datetime:
     return _utc(next(c for c in candidates if c > local))
 
 
-def store_path() -> str:
-    override = os.environ.get(STORE_PATH_ENV)
-    if override:
-        return override
-    return os.path.join(os.path.dirname(programme_protocol.personal_path()), STORE_NAME)
-
-
-def _read(path) -> dict:
-    try:
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except FileNotFoundError:
-        return {"format": STORE_FORMAT, "personal": [], "repos": {}}
-    except (OSError, ValueError) as exc:
-        raise RitualError(f"rituals store {path} is unreadable; not overwriting it: {exc}")
-    repos = doc.get("repos", {}) if isinstance(doc, dict) else None
-    if not isinstance(doc, dict) or not isinstance(doc.get("personal", []), list) \
-            or not isinstance(repos, dict) or not all(isinstance(v, list) for v in repos.values()):
-        raise RitualError(f"rituals store {path} is not a rituals store; not overwriting it")
-    doc.setdefault("format", STORE_FORMAT)
-    doc.setdefault("personal", [])
-    doc.setdefault("repos", {})
-    return doc
-
-
-def read_store() -> dict:
-    return _read(store_path())
-
-
-def _require_readable_store() -> None:
-    # load_store swallows an unreadable file into notices, so a verb that must refuse on one reads it directly.
-    read_store()
-
-
-# The doc is read inside the lock, so an update that replaces an id acts on the file as it is at
-# the moment of the write.
-def write_store(update) -> None:
-    path = store_path()
-
-    def body():
-        doc = _read(path)
-        if not isinstance(doc["format"], int) or doc["format"] > STORE_FORMAT:
-            raise RitualError(f"rituals store {path} has a newer format; not overwriting it")
-        update(doc)
-        folder = os.path.dirname(os.path.abspath(path))
-        os.makedirs(folder, exist_ok=True)
-
-        def write(fh):
-            json.dump(doc, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-
-        programme_home.atomic_write(path, write, ".rituals.", folder)
-
-    os.makedirs(programme_home.programmes_dir(), exist_ok=True)
-    run_record_core._flock_run(os.path.join(programme_home.programmes_dir(), STORE_LOCK), body)
+_S = programme_layered_store.LayeredStore(
+    "ritual", file_name=STORE_NAME, lock_name=STORE_LOCK, path_env=STORE_PATH_ENV, error=RitualError,
+    verdict=lambda entry: verdict(entry), target=lambda entry: target(entry))
+_refuse = _S.refuse
+store_path = _S.path
+read_store = _S.read
+write_store = _S.write
+load_store = _S.load
+_default_lookup = programme_layered_store._default_lookup
+_without, _place = programme_layered_store._without, programme_layered_store._place
+adopt = programme_carryover.adopt
 
 
 def target(entry) -> str:
@@ -275,75 +224,13 @@ def target(entry) -> str:
     return f"ritual:personal:{entry.get('id')}"
 
 
-adopt = programme_carryover.adopt
+def _require_readable_store() -> None:
+    # load_store swallows an unreadable file into notices, so a verb that must refuse on one reads it directly.
+    read_store()
 
 
-_without = programme_behaviours._without
-_place = programme_behaviours._place
-
-
-# The loader verifies a same-machine entry only through its approval row, so every stored entry
-# gets one. The rows are separate journal writes: call this after the programme write commits.
 def store(adopted, prompt, run_id, session_id, how="ritual") -> None:
-    for entry in adopted:
-        _refuse(entry, verdict(entry))
-        if entry["layer"] not in STORED_LAYERS or "adoption" not in entry:
-            raise RitualError(f"ritual {entry['id']!r} is not an adopted personal or repo entry")
-
-    def update(doc):
-        for entry in adopted:
-            _place(doc, entry)
-
-    write_store(update)
-    for entry in adopted:
-        programme_journal.append(
-            run_id, APPROVAL_KIND, session_id,
-            {"entry": how, "target": target(entry), "hash": entry["adoption"]["hash"],
-             "prompt_id": prompt["prompt_id"], "quote": prompt["quote"]},
-            cites=[prompt["prompt_id"]])
-
-
-_default_lookup = programme_behaviours._default_lookup
-
-
-def _stored_reason(entry, layer, key, lookup):
-    check = verdict(entry)
-    if not check["ok"]:
-        return check["reason"], check["detail"]
-    if entry["layer"] != layer:
-        return "wrong_layer", entry["layer"]
-    if layer == "repo" and entry["repo_key"] != key:
-        return "wrong_key", entry["repo_key"]
-    try:
-        programme_protocol._verify_adoption(entry, lookup, target(entry), local_only=False)
-    except _Reject as exc:
-        return exc.reason, exc.detail
-    return None
-
-
-def _admit(out, layer, key, entry, lookup) -> None:
-    reason = _stored_reason(entry, layer, key, lookup)
-    if reason is None:
-        (out["personal"] if layer == "personal" else out["repos"].setdefault(key, [])).append(entry)
-        return
-    name = entry.get("id") if isinstance(entry, dict) else None
-    out["rejected"].append({"layer": layer, "key": key, "id": name, "reason": reason[0], "detail": reason[1]})
-
-
-def load_store(lookup=None) -> dict:
-    out = {"personal": [], "repos": {}, "rejected": [], "notices": []}
-    try:
-        doc = read_store()
-    except RitualError as exc:
-        out["notices"].append(programme_sanitize.clean(str(exc), cap=0))
-        return out
-    lookup = lookup or _default_lookup()
-    for entry in doc["personal"]:
-        _admit(out, "personal", None, entry, lookup)
-    for key, rows in doc["repos"].items():
-        for entry in rows:
-            _admit(out, "repo", key, entry, lookup)
-    return out
+    _S.store(adopted, prompt, run_id, session_id, how)
 
 
 def _programme_entries(programme, rejected) -> list:
@@ -676,117 +563,6 @@ def note_gap(run_id, session_id, previous_beat, record) -> bool:
     return True
 
 
-def _find(host, programme, rec, rid):
-    entry = next((e for e in in_force(dict(rec, programme=programme), lookup=host.prompt_lookup) if e["id"] == rid), None)
-    if entry is None:
-        raise RitualError(f"ritual {rid!r} is not in force (unknown, retired or proposed)")
-    return entry
-
-
-def _due(host, programme, rec) -> dict:
-    # Loaded here, not at import: the due module imports this one.
-    return load_lib_module("programme_rituals_due").due(dict(rec, programme=programme), rec["run_id"],
-                                                         lookup=host.prompt_lookup)
-
-
-def _state_of(host, programme, rec, rid) -> str | None:
-    due = _due(host, programme, rec)
-    for bucket in ("in_flight", "missed", "due"):
-        if any(r["ritual"] == rid for r in due[bucket]):
-            return bucket
-    return None
-
-
-def _needs_answer(host, opts, rid) -> bool:
-    """A missed ritual runs, starts or is skipped only on Shawn's typed answer, so the prompt is demanded for exactly that state."""
-    run_id, home, record = host._locate(opts)
-    probe = programme_home.normalize_programme(record.get("programme") or {})
-    return _state_of(host, probe, dict(record, run_id=run_id), rid) == "missed"
-
-
-def _check_answer(host, programme, rec, rid, prompt) -> None:
-    """The unlocked probe only decides whether a prompt is demanded; this decides again under the lock."""
-    if prompt:
-        host.require_named(prompt, rid)
-    elif _state_of(host, programme, rec, rid) == "missed":
-        raise RitualError(f"ritual {rid!r} is missed: it needs Shawn's typed answer naming it (--prompt <id>)")
-
-
-def _h_start(host, argv):
-    positional, opts = host._parse(argv, values=("run", "prompt"))
-    if len(positional) != 1:
-        raise ValueError("usage: start-ritual <id> [--prompt <id>] [--run <id>]")
-    rid = positional[0]
-    needs = _needs_answer(host, opts, rid)
-
-    def change(programme, prompt, rec):
-        # Resolution re-validates every entry, so a ritual stored before a protected word was added is
-        # rejected there and never reaches this point: that is the run-time refusal.
-        entry = _find(host, programme, rec, rid)
-        _check_answer(host, programme, rec, rid, prompt)
-        return {"ritual": rid, "trigger": entry["when"]["trigger"], "steps": entry["steps"]}
-
-    return host._write(opts, change, STARTED, prompt_id=opts.get("prompt"), needs_prompt=needs,
-                       verb="start-ritual", target=rid)
-
-
-def _answer(host, argv, kind, verb, fields=(), typed=False):
-    positional, opts = host._parse(argv, values=("run", "prompt") + fields)
-    if len(positional) != 1:
-        raise ValueError(f"usage: {verb} <id> {' '.join('[--' + f + ' <text>]' for f in fields)} [--prompt <id>] [--run <id>]")
-    rid = positional[0]
-    needs = typed or _needs_answer(host, opts, rid)
-
-    def change(programme, prompt, rec):
-        entry = _find(host, programme, rec, rid)
-        _check_answer(host, programme, rec, rid, prompt)
-        advance_clock(programme, entry)
-        extra = {f: _clean(opts[f], "--" + f) for f in fields if opts.get(f)}
-        return dict({"ritual": rid, "trigger": entry["when"]["trigger"]}, **extra)
-
-    return host._write(opts, change, kind, prompt_id=opts.get("prompt"), needs_prompt=needs, verb=verb, target=rid)
-
-
-def _h_run(host, argv):
-    return _answer(host, argv, RAN, "run-ritual", ("outcome",))
-
-
-def _h_skip(host, argv):
-    # Skipping is Shawn's call in every state; an unprompted skip would also satisfy the handover and end gates.
-    return _answer(host, argv, SKIPPED, "skip-ritual", ("why",), typed=True)
-
-
-def _h_fail(host, argv):
-    positional, opts = host._parse(argv, values=("run", "why"))
-    why = programme_sanitize.clean(opts.get("why") or "", 300)
-    if len(positional) != 1 or not why:
-        raise ValueError("usage: fail-ritual <id> --why <line> [--run <id>]")
-    rid = positional[0]
-
-    def change(programme, _prompt, rec):
-        entry = _find(host, programme, rec, rid)
-        return {"ritual": rid, "trigger": entry["when"]["trigger"], "why": why}
-
-    return host._write(opts, change, FAILED, verb="fail-ritual", target=rid)
-
-
-def _h_offer(host, argv):
-    positional, opts = host._parse(argv, values=("run",))
-    if not positional:
-        raise ValueError("usage: offer-rituals <id>... [--run <id>]")
-    wanted = list(dict.fromkeys(positional))
-
-    def change(programme, _prompt, rec):
-        due = _due(host, programme, rec)
-        waiting = {r["ritual"]: r for r in due["missed"] + due["in_flight"]}
-        absent = [r for r in wanted if r not in waiting]
-        if absent:
-            raise RitualError(f"no missed or in-flight ritual {', '.join(absent)} to offer")
-        return {"offered": [{"ritual": r, "pending_at": waiting[r]["pending_at"]} for r in wanted]}
-
-    return host._write(opts, change, OFFERED, verb="offer-rituals", target=",".join(wanted))
-
-
 _SPECS = (
     ("record-ritual", _h_record,
      "--prompt <id> " + _FIELDS_DOC + " [--run <id>], or --from-proposal <id> --prompt <id> [--run <id>]",
@@ -808,22 +584,6 @@ _SPECS = (
      "no typed prompt from the driving session; a prompt that does not name the layer or negates it, or names "
      "none of the ids; a named id that is not an active programme-layer ritual; an unreadable rituals store; "
      "--to repo with several remit repos and no --repo."),
-    ("start-ritual", _h_start, "<id> [--prompt <id>] [--run <id>]",
-     "a session that does not drive the programme; a ritual not in force (a ritual whose step names a "
-     "protected escalation is rejected on load, so it is never in force); a missed ritual without a typed "
-     "prompt that names its id."),
-    ("run-ritual", _h_run, "<id> [--outcome <text>] [--prompt <id>] [--run <id>]",
-     "a session that does not drive the programme; a ritual not in force; a missed ritual without a typed "
-     "prompt that names its id. Moves this programme's next-due time past now."),
-    ("fail-ritual", _h_fail, "<id> --why <line> [--run <id>]",
-     "a session that does not drive the programme; a ritual not in force; no --why. Ends the in-flight state "
-     "without answering the ritual."),
-    ("skip-ritual", _h_skip, "<id> --prompt <id> [--why <text>] [--run <id>]",
-     "a session that does not drive the programme; a ritual not in force; no typed prompt that names the "
-     "ritual id, in any state. Moves this programme's next-due time past now."),
-    ("offer-rituals", _h_offer, "<id>... [--run <id>]",
-     "a session that does not drive the programme; an id that is not a missed or in-flight ritual. Records the "
-     "offer once so an unanswered picker is not posted again."),
 )
 
 

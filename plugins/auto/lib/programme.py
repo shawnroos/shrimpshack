@@ -288,6 +288,11 @@ def promoting(run_id, home, verb, attempt):
     return attempt()
 
 
+# Every beating write calls these after it commits, with the beat it replaced; a gap seen by one
+# write is gone for the next, so the hook cannot sit on the beat verb alone.
+AFTER_BEAT = []
+
+
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
            journal=True, after=None, verb=None, target=None, beat=True, names_change=True, promote=True):
     run_id, home, _ = _locate(opts, finish_move=promote)
@@ -338,7 +343,8 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         return 0
     payload = seen["full"]
     if beat:
-        programme_rituals.note_gap(run_id, seen["sid"], seen.get("previous_beat"), seen["record"])
+        for hook in AFTER_BEAT:
+            hook(run_id, seen["sid"], seen.get("previous_beat"), seen["record"])
     extra = (after(payload) or {}) if after is not None else {}
     if extra:
         payload.update(extra)
@@ -919,6 +925,8 @@ _VERBS.update(load_lib_module("programme_behaviours_skip").build_verbs(sys.modul
 
 programme_rituals = load_lib_module("programme_rituals")
 _VERBS.update(programme_rituals.build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_ritual_run").build_verbs(sys.modules[__name__]))
+AFTER_BEAT.append(programme_rituals.note_gap)
 
 _ERRORS = (
     ProgrammeError,
