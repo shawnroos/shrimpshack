@@ -26,7 +26,7 @@ NAMES = ("versions-bumped",)
 RESULTS = ("pass", "fail", "error")
 REASONS = ("ok", "shipped_changed", "marketplace_mismatch", "not_a_repo", "ref_missing", "no_plugins",
            "marketplace_unreadable", "bad_plugin_name", "history_window", "git_missing", "git_failed",
-           "timeout", "unknown_check", "internal")
+           "timeout", "unknown_check", "repo_not_in_remit", "internal")
 DEFAULT_BASE = "origin/main"
 BUDGET_SECONDS = 30.0
 CALL_SECONDS = 10.0

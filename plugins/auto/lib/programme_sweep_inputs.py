@@ -46,6 +46,8 @@ def _quiet_row(row) -> bool:
         return True
     if kind == "prompt":
         return programme_journal.prompt_origin(row) == "cron"
+    if kind == "ritual_checked":
+        return payload.get("result") == "pass"
     if kind == "validate_pass":
         return not payload.get("refuted")
     if kind == "permission_proposed":

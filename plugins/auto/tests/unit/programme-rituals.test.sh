@@ -1012,6 +1012,15 @@ check 0 "$CODE"
 has '"ran": 0' "$OUT"
 check "0" "$(q "$RUNQ" "count('ritual_checked')")"
 
+it "C4: the Programme view shows the last check result, the failed plugins and the age of the clone"
+has "check versions-bumped: fail (shipped_changed), failed: foo" "$(run_py "$RUNF" <<'EOF'
+pv = load_lib_module("programme_view")
+rec = record(args[0])
+rows = pv.rituals_view(rec, pj.read(args[0]))
+print(pv._ritual_text(rows[0]))
+EOF
+)"
+
 echo
 echo "${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

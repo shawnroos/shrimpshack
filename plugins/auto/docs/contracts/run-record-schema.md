@@ -753,7 +753,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviour_skipped`,
 `behaviours_kept`, `ritual_recorded`, `ritual_proposed`, `ritual_moved`, `ritual_retired`,
 `rituals_kept`, `ritual_started`, `ritual_ran`, `ritual_failed`, `ritual_skipped`, `ritual_offered`,
-`ritual_event`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
+`ritual_checked`, `ritual_event`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
 `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`,
 `item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`, `item_aliased`,
 `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`, `item_handed`,
@@ -883,7 +883,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `ritual:repo:<key>:<id>`. `ritual_started` carries `{ritual, trigger, steps}`; `ritual_ran` carries `{ritual,
   trigger, outcome?}`; `ritual_failed` carries `{ritual, trigger, why}`; `ritual_skipped` carries `{ritual,
   trigger, why?}`. `ritual_ran` and `ritual_skipped` add the approval fields only when the ritual was missed.
-  `ritual_offered` carries `{offered: [{ritual, pending_at}]}`. `ritual_event` carries `{trigger: "resume",
+  `ritual_offered` carries `{offered: [{ritual, pending_at}]}`. `ritual_checked` carries `{ritual, check, pending_at, late, result: pass|fail|error, reason, checked?, failed?: [{plugin, reason, files}], ref?, ref_sha?, ref_age_seconds?}`; a pass row is quiet bookkeeping for the sweep, a fail or error row is not. `ritual_event` carries `{trigger: "resume",
   silent_since}`: the one trigger no existing row represents, written after a write that follows a silence longer
   than two cadence periods. Start, takeover, handover, end and going-quiet read the existing rows
   `programme_started`, `taken_over`, `handed_over`, `programme_ended` and `stop_quiet`.

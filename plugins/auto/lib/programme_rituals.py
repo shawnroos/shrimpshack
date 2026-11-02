@@ -355,6 +355,7 @@ STARTED = "ritual_started"
 RAN = "ritual_ran"
 FAILED = "ritual_failed"
 SKIPPED = "ritual_skipped"
+CHECKED = "ritual_checked"
 OFFERED = "ritual_offered"
 ENDINGS = ("retired", "undone")
 LAYER_WORDS = {"programme": ("programme",), "repo": ("repo",), "personal": ("personal", "global", "all projects")}

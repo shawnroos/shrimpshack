@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import os
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -20,6 +21,9 @@ programme_home = load_lib_module("programme_home")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_rituals = load_lib_module("programme_rituals")
 programme_rituals_due = load_lib_module("programme_rituals_due")
+programme_ritual_checks = load_lib_module("programme_ritual_checks")
+programme_carryover = load_lib_module("programme_carryover")
+programme_journal = load_lib_module("programme_journal")
 
 RitualError = programme_rituals.RitualError
 
@@ -137,7 +141,113 @@ def _h_offer(host, argv):
     return host._write(opts, change, programme_rituals.OFFERED, verb="offer-rituals", target=",".join(wanted))
 
 
+SWEEP_BUDGET_SECONDS = 90.0
+
+
+class _NoLongerDue(RitualError):
+    pass
+
+
+def _remit_path(programme, key):
+    for repo in (programme.get("remit") or {}).get("repos") or []:
+        if isinstance(repo, dict) and repo.get("path") and programme_carryover.key_of(repo) == key:
+            return repo["path"]
+    return None
+
+
+def _check_targets(host, record, run_id, only):
+    """Due and missed calendar rituals that carry a check and have not been checked for this slot."""
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    scoped = dict(record, run_id=run_id, programme=programme)
+    rows = programme_journal.read(run_id)
+    slots = {(r.get("payload") or {}).get("ritual"): set() for r in rows if r.get("kind") == programme_rituals.CHECKED}
+    for r in rows:
+        if r.get("kind") == programme_rituals.CHECKED:
+            slots[(r.get("payload") or {}).get("ritual")].add((r.get("payload") or {}).get("pending_at"))
+    got = programme_rituals_due.due(scoped, run_id, rows=rows, lookup=host.prompt_lookup)
+    entries = {e["id"]: e for e in programme_rituals.in_force(scoped, lookup=host.prompt_lookup)}
+    targets = []
+    for state in ("due", "missed"):
+        for row in got[state]:
+            entry = entries.get(row["ritual"])
+            if entry is None or not entry.get("check") or entry["when"]["trigger"] != "calendar":
+                continue
+            if only and row["ritual"] != only:
+                continue
+            if not only and row["pending_at"] in slots.get(row["ritual"], ()):
+                continue
+            targets.append((entry, row))
+    if only and not targets:
+        raise RitualError(f"ritual {only!r} has no check that is due or missed")
+    return targets
+
+
+def _check_payload(entry, row, result) -> dict:
+    keep = ("checked", "failed", "ref", "ref_sha", "ref_age_seconds")
+    out = {"ritual": entry["id"], "check": entry["check"]["name"], "pending_at": row["pending_at"],
+           "late": row["state"] == "missed", "result": result["result"], "reason": result["reason"]}
+    out.update({k: result[k] for k in keep if k in result})
+    return out
+
+
+def _record_check(host, opts, entry, row, result) -> bool:
+    rid = entry["id"]
+
+    def change(programme, _prompt, rec):
+        # The check ran outside the lock; decide again here that this slot is still waiting.
+        again = {r["ritual"]: r for state in ("due", "missed") for r in _due(host, programme, rec)[state]}
+        if rid not in again or again[rid]["pending_at"] != row["pending_at"]:
+            raise _NoLongerDue(f"ritual {rid!r} is no longer waiting for the slot that was checked")
+        if result["result"] == "pass":
+            programme_rituals.advance_clock(programme, _find(host, programme, rec, rid))
+        return _check_payload(entry, row, result)
+
+    try:
+        host._write(opts, change, programme_rituals.CHECKED, verb="run-ritual-checks", target=rid,
+                    beat=False, names_change=False)
+    except (host.ProgrammeError, RitualError):
+        return False
+    return True
+
+
+def _h_checks(host, argv):
+    positional, opts = host._parse(argv, values=("run", "ritual"))
+    if positional:
+        raise ValueError("usage: run-ritual-checks [--ritual <id>] [--run <id>]")
+    run_id, _home, record = host._locate(opts)
+    targets = _check_targets(host, record, run_id, opts.get("ritual"))
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    deadline = time.monotonic() + SWEEP_BUDGET_SECONDS
+    counts = {"pass": 0, "fail": 0, "error": 0}
+    not_recorded, left_over = [], []
+    for entry, row in targets:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            left_over.append(entry["id"])
+            continue
+        check = entry["check"]
+        key = check.get("repo_key") or entry.get("repo_key")
+        path = _remit_path(programme, key)
+        if path is None:
+            result = {"result": "error", "reason": "repo_not_in_remit"}
+        else:
+            result = programme_ritual_checks.run_check(check["name"], path, check.get("base"),
+                                                       budget_seconds=min(programme_ritual_checks.BUDGET_SECONDS, left))
+        if _record_check(host, opts, entry, row, result):
+            counts[result["result"]] += 1
+        else:
+            not_recorded.append(entry["id"])
+    host._emit({"ok": True, "kind": "ritual_checks", "run": run_id, "ran": sum(counts.values()), "passed": counts["pass"],
+                "failed": counts["fail"], "errors": counts["error"], "not_recorded": not_recorded,
+                "left_over": left_over})
+    return 0
+
+
 _SPECS = (
+    ("run-ritual-checks", _h_checks, "[--ritual <id>] [--run <id>]",
+     "a session that does not drive the programme (the ritual stays due and is listed as not_recorded). Runs the "
+     "named check of each due or missed calendar ritual that has not been checked for its slot, outside the "
+     "programme lock; a pass moves the clock, a fail or error leaves the ritual due. --ritual re-runs one."),
     ("start-ritual", _h_start, "<id> [--prompt <id>] [--run <id>]",
      "a session that does not drive the programme; a ritual not in force (a ritual whose step names a "
      "protected escalation is rejected on load, so it is never in force); a missed ritual without a typed "
