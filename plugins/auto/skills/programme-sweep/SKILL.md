@@ -256,7 +256,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      <behaviour-id> --applied --why "<what you did>"`. The sweep stays open
      until that list is empty. `P rules` prints each behaviour's checks.
 5b. **Domain check.** Answer the digest's domain behaviours (domain.md).
-5c. **Rituals.** Answer the digest's Rituals: [references/rituals.md](references/rituals.md).
+5c. **Rituals** in the digest: [references/rituals.md](references/rituals.md).
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;
