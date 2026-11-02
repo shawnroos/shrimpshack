@@ -481,7 +481,11 @@ session.
   its version; once "bound" it bumps the run record's contract version and queues one pending entry for the
   engine. Each accepted change journals `contract_set`; each refusal journals one `request_refused`. A
   `--workflow` name must resolve in the worker's repo and pass the workflow validator, and the workflow must
-  have a step in the run's remaining phases; otherwise the call is refused. Once a workflow change has bitten,
+  have a step in the run's remaining phases; otherwise the call is refused. A workflow file that carries a key
+  from the contract's authority vocabulary is refused, because a workflow cannot grant authority. A change to a
+  different workflow reads the workflow_change authority: act_and_tell changes it and returns a tell, propose
+  hands Shawn an ask and changes nothing until the PM returns with `--approved` set to the ask id for that same
+  workflow, and never refuses. Once a workflow change has bitten,
   the engine (the pulse, the wave and the dispatch prompt, never the worker) replaces the run's pending steps in
   one write: they read skipped with the reason "workflow replaced v<N>", the new workflow's steps carry the
   version in their ids, and dispatched steps and their findings stay. Two changes before the boundary
@@ -524,6 +528,13 @@ session.
   `sweep-inputs` verdict gains `contract_changed` (a contracted item's version, last beat, record mtime or
   open-question count or oldest question moved since the last `--save`), `worker_question_due` (an open
   question past its limit, or one owed to Shawn, not yet escalated) and `contract_status_unreadable`.
+- **Contract records on the programme**: an item's `auto_run` block holds state ("launched", "bound" or
+  "launch-blocked"), mode, attempts, `session_id`, contract (the seed), plan, `launched_at`,
+  `last_start_ok`, `run_id`, path, `bound_at` and, after a handover, `handed_over_from`. The item history
+  gains `run_launching`, `run_bound`, `launch_blocked` and `run_handover`. The journal gains `contract_set`,
+  `contract_handover`, `goal_written`, `worker_question`, `worker_question_answered` and
+  `worker_question_escalated`; a refused contract write reuses `request_refused`. The goal doc is Markdown,
+  so no `.json` file under `.claude/auto/` is anything but a run record.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the Rulings kept under

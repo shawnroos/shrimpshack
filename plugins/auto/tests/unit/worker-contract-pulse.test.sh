@@ -315,7 +315,7 @@ check "1" "$(grep -c 'worker_contract_apply' "${AUTO_ROOT}/lib/dispatcher.py")"
 SB="$(bash "${AUTO_ROOT}/tests/unit/size-budget.test.sh" 2>&1)"
 has "dispatcher.py:dispatch_batch:140" "$(grep 'dispatcher.py:dispatch_batch' "${AUTO_ROOT}/tests/unit/size-budget.test.sh")"
 case "$SB" in *"dispatch_batch"*) fail "size-budget names dispatch_batch: $(printf '%s' "$SB" | grep 'dispatch_batch' | head -2)" ;; *) pass ;; esac
-case "$SB" in *"lib/dispatcher.py"*|*"lib/pulse.py"*|*"lib/pulse_guidance.py"*|*"lib/dispatch_prompt.py"*|*"lib/worker_contract_apply.py"*) fail "size-budget names a file this unit changed" ;; *) pass ;; esac
+case "$SB" in *"lib/dispatcher.py"*|*"lib/pulse.py"*|*"lib/pulse_guidance.py"*|*"lib/dispatch_prompt.py"*|*"lib/worker_contract_apply.py"*) fail "size-budget names a file this change touched" ;; *) pass ;; esac
 
 echo ""
 echo "worker-contract-pulse.test.sh: ${PASS} passed, ${FAIL} failed"

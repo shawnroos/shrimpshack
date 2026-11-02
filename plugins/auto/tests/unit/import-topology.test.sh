@@ -743,6 +743,45 @@ for _leaf in verb_cli.py programme_sanitize.py; do
   fi
 done
 
+# ─── worker contract family: one-way order, below the verb host ─────────────
+# Each module may load only modules EARLIER in this list (module-top or lazy). The order is the DAG:
+# worker_contract is the root; goal_binding is the top, loaded lazily by pulse and the run_record facade.
+_WORKER_ORDER="worker_contract worker_question worker_register worker_rebake worker_contract_apply \
+worker_question_verbs worker_contract_status worker_contract_write worker_handover goal_doc goal_binding"
+for _w in $_WORKER_ORDER; do
+  it "lib/${_w}.py exists (the worker contract DAG checks are vacuous without it)"
+  if [ -f "${LIB}/${_w}.py" ]; then pass; else fail "lib/${_w}.py missing"; fi
+done
+
+_seen=""
+for _w in $_WORKER_ORDER; do
+  it "${_w}.py loads no worker or goal module that comes later in the order (no cycle)"
+  _bad=""
+  for _later in $_WORKER_ORDER; do
+    case " $_seen " in *" $_later "*) ;; *) loads_sibling "${_w}.py" "$_later" && _bad="${_bad}${_later} " ;; esac
+  done
+  if [ -z "$_bad" ]; then pass; else fail "${_w}.py loads ${_bad}— the order is worker_contract at the root, goal_binding at the top"; fi
+  _seen="${_seen} ${_w}"
+done
+
+for _w in $_WORKER_ORDER; do
+  it "${_w}.py does NOT load programme, the run_record facade, pulse or dispatcher (it sits below the verb host)"
+  if loads_sibling "${_w}.py" "programme" || loads_sibling "${_w}.py" "run_record" \
+     || loads_sibling "${_w}.py" "pulse" || loads_sibling "${_w}.py" "dispatcher" \
+     || loads_sibling "${_w}.py" "programme_sources" || loads_sibling "${_w}.py" "programme_lifecycle"; then
+    fail "${_w}.py must not load a module that loads it — programme, the facade, pulse and dispatcher reach the worker modules"
+  else
+    pass
+  fi
+done
+
+it "programme.py registers the worker verb modules after its verb table (build_verbs(host))"
+_reg=0
+for _w in goal_doc worker_register worker_contract_write worker_handover worker_question_verbs worker_contract_status; do
+  grep -qE "load_lib_module\(\"${_w}\"\)\.build_verbs\(" "$LIB/programme.py" || _reg=$((_reg + 1))
+done
+if [ "$_reg" -eq 0 ]; then pass; else fail "${_reg} worker verb module(s) are not registered through build_verbs in programme.py"; fi
+
 # ─── deliberate-fail: prove the lint isn't vacuous ──────────────────────────
 # Write a tmp copy of run_record_mutators.py with a forbidden facade import added;
 # the loads_sibling check MUST flag it. (We test the predicate directly against

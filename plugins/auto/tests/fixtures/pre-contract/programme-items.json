@@ -1,0 +1,68 @@
+{
+  "herdr:w2/p31": {
+    "aliases": [],
+    "change_kinds": [],
+    "deliverables": {},
+    "dropped_reason": null,
+    "focus_override": null,
+    "held": null,
+    "held_at": null,
+    "history": [
+      {
+        "at": "2026-10-30T10:00:00Z",
+        "kind": "added"
+      }
+    ],
+    "id": "herdr:w2/p31",
+    "joined_at": "2026-10-30T10:00:00Z",
+    "matched_rule": null,
+    "owner": {
+      "pane": "w2:p31",
+      "session_id": "sess-hand",
+      "terminal_id": "term_p31"
+    },
+    "parked_pane": null,
+    "repo": null,
+    "requires": [],
+    "sessions": [],
+    "size": null,
+    "state": "open",
+    "task_runs": [],
+    "title": "Hand-driven pane worker",
+    "trajectory": null,
+    "waiting_on": null
+  },
+  "linear:AI-701": {
+    "aliases": [],
+    "change_kinds": [],
+    "deliverables": {},
+    "dropped_reason": null,
+    "focus_override": null,
+    "held": null,
+    "held_at": null,
+    "history": [
+      {
+        "at": "2026-10-30T10:00:00Z",
+        "kind": "added"
+      }
+    ],
+    "id": "linear:AI-701",
+    "joined_at": "2026-10-30T10:00:00Z",
+    "matched_rule": null,
+    "owner": {
+      "pane": null,
+      "session_id": null,
+      "terminal_id": null
+    },
+    "parked_pane": null,
+    "repo": null,
+    "requires": [],
+    "sessions": [],
+    "size": null,
+    "state": "open",
+    "task_runs": [],
+    "title": "Plain item",
+    "trajectory": null,
+    "waiting_on": null
+  }
+}
