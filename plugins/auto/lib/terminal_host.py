@@ -208,15 +208,22 @@ class Detection:
 
     `proof` is the own_pane answer that selected the host when two hosts were announced, so a caller does not probe twice.
     """
-    __slots__ = ("name", "announced", "why", "fix", "proof")
+    __slots__ = ("name", "announced", "why", "fix", "proof", "rung")
 
-    def __init__(self, name=None, announced=False, why=None, fix=None, proof=None):
-        self.name, self.announced, self.why, self.fix, self.proof = name, announced, why, fix, proof
+    def __init__(self, name=None, announced=False, why=None, fix=None, proof=None, rung=None):
+        self.name, self.announced, self.why, self.fix, self.proof, self.rung = name, announced, why, fix, proof, rung
 
 
 def key_hosts() -> tuple:
     """Hosts a space key may carry. stub exists only while AUTO_TEST_HOST selects it, so no production state names it."""
     return HOSTS + (("stub",) if os.environ.get(TEST_HOST_ENV) == "stub" else ())
+
+
+RUNG_LIVE = "live proof"
+RUNG_INSTALLED = "only announced host installed"
+RUNG_ROW = "this session's registry row"
+# A host picked by these was not proven to hold this session's pane, so nothing may record a pane for it.
+FALLBACK_RUNGS = (RUNG_INSTALLED, RUNG_ROW)
 
 
 def _herdr_server_up() -> bool:
@@ -233,17 +240,51 @@ def _proves(name, found) -> bool:
 
 
 def _tell_apart(env) -> Detection:
-    key = tuple(env.get(k) for k in _PROOF_ENV) + (env.get("PATH"),)
+    key = tuple(env.get(k) for k in _PROOF_ENV) + (env.get("PATH"), env.get("CLAUDE_CODE_SESSION_ID"))
     if key in _proved:
         return _proved[key]
     answers = {name: host_named(name).own_pane(env) for name in ("herdr", "rex")}
     proven = [name for name, found in answers.items() if _proves(name, found)]
     if len(proven) == 1:
-        _proved[key] = Detection(proven[0], True, proof=answers[proven[0]])
+        _proved[key] = Detection(proven[0], True, proof=answers[proven[0]], rung=RUNG_LIVE)
         return _proved[key]
-    why = ("both herdr and Rex prove this session's pane, so auto cannot tell which one to type into" if proven
-           else "this session announces both herdr and Rex, and neither herdr nor Rex could prove its pane")
-    return Detection(None, True, why, _FIX_AMBIGUOUS)
+    if proven:
+        return Detection(None, True, "both herdr and Rex prove this session's pane, so auto cannot tell which one to type into",
+                         _FIX_AMBIGUOUS)
+    installed = [name for name in ("herdr", "rex") if host_named(name).installed()]
+    # Fallback picks are never memoised: the registry row and the installed set can change under a long-lived watcher.
+    if len(installed) == 1:
+        return Detection(installed[0], True, rung=RUNG_INSTALLED)
+    recorded = _recorded_host(env, installed)
+    if recorded:
+        return Detection(recorded, True, rung=RUNG_ROW)
+    facts = ("neither the herdr nor the Rex command is on PATH" if not installed else
+             "both commands are installed and the session registry has no interactive row for this session")
+    return Detection(None, True, f"this session announces both herdr and Rex, and neither herdr nor Rex could prove its pane; {facts}",
+                     _FIX_AMBIGUOUS)
+
+
+def _recorded_host(env, installed) -> str | None:
+    """The host this session's own registry row names, when its command is installed and the row was written under
+    the same pane variable this environment still carries.
+
+    `claude --resume` reuses the session id, so the id alone would let an old herdr row decide for a session that
+    now runs in Rex. A broken registry file must not turn a refusal into a crash, so any failure means no answer.
+    """
+    sid = env.get("CLAUDE_CODE_SESSION_ID")
+    if not sid:
+        return None
+    try:
+        registry = load_lib_module("session_registry")
+        row = registry.lookup(sid)
+        host = registry.host_of_row(row) if row else None
+    except Exception:  # noqa: BLE001
+        return None
+    if host not in installed:
+        return None
+    seen = env.get("HERDR_PANE_ID") if host == "herdr" else env.get("REX_BLOCK")
+    stored = row.get("env_pane") if host == "herdr" else row.get("pane_id")
+    return host if not seen or seen == stored else None
 
 
 def detect(env=None) -> Detection:
@@ -265,6 +306,18 @@ def detect(env=None) -> Detection:
     if env.get("TERM_PROGRAM") == "ghostty":
         return Detection("herdr" if _herdr_server_up() else "ghostty", True)
     return Detection(FALLBACK_HOST, False)
+
+
+def explain(env=None) -> dict:
+    """The facts behind detect() for this session, for a person whose session was refused. Reads only; writes nothing."""
+    env = os.environ if env is None else env
+    found = detect(env)
+    return {"host": found.name, "decided_by": found.rung or ("environment" if found.name else None),
+            "why": found.why, "fix": found.fix,
+            "announced": [n for n, hit in (("herdr", env.get("HERDR_PANE_ID") or env.get("HERDR_ENV")),
+                                           ("rex", env.get("REX_SESSION"))) if hit],
+            "installed": [n for n in ("herdr", "rex") if host_named(n).installed()],
+            "session_id_set": bool(env.get("CLAUDE_CODE_SESSION_ID"))}
 
 
 class RefusedHost(TerminalHost):
