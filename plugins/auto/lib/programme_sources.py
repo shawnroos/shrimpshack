@@ -39,6 +39,7 @@ programme_behaviours = load_lib_module("programme_behaviours")
 programme_focus = load_lib_module("programme_focus")
 programme_domain = load_lib_module("programme_domain")
 programme_domain_state = load_lib_module("programme_domain_state")
+programme_remit_owned = load_lib_module("programme_remit_owned")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -90,7 +91,7 @@ def remit(programme) -> dict:
     tracker = block.get("tracker") if isinstance(block.get("tracker"), dict) else {}
     return {"server": server, "workspaces": reached, "unreached": unreached,
             "tabs": list(tabs) if term.get("value") == "tabs" and tabs else None,
-            "repos": [r for r in block.get("repos") or [] if isinstance(r, dict) and r.get("path")],
+            "repos": programme_remit_owned.sweep_scope(block),
             "tracker": {part: list(tracker.get(part) or []) for part in programme_home.TRACKER_SCOPE_PARTS}}
 
 
@@ -521,8 +522,19 @@ def launch_worker(spinoff, extra, session_id=None) -> dict:
         out.update(reason=confirmed.why, outcome="uncertain")
         return out
     out.update(ok=True, outcome="completed", pane=programme_sanitize.token(found["row"].get("pane_id")) or pane,
-               terminal_id=programme_sanitize.token(found["row"].get("terminal_id")))
+               terminal_id=programme_sanitize.token(found["row"].get("terminal_id")),
+               worktree=programme_sanitize.clean(programme_remit_owned.worktree_of(output), 400) or None,
+               folder=_pane_folder(found["row"].get("pane_id") or pane, found["row"]))
     return out
+
+
+def _pane_folder(pane_id, row) -> str | None:
+    folder = row.get("foreground_cwd") or row.get("cwd")
+    if not folder:
+        snap, _ = read_herdr()
+        match = next((p for p in (snap or {}).get("panes") or [] if p.get("pane_id") == pane_id), None)
+        folder = (match or {}).get("foreground_cwd") or (match or {}).get("cwd")
+    return programme_sanitize.clean(folder, 400) or None
 
 
 def _take(argv, flag) -> tuple:
@@ -650,7 +662,7 @@ def _brief_copy(home, item_id, extra, at, brief, tail) -> list:
     return extra[:at] + [copy] + extra[at + 1:]
 
 
-def _launch_assign(started, session_name, restrictions=(), behaviour_ids=()):
+def _launch_assign(started, session_name, restrictions=(), behaviour_ids=(), payload=None):
     def assign(prog, op):
         item = prog["items"][programme_record._resolve(prog, op["item"])]
         entry = {k: started.get(k) for k in ("session_id", "pane", "terminal_id", "ok", "reason", "spinoff_exit")}
@@ -663,10 +675,23 @@ def _launch_assign(started, session_name, restrictions=(), behaviour_ids=()):
             _record_restrictions(item, restrictions, "start-worker")
             for bid in behaviour_ids:
                 programme_behaviours.record_delivery(item, bid, "brief", "start-worker")
+            _join_remit(prog, op, entry, started, payload)
         item["history"].append({"at": entry["at"], "kind": "started" if started.get("ok") else "start_failed",
                                 "session_id": started["session_id"]})
         return True
     return assign
+
+
+def _join_remit(prog, op, entry, started, payload) -> None:
+    result = programme_remit_owned.add_for_worker(
+        prog, worktree=started.get("worktree"), folder=started.get("folder"), item=op["item"],
+        session=started["session_id"], at=entry["at"])
+    if result["repo"]:
+        entry["repo"] = result["repo"]
+    if payload is not None:
+        # settle composes its journal row from this dict after assign runs, so the row carries the result atomically.
+        payload["remit_added"] = result["added"]
+        payload["remit_reason"] = result["reason"]
 
 
 def _reconcile_assign(target):
@@ -756,7 +781,10 @@ def _h_start_worker(host, argv):
                    behaviour_ids=behaviour_ids, behaviours_held_back=held_back, **{k: v for k, v in started.items() if k != "ok"})
     done = _settled(host, run_id, home, op, "worker_started" if started["ok"] else "worker_start_failed",
                     payload, started["outcome"],
-                    assign=_launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids))
+                    assign=_launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids, payload))
+    if payload.get("remit_added"):
+        programme_journal.append(run_id, "remit_worker_added", driver_session_id(),
+                                 {"item": key, "repo": payload["remit_added"], "session_id": started["session_id"]})
     host._emit(dict({"ok": True, "run": run_id, "kind": "worker_started" if started["ok"] else
                      "worker_start_failed", "attempt": op["attempt"], "operation_state": done["state"],
                      "late": not done["receipt"]["authority_current"]}, **payload))
