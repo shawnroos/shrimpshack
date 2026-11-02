@@ -9,10 +9,12 @@ are also reported to herdr, so its snapshot carries the owner.
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import re
 import sys
+import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -205,6 +207,26 @@ def lookup(session_id, server=None, workspace=None, *, include_headless=False, h
     if not found:
         return None
     return max(found, key=lambda r: r.get("at") or "")
+
+
+def session_start(session_id):
+    """Epoch seconds of the earliest registry row for a session, or None.
+
+    SessionStart fires again on resume and compact, so the latest row would move the start past files the session
+    wrote before it.
+    """
+    if not session_id:
+        return None
+    start = None
+    for row in _all_rows():
+        if row.get("session_id") != session_id:
+            continue
+        try:
+            stamp = calendar.timegm(time.strptime(row["at"], "%Y-%m-%dT%H:%M:%SZ"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        start = stamp if start is None else min(start, stamp)
+    return start
 
 
 def known_panes() -> set:

@@ -51,6 +51,26 @@ Three ways to allow some commands whose program name is built at run time (`"$PY
 - **Replay the real denials as the acceptance number, and do not trust a stored command's text.** The journal of a live programme held 282 distinct denied commands; replaying them through each candidate guard turned "this feels better" into 119 of 129. Two traps in that measurement: a journal row is truncated at 2000 characters, which leaves quotes unbalanced, so the lexer takes its `split()` fallback and shreds the row into words — one apparent false positive was purely that artifact. And `bash tests/run.sh 2>&1 | tail -30` backgrounded returns the **pipeline's** exit status, which is `tail`'s, so it reported exit 0 with an empty log; re-run unpiped to a file to get the real `7735 passed, 3 failed`.
 - **Clear every terminal-host variable in a test harness, not just the host you are testing.** `plugins/auto/tests/integration/programme-hooks.test.sh` unset only `HERDR_*`. Run from a Rex pane, the leftover `REX_*` put the session in a host the suite never set up and failed 25 cases that read exactly like real regressions. The unit suite already cleared `HERDR|REX|GHOSTTY|AUTO_TEST`; the integration suite had drifted.
 
+## Code the guard cannot read as a command (issues #184 and #185)
+
+A command-text guard stops at the program name. When the program is a shell or an interpreter, the code it runs decides what happens, and that code can sit in a heredoc, an inline `-c` operand, or a file the session wrote. The guard now reads it, for a session that drives no programme.
+
+**What is read, and by which rule** (`plugins/auto/lib/send_guard_runners.py`, `send_guard_inline.py`):
+
+| Code | Rule |
+|---|---|
+| A path the same command writes and then runs | Judged like a typed command; content the guard cannot read is refused |
+| A script file the session wrote or changed | Judged like a typed command. "Session wrote it" means `max(mtime, ctime)` is at or after the session's earliest registry row, and the file is not a tracked file equal to the default branch |
+| Inline Python (`-c`, heredoc, here-string) | Allowed only when a positive list of modules and attributes proves it cannot start a process, open a socket, load code by string or reach a private name |
+| Inline code in any other language | Refused |
+| `PYTHON*`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PATH`, `LD_*`, `DYLD_*` set in front of an interpreter or shell | Refused |
+
+**Why a positive list, and what it costs.** A refused-module list leaks: `shlex.os`, `json.codecs` and `collections._sys` hand out the modules the list was meant to keep out. The positive list allows a public attribute only when its value is not itself a module, never lets a module stand as a bare value, and refuses underscore names, frame attributes, `getattr`, `eval`, `exec`, `compile`, and any `/dev/` path other than the null and random devices. Replaying 30 days of worker commands (23,237 commands) through the old and new guard, the new guard refuses 5.1% more of them and allows nothing the old guard denied. The largest parts are by design: `subprocess` 1.6%, and a command that writes a file and runs it in the same breath 0.9%.
+
+**Two measurements changed the design.** Running the existing command rule over every script file a worker ran would have refused 90% of them, because real scripts hold `$VAR` command words. Reading only files the session wrote cost under 1%. A first draft that also refused every file write and `pathlib` refused 15% of all commands. A file write is not process creation, so the rule moved to what a written file does next: it is read when it runs, a module file that shadows an import is refused, and a device path is refused.
+
+**Residuals that stay open** (each is a follow-up issue): code changed after the check (a background job swapping a file, or `git update-ref` making a script look identical to the default branch); `python3 -m <module>`; a script that imports or sources another file; interpreters outside the name list; programs that start processes from their own arguments (`awk`, `find -exec`, `xargs`, `git -c`); startup files in site directories; and operands the guard cannot resolve (`bash "$f"`). Only a runtime fix closes the class: the host binaries and the herdr socket refuse any session that is not the driver.
+
 ## Applicability
 
 This applies to any guard that reads command text where a wrong "allow" fails silently, and especially to one whose errors and timeouts fail open. Before narrowing such a guard, ask the person which precision they will give up. Do not start a third parse-based round (auto memory [claude]: the same pattern failed three rounds running in earlier auto and reflect guard work).

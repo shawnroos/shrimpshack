@@ -556,7 +556,11 @@ def driver_send_denial(stdin_raw: str) -> dict | None:
     session_id, command = _read_stdin(stdin_raw)
     if not command:
         return None
-    return load_lib_module("send_guard").denial(session_id, command)
+    try:
+        cwd = json.loads(stdin_raw).get("cwd")
+    except Exception:
+        cwd = None
+    return load_lib_module("send_guard").denial(session_id, command, cwd if isinstance(cwd, str) and cwd else None)
 
 
 DONE_STATE_NAMES = frozenset({"done", "completed", "complete", "canceled", "cancelled",

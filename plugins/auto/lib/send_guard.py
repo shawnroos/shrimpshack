@@ -7,6 +7,7 @@ proves a pane or a host (KTD3).
 from __future__ import annotations
 
 import codecs
+import collections
 import json
 import os
 import re
@@ -16,7 +17,7 @@ import sys
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_lib_module  # noqa: E402
+from _bootstrap import load_lib_module, test_hatch_enabled  # noqa: E402
 
 _SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
 _SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
@@ -26,6 +27,10 @@ _SHELL_NAMES = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "
                           "fish", "tcsh", "csh", "yash", "posh", "rc", "osh", "xonsh"})
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 MAX_DEPTH = 4
+# One heredoc: its text, whether a shell may run it, whether the delimiter was quoted, the path its reader line
+# redirects into (`cat > x.sh <<'EOF'`), and the programs on that line.
+_Body = collections.namedtuple("_Body", "text shell quoted target readers")
+_INLINE_FAULT = "CLAUDE_AUTO_TEST_SEND_GUARD_INLINE_FAULT"
 # Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
 SEEN_CAP = 8
 SEGMENT_CAP = 256
@@ -149,8 +154,24 @@ def _heredoc_reader_is_shell(text: str, start: int, line_end: int) -> bool:
                or _RUNTIME_WORD.search(w) for w in programs)
 
 
+def _reader_info(text: str, start: int, line_end: int):
+    """(programs on the heredoc's reader line, the path that line redirects into or None)."""
+    words = _lex(text[text.rfind("\n", 0, start) + 1:line_end])
+    runs, assigns = _command_positions(words)[:2]
+    programs = [os.path.basename(w).casefold() for k, w in enumerate(words)
+                if runs[k] and not assigns[k] and not _OPERATOR_ONLY.match(w) and w not in _COMMAND_PREFIX]
+    target = None
+    for k, word in enumerate(words):
+        if word in (">", ">>", ">|") and k + 1 < len(words):
+            target = words[k + 1]
+        elif os.path.basename(word) == "tee" and runs[k]:
+            args = [w for w in words[k + 1:] if not w.startswith("-") and not _OPERATOR_ONLY.match(w)]
+            target = args[0] if args else target
+    return programs, target
+
+
 def _split_heredocs(text: str):
-    """(text without heredoc bodies, [(body, a shell runs it, the delimiter was quoted)]).
+    """(text without heredoc bodies, [_Body]).
 
     A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) is the one case where the shell expands nothing in the
     body, so such a body cannot become a command through `$VAR` either.
@@ -169,6 +190,7 @@ def _split_heredocs(text: str):
         kept.append(text[pos:line_end + 1])
         quoted = bool(found.group(1)) or text[max(0, found.start(2) - 1):found.start(2)] == "\\"
         shell = _heredoc_reader_is_shell(text, found.start(), line_end)
+        readers, target = _reader_info(text, found.start(), line_end)
         lines, cursor = [], line_end + 1
         while cursor < len(text):
             end = text.find("\n", cursor)
@@ -177,7 +199,7 @@ def _split_heredocs(text: str):
             if line.strip() == found.group(2):
                 break
             lines.append(line)
-        bodies.append(("\n".join(lines), shell, quoted))
+        bodies.append(_Body("\n".join(lines), shell, quoted, target, readers))
         pos = cursor
         if pos >= len(text):
             return "".join(kept), bodies
@@ -435,11 +457,11 @@ def _resolver(tokens: list, assigns: list, spans: list, main: str, hosts: list, 
 
 
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None,
-          shell: bool = True, expands: bool = True, loops_ok: bool = False) -> None:
+          shell: bool = True, expands: bool = True, loops_ok: bool = False, ctx=None) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     marked, spans = _mark_substitutions(main)
     tokens = _lex(_newlines_as_breaks(marked))
-    piped = main + "\n" + "\n".join(body for body, _, _ in bodies)
+    piped = main + "\n" + "\n".join(body.text for body in bodies)
     strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
     positions = _command_positions(tokens)
     runs, assigns, _globbed, progs = positions
@@ -453,11 +475,11 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         for script in _substitution_scripts(spans):
             # A loop variable resolves only inside a body whose output sets a variable: that body is read as a value.
             _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=shell, expands=expands,
-                  loops_ok=script in resolve.value_bodies)
-        for body, body_shell, quoted in bodies:
-            for script in [body] + body.splitlines():
+                  loops_ok=script in resolve.value_bodies, ctx=ctx)
+        for body in bodies:
+            for script in [body.text] + body.text.splitlines():
                 _scan(script, depth + 1, hosts, pane_ids, found, proven,
-                      shell=shell and body_shell, expands=expands and not quoted)
+                      shell=shell and body.shell, expands=expands and not body.quoted, ctx=ctx)
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
         prog = resolve(start, token) or token
@@ -476,16 +498,16 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         if _INTERPRETERS.match(base) and depth < MAX_DEPTH and runs[start]:
             # Inline code of another language can call the host command through a string; scan every string in it.
             for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
-                _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
+                _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=ctx)
         if script is None and base in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
             # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be
             # that script. Lex the unmarked text for this: `bash <(echo '<send>')` holds the script inside a
             # substitution span, which the marked token list no longer carries.
             for quoted in {t for t in tokens + _lex(_newlines_as_breaks(main)) if " " in t}:
-                _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
+                _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=ctx)
         if script is not None:
             if depth < MAX_DEPTH:
-                _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=script_shell, expands=expands)
+                _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=script_shell, expands=expands, ctx=ctx)
             continue
         if start in looked_up:
             continue
@@ -497,6 +519,9 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
                 hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
             if hit:
                 found.append((host.name, hit[0], hit[1], hit[2] if len(hit) > 2 else ""))
+    if proven is not None and ctx is not None and shell:
+        load_lib_module("send_guard_runners").judge_runners(
+            sys.modules[__name__], tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_ids, found, proven, ctx)
 
 
 def _command_positions(tokens: list) -> tuple:
@@ -615,14 +640,15 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven,
     return "send to a pane auto cannot prove is not the driver's", "", "send"
 
 
-def host_sends(command: str, pane_ids: list, proven=None) -> list:
+def host_sends(command: str, pane_ids: list, proven=None, cwd=None, session_start=None) -> list:
     """(host, verb, target) for every host command in ``command`` that types into a pane.
 
     proven (a callable, for a session that is not the driver) switches to the allow-list policy in _unproven."""
     terminal_host = load_lib_module("terminal_host")
     hosts = [terminal_host.host_named(name) for name in terminal_host.key_hosts()]
     found = []
-    _scan(command, 0, hosts, [i for i in pane_ids if i], found, proven)
+    ctx = load_lib_module("send_guard_inline").Context(cwd, session_start) if proven is not None else None
+    _scan(command, 0, hosts, [i for i in pane_ids if i], found, proven, ctx=ctx)
     return found
 
 
@@ -689,13 +715,14 @@ def _driver_hit(command: str, session_id, driver: dict, sender: dict):
     return (None, None, named) if named else None
 
 
-def _strict_hit(command: str, session_id, drivers: list, sender: dict):
+def _strict_hit(command: str, session_id, drivers: list, sender: dict, cwd=None):
     """Allow-list for a session that drives no programme: its command may type into a pane only by proving the
     target is another session's pane, and may not write to a tty device."""
     if any(d.get("session_id") == session_id for d in drivers):
         return None
     ids = [i for d in drivers for i in _ids(d)]
-    unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers))
+    started = load_lib_module("session_registry").session_start(session_id)
+    unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers), cwd=cwd, session_start=started)
     if unproven:
         return unproven[0][0], unproven[0][1], drivers[0]["pane_id"], unproven[0][3]
     return (None, "tty write", drivers[0]["pane_id"]) if _tty_write(command) else None
@@ -780,13 +807,25 @@ _FIXES = {
                 "`||`, `if` or loop, and use it only as a whole word, `$PY`.",
     "word": "this command runs a program whose name is built at run time (a `$(...)`, glob, brace or `~` joined into "
             "the word). Write the program name as one literal word.",
+    "inline": "this command runs inline code auto cannot show is safe: {detail}. Write the step as a plain command, or "
+              "keep the Python to parsing and formatting (json, re, os.path, collections, datetime, sys.argv); code "
+              "with quotes or a dollar sign goes in a quoted heredoc (python3 - <<'EOF'). Remove any PYTHON*, PATH "
+              "or BASH_ENV setting from the command.",
+    "script": "the script `{detail}`. A script written in this session is judged like a command typed here: write "
+              "each program name as a literal word, set variables from literal words, put the script's text in a "
+              "quoted heredoc or the editor tool, or run a script that existed before this session.",
     "send": "send only to a literal pane id that another session's registry row shows, with no variable, "
             "substitution or file in the command word or the target; run osascript only with -e and a script "
             "that does not mention Ghostty, a terminal, key presses or string joins; never write to a tty device.",
 }
 
 
-def denial(session_id, command):
+def _fix(cause: str) -> str:
+    kind, _, detail = cause.partition(":")
+    return _FIXES.get(kind, _FIXES["send"]).replace("{detail}", detail.strip())
+
+
+def denial(session_id, command, cwd=None):
     drivers = load_lib_module("session_registry").driver_panes()
     try:
         _with_live_ids(drivers)
@@ -797,7 +836,7 @@ def denial(session_id, command):
     for driver in drivers:
         hit = _driver_hit(command, session_id, driver, sender)
         if hit is None and driver is drivers[-1]:
-            hit = _strict_hit(command, session_id, drivers, sender)
+            hit = _strict_hit(command, session_id, drivers, sender, cwd)
             driver = drivers[0]
         if hit is None:
             continue
@@ -817,7 +856,7 @@ def denial(session_id, command):
             "Only the person types into the programme driver's pane, "
             "and other sessions may not name it in any command; report through the "
             "programme's inbox instead. This attempt is journaled."
-            + (f" Fix: {_FIXES.get(cause, _FIXES['send'])}" if unproven else "")
+            + (f" Fix: {_fix(cause)}" if unproven else "")
         )
         return {"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

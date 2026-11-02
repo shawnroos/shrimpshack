@@ -220,7 +220,9 @@
 #                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy],
 #                          programme_behaviour_guard [lazy], programme_settings_guard [lazy],
 #                          programme_store [lazy], send_guard [lazy]
-#   send_guard           → terminal_host, session_registry [lazy]
+#   send_guard           → terminal_host, session_registry [lazy], send_guard_runners [lazy],
+#                          send_guard_inline [lazy]
+#   send_guard_runners   → send_guard_inline [lazy] (the send_guard module is passed in, never imported)
 #   auto-spawn           → driver_session; auto-workspace [lazy]
 #
 # format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`
