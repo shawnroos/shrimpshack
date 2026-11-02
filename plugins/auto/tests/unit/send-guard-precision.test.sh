@@ -361,10 +361,18 @@ check deny "$(verdict "$OUT")"
 it "the denial names the live pane"
 has "w2:pAG" "$OUT"
 denied 'herdr pane send-text w2:p9T hi'
+denied 'herdr pane close w2:p9T'
+denied 'herdr pane close w2:pAG'
+denied 'herdr pane close w2:p77'
+denied 'herdr pane close --help'
+denied 'herdr pane close'
+denied '$HERDR_BIN_PATH pane close w2:p77'
 denied 'herdr pane send-text term_pAG hi'
 allowed 'herdr pane send-text w2:p77 hi'
 it "the PM's own session may still send to a worker pane"
 check allow "$(verdict "$(hook pm-mv 'herdr pane send-text w2:p77 hi')")"
+it "the PM's own session may close a worker pane"
+check allow "$(verdict "$(hook pm-mv 'herdr pane close w2:p77')")"
 
 it "after one live sighting, a failed lookup still guards the live pane"
 check deny "$(verdict "$(hook sess-worker 'herdr pane send-text w2:pAG hi' FAKE_HERDR_MODE=fail)")"
