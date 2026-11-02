@@ -255,6 +255,24 @@ session.
   decided, under the instruction's id. A Ruling already stored under that id wins.
   The gate never reads a kind-less Ruling, `record-ruling` refuses to revise one,
   and `close-ruling` closes one with a typed prompt naming it.
+- **Rituals**: named workflows the PM runs when a calendar rule or a programme moment fires
+  (programme-rituals-format.md). `record-ritual` (`--prompt <id> --when <text>`, one of
+  `--trigger start|takeover|handover|end|resume|quiet` or `--schedule 'daily HH:MM'|'weekly mon HH:MM'|
+  'monthly 1-31 HH:MM'`, and one or more `--step <line>`) applies one at once at the programme layer, sets
+  this programme's clock and journals `ritual_recorded`; a step that names a protected escalation is
+  refused. `propose-ritual` stores a proposal with no prompt, and `record-ritual --from-proposal <id>
+  --prompt <id>` applies it. `move-ritual`, `retire-ritual` and `keep-rituals` follow the Behaviours verbs of the
+  same name (typed prompt naming the id and the layer; the store write and one `rule_adopted` record run after
+  the commit; `CLAUDE_AUTO_RITUALS_STORE` overrides the path). A due ritual runs as `start-ritual <id>`, the
+  steps, then `run-ritual <id> [--outcome <text>]`; `fail-ritual <id> --why <line>` ends a run that did not
+  finish. A missed ritual is never run silently late: `offer-rituals <id>...` records that the PM put it to Shawn
+  once, and his answer then goes to `start-ritual`, `run-ritual`, `skip-ritual` or `retire-ritual`, one
+  call per ritual, each prompt naming that ritual's id. `skip-ritual` needs a typed prompt in every state, so an
+  unprompted skip cannot satisfy a gate. Those four, `move-ritual` and `keep-rituals` also accept a pick of the
+  exact label `approval-label` prints; `record-ritual` and `propose-ritual` do not. `run-ritual`, `skip-ritual` and `retire-ritual` move the programme's next-due time past
+  now. `handover` and `end` refuse while a ritual for their trigger is unanswered in the tenure that is
+  ending; `--without-rituals` goes ahead and leaves it missed. The ritual verbs, in the order a run uses them:
+  `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`.
 - **Behaviours**: standing guidance on how the PM and its workers do the work. A
   behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
   --when <text>`) with `--do` or `--dont` lines (plus optional `--trigger claim|merge|block|start`, `--pm-check`,
