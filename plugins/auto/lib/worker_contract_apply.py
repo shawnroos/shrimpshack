@@ -63,7 +63,7 @@ def apply_at_pulse(repo_root, run_id, record=None) -> dict:
 
 
 def clamp_wave(repo_root, run_id, cap) -> int:
-    record = apply_bites(repo_root, run_id, STEP_BITES)
+    record = load_lib_module("worker_rebake").complete_due(repo_root, run_id, apply_bites(repo_root, run_id, STEP_BITES))
     block = _block(record)
     if block is None:
         return cap
@@ -103,6 +103,6 @@ def append_guidance(text, record, effective=None, answers=None):
 
 
 def step_section(repo_root, run_id) -> str:
-    record = apply_bites(repo_root, run_id, STEP_BITES)
+    record = load_lib_module("worker_rebake").complete_due(repo_root, run_id, apply_bites(repo_root, run_id, STEP_BITES))
     block = _block(record)
     return "" if block is None else guidance(block)

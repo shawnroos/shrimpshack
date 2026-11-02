@@ -66,6 +66,10 @@ shapes and per-verb rejection modes. In brief:
   never takes a result as an argument), `evidence-journal` (reads the checks journaled
   under .claude/auto/journal/). The exit predicate never reads this evidence, so a
   task run finishes exactly as it would without it.
+- **Goal binding**: `goal-bound` (args: the run, the goal doc version) is how a contracted worker reports the
+  goal doc version it bound with its own `/goal`. It refuses any session but the run's own, a run with no
+  contract, and a version outside 1 to the contract's goal version. The version only moves up. The exit
+  predicate never reads it, so an unbound or stale goal leaves the Stop hook holding on the predicate.
 
 This table is fenced by `tests/unit/doc-fence-agent-tool-surface.test.sh`: it
 derives the verb set from `describe` (hence from `_VERBS`) and fails if any verb
@@ -475,7 +479,23 @@ session.
   accepted. With no `--bite`, a change that narrows any authority binds at the next pulse and every other
   change at the next step boundary. While the item is "launched" it edits the item's seed contract and bumps
   its version; once "bound" it bumps the run record's contract version and queues one pending entry for the
-  engine. Each accepted change journals `contract_set`; each refusal journals one `request_refused`.
+  engine. Each accepted change journals `contract_set`; each refusal journals one `request_refused`. A
+  `--workflow` name must resolve in the worker's repo and pass the workflow validator, and the workflow must
+  have a step in the run's remaining phases; otherwise the call is refused. Once a workflow change has bitten,
+  the engine (the pulse, the wave and the dispatch prompt, never the worker) replaces the run's pending steps in
+  one write: they read skipped with the reason "workflow replaced v<N>", the new workflow's steps carry the
+  version in their ids, and dispatched steps and their findings stay. Two changes before the boundary
+  coalesce into the later one.
+- **Contract handover**: `handover-contract` (args: `--item`, optional `--run`) moves an item's contract to a
+  new worker. Same caller guard as `set-contract`, checked again inside the run-record lock. It closes the
+  item's bound run, then moves the item's `auto_run` block back to state "launched" with a seed copied from the
+  latest contract: version plus one, same authority, done bar, workflow and cap, and every pending entry
+  bound at the new run's first pulse. `start-worker <item> --contract <file> --plan <plan>` then launches the
+  new worker from that seed (the file is not read when the seed exists) and the worker calls `register-run`.
+  The run closes first, so a crash between the two writes leaves a closed run still bound to the item and
+  never two open runs; a repeat call finishes the move. The old run refuses contract writes, as any done run
+  does. It refuses an item that is not bound, a worker outside the remit, and a run with no contract. It
+  journals `contract_handover`.
 - **Worker questions**: `open-worker-questions` (args: optional `--run`, `--limit`) is read-only and lists the
   open questions routed to the PM or Shawn. `escalate-worker-questions` (args: optional `--run`, `--limit`)
   raises one Shawn ask for each open question that is routed to Shawn or past the limit; a second call raises

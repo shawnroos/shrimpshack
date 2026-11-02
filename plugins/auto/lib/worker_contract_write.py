@@ -30,6 +30,7 @@ programme_decisions = load_lib_module("programme_decisions")
 worker_contract = load_lib_module("worker_contract")
 worker_question = load_lib_module("worker_question")
 worker_register = load_lib_module("worker_register")
+worker_rebake = load_lib_module("worker_rebake")
 driver_session = load_lib_module("driver_session")
 
 SET_KIND = "contract_set"
@@ -178,6 +179,8 @@ def set_contract(run_id, item_id, change, *, bite=None, caller=None, space_of=No
     key, state, worker = _locate_target(run_record_core.read_run_record(home, run_id), item_id)
     record = worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
     _open_for_writes(record)
+    if "workflow" in change:
+        worker_rebake.check_change(record, key, state, change["workflow"])
     if os.path.exists(os.path.join(home, programme_home.COMPACT_FLAG)):
         raise worker_contract.ContractError(
             "context was compacted or handed over: read the rules in force, then run `programme.py rules --ack`",

@@ -163,6 +163,7 @@ KINDS = (
     "worker_question_answered",
     "worker_question_escalated",
     "contract_set",
+    "contract_handover",
     "goal_written",
 )
 

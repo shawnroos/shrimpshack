@@ -55,6 +55,8 @@ condition phrased to MIRROR auto's exit predicate (so the two gates
 agree) and saves it as a goal doc for the operator to bind by hand —
 auto still never runs `/goal` itself.
 
+A contracted worker whose pulse guidance says `GOAL BIND:` or `GOAL REBIND:` runs that `/goal` itself, then reports it with the `goal-bound` command the guidance names; the Stop hook still holds on the exit predicate.
+
 ## 1.5 Boss goal-doc drive (R12–R17)
 
 The boss may drive from **one editable goal doc as its sole required

@@ -77,6 +77,7 @@ phase_grammar = load_lib_module("phase-grammar")
 pulse_advance = load_lib_module("pulse_advance")
 pulse_guidance = load_lib_module("pulse_guidance")
 worker_contract_apply = load_lib_module("worker_contract_apply")
+goal_binding = load_lib_module("goal_binding")
 
 # Re-arm delay between pulses. ScheduleWakeup clamps to [60, 3600]s; we sit at
 # the floor so the smallest-useful advance paces as fast as the substrate
@@ -388,6 +389,7 @@ def _pulse_body_inner(
     before = run_record.read_run_record(repo_root, run_id)
     extras = _guidance_extras(repo_root, run_id, before)
     led = worker_contract_apply.apply_at_pulse(repo_root, run_id, before)
+    led = load_lib_module("worker_rebake").complete_due(repo_root, run_id, led)
     phase = phase_grammar.current_phase(led)
 
     intent, led = _try_iteration_check(
@@ -780,6 +782,7 @@ def _build_rearm_intent(
             (extras or {}).get("effective"), (extras or {}).get("answers"),
         ),
     )
+    goal_binding.annotate(intent, repo_root, run_id, led_now)
     gap_guard = pulse_guidance._gaps_open_guard(phase, led_now)
     if gap_guard is not None:
         intent["gaps_open_guard"] = gap_guard

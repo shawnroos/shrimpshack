@@ -973,6 +973,7 @@ _VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("goal_doc").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("worker_register").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("worker_contract_write").build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("worker_handover").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("worker_question_verbs").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("worker_contract_status").build_verbs(sys.modules[__name__]))
 
