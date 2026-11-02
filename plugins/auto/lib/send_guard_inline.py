@@ -23,7 +23,10 @@ MAX_FILES = 8
 GIT_TIMEOUT = 2.0
 DEADLINE = 6.0
 # Environment names that make an interpreter or shell load code the guard did not read.
-LOADER_ENV = re.compile(r"^(?:PYTHON\w*|BASH_ENV|ENV|ZDOTDIR|PATH|LD_\w+|DYLD_\w+|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND)$")
+LOADER_ENV = re.compile(
+    r"^(?:PYTHON(?!(?:UNBUFFERED|IOENCODING|DONTWRITEBYTECODE|HASHSEED|UTF8|FAULTHANDLER|NOUSERSITE)$)\w*|BASH_ENV|ENV|"
+    r"ZDOTDIR|HOME|PATH|LD_\w+|DYLD_\w+|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|NODE_OPTIONS|NODE_PATH|RUBYOPT|RUBYLIB|"
+    r"PERL5OPT|PERL5LIB)$")
 _COOKIE = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+", re.M)
 _PY_NAME = re.compile(r"^(?:python|pythonw|pypy)[\d.]*$")
 _OTHER_LANG = {"node": "node", "nodejs": "node", "tsx": "node", "bun": "bun", "deno": "deno", "ruby": "ruby",
@@ -37,6 +40,8 @@ _VALUE_FLAGS = {"node": {"-r", "--require", "--import", "--loader", "--experimen
 _CODE_FLAGS = {"node": r"-e|--eval|-p|--print|-pe|-ep", "bun": r"-e|--eval|-p|--print", "deno": r"-e",
                "ruby": r"-[A-Za-z]*e", "perl": r"-[A-Za-z]*[eE]", "lua": r"-e", "php": r"-r", "rscript": r"-e",
                "swift": r"-e", "tclsh": r"NEVER", "expect": r"-c"}
+# bun, deno and swift take package commands (`bun install`, `swift build`) as well as scripts.
+_SCRIPT_WORD = re.compile(r"[/]|\.(?:[cm]?[jt]sx?|swift)$")
 _SUBCOMMANDS = frozenset({"run", "test", "bench", "task", "repl", "check", "compile", "x", "exec"})
 
 # Whole modules. A public attribute is allowed unless its value is itself a module: `shlex.os`, `json.codecs` and
@@ -134,6 +139,8 @@ def _bind_imports(nodes: list):
                     raise Refusal(f"`from {module} import *` hides what is imported")
                 if name.startswith("_"):
                     raise Refusal(f"`{module}.{name}` is a private name")
+                if module == "os" and name == "environ":
+                    raise Refusal("`from os import environ` hides changes to the environment; write `os.environ`")
                 if f"{module}.{name}" in MODULES:
                     bound[alias.asname or name] = f"{module}.{name}"
                 elif module in NAMESPACES or name not in _safe_attrs(module):
@@ -189,8 +196,12 @@ def _literal_command(call: ast.Call):
     if any(k.arg not in _SPAWN_KEYWORDS and k.arg != "args" for k in call.keywords):
         return None
     arg = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "args"), None)
+    shell = next((k.value for k in call.keywords if k.arg == "shell"), None)
+    shell_on = shell is not None and not (isinstance(shell, ast.Constant) and shell.value is False)
     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
         return arg.value
+    if shell_on:
+        return None
     if isinstance(arg, (ast.List, ast.Tuple)) and arg.elts and all(
             isinstance(e, ast.Constant) and isinstance(e.value, str) for e in arg.elts):
         return " ".join(shlex.quote(e.value) for e in arg.elts)
@@ -277,8 +288,29 @@ _WRITE_ATTRS = frozenset({"write", "write_text", "write_bytes", "touch", "copy",
                           "rename", "replace", "symlink", "chmod", "mkdir", "makedirs", "dump", "writelines"})
 
 
+def _fold(node):
+    """The string an expression of literals builds ('x' + '.sh', f'a{...}' without fields, Path('d') / 'x'), else None."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Div)):
+        left, right = _fold(node.left), _fold(node.right)
+        if left is None or right is None:
+            return None
+        return left + right if isinstance(node.op, ast.Add) else left.rstrip("/") + "/" + right
+    if isinstance(node, ast.JoinedStr):
+        parts = [_fold(v) for v in node.values]
+        return None if any(p is None for p in parts) else "".join(parts)
+    if isinstance(node, ast.Call) and node.args and isinstance(node.func, (ast.Name, ast.Attribute)):
+        name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        parts = [_fold(a) for a in node.args]
+        if name in ("Path", "PurePath", "join") and all(p is not None for p in parts):
+            return "/".join(p.rstrip("/") if i < len(parts) - 1 else p for i, p in enumerate(parts))
+    return None
+
+
 def written_names(code: str) -> set:
-    """String constants in code that writes files: the names it could be creating. Empty when the code only reads."""
+    """The file names code that writes files could be creating: its string constants and the strings its literal
+    expressions build. Empty when the code only reads. A name built from variables is a named residual."""
     try:
         nodes = list(ast.walk(ast.parse(code)))
     except Exception:
@@ -290,7 +322,12 @@ def written_names(code: str) -> set:
         for n in nodes)
     if not writes:
         return set()
-    return {n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    return {name for name in (_fold(n) for n in nodes) if name}
+
+
+def _is_package(path: str) -> bool:
+    """A directory with an __init__ file; a bare data directory of the same name loses to the standard module."""
+    return os.path.isdir(path) and any(n.startswith("__init__.") for n in os.listdir(path))
 
 
 def shadowed(code: str, directories):
@@ -319,7 +356,7 @@ def shadowed(code: str, directories):
         except OSError:
             continue
         for module in modules:
-            hit = next((n for n in names if n == module and os.path.isdir(os.path.join(folder, n))
+            hit = next((n for n in names if n == module and _is_package(os.path.join(folder, n))
                         or n.startswith(module + ".") and n.rsplit(".", 1)[-1] in _MODULE_SUFFIXES), None)
             if hit:
                 return f"`{os.path.join(folder, hit)}` would be imported instead of the standard module `{module}`"
@@ -384,6 +421,8 @@ def plan(kind: str, rest: list) -> tuple:
         if tok in _SUBCOMMANDS and kind in ("deno", "bun"):
             i += 1
             continue
+        if kind in ("bun", "deno", "swift") and not _SCRIPT_WORD.search(tok):
+            return "none", None
         return "file", tok
     return "stdin", None
 
@@ -479,6 +518,13 @@ def fresh_text(path: str, ctx: Context):
     return data.decode("utf-8", "replace"), None
 
 
+def shebang_interpreter(text: str):
+    """The program path on a `#!` line, else None."""
+    first = text.split("\n", 1)[0]
+    words = first[2:].split() if first.startswith("#!") else []
+    return words[0] if words else None
+
+
 def file_kind(path: str, text: str, runner: str) -> str:
     """How to judge a file: 'python', 'shell' or a language name, from the runner and then the shebang."""
     if runner in ("python", "shell") or runner in _OTHER_LANG.values():
@@ -493,6 +539,6 @@ def file_kind(path: str, text: str, runner: str) -> str:
         if kind:
             return kind
         return "shell" if names and names[0] in _SHELL_SHEBANGS else (names[0] if names else "shell")
-    if path.endswith(".py"):
+    if runner != "exec" and path.endswith(".py"):
         return "python"
     return "shell"

@@ -31,6 +31,10 @@ MAX_DEPTH = 4
 # redirects into (`cat > x.sh <<'EOF'`), and the programs on that line.
 _Body = collections.namedtuple("_Body", "text shell quoted target readers")
 _INLINE_FAULT = "CLAUDE_AUTO_TEST_SEND_GUARD_INLINE_FAULT"
+# The hook is killed at 10 s and a killed hook denies nothing, so a command too large to read in time is refused.
+COMMAND_CAP = 100_000
+_TOO_LARGE = ("inline", "runtime-built command", "",
+              "inline:the command is too large for auto to read in the time allowed; split it into smaller commands")
 # Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
 SEEN_CAP = 8
 SEGMENT_CAP = 256
@@ -479,9 +483,16 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
                   loops_ok=script in resolve.value_bodies, ctx=ctx)
         for body in bodies:
             for script in [body.text] + body.text.splitlines():
+                if ctx is not None and ctx.expired():
+                    found.append(_TOO_LARGE)
+                    return
                 _scan(script, depth + 1, hosts, pane_ids, found, proven,
                       shell=shell and body.shell, expands=expands and not body.quoted, ctx=ctx)
+    spaced = []
     for start, token in enumerate(tokens):
+        if ctx is not None and start % 32 == 0 and ctx.expired():
+            found.append(_TOO_LARGE)
+            return
         rest = tokens[start + 1:]
         prog = resolve(start, token) or token
         base = os.path.basename(prog)
@@ -504,7 +515,10 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be
             # that script. Lex the unmarked text for this: `bash <(echo '<send>')` holds the script inside a
             # substitution span, which the marked token list no longer carries.
-            for quoted in {t for t in tokens + _lex(_newlines_as_breaks(main)) if " " in t}:
+            if not spaced:
+                # Once per scan: lexing the whole command for every shell word made a long command quadratic.
+                spaced.append({t for t in tokens + _lex(_newlines_as_breaks(main)) if " " in t})
+            for quoted in spaced[0]:
                 _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=ctx)
         if script is not None:
             if depth < MAX_DEPTH:
@@ -649,6 +663,8 @@ def host_sends(command: str, pane_ids: list, proven=None, cwd=None, session_star
     hosts = [terminal_host.host_named(name) for name in terminal_host.key_hosts()]
     found = []
     ctx = load_lib_module("send_guard_inline").Context(cwd, session_start) if proven is not None else None
+    if ctx is not None and len(command) > COMMAND_CAP:
+        return [_TOO_LARGE]
     _scan(command, 0, hosts, [i for i in pane_ids if i], found, proven, ctx=ctx)
     return found
 
@@ -834,8 +850,11 @@ def denial(session_id, command, cwd=None):
         # A hook error fails open, so a broken live lookup must leave the registry ids guarding, not raise.
         pass
     sender = {}
+    # Checked before any lexing: the lexer costs about 25 us a character, and a hook killed at 10 s denies nothing.
+    oversize = len(command) > COMMAND_CAP and not any(d.get("session_id") == session_id for d in drivers)
     for driver in drivers:
-        hit = _driver_hit(command, session_id, driver, sender)
+        hit = (_TOO_LARGE[0], _TOO_LARGE[1], driver["pane_id"], _TOO_LARGE[3]) if oversize else _driver_hit(
+            command, session_id, driver, sender)
         if hit is None and driver is drivers[-1]:
             hit = _strict_hit(command, session_id, drivers, sender, cwd)
             driver = drivers[0]

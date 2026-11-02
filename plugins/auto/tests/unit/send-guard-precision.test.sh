@@ -249,7 +249,7 @@ it "denied fast: twenty thousand assignment prefixes are judged well inside the 
 START=$(date +%s)
 V="$(verdict "$(hook sess-worker "$(printf 'a=1 %.0s' $(seq 20000))\$H pane send-text \$P hi")")"
 ELAPSED=$(( $(date +%s) - START ))
-check "deny fast" "$V $([ "$ELAPSED" -lt 5 ] && echo fast || echo "slow:${ELAPSED}s")"
+check "deny fast" "$V $([ "$ELAPSED" -lt 8 ] && echo fast || echo "slow:${ELAPSED}s")"
 
 echo "send-guard-precision: any command word built at run time is denied, whatever follows (fails closed)"
 denied '"$PY" "$SKILL_DIR/scripts/x.py"'

@@ -19,28 +19,46 @@ _ENV_EXPORTERS = frozenset({"export", "declare", "typeset", "readonly", "local",
 _RUN_WRAPPERS = frozenset({"uv", "poetry", "pipx", "pipenv", "rye", "conda", "hatch"})
 _WRAPPER_VALUE_OPTS = frozenset({"--with", "--python", "-p", "--project", "--directory", "--env-file", "--group",
                                  "--extra", "--package", "--index", "--from", "-w", "-e", "--with-requirements"})
-_TIMEOUT_VALUE_OPTS = frozenset({"-s", "-k", "--signal", "--kill-after"})
+_TIMEOUT_VALUE_OPTS = frozenset({"-s", "-k", "--signal", "--kill-after", "-w", "-E", "-c", "-n", "-p"})
+_CD_CAP = 16
+_SYSTEM_DIRS = ("/bin/", "/usr/bin/", "/usr/local/bin/", "/opt/homebrew/bin/", "/sbin/", "/usr/sbin/")
 
 
 def _hit(found: list, cause: str) -> None:
     found.append(("inline", "runtime-built command", "", cause))
 
 
-def _real_program(g, tokens: list, k: int) -> int:
-    """Index of the program a wrapper at `k` runs, else `k`."""
+def _unwrap_once(g, tokens: list, k: int) -> int:
     name = os.path.basename(tokens[k])
     j = k + 1
-    if name in ("timeout", "gtimeout"):
+    if name in ("timeout", "gtimeout", "flock", "taskset", "chrt"):
         while j < len(tokens) and tokens[j].startswith("-"):
             j += 2 if tokens[j] in _TIMEOUT_VALUE_OPTS else 1
         j += 1
-    elif name in _RUN_WRAPPERS and tokens[j:j + 1] == ["run"]:
+    elif name in ("ionice", "numactl"):
+        while j < len(tokens) and tokens[j].startswith("-"):
+            j += 2 if tokens[j] in _TIMEOUT_VALUE_OPTS else 1
+    elif name in _RUN_WRAPPERS:
+        while j < len(tokens) and tokens[j].startswith("-"):
+            j += 2 if tokens[j] in _WRAPPER_VALUE_OPTS else 1
+        if tokens[j:j + 1] != ["run"]:
+            return k
         j += 1
         while j < len(tokens) and tokens[j].startswith("-"):
             j += 2 if tokens[j] in _WRAPPER_VALUE_OPTS else 1
     else:
         return k
     return j if j < len(tokens) and tokens[j] not in g._SHELL_BREAKS else k
+
+
+def _real_program(g, tokens: list, k: int) -> int:
+    """Index of the program the wrappers starting at `k` run, else `k`. Wrappers may nest."""
+    for _ in range(4):
+        nxt = _unwrap_once(g, tokens, k)
+        if nxt == k:
+            break
+        k = nxt
+    return k
 
 
 def _args(g, tokens: list, start: int):
@@ -64,7 +82,7 @@ def _shell_file(g, args: list):
         if tok in g._SHELL_VALUE_OPTS:
             i += 2
         elif tok[:1] in ("-", "+"):
-            if tok[:2] != "--" and "c" in tok[1:]:
+            if tok[:2] != "--" and ("c" in tok[1:] or "s" in tok[1:]):
                 return None
             i += 1
         else:
@@ -76,6 +94,11 @@ def _has_dash_c(args: list) -> bool:
     return any(re.fullmatch(r"-[A-Za-z]*c", a) for a in args)
 
 
+def _system_program(prog: str) -> bool:
+    """A program named by a path in a system directory, as opposed to a file the worker could have put in place."""
+    return prog.startswith(_SYSTEM_DIRS) or "/" not in prog
+
+
 def _runner(g, tokens: list, start: int, prog: str, inline):
     """What the program at `start` runs when it is a shell, an interpreter or a path: a dict, else None."""
     name = os.path.basename(prog).casefold()
@@ -84,7 +107,8 @@ def _runner(g, tokens: list, start: int, prog: str, inline):
         file = args[0] if prog in ("source", ".") and args else _shell_file(g, args)
         if file is None and stdin and stdin[0] == "file":
             file = stdin[1]
-        return {"kind": "shell", "file": file, "args": args, "stdin": stdin, "what": "file" if file else "stdin"}
+        return {"kind": "shell", "file": file, "args": args, "stdin": stdin, "what": "file" if file else "stdin",
+                "self": None if _system_program(prog) or prog in ("source", ".") else prog}
     lang = inline.interpreter_kind(prog)
     if lang:
         args, stdin = _args(g, tokens, start)
@@ -92,14 +116,15 @@ def _runner(g, tokens: list, start: int, prog: str, inline):
         if what == "stdin" and stdin and stdin[0] == "file":
             what, value = "file", stdin[1]
         return {"kind": lang, "file": value if what == "file" else None, "args": args, "stdin": stdin,
-                "what": what, "value": value}
+                "what": what, "value": value, "self": None if _system_program(prog) else prog}
     if "/" in prog and prog.startswith(("./", "../", "/", "~")) and not g._OPERATOR_ONLY.match(prog):
         return {"kind": "exec", "file": prog, "args": [], "stdin": None, "what": "file"}
     return None
 
 
-def _cwd_track(g, tokens: list, runs: list, base, inline) -> list:
-    """The directories each token may run in, as a frozenset (None = unknown).
+def _cwd_track(g, tokens: list, runs: list, base, inline, resolve):
+    """The directories each token may run in, as a frozenset (None = unknown); None when a command changes
+    directory more often than auto follows.
 
     A `cd` may fail, sit in a subshell or follow `&&`/`||`, so the directory before it stays possible.
     """
@@ -107,7 +132,12 @@ def _cwd_track(g, tokens: list, runs: list, base, inline) -> list:
     for k, tok in enumerate(tokens):
         out.append(here)
         if runs[k] and tok in ("cd", "pushd"):
-            operand = next((w for w in tokens[k + 1:k + 3] if w != "--"), None)
+            j = k + 1
+            while j < len(tokens) and tokens[j] in ("-L", "-P", "-e", "-@", "--"):
+                j += 1
+            operand = tokens[j] if j < len(tokens) and tokens[j] not in g._SHELL_BREAKS else None
+            if operand and operand.startswith("$"):
+                operand = resolve(j, operand) or operand
             if operand is None:
                 moved = {os.path.expanduser("~")}
             elif operand.startswith("-"):
@@ -115,6 +145,8 @@ def _cwd_track(g, tokens: list, runs: list, base, inline) -> list:
             else:
                 moved = {inline.resolve_path(operand, c) if c else None for c in here}
             here = frozenset(here | moved)
+            if len(here) > _CD_CAP:
+                return None
     return out
 
 
@@ -141,31 +173,63 @@ def _piped_source_literal(g, tokens: list, assigns: list, start: int) -> bool:
     while i >= 0 and tokens[i] not in g._SHELL_BREAKS:
         i -= 1
     producer = tokens[i + 1:pipe]
-    if not producer:
+    if not producer or producer[0] in _shadowed_names(tokens):
         return False
-    name = os.path.basename(producer[0])
-    if name in ("echo", "printf"):
+    name = producer[0]
+    if name == "echo":
         return not any(g._RUNTIME_WORD.search(w) for w in producer[1:])
-    return name == "cat" and any(w in ("<<", "<<-", "<<<") for w in producer)
+    if name == "printf":
+        return len(producer) > 1 and "%" not in producer[1] and not any(g._RUNTIME_WORD.search(w) for w in producer[1:])
+    if name == "cat":
+        # Only a heredoc or here-string: `cat file <<EOF | sh` also reads the file.
+        words, i = [], 1
+        while i < len(producer):
+            if producer[i] in ("<<", "<<-", "<<<"):
+                i += 2
+                continue
+            words.append(producer[i])
+            i += 1
+        return not words and len(producer) > 1
+    return False
 
 
-def _relative_path_value(value: str) -> bool:
-    """Does a PATH value name a directory that is relative to wherever the command runs?"""
-    return any(part == "" or not part.startswith(("/", "$", "~")) for part in value.split(":"))
+def _shadowed_names(tokens: list) -> set:
+    """Names the text defines as shell functions, which then run instead of the program of that name."""
+    names = set()
+    for k, tok in enumerate(tokens):
+        if tok == "function" and k + 1 < len(tokens):
+            names.add(tokens[k + 1])
+        elif tok.endswith("()") and len(tok) > 2:
+            names.add(tok[:-2])
+        elif k + 1 < len(tokens) and tokens[k + 1] in ("()", "(") and k + 2 < len(tokens) and tokens[k + 2] in (")", "{", "()"):
+            names.add(tok)
+    return names
+
+
+def _safe_path_value(value: str) -> bool:
+    """Is every component of a PATH value an absolute directory, or $PATH or $HOME, which the harness sets?"""
+    parts = value.split(":")
+    return all(part in ("$PATH", "${PATH}", "$HOME", "${HOME}") or part.startswith(("/", "$HOME/", "${HOME}/", "~/"))
+               and "$" not in part.replace("$HOME", "").replace("${HOME}", "") for part in parts)
 
 
 def _loader_hit(g, tokens: list, assigns: list, has_runner: bool, inline):
     """The first setting in the text that makes a program load code the guard did not read."""
     for k, tok in enumerate(tokens):
         match = _ASSIGN.match(tok)
-        if not match or not (assigns[k] or (k and tokens[k - 1] in _ENV_EXPORTERS)):
+        if not match:
+            continue
+        j = k - 1
+        while j >= 0 and tokens[j].startswith("-"):
+            j -= 1
+        if not (assigns[k] or (j >= 0 and tokens[j] in _ENV_EXPORTERS)):
             continue
         name = match.group(1)
         if not inline.LOADER_ENV.match(name):
             continue
         if name == "PATH":
-            if _relative_path_value(match.group(2)):
-                return "`PATH` names a directory relative to where the command runs, so a file there can stand in for a program"
+            if not _safe_path_value(match.group(2).strip("\"'")):
+                return "`PATH` names a directory that is not absolute, so a file there can stand in for a program"
         elif has_runner:
             return f"`{name}=` makes the program load code auto did not read"
     return None
@@ -179,11 +243,11 @@ def _keys(inline, operand: str, directories) -> set:
 
 
 def _writes(g, tokens: list, runs: list, progs: list) -> dict:
-    """{path as written: the writing command's words} for each path the text writes (redirect, tee, cp, mv, sed -i)."""
-    out = {}
+    """[(path as written, the writing command's words)] for each write in the text (redirect, tee, cp, mv, sed -i)."""
+    out = []
     for k, tok in enumerate(tokens):
         if tok in (">", ">>", ">|", "&>", "&>>") and k + 1 < len(tokens):
-            out[os.path.normpath(tokens[k + 1])] = tokens[progs[k]:k] if progs[k] >= 0 else []
+            out.append((os.path.normpath(tokens[k + 1]), tokens[progs[k]:k] if progs[k] >= 0 else []))
             continue
         name = os.path.basename(tok)
         if not runs[k] or name not in _WRITERS:
@@ -198,12 +262,12 @@ def _writes(g, tokens: list, runs: list, progs: list) -> dict:
         else:
             targets = []
         for word in targets:
-            out[os.path.normpath(word)] = seg
+            out.append((os.path.normpath(word), seg))
         for i, word in enumerate(seg):
             if name in ("curl", "wget") and word in ("-o", "-O", "--output") and i + 1 < len(seg):
-                out[os.path.normpath(seg[i + 1])] = seg
+                out.append((os.path.normpath(seg[i + 1]), seg))
             elif name == "dd" and word.startswith("of="):
-                out[os.path.normpath(word[3:])] = seg
+                out.append((os.path.normpath(word[3:]), seg))
     return out
 
 
@@ -222,6 +286,9 @@ def _judge(g, tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_
     runs, assigns, _globbed, progs = positions
     runners = {}
     for k in range(len(tokens)):
+        if k % 64 == 0 and ctx.expired():
+            _hit(found, "inline:the command names more programs than auto can read in the time allowed")
+            return
         if runs[k] and k not in looked_up and not assigns[k]:
             real = _real_program(g, tokens, k)
             run = _runner(g, tokens, real, resolve(real, tokens[real]) or tokens[real], inline) if real not in runners else None
@@ -229,22 +296,29 @@ def _judge(g, tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_
                 run["anchor"] = k
                 runners[real] = run
             if os.path.basename(tokens[k]) == "env" and any(
-                    a == "--split-string" or a.startswith("-S") for a in _args(g, tokens, k)[0]):
+                    a == "--split-string" or re.fullmatch(r"-[A-Za-z]*S.*", a) for a in _args(g, tokens, k)[0]):
                 _hit(found, "inline:`env -S` runs a command line that is split at run time")
     loader = _loader_hit(g, tokens, assigns, bool(runners), inline)
     if loader:
         _hit(found, f"inline:{loader}")
-    cwds = _cwd_track(g, tokens, runs, ctx.cwd, inline) if runners else []
+    cwds = _cwd_track(g, tokens, runs, ctx.cwd, inline, resolve) if runners else []
+    if cwds is None:
+        _hit(found, "inline:the command changes directory more often than auto follows")
+        return
     everywhere = frozenset().union(*cwds) | {ctx.cwd} if cwds else frozenset({ctx.cwd})
     kinds = {}
     for real, run in runners.items():
         if run["file"]:
             for key in _keys(inline, run["file"], cwds[real]):
                 kinds[key] = run["kind"]
-    heredoc_keys = set()
+    heredocs = {}
     for body in bodies:
         if body.target:
-            heredoc_keys |= _keys(inline, body.target, everywhere)
+            heredocs.setdefault(os.path.normpath(body.target), []).append(body)
+    heredoc_keys = set()
+    for target in heredocs:
+        heredoc_keys |= _keys(inline, target, everywhere)
+    writes = _writes(g, tokens, runs, progs)
 
     def scan(command: str) -> None:
         if depth >= g.MAX_DEPTH:
@@ -253,19 +327,23 @@ def _judge(g, tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_
             g._scan(command, depth + 1, hosts, pane_ids, found, proven, shell=True, expands=True, ctx=ctx)
 
     if kinds:
-        for body in bodies:
-            kind = next((kinds[key] for key in _keys(inline, body.target, everywhere) if key in kinds), None) \
-                if body.target else None
+        for target, group in heredocs.items():
+            kind = next((kinds[key] for key in _keys(inline, target, everywhere) if key in kinds), None)
             if not kind or depth >= g.MAX_DEPTH:
                 continue
+            text = "\n".join(b.text for b in group)
             if kind == "python":
-                why = _python_why(g, body.text, [ctx.cwd], kinds, inline, scan)
+                why = _python_why(g, text, [ctx.cwd], kinds, inline, scan)
                 if why:
-                    _hit(found, f"script:{body.target}: {why}")
+                    _hit(found, f"script:{target}: {why}")
             else:
-                g._scan(body.text, depth + 1, hosts, pane_ids, found, proven, shell=True, expands=True, ctx=ctx)
-        for path, words in _writes(g, tokens, runs, progs).items():
-            if _keys(inline, path, everywhere) & set(kinds) and not _keys(inline, path, everywhere) & heredoc_keys:
+                g._scan(text, depth + 1, hosts, pane_ids, found, proven, shell=True, expands=True, ctx=ctx)
+            if sum(1 for path, _words in writes if path == target) > len(group):
+                _hit(found, f"script:{target}: another command in the text also writes it, and the same command then "
+                            "runs it")
+        for path, words in writes:
+            path_keys = _keys(inline, path, everywhere)
+            if path_keys & set(kinds) and not path_keys & heredoc_keys:
                 literal = words[:1] and os.path.basename(words[0]) in ("echo", "printf") and not any(
                     g._RUNTIME_WORD.search(w) for w in words[1:])
                 if literal and depth < g.MAX_DEPTH:
@@ -273,8 +351,7 @@ def _judge(g, tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_
                 else:
                     _hit(found, f"script:{path}: its content comes from a command auto cannot read, and the same "
                                 "command then runs it")
-    written = set(kinds) & (heredoc_keys | {key for path in _writes(g, tokens, runs, progs)
-                                            for key in _keys(inline, path, everywhere)})
+    written = set(kinds) & (heredoc_keys | {key for path, _words in writes for key in _keys(inline, path, everywhere)})
     for real, run in runners.items():
         if ctx.expired():
             _hit(found, "inline:the command names more programs than auto can read in the time allowed")
@@ -282,6 +359,8 @@ def _judge(g, tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_
         if run.get("what") == "loader" or any(a in ("--rcfile", "--init-file") for a in run["args"]):
             _hit(found, "inline:an option that loads a startup file auto did not read")
             continue
+        if run.get("self") and depth < g.MAX_DEPTH:
+            _judge_operand(g, run["self"], "exec", cwds[real], depth, hosts, pane_ids, found, proven, ctx, inline, scan)
         if run["kind"] not in ("shell", "exec") and run["what"] in ("code", "stdin"):
             _judge_inline(g, run, tokens, assigns, real, bodies, resolve, found, inline, cwds[real], kinds, scan)
         if run["kind"] == "shell" and run["what"] == "stdin" and not run["stdin"] and not _has_dash_c(run["args"]) \
@@ -320,25 +399,29 @@ def _expanded(code: str, resolve, index: int, assigned: set):
 
 
 def _writes_then_runs(code: str, kinds: dict, inline):
-    """Why inline code that names a file the same command then runs cannot be read: the file does not exist yet."""
+    """Why inline code that names a file the same command then runs cannot be read: the file may not exist yet."""
     named = {os.path.normpath(s) for s in inline.written_names(code)} & set(kinds)
     return (f"the code writes `{sorted(named)[0]}` and the same command then runs it; run it in a separate "
             "command so auto can read the file first") if named else None
 
 
-def _stdin_fed(g, command: str, inline) -> bool:
-    """Does this literal command line start a shell or interpreter with no script, so it reads one from stdin?"""
+def _command_facts(g, command: str, inline) -> tuple:
+    """(a shell or interpreter in the command line reads its program from stdin, the script files it runs)."""
     words = g._lex(command)
     runs, assigns = g._command_positions(words)[:2]
+    stdin_fed, files = False, set()
     for k in range(len(words)):
         if not runs[k] or assigns[k]:
             continue
         real = _real_program(g, words, k)
         run = _runner(g, words, real, words[real], inline)
-        if run and (not run["file"] and not _has_dash_c(run["args"]) if run["kind"] == "shell"
-                    else run["what"] == "stdin"):
-            return True
-    return False
+        if not run:
+            continue
+        if run["file"]:
+            files.add(os.path.normpath(run["file"]))
+        stdin_fed = stdin_fed or (not run["file"] and not _has_dash_c(run["args"]) if run["kind"] == "shell"
+                                  else run["what"] == "stdin")
+    return stdin_fed, files
 
 
 def _python_why(g, text: str, dirs, kinds: dict, inline, scan):
@@ -349,9 +432,10 @@ def _python_why(g, text: str, dirs, kinds: dict, inline, scan):
         return why
     written = {os.path.normpath(s) for s in inline.written_names(text)}
     for command in commands:
-        if _stdin_fed(g, command, inline):
+        stdin_fed, files = _command_facts(g, command, inline)
+        if stdin_fed:
             return "a command it starts reads its program from stdin, which auto cannot read"
-        if any(os.path.normpath(word) in written for word in g._lex(command)[1:]):
+        if files & written:
             return "the code writes a file and then starts it; run it in a separate command so auto can read the file first"
         scan(command)
     return None
@@ -410,6 +494,11 @@ def _judge_operand(g, operand, kind, cwds, depth, hosts, pane_ids, found, proven
         if text is None:
             continue
         judged = inline.file_kind(path, text, kind)
+        interpreter = inline.shebang_interpreter(text)
+        if interpreter and not _system_program(interpreter):
+            planted, planted_why = inline.fresh_text(interpreter, ctx)
+            if planted_why or planted is not None:
+                return _hit(found, f"script:{operand}: its shebang names `{interpreter}`, which was written in this session")
         if judged == "python":
             why = _python_why(g, text, [os.path.dirname(path)], {}, inline, scan)
         elif judged == "shell":

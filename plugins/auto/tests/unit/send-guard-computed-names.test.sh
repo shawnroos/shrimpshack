@@ -610,6 +610,14 @@ T
 D <<'T'
 bash big.sh
 T
+"$PY" -c 'open("'"${PROJ}"'/big2.sh","w").write("# " + "x" * 300000 + "\necho ok\n")'
+D <<'T'
+bash big2.sh
+T
+"$PY" -c 'open("'"${PROJ}"'/big.py","w").write("x = \"" + "y" * 220000 + "\"\n")'
+D <<'T'
+python3 big.py
+T
 
 echo "send-guard-computed-names: a file that shadows a standard module is not imported unread (R5)"
 mkdir -p "${PROJ}/shadow"
@@ -908,6 +916,193 @@ A <<'T'
 node -r nolib old.sh
 T
 AS=sess-worker
+
+echo "send-guard-computed-names: bypasses found in the second review round stay refused"
+CDS="$(for n in $(seq 0 19); do printf 'cd d%s; ' "$n"; done)"
+T0=$(date +%s)
+OUT="$(hook sess-worker "${CDS}bash s.sh")"
+T1=$(date +%s)
+it "denied: twenty chained cd commands before a script (the candidate set is capped, not exponential)"
+check deny "$(verdict "$OUT")"
+it "that refusal took under 10 seconds"
+[ $((T1 - T0)) -lt 10 ] && pass || fail "took $((T1 - T0)) s"
+printf 'H=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/bash"
+mkdir -p "${PROJ}/bb"
+printf 'H=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/bb/sh"
+chmod +x "${PROJ}/bash" "${PROJ}/bb/sh"
+D <<'T'
+./bash fresh-ok.sh
+T
+D <<'T'
+bb/sh fresh-ok.sh
+T
+mkdir -p "${PROJ}/pyx"
+printf '#!/bin/sh\nH=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/pyx/python3"
+chmod +x "${PROJ}/pyx/python3"
+printf '#!%s/pyx/python3\nprint(1)\n' "$PROJ" > "${PROJ}/plant.py"
+chmod +x "${PROJ}/plant.py"
+D <<'T'
+./plant.py
+T
+D <<'T'
+cat fresh.sh <<<x | bash
+T
+D <<'T'
+echo() { cat fresh.sh; }; echo hi | bash
+T
+D <<'T'
+printf '%s%s send --pane 1 hi' re x | bash
+T
+D <<'T'
+PATH=$PWD/b:$PATH ls
+T
+D <<'T'
+X=b; PATH=$X:$PATH ls
+T
+D <<'T'
+export PATH=$PWD/b:$PATH
+T
+D <<'T'
+declare -x PATH=b
+T
+D <<'T'
+export -- PATH=b
+T
+D <<'T'
+HOME=h zsh -c true
+T
+D <<'T'
+NODE_OPTIONS=--require=./p.js node --version
+T
+A <<'T'
+PYTHONUNBUFFERED=1 python3 -c 'print(1)'
+T
+A <<'T'
+PYTHONIOENCODING=utf-8 python3 -c 'print(1)'
+T
+D <<'T'
+flock /tmp/x python3 -c 'import socket'
+T
+D <<'T'
+taskset 1 bash fresh.sh
+T
+D <<'T'
+timeout 5 uv run python3 -c 'import socket'
+T
+D <<'T'
+uv --directory . run python3 -c 'import socket'
+T
+D <<'T'
+ionice -c 3 python3 -c 'import socket'
+T
+D <<'T'
+cat > sub/m.py <<'A'
+import os
+A
+cat >> sub/m.py <<'B'
+os.system(cmd)
+B
+python3 sub/m.py
+T
+D <<'T'
+cat > a.sh <<'EOS'
+echo ok
+EOS
+cp fresh.sh a.sh
+bash a.sh
+T
+D <<'T'
+cd -L sub && bash inner.sh
+T
+D <<'T'
+D=sub; cd $D && bash inner.sh
+T
+D <<'T'
+bash -s fresh-ok.sh < fresh.sh
+T
+D <<'T'
+env -iS 'bash fresh.sh'
+T
+D <<'T'
+python3 -c 'from os import environ, system; environ["PATH"] = "b"; system("ls")'
+T
+D <<'T'
+python3 -c 'import subprocess; subprocess.run(["herdr pane send-text w2:p77 hi"], shell=True)'
+T
+D <<'T'
+python3 -c "open('fresh-ok'+'.sh', 'w').write('echo'); import os; os.system('bash fresh-ok.sh')"
+T
+D <<'T'
+python3 -c 'open("fresh-ok.sh", "w").write("echo")' && bash fresh-ok.sh
+T
+A <<'T'
+python3 -c "open('nothing.txt', 'w').write('x')" && bash fresh-ok.sh
+T
+printf "''':'\nH=\$(printf %%s her); \$H pane send-text w2:p77 hi\nexit\n'''\n" > "${PROJ}/noshebang.py"
+chmod +x "${PROJ}/noshebang.py"
+D <<'T'
+./noshebang.py
+T
+A <<'T'
+bun install
+T
+A <<'T'
+deno fmt
+T
+A <<'T'
+swift build
+T
+A <<'T'
+bun run dev
+T
+mkdir -p "${PROJ}/fp/csv"
+HOOKCWD="${PROJ}/fp"
+A <<'T'
+python3 -c 'import csv; print(1)'
+T
+HOOKCWD="$PROJ"
+
+echo "send-guard-computed-names: a command too large to read in time is refused, not left to the hook's kill (R10)"
+HUGE="$("$PY" -c 'print("bash a.sh; " * 3000)')"
+T0=$(date +%s)
+OUT="$(hook sess-worker "$HUGE")"
+T1=$(date +%s)
+it "denied: 3000 script words answer inside the hook limit"
+check deny "$(verdict "$OUT")"
+it "that refusal took under 10 seconds"
+[ $((T1 - T0)) -lt 10 ] && pass || fail "took $((T1 - T0)) s"
+BIGCMD="$("$PY" -c 'print("echo " + "x" * 120000)')"
+OUT="$(hook sess-worker "$BIGCMD")"
+it "the module itself refuses an oversized command before it lexes it"
+V="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import send_guard
+print(len(send_guard.host_sends("echo " + "x" * 120000, [], proven=lambda t: False)))
+PYEOF
+)"
+check 1 "$V"
+V="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import send_guard
+t0 = time.monotonic()
+out = send_guard.denial("sess-worker", "echo " + "x" * 600000)
+print("deny" if out else "allow", "fast" if time.monotonic() - t0 < 5 else "slow")
+PYEOF
+)"
+it "denial() refuses an oversized command from a non-driver session before any lexing"
+check "deny fast" "$V"
+BIGW="$("$PY" -c 'print("echo " + "x" * 600000)')"
+T0=$(date +%s)
+OUT="$(hook sess-worker "$BIGW")"
+T1=$(date +%s)
+it "denied: a 600,000-character word is refused before the driver-mode scan lexes it"
+check deny "$(verdict "$OUT")"
+it "that refusal took under 10 seconds"
+[ $((T1 - T0)) -lt 10 ] && pass || fail "took $((T1 - T0)) s"
+it "denied: a command over 100,000 characters names the size and says to split it"
+has "too large" "$OUT"
 
 echo "send-guard-computed-names: the check refuses instead of allowing when it cannot finish (R10)"
 it "an exception inside the new checks refuses"
