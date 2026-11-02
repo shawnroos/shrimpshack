@@ -41,7 +41,6 @@ REMIT_INPUT_CAP = 1 << 16
 REMIT_NAME_CAP = 100
 REMIT_ID_CAP = 64
 _TEAM_KEY_RE = re.compile(r"[A-Z][A-Z0-9]{0,7}")
-_GITHUB_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 class _Refused(Exception):
@@ -786,35 +785,8 @@ def _named_entry(raw, part, *, key_re=None):
     return entry
 
 
-def _stored_for(stored, path):
-    return next((s for s in stored if isinstance(s, dict) and isinstance(s.get("path"), str)
-                 and programme_remit_owned.same_path(s["path"], path)), None)
-
-
 def _repo_entry(raw, stored=()):
-    """None for a stored path whose folder is gone; a new path that is not a folder is still refused."""
-    if not isinstance(raw, dict) or not isinstance(raw.get("path"), str):
-        raise _remit_error("each repo is an object with a path")
-    path = raw["path"]
-    if not os.path.isabs(path) or ".." in path.split(os.sep):
-        raise _remit_error(f"repo path must be an absolute directory, got {path!r}")
-    known = _stored_for(stored, path)
-    if not os.path.isdir(path):
-        if known is not None:
-            return None
-        raise _remit_error(f"repo path must be an absolute directory, got {path!r}")
-    github = raw.get("github")
-    if github is not None and (not isinstance(github, str) or not _GITHUB_RE.fullmatch(github)):
-        raise _remit_error(f"repo github must be owner/name, got {github!r}")
-    entry = {"path": os.path.normpath(path), "github": github}
-    if known is not None and known.get("via"):
-        entry["via"] = known["via"]
-    return entry
-
-
-def stale_paths(repos) -> set:
-    return {os.path.normpath(r["path"]) for r in repos or []
-            if isinstance(r, dict) and isinstance(r.get("path"), str) and not os.path.isdir(r["path"])}
+    return programme_remit_owned.parse_repo(raw, stored, _remit_error)
 
 
 def parse_remit(doc, current) -> dict:
@@ -833,11 +805,12 @@ def parse_remit(doc, current) -> dict:
         out["spaces"] = spaces
     if "repos" in doc:
         stored = current.get("repos") or []
-        rows = [_repo_entry(r, stored) for r in _capped(doc["repos"], "repos", REMIT_CAPS["repos"])]
+        given = _capped(doc["repos"], "repos", REMIT_CAPS["repos"])
+        rows = [_repo_entry(r, stored) for r in given]
         out["repos"] = [r for r in rows if r is not None]
-        if not out["repos"] and stored and any(r is None for r in rows):
-            # Dropping every stale path would leave an empty list, which means "no limit".
-            out["repos"] = list(stored)
+        if not out["repos"] and any(r is None for r in rows):
+            # Dropping every stale path would leave an empty list, which means "no limit"; keep the ones given.
+            out["repos"] = [programme_remit_owned.entry_for(stored, r["path"]) for r in given]
     tracker = doc.get("tracker", {})
     if not isinstance(tracker, dict):
         raise _remit_error("tracker is an object of teams, projects and initiatives")
@@ -933,12 +906,10 @@ def _h_set_remit(host, argv):
         accepted = programme["agreement"].get("accepted")
         if accepted and prompt is None:
             raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of a typed prompt")
-        gone = stale_paths(before["repos"])
-        # Dropping a repo whose folder is gone only narrows the remit, so it needs no typed words.
-        needs = [(part, entry) for part, how, entry in changes
-                 if not (part == "repos" and how == "removed" and os.path.normpath(entry["path"]) in gone)]
+        gone = programme_remit_owned.stale_paths(before["repos"])
         if accepted:
-            host.require_named(prompt, *[_names(part, entry) for part, entry in needs])
+            host.require_named(prompt, *[_names(part, entry)
+                                         for part, entry in programme_remit_owned.unnamed_removals(changes, gone)])
         moves = _lease_moves(rec["run_id"], changes)
         programme["remit"] = dict(before, **after)
         term = programme["agreement"]["terms"]["remit"]
@@ -948,7 +919,7 @@ def _h_set_remit(host, argv):
             term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
         out = {"remit": after,
                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
-        dropped = sorted(p for p in gone if p not in {os.path.normpath(r["path"]) for r in after["repos"]})
+        dropped = programme_remit_owned.dropped_stale(gone, after["repos"])
         if dropped:
             out["dropped_stale"] = dropped
         if not accepted:

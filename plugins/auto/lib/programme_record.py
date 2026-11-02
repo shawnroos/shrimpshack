@@ -34,6 +34,7 @@ programme_tracker = load_lib_module("programme_tracker")
 programme_decisions = load_lib_module("programme_decisions")
 programme_context = load_lib_module("programme_context")
 programme_naming = load_lib_module("programme_naming")
+programme_remit_owned = load_lib_module("programme_remit_owned")
 programme_asks = load_lib_module("programme_asks")
 
 HOST_SOURCES = terminal_host.HOSTS
@@ -154,9 +155,8 @@ def _remit_repo(programme, path):
     if not path:
         return None
     real = os.path.realpath(path)
-    for entry in programme["remit"].get("repos") or []:
-        if isinstance(entry, dict) and isinstance(entry.get("path"), str) \
-                and os.path.realpath(entry["path"]) == real:
+    for entry in programme_remit_owned.authority_repos(programme):
+        if isinstance(entry.get("path"), str) and os.path.realpath(entry["path"]) == real:
             return entry["path"]
     return None
 

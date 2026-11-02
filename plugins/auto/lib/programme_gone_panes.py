@@ -84,9 +84,9 @@ def _drop_remit_entry(host, run_id, home, record, sid, item) -> dict:
 
     try:
         programme_authority.write(home, run_id, mutate, compose)
-        host.refresh_view(run_id, home)
     except Exception as exc:  # noqa: BLE001 - the close already happened; say the entry stayed
         return {"dropped": None, "reason": f"the remit write failed: {exc}"}
+    host.refresh_view(run_id, home)
     return dict(seen)
 
 
