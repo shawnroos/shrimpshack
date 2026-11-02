@@ -70,6 +70,7 @@ _INTERPRETERS = re.compile(r"^(?:python[\d.]*|ruby|perl|node|php|osascript|lua|d
 _STRING_LITERAL = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 _UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
+                             "setsid", "arch", "xcrun", "coproc",
                              "elif", "if", "while", "until", "{", "!", "noglob", "nocorrect", "doas", "stdbuf",
                              "caffeinate", "nice"})
 # Options of a precommand that take the next word as their value; any other option keeps the command position.
@@ -807,10 +808,10 @@ _FIXES = {
                 "`||`, `if` or loop, and use it only as a whole word, `$PY`.",
     "word": "this command runs a program whose name is built at run time (a `$(...)`, glob, brace or `~` joined into "
             "the word). Write the program name as one literal word.",
-    "inline": "this command runs inline code auto cannot show is safe: {detail}. Write the step as a plain command, or "
-              "keep the Python to parsing and formatting (json, re, os.path, collections, datetime, sys.argv); code "
-              "with quotes or a dollar sign goes in a quoted heredoc (python3 - <<'EOF'). Remove any PYTHON*, PATH "
-              "or BASH_ENV setting from the command.",
+    "inline": "this command runs code auto cannot show is safe: {detail}. Write the step as a plain command, or keep "
+              "the Python to parsing, formatting and file work with the standard modules; a process it starts must be "
+              "a command line written out as literal strings. Code with quotes or a dollar sign goes in a quoted "
+              "heredoc (python3 - <<'EOF'). Remove any PYTHON*, BASH_ENV or relative PATH setting from the command.",
     "script": "the script `{detail}`. A script written in this session is judged like a command typed here: write "
               "each program name as a literal word, set variables from literal words, put the script's text in a "
               "quoted heredoc or the editor tool, or run a script that existed before this session.",

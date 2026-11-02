@@ -25,15 +25,25 @@ DEADLINE = 6.0
 # Environment names that make an interpreter or shell load code the guard did not read.
 LOADER_ENV = re.compile(r"^(?:PYTHON\w*|BASH_ENV|ENV|ZDOTDIR|PATH|LD_\w+|DYLD_\w+|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND)$")
 _COOKIE = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+", re.M)
-_PY_NAME = re.compile(r"^python[\d.]*$")
-_OTHER_LANG = {"node": "node", "nodejs": "node", "bun": "bun", "deno": "deno", "ruby": "ruby", "perl": "perl",
-               "php": "php", "lua": "lua"}
+_PY_NAME = re.compile(r"^(?:python|pythonw|pypy)[\d.]*$")
+_OTHER_LANG = {"node": "node", "nodejs": "node", "tsx": "node", "bun": "bun", "deno": "deno", "ruby": "ruby",
+               "perl": "perl", "php": "php", "lua": "lua", "swift": "swift", "expect": "expect", "rscript": "rscript",
+               "tclsh": "tclsh"}
+# Options of each language that take the next word as their value, so that word is not the script.
+_VALUE_FLAGS = {"node": {"-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions"},
+                "bun": {"-r", "--preload", "--config", "-c"}, "deno": {"--config", "-c", "--import-map", "--lock"},
+                "perl": {"-I", "-M", "-m", "-x", "-C"}, "ruby": {"-I", "-r", "-C", "-x"}, "php": {"-d", "-c", "-z"},
+                "lua": {"-l"}, "swift": {"-I", "-L", "-target"}, "expect": {"-c"}, "rscript": {"-e"}, "tclsh": set()}
+_CODE_FLAGS = {"node": r"-e|--eval|-p|--print|-pe|-ep", "bun": r"-e|--eval|-p|--print", "deno": r"-e",
+               "ruby": r"-[A-Za-z]*e", "perl": r"-[A-Za-z]*[eE]", "lua": r"-e", "php": r"-r", "rscript": r"-e",
+               "swift": r"-e", "tclsh": r"NEVER", "expect": r"-c"}
+_SUBCOMMANDS = frozenset({"run", "test", "bench", "task", "repl", "check", "compile", "x", "exec"})
 
 # Whole modules. A public attribute is allowed unless its value is itself a module: `shlex.os`, `json.codecs` and
 # `glob.os` hand out modules the list does not name.
 MODULES = frozenset({
     "json", "re", "collections", "itertools", "math", "datetime", "time", "textwrap", "string", "csv", "hashlib",
-    "base64", "urllib.parse", "statistics", "random", "uuid", "fnmatch", "difflib", "html", "decimal", "fractions",
+    "base64", "urllib.parse", "statistics", "random", "fnmatch", "difflib", "html", "decimal", "fractions",
     "heapq", "bisect", "copy", "pprint", "unicodedata", "binascii", "struct", "calendar", "io", "shlex", "glob",
     "tomllib", "secrets", "sys", "os", "os.path", "pathlib", "tempfile", "shutil", "zlib", "gzip", "bz2", "zipfile",
     "tarfile", "sqlite3", "contextlib", "functools", "ast", "hmac", "subprocess"})
@@ -41,7 +51,7 @@ MODULES = frozenset({
 # then judges as a typed command; a computed name, an `env=` or an `executable=` would hide the program.
 SPAWN = {"subprocess": frozenset({"run", "call", "check_call", "check_output", "Popen", "getoutput", "getstatusoutput"}),
          "os": frozenset({"system", "popen"})}
-_SPAWN_KEYWORDS = frozenset({"stdout", "stderr", "stdin", "text", "capture_output", "check", "timeout", "cwd",
+_SPAWN_KEYWORDS = frozenset({"stdout", "stderr", "stdin", "text", "capture_output", "check", "timeout",
                              "universal_newlines", "encoding", "errors", "shell"})
 NAMESPACES = frozenset({"urllib"})
 _EXPLICIT = {
@@ -50,7 +60,7 @@ _EXPLICIT = {
     "os": frozenset({"environ", "getcwd", "getenv", "listdir", "sep", "linesep", "name", "curdir", "pardir",
                      "cpu_count", "getpid", "getppid", "walk", "scandir", "stat", "fspath", "makedirs", "mkdir",
                      "remove", "unlink", "rename", "replace", "rmdir", "chmod", "utime", "symlink", "readlink",
-                     "chdir", "access", "urandom", "get_terminal_size", "devnull", "R_OK", "W_OK", "X_OK", "F_OK",
+                     "access", "urandom", "get_terminal_size", "devnull", "R_OK", "W_OK", "X_OK", "F_OK",
                      "system", "popen"}),
     "os.path": frozenset({"join", "exists", "isfile", "isdir", "islink", "basename", "dirname", "abspath", "realpath",
                           "expanduser", "expandvars", "splitext", "split", "relpath", "getsize", "getmtime",
@@ -63,7 +73,16 @@ _BANNED_NAMES = frozenset({"__import__", "getattr", "setattr", "delattr", "eval"
                            "locals", "vars", "breakpoint", "help", "memoryview"})
 # Frames and code objects carry the module globals without a dunder name in sight.
 _BANNED_ATTRS = frozenset({"gi_frame", "cr_frame", "ag_frame", "tb_frame", "f_globals", "f_builtins", "f_locals",
-                           "f_back", "f_code", "gi_code", "cr_code", "ag_code", "tb_next", "func_globals"})
+                           "f_back", "f_code", "gi_code", "cr_code", "ag_code", "tb_next", "func_globals",
+                           "enable_load_extension", "load_extension"})
+# os.environ may be read; changing it changes what a later spawn or import loads.
+# A compiled program is not code auto can read; anything else is read as text, because a shell runs the lines
+# after a NUL byte and Python runs a zip or .pyc whose bytes only look like binary.
+_NATIVE_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
+                 b"\xca\xfe\xba\xbe", b"MZ")
+_SHELL_SHEBANGS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash"})
+_MODULE_SUFFIXES = frozenset({"py", "pyc", "pyo", "so", "pyd", "zip", "egg"})
+_ENVIRON_READS = frozenset({"get", "copy", "keys", "items", "values"})
 _FILE_MODE = frozenset("rwxabt+U")
 # A device path is how a script reaches a terminal without a command: `open('/dev/pts/3', 'w')`.
 _DEVICE_OK = frozenset({"/dev/null", "/dev/zero", "/dev/urandom", "/dev/random", "/dev/stdin", "/dev/stdout", "/dev/stderr"})
@@ -150,6 +169,19 @@ def _open_ok(call: ast.Call) -> bool:
     return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) <= _FILE_MODE
 
 
+def _device(text: str) -> bool:
+    path = os.path.normpath(text.replace("//", "/"))
+    return (path == "/dev" or path.startswith("/dev/")) and path not in _DEVICE_OK
+
+
+def _environ_read(node, up, parent) -> bool:
+    if isinstance(up, ast.Subscript) and up.value is node:
+        return isinstance(up.ctx, ast.Load)
+    if isinstance(up, ast.Attribute) and up.value is node:
+        return up.attr in _ENVIRON_READS and isinstance(parent.get(up), ast.Call)
+    return isinstance(up, ast.Compare)
+
+
 def _literal_command(call: ast.Call):
     """The command line a spawn call runs when every word is a literal string, else None."""
     if len(call.args) > 1 or any(isinstance(a, ast.Starred) for a in call.args):
@@ -205,9 +237,13 @@ def _check_tree(tree) -> list:
             up = parent.get(node)
             if _module_path(node, bound) is not None and not (isinstance(up, ast.Attribute) and up.value is node):
                 raise Refusal("a module may only be used by naming an attribute of it")
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if node.value.startswith("/dev/") and node.value not in _DEVICE_OK:
-                raise Refusal(f"`{node.value}` is a device path, and a script can write to a terminal through one")
+            if node.attr == "environ" and _module_path(node.value, bound) == "os" and not _environ_read(node, up, parent):
+                raise Refusal("`os.environ` may be read but not changed: a changed environment changes what a later "
+                              "command or import loads")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            text = node.value if isinstance(node.value, str) else node.value.decode("latin-1")
+            if _device(text):
+                raise Refusal(f"`{text}` is a device path, and a script can write to a terminal through one")
     for node in nodes:
         if isinstance(node, ast.Name) and node.id in bound:
             up = parent.get(node)
@@ -235,11 +271,6 @@ def analyse(code: str):
         return str(exc), []
     except Exception as exc:
         return f"auto could not finish reading the code ({type(exc).__name__})", []
-
-
-def python_refusal(code: str):
-    """None when the code may run, else the reason it may not."""
-    return analyse(code)[0]
 
 
 _WRITE_ATTRS = frozenset({"write", "write_text", "write_bytes", "touch", "copy", "copy2", "copyfile", "copytree", "move",
@@ -276,15 +307,20 @@ def shadowed(code: str, directories):
     modules = {a.name.split(".")[0] for n in nodes if isinstance(n, ast.Import) for a in n.names}
     modules |= {n.module.split(".")[0] for n in nodes if isinstance(n, ast.ImportFrom) and n.module}
     folders = [d for d in directories if d]
-    folders += [n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)
-                and os.path.isabs(n.value) and os.path.isdir(n.value)]
+    base = folders[0] if folders else None
+    for n in nodes:
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value and not n.value.startswith("-"):
+            candidate = n.value if os.path.isabs(n.value) else (os.path.join(base, n.value) if base else None)
+            if candidate and os.path.isdir(candidate):
+                folders.append(candidate)
     for folder in folders:
         try:
-            names = set(os.listdir(folder))
+            names = os.listdir(folder)
         except OSError:
             continue
         for module in modules:
-            hit = next((n for n in names if n == module or n.startswith(module + ".")), None)
+            hit = next((n for n in names if n == module and os.path.isdir(os.path.join(folder, n))
+                        or n.startswith(module + ".") and n.rsplit(".", 1)[-1] in _MODULE_SUFFIXES), None)
             if hit:
                 return f"`{os.path.join(folder, hit)}` would be imported instead of the standard module `{module}`"
     return None
@@ -330,30 +366,25 @@ def plan(kind: str, rest: list) -> tuple:
                 i += 1
                 continue
             return "file", tok
-        if kind in ("node", "bun", "deno"):
-            if tok in ("-e", "--eval", "-p", "--print", "-pe", "-ep", "eval") or tok.startswith("--eval="):
-                return ("code", rest[i + 1] if i + 1 < len(rest) else "")
-            if tok in ("--version", "-v", "-V", "--help", "-h"):
-                return "none", None
-            if tok == "-":
-                return "stdin", None
-            if tok.startswith("-"):
-                i += 1
-                continue
-            return "file", tok
-        if kind in ("ruby", "perl", "lua", "php"):
-            flag = {"ruby": r"-[A-Za-z]*e", "perl": r"-[A-Za-z]*[eE]", "lua": r"-e", "php": r"-r"}[kind]
-            if re.fullmatch(flag, tok):
-                return ("code", rest[i + 1] if i + 1 < len(rest) else "")
-            if tok in ("--version", "-v", "-V", "--help", "-h"):
-                return "none", None
-            if tok == "-":
-                return "stdin", None
-            if tok.startswith("-"):
-                i += 1
-                continue
-            return "file", tok
-        i += 1
+        code_flag = _CODE_FLAGS.get(kind)
+        if tok in ("--version", "-v", "-V", "--help", "-h"):
+            return "none", None
+        if code_flag and (re.fullmatch(code_flag, tok) or tok.startswith("--eval=")):
+            return ("code", rest[i + 1] if i + 1 < len(rest) else "")
+        if tok == "-":
+            return "stdin", None
+        if tok in _VALUE_FLAGS.get(kind, ()):
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        if tok == "eval" and kind == "deno":
+            return ("code", rest[i + 1] if i + 1 < len(rest) else "")
+        if tok in _SUBCOMMANDS and kind in ("deno", "bun"):
+            i += 1
+            continue
+        return "file", tok
     return "stdin", None
 
 
@@ -381,17 +412,23 @@ def _git(args: list, cwd: str):
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def same_as_default_branch(path: str) -> bool:
-    """A tracked file whose bytes equal the default branch's: code the session did not author."""
+def same_as_default_branch(path: str, ctx: Context) -> bool:
+    """A tracked file whose bytes equal the default branch's: code the session did not author.
+
+    Each git call is bounded and the whole lookup stops when the command's time is spent, so a worker cannot use
+    many script words to push the hook past its own time limit.
+    """
     folder = os.path.dirname(path) or "."
     top = _git(["rev-parse", "--show-toplevel"], folder)
-    if not top:
+    if not top or ctx.expired():
         return False
     rel = os.path.relpath(os.path.realpath(path), os.path.realpath(top))
-    if _git(["ls-files", "--error-unmatch", "--", rel], top) is None:
+    if _git(["ls-files", "--error-unmatch", "--", rel], top) is None or ctx.expired():
         return False
     ours = _git(["hash-object", "--no-filters", "--", rel], top)
     for ref in ("origin/main", "origin/master", "main", "master"):
+        if ctx.expired():
+            return False
         theirs = _git(["rev-parse", "--verify", "-q", f"{ref}:{rel}"], top)
         if theirs:
             return ours is not None and ours == theirs
@@ -420,13 +457,13 @@ def fresh_text(path: str, ctx: Context):
     newest = max(lst.st_mtime, lst.st_ctime, st.st_mtime, st.st_ctime)
     if newest < ctx.session_start:
         return None, None
-    if same_as_default_branch(path):
-        return None, None
     if not os.path.isfile(path):
         return None, "it is not a regular file"
     if ctx.files >= MAX_FILES or ctx.expired():
         return None, "the command names more script files than auto reads in the time allowed"
     ctx.files += 1
+    if same_as_default_branch(path, ctx):
+        return None, None
     if st.st_size > FILE_CAP:
         return None, "it is larger than auto reads (256 KB)"
     try:
@@ -437,7 +474,7 @@ def fresh_text(path: str, ctx: Context):
             os.close(fd)
     except OSError:
         return None, "auto could not read it"
-    if b"\0" in data[:4096]:
+    if data.startswith(_NATIVE_MAGIC):
         return None, None
     return data.decode("utf-8", "replace"), None
 
@@ -455,7 +492,7 @@ def file_kind(path: str, text: str, runner: str) -> str:
         kind = interpreter_kind(names[0]) if names else None
         if kind:
             return kind
-        return "shell"
+        return "shell" if names and names[0] in _SHELL_SHEBANGS else (names[0] if names else "shell")
     if path.endswith(".py"):
         return "python"
     return "shell"

@@ -12,7 +12,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** A programme worker that builds a send to another session's pane at run time, in a script it wrote or in inline interpreter code, is stopped with a fix it can act on, and ordinary worker commands still run.
-- **Means:** Judge code a worker authored by the rule the worker's own typed commands already get, and allow inline Python only when it provably cannot start a process, open a socket or write a file (KTD1, KTD2, KTD3).
+- **Means:** Judge code a worker authored by the rule the worker's own typed commands already get, and allow inline Python only when a positive list shows it cannot open a socket or load code by string, and any process it starts has a command line written out as literal strings that is judged like a typed command (KTD1, KTD2, KTD3).
 - **Authority:** This plan, then the brief `docs/handoff.md`, then the PM's go of 2026-11-02, then `docs/solutions/security-issues/narrowing-a-shell-command-guard-needs-default-deny-and-a-differential.md`.
 - **Stop conditions:** Stop and report if a rule needs a deny-by-enumeration list to stay closed, if a new rule refuses more than 5% of the measured worker commands, or if the hook cannot answer inside its 10 s limit.
 - **Execution profile:** Test-first. Every hole probe becomes a failing test before any rule changes. Every new rule gets a mutation check.
@@ -59,9 +59,10 @@ Counts come from 339 transcripts touched in the last 30 days: 22,648 Bash comman
 | Of those, refused by the existing command rule | 99 (45%) = 0.44% of all commands | affordable |
 | Scripts written and run in one command | 247 (1.1% of commands) | refusal share not yet measured; U1 measures it |
 | Inline interpreter commands by language | python 2,993; perl 27; php/lua/other 5; node 1 | non-Python is 0.15% of commands |
-| Inline Python a first-draft import-and-attribute allowlist would pass | 4,025 of 4,486 parsed bodies (90%) | refuses about 2% of commands; the first draft allowed `pathlib` and `open` writes, which this plan removes, so U3 re-measures |
+| A first design that refused file writes and `pathlib` | 15.1% of all commands refused | too costly; file writes are now allowed and judged by what happens to the file next |
+| Final design, replayed through the old and new guard (23,752 commands) | 6.3% newly refused as measured; 5.0% leaving out 312 runs of scripts that no longer exist; 3.7% leaving out script-file refusals too | see the note below; nothing the old guard denied is allowed |
 
-Reading every script under the command rule is the wrong tool. Reading only files the session itself wrote costs under 1% of commands. The PM can redirect the Python rule if the final measured refusal is higher.
+Reading every script under the command rule is the wrong tool. Reading only files the session itself wrote costs about 1% of commands. The replay is an ad hoc measurement, not a committed tool: it replays today's files and clock against old sessions, so scripts modified since then read as fresh and deleted ones read as missing. The largest parts of the 5.0% are by design: a process started from a command line that is not written out as literal strings (1.0%), and a command that writes a file and runs it in the same breath (1.2%). The PM can redirect either rule in review.
 
 ### Key Decisions
 
@@ -75,15 +76,15 @@ Reading every script under the command rule is the wrong tool. Reading only file
 - R1. A path that the same command text writes and then runs is judged as shell text (or as Python under R5 when it is a Python file) whatever the heredoc quoting, the redirect position, or the writer, and refused when the content cannot be read literally.
 - R2. A script file that the sender session wrote or changed, run in a later command, is read before it runs and judged by the rule the sender's own typed commands get.
 - R3. A tracked file identical to the default branch, and a file older than the sender's session, are not read: repo scripts and installed tools keep running.
-- R4. A relative script path resolves against the command's working directory, with literal `cd` tracked. A path that cannot be resolved stays allowed, as today, and is a named residual.
+- R4. A relative script path resolves against every directory the command may be in: a `cd` may fail, sit in a subshell or follow `&&`/`||`, so the directory before it stays possible. A literal script path that exists in none of them is refused (it may be created by a command the guard cannot read). A path that cannot be resolved (`bash "$f"`) stays allowed, as today, and is a named residual.
 
 **Inline interpreters (#185)**
 
-- R5. Inline Python is allowed only when its source is one literal piece (a single-quoted `-c` operand, a quoted heredoc, or a single-quoted here-string), has no encoding cookie, and uses only imports, attributes and names on a published positive list. Everything else is refused.
-- R6. The positive list contains no module or call that starts a process, opens a socket, writes a file, loads code by string, or reaches another module by attribute or underscore name.
+- R5. Inline Python is allowed only when its source is one piece the guard can read (a `-c` operand, a heredoc, or a here-string; `$NAME` expansions are replaced by values set from literal words in the same command, or by the harness variables `HOME`, `PWD`, `USER`, `TMPDIR` and similar when the command does not assign them), has no encoding cookie, and uses only imports, attributes and names on a published positive list. Everything else is refused.
+- R6. The positive list contains no module or call that opens a socket, loads code by string, reaches another module by attribute or underscore name, or changes `os.environ` or the working directory. A call that starts a process passes only with a command line written out as literal strings, no `cwd=`, `env=`, `executable=` or `input=`, and no shell or interpreter reading its program from stdin; the command line is then judged like a typed command. File reads and writes pass; a device path under `/dev` other than the null and random devices is refused.
 - R7. Inline code in any other scripting language is refused outright, except `osascript`, which keeps its existing rule.
-- R8. A Python file run by name is judged by R5 and R6 when R2 says the file is read; a fresh file in another language is refused.
-- R9. An environment setting on an interpreter or shell command that loads code the guard cannot read is refused: `PYTHON*`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PATH`, `LD_*`, `DYLD_*`, and the options `python -i` and `--rcfile`.
+- R8. A Python file run by name is judged by R5 and R6 when R2 says the file is read; a fresh file in another language, or with an unknown shebang, is refused. A file that imports a module shadowed by a file in the directories Python searches first (the working directory, the script's directory, a directory the code names) is refused.
+- R9. A setting in the text that makes a program load code the guard cannot read is refused when the text runs a shell, interpreter or path: `PYTHON*`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `LD_*`, `DYLD_*`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, whether set as a prefix or exported earlier. A `PATH` setting with a relative or empty component is refused whatever the command. `python -i`, `--rcfile`, `--init-file` and `env -S` are refused. A shell that reads its script from a pipe or a process substitution is refused.
 
 **Refusals and safety**
 
@@ -102,10 +103,12 @@ Reading every script under the command rule is the wrong tool. Reading only file
 - The runtime closure: host binaries and the herdr socket refuse a non-driver session. It is the only fix that closes the class.
 - Programs that start processes from their own arguments: `awk 'BEGIN{system(...)}'`, `find -exec`, `xargs`, `sed` with the `e` flag, `git -c` hooks, `make`.
 - `python3 -m <module>`, including `-m timeit` with inline code, and code a read file imports or sources (transitive code, such as a fresh test file under `bash tests/run.sh`).
-- Interpreters not on the name list (`nodejs`, `lua5.4`, `ipython`, `tclsh`, `awk`), and `osascript` `do shell script` with a computed name.
+- Interpreters not on the name list (`lua5.4`, `ipython`, `awk`), wrappers not in KTD8 (`watch`, `script`, `parallel`), and `osascript` `do shell script` with a computed name.
 - Races: a file swapped between the hook's read and the shell's run by a background job started in an earlier command.
 - A worker moving the default-branch ref (`git update-ref`) to make its own script look identical to main.
-- An operand the guard cannot resolve (`bash "$f"`, a non-literal `cd`), which is 23% of file runs and stays allowed as today.
+- An operand the guard cannot resolve (`bash "$f"`, a non-literal `cd` leaves the earlier directory possible but adds none), which is 23% of file runs and stays allowed as today.
+- Device paths spelled in pieces (`'/de' + 'v/tty'`), and startup files in Python site directories.
+- A `$` inside a single-quoted `-c` operand is read as an expansion, because the lexer drops the quote kind.
 
 **Outside this plan:** Changing what the guard does for the driver session, and the driver-pane id lookup.
 
@@ -125,13 +128,14 @@ Reading every script under the command rule is the wrong tool. Reading only file
 
 - KTD1. **A script the session wrote is judged by the rule its typed commands get.** Cost is 0.44% of commands for editor-written scripts, against 90% for all scripts. Authorship, not content, separates the two.
 - KTD2. **Freshness decides authorship.** A file is the session's when `max(mtime, ctime)` from `lstat` and `stat` is at or after the sender's session start, and it is not a tracked file whose `git hash-object --no-filters` blob equals the default branch's. ctime defeats `touch -d`. The session start is the **earliest** `at` in the registry rows for the session id, because SessionStart also fires on resume and compact and `lookup()` returns the latest. Git runs with the file's directory as cwd, a 2 s timeout, and any git error means read the file.
-- KTD3. **Inline Python is default-deny by a positive list of (module, attribute) pairs.** Any underscore-leading name or attribute, any star import, any name that loads or reaches code by string (`__import__`, `getattr`, `eval`, `exec`, `compile`, `globals`, `locals`, `vars`, `breakpoint`, `open` with a non-read literal mode), and any module off the list is refused. Aliases resolve to the module before the check. The concrete list is published in `send_guard_inline.py` and the docs: `json`, `re`, `sys` (`argv`, `stdin`, `stdout`, `stderr`, `exit`, `version_info`), `os.path`, `collections`, `itertools`, `math`, `datetime`, `time`, `textwrap`, `string` (not `Formatter`), `csv`, `hashlib`, `base64`, `urllib.parse`, `typing`, `statistics`, `random`, `uuid`, `fnmatch`, `difflib`, `html`, `dataclasses`, `enum`, `decimal`, `fractions`, `heapq`, `bisect`, `copy`, `pprint`, `unicodedata`, `binascii`, `struct`, `calendar`, `io` (`StringIO`, `BytesIO`), `shlex` (`split`, `quote`, `join`), `glob`, `tomllib`. `socket`, `ssl`, `http`, `urllib.request`, `asyncio`, `ctypes`, `pty`, `pickle`, `marshal`, `runpy`, `code`, `pdb`, `pkgutil`, `timeit`, `importlib`, `operator`, `functools`, `shutil`, `pathlib`, `tempfile`, `zipfile` and `subprocess` are not on it. The list may grow only by adding a pair with a test. (session-settled: user-approved — positive list over a refused-name list: the repo learning on enumeration, accepted in the brief.)
-- KTD4. **Only literal code is read.** A single-quoted `-c` operand, a quoted heredoc, or a single-quoted here-string. Code from a double-quoted operand with any expansion, an unquoted heredoc, a pipe from an unreadable source, `/dev/stdin`, or process substitution is refused. An encoding cookie refuses. This closes the case where the guard and the interpreter would read different bytes.
+- KTD3. **Inline Python is default-deny by a positive list.** A public attribute of an allowed module passes only when its value is not itself a module (computed from the module at check time), a module never stands as a bare value, aliases resolve to the module, and an underscore-leading name or attribute, a star import, a frame attribute, and any name that loads or reaches code by string (`__import__`, `getattr`, `eval`, `exec`, `compile`, `globals`, `locals`, `vars`, `breakpoint`) are refused. The module list is in `MODULES` in `send_guard_inline.py` and the docs: the data and text modules (`json`, `re`, `collections`, `itertools`, `math`, `datetime`, `time`, `textwrap`, `string` without `Formatter`, `csv`, `hashlib`, `base64`, `urllib.parse`, `statistics`, `random`, `fnmatch`, `difflib`, `html`, `decimal`, `fractions`, `heapq`, `bisect`, `copy`, `pprint`, `unicodedata`, `binascii`, `struct`, `calendar`, `shlex`, `glob`, `io` for `StringIO` and `BytesIO`, `ast`, `hmac`, `contextlib`, `functools`), the file modules (`pathlib`, `tempfile`, `shutil`, `zlib`, `gzip`, `bz2`, `zipfile`, `tarfile`, `sqlite3` without extension loading), `sys` and `os` with named attributes, and `subprocess` under KTD10. `socket`, `ssl`, `http`, `urllib.request`, `asyncio`, `ctypes`, `pty`, `pickle`, `marshal`, `runpy`, `code`, `pdb`, `pkgutil`, `timeit`, `importlib`, `operator`, `typing`, `dataclasses` and `argparse` are not on it. The list grows only by adding a name with a test. A positive list was chosen over a refused-name list because of the repo learning on enumeration. The first design also refused file writes and `pathlib`; the 30-day replay showed that refused 15% of all commands, so a file write is allowed and judged by what happens to the file next (R2, R8, the device-path rule).
+- KTD4. **Code is read as the shell passes it.** A `-c` operand, heredoc or here-string is read as text; a `$NAME` in it is replaced by a value set from literal words in the same command and both the raw and the expanded text must pass. An encoding cookie, a pipe from another command, `/dev/stdin`, a process substitution, or an unquoted heredoc holding a backslash escape the shell rewrites is refused. The lexer loses the quote kind, so a `$` inside single quotes is read as an expansion; that is a known false refusal with the quoted-heredoc fix.
 - KTD5. **Non-Python inline code is refused outright.** Use was 33 commands in 30 days and no parser exists for them here.
-- KTD6. **One module holds the new checks.** `plugins/auto/lib/send_guard_inline.py` follows the `send_guard_values.py` precedent, loaded with `load_lib_module`, so `send_guard.py` does not grow past its 827 lines.
-- KTD7. **Fail closed inside a deadline.** The new entry point catches `BaseException` and refuses; it has a per-command wall-clock deadline, a cap of 8 files and 256 KB each, a regular-file non-blocking open (a FIFO or `/dev/zero` refuses), and a wrapped `ast.parse` (so `RecursionError` and `MemoryError` refuse). The walk is iterative with a node cap.
-- KTD8. **One "what runs a file" set.** Shells in `_SHELL_NAMES`, `source`, `.`, `./path`, absolute, `~` and `../` paths, `exec` and `env` wrappers, and the interpreter list. The judge is chosen by interpreter name, falling back to the shebang or extension for `./f`. Operands the guard cannot resolve stay allowed (R4).
-- KTD9. **Environment loaders are refused by name.** The set in R9 is small and each name has a documented effect, so a name list is correct here: the effect is "load code the guard did not read", not a program name.
+- KTD6. **Two modules hold the new checks.** `send_guard_inline.py` has the Python check, the language flags, and file reading; `send_guard_runners.py` finds what each shell and interpreter in a command runs, and takes the `send_guard` module as an argument because `_scan` and the lexer live there. `send_guard.py` grows only by the heredoc body record, the `ctx` argument and the call (827 to 868 lines), which keeps it under the 1000-line budget.
+- KTD7. **Fail closed inside a deadline.** The entry point catches `Exception` and refuses, which covers `RecursionError` and `MemoryError`. It has a per-command deadline checked between programs and between git calls, a cap of 8 files and 256 KB each, and a node cap; a non-regular file refuses. `ast.parse` runs inside the same guard.
+- KTD8. **One "what runs a file" set.** Shells in `_SHELL_NAMES`, `source`, `.`, `./path`, absolute, `~` and `../` paths, the interpreter list, `exec`, `env`, `setsid`, `arch`, `xcrun`, `coproc`, `timeout`, `gtimeout` and `uv`/`poetry`/`pipx`/`pipenv`/`rye`/`conda`/`hatch run`. The judge is chosen by interpreter name, falling back to the shebang for `./f`; an unknown shebang is refused. Wrappers not in this list (`watch`, `script`, `parallel`) are a named residual.
+- KTD9. **Loader settings are refused by name.** The set in R9 is small and each name has a documented effect ("load code the guard did not read"), so a name list is correct here; it is not a list of program names.
+- KTD10. **A literal spawn is judged as a typed command.** `subprocess.run`, `call`, `check_call`, `check_output`, `Popen`, `getoutput`, `getstatusoutput` and `os.system`/`os.popen` pass only when called directly with one literal string or a list of literal strings, and only the keywords `stdout`, `stderr`, `stdin`, `text`, `capture_output`, `check`, `timeout`, `universal_newlines`, `encoding`, `errors` and `shell`. The command line is scanned as if typed, so a send to a driver's pane stays denied and a send to a proven worker pane stays allowed. This is the fix direction written in issue #185. Chosen over refusing all inline code that starts a process because the existing integration test `programme-hooks.test.sh` pins that a literal send to a worker pane from inline Python is allowed; the PM can redirect this in review.
 
 ### High-Level Technical Design
 
@@ -170,9 +174,10 @@ flowchart TB
 |---|---|
 | The positive list leaks through a module reachable from an allowed one | Positive pairs, underscore names refused, mutation-check `shlex.os`, `collections.sys`, `os.path.os`, `string.Formatter`; the list is public and grows only with a test |
 | `git checkout` or rebase freshens repo scripts | Exempt tracked files identical to the default branch |
-| Python refusal exceeds 5% after removing `pathlib` and writes | U3 measures first; stop and report to the PM, who can accept a wider list |
+| The refusal share exceeds 5% | Measured on every design change; the first design measured 15% and was loosened; the final design measures 5.0% to 6.3% depending on replay artifacts, which the PM judges |
 | Worker forges the default-branch ref or races a file | Documented residuals with a runtime-closure follow-up |
-| A hook exception allows the command | KTD7: new code catches `BaseException` and refuses |
+| A hook exception allows the command | KTD7: the new code catches `Exception` and refuses; a fuzz of about 92,000 commands found no crash outside it |
+| Each review round finds more bypasses | Stop at three rounds with the same P0 or P1 and hand back (brief); the runtime closure is the real fix |
 
 ---
 
@@ -183,12 +188,12 @@ flowchart TB
 - **Goal:** R1.
 - **Requirements:** R1, R10
 - **Dependencies:** none
-- **Files:** `plugins/auto/lib/send_guard.py`, `plugins/auto/tests/unit/send-guard-computed-names.test.sh` (new)
+- **Files:** `plugins/auto/lib/send_guard.py`, `plugins/auto/lib/send_guard_runners.py` (new), `plugins/auto/tests/unit/send-guard-computed-names.test.sh` (new)
 - **Approach:**
-  1. Collect write destinations in the text: `>` and `>>` (before or after a `<<`), `tee`, `cp`, `mv`, `sed -i`, `curl -o`, `install`, `ln`, and a `printf` or `echo` literal.
-  2. Collect run targets with the KTD8 set.
-  3. Reorder `_scan` so bodies are scanned after the run targets are known (the bodies loop runs first today); a body whose destination is a run target anywhere in the text is scanned as shell, or as Python for a `.py` destination or a Python shebang.
-  4. A destination that is also a run target but whose content is not a literal heredoc or literal `printf` is refused with cause `script`.
+  1. Record each heredoc's redirect target and reader programs in `_split_heredocs` (`_Body`).
+  2. Collect write destinations in the text: `>`, `>>`, `&>`, `tee`, `cp`, `mv`, `sed -i`, `curl -o`, `install`, `ln`, `dd of=`, and a literal `printf` or `echo`; collect run targets with the KTD8 set.
+  3. After the token loop, `_scan` calls `send_guard_runners.judge_runners`. A body whose destination matches any spelling of a run target (as written, and resolved against each directory the command may be in) is scanned as shell, or as Python for a Python runner.
+  4. A destination that is also a run target but whose content is not a literal heredoc or literal `printf` is refused with cause `script`. A literal run target that exists nowhere is refused too, which covers writers the guard does not model (`tar`, `unzip`, `git checkout`).
 - **Execution note:** Write the failing tests from the probe table first; measure the refusal share of the 247 same-command runs against the old guard before closing the unit.
 - **Patterns to follow:** `_heredoc_reader_is_shell`, the `quoted` handling in `_split_heredocs`.
 - **Test scenarios:**
@@ -206,15 +211,15 @@ flowchart TB
 - **Goal:** Find the code an interpreter will run so U3 can judge it.
 - **Requirements:** R5, R7, R9
 - **Dependencies:** U1 (both edit the `_scan` region; serial)
-- **Files:** `plugins/auto/lib/send_guard.py`, `plugins/auto/lib/send_guard_inline.py` (new)
+- **Files:** `plugins/auto/lib/send_guard.py`, `plugins/auto/lib/send_guard_runners.py`, `plugins/auto/lib/send_guard_inline.py` (new)
 - **Approach:**
-  1. Keep the existing literal-string scan for every interpreter so nothing regresses, then add extraction ahead of it.
-  2. Return the code for a single-quoted `-c` operand after any flag cluster, a quoted heredoc whose reader is the interpreter, a single-quoted here-string, or `-` with a literal source; otherwise return `unreadable`.
-  3. Refuse `-i`, `--rcfile`, and an env prefix or `env VAR=` assignment of the R9 names.
-  4. Resolve `uv run`, `env`, `exec` and absolute-path wrappers to the interpreter.
+  1. Keep the existing literal-string scan for every interpreter so nothing regresses; the new judgement runs after it.
+  2. `plan()` in `send_guard_inline.py` returns the code operand, stdin, file or module from the words after an interpreter, skipping the options that take a value (`node -r f`, `perl -I d`, `deno run`).
+  3. Read a heredoc body when its reader line names the interpreter, a here-string as text, and a `$NAME` by KTD4; refuse a pipe, `/dev/stdin` and a process substitution.
+  4. Resolve the wrappers in KTD8 to the program they run, and refuse the loader settings in R9.
 - **Test scenarios:**
   - `python3 -c '...'`, `python3 -Ic '...'`, `python3.12 - <<'EOF'`, `python3 <<<'...'` yield the code.
-  - `python3 -c "$CODE"`, `python3 -c "x='$A'"`, unquoted heredoc, `curl … | python3 -`, `python3 /dev/stdin`, `python3 <(…)` are refused.
+  - `python3 -c "$CODE"`, `python3 -c "x='$A'"`, `curl … | python3 -`, `python3 /dev/stdin`, `python3 <(…)` are refused; an unquoted heredoc with no escape that the shell rewrites is read.
   - `cat data.json | python3 -c '...'` judges the `-c` code only.
   - `PYTHONBREAKPOINT=os.system python3 -c '...'`, `PYTHONSTARTUP=f python3 -i`, `BASH_ENV=f bash -c 'true'`, `PATH=./bin:$PATH python3 -c '...'` are refused.
 
@@ -227,12 +232,12 @@ flowchart TB
 - **Approach:**
   1. Parse with a wrapped `ast.parse`; refuse a coding cookie; walk iteratively with a node cap.
   2. Apply KTD3 as a positive list of pairs; resolve aliases; refuse underscore names, star imports and listed names.
-  3. Return cause `inline` with the first offending import, name or attribute, and add `inline` and `script` to `_FIXES` and `_UNPROVEN_VERBS` so the denial prints the right fix: write the step as a plain command, or keep the Python to parsing and formatting with the named modules.
+  3. Return cause `inline` or `script` with the first offending import, name or attribute. The existing verb `runtime-built command` carries them, so `_UNPROVEN_VERBS` is unchanged; `_FIXES` gains `inline` and `script` entries whose `{detail}` is filled by `_fix`.
   4. Re-measure the 30-day corpus with the final list; if the refused share is over 5%, stop and report.
-- **Technical design:** a pure function `code -> None | reason`.
+- **Technical design:** a pure function `analyse(code) -> (reason | None, literal command lines)`.
 - **Test scenarios:**
-  - Allowed: `import json, sys; print(json.dumps({'a': 1}))`, `os.path.join`, `re`, `collections`, `datetime`, `open('f')` and `open('f','r')`.
-  - Denied: `subprocess.run`, `os.system`, `import os as o; o.system`, `o.posix_spawn`, `from os import system`, `import socket`, `urllib.request`, `__import__('sub'+'process')`, `getattr`, `shlex.os.system`, `collections._sys`, `collections.sys.modules`, `os.path.os.system`, `sys._getframe`, `string.Formatter().get_field(...)`, `().__class__.__bases__[0].__subclasses__()`, `eval`, `exec`, `compile`, `breakpoint()`, `open('x','w')`, `pathlib.Path(...).write_text`, `from shlex import os as o`, `from x import *`.
+  - Allowed: `import json, sys; print(json.dumps({'a': 1}))`, `os.path.join`, `re`, `collections`, `datetime`, `open('f')`, `open('f','w')`, `pathlib.Path(...).write_text`, `os.makedirs`, `shutil.copy`, `os.system('echo hi')`, `subprocess.run(['git', 'status'])`, and a literal `herdr pane send-text` to a proven worker pane.
+  - Denied: a computed command line, `cwd=`, `env=`, `executable=`, `input=`, a shell or interpreter with no script, `import os as o; o.system(cmd)`, `o.posix_spawn`, `import socket`, `urllib.request`, `__import__('sub'+'process')`, `getattr`, `shlex.os.system`, `collections._sys`, `collections.sys.modules`, `os.path.os.system`, `sys._getframe`, `string.Formatter().get_field(...)`, `().__class__.__bases__[0].__subclasses__()`, `eval`, `exec`, `compile`, `breakpoint()`, `open('x', mode_var)`, `os.environ['X'] = ...`, `os.chdir`, a `/dev/tty` path in any spelling, `from shlex import os as o`, `from x import *`, a literal send to a driver's pane.
   - Denied: a `# coding: utf-7` cookie; `node -e`, `ruby -e`, `perl -e` with backticks, `deno eval`, `bun -e`, `php -r`, `lua -e`; allowed: `osascript -e 'tell …'` under its existing rule.
   - Error path: a 200 KB code string, 5,000 nested expressions and a syntax error each answer inside 10 s and refuse.
   - Differential: every command in the probe set that the old guard denied is still denied.
@@ -242,12 +247,12 @@ flowchart TB
 - **Goal:** R2, R3, R4, R8.
 - **Requirements:** R2, R3, R4, R8, R10
 - **Dependencies:** U3 (and the cwd plumbing in this unit)
-- **Files:** `plugins/auto/lib/on-pretooluse-action.py` (pass `cwd` from the hook JSON), `plugins/auto/lib/send_guard.py` (`denial` takes `cwd`), `plugins/auto/lib/send_guard_inline.py`, `plugins/auto/lib/session_registry.py` (read only), `plugins/auto/tests/unit/send-guard-computed-names.test.sh`
+- **Files:** `plugins/auto/lib/on-pretooluse-action.py` (pass `cwd` from the hook JSON), `plugins/auto/lib/send_guard.py` (`denial` takes `cwd`), `plugins/auto/lib/send_guard_runners.py`, `plugins/auto/lib/send_guard_inline.py`, `plugins/auto/lib/session_registry.py` (`session_start`), `plugins/auto/tests/unit/send-guard-computed-names.test.sh`
 - **Approach:**
-  1. Pass the hook's `cwd` to `denial`; track a literal `cd`; an operand after a non-literal `cd` is unresolved and allowed (R4).
-  2. For each KTD8 run target with a literal operand, apply KTD2 freshness; skip files that are not fresh or are identical to the default branch.
-  3. Read under KTD7 limits. Shell files go to `_scan` under the strict policy; Python files go to U3; a fresh file in another language, a FIFO, an unreadable file and a file over 256 KB are refused with the fix. A fresh binary or a git-ignored build path is allowed.
-  4. Take the earliest `at` for the session id as the start; the fallback is six hours before now when the row is missing.
+  1. Pass the hook's `cwd` to `denial`; track `cd` as a set of possible directories (R4).
+  2. For each KTD8 run target with a literal operand, apply KTD2 freshness in each possible directory; skip files that are not fresh or are identical to the default branch.
+  3. Read under KTD7 limits. Shell files go to `_scan` under the strict policy; Python files go to U3; a fresh file in another language or with an unknown shebang, a FIFO, an unreadable file and a file over 256 KB are refused with the fix. Only a compiled program (ELF, Mach-O, PE magic) is allowed unread; a NUL byte does not make a file binary.
+  4. `session_registry.session_start` returns the earliest `at` for the session id; the fallback is six hours before now when the row is missing.
 - **Execution note:** Check the registry rows after a resume and a compact before writing the start helper.
 - **Test scenarios:**
   - A fresh file that computes `herdr`, then `bash f` in a later command, is denied.
@@ -257,9 +262,9 @@ flowchart TB
   - A script committed on the feature branch but absent from the default branch is read.
   - An old untracked installed tool is allowed.
   - A fresh file over 256 KB, a FIFO, a directory and a symlink to a fresh file are refused or resolved by real path.
-  - `cd sub && bash f.sh` resolves `f.sh` under `sub`; `cd "$D" && bash f.sh` stays allowed.
+  - `cd sub && bash f.sh` resolves `f.sh` under `sub` and under the directory before the `cd`; `cd "$D" && bash f.sh` reads `f.sh` where it exists and stays allowed when it exists nowhere.
   - Fresh `x.py` holding `subprocess` is denied; holding only `json` is allowed.
-  - Timing: 20 fresh files of 256 KB answer inside the deadline and refuse past it.
+  - A command that runs more than 8 fresh scripts is refused (the file cap), so a worker cannot use many script words to push the hook past its time limit.
 
 ### U5. Corpus replay, differential, mutation checks and docs
 

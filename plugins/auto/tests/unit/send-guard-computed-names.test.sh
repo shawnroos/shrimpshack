@@ -32,6 +32,7 @@ export CLAUDE_AUTO_PERSONAL_PROTOCOL="${WORK}/personal/protocol.json"
 export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
 export CLAUDE_AUTO_SECRETS_FILE="${WORK}/secrets"
 : > "$CLAUDE_AUTO_SECRETS_FILE"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 NOREPO="${WORK}/norepo"
 mkdir -p "$NOREPO"
 
@@ -93,9 +94,6 @@ allowed() {
 # The command is read from stdin, so a multi-line or heavily quoted command is written as it runs.
 A() { local c; c="$(cat)"; allowed "$c"; }
 D() { local c; c="$(cat)"; denied "$c"; }
-# Accepted by the guard before this change too: reported, not asserted, because this work adds no refusal to
-# inline code that the line scan already accepts.
-G() { local c; c="$(cat)"; printf "  - known gap (accepted today): %s\n" "$(printf %s "$c" | head -2 | tr '\n' ' ')"; }
 
 row herdr default w2 pm-mv w2:p9T term_p9T
 programme herdr default w2 pm-mv >/dev/null
@@ -569,14 +567,17 @@ T
 A <<'T'
 python3 fresh-ok.py
 T
-A <<'T'
+D <<'T'
 bash missing.sh
 T
 A <<'T'
 bash "$SCRIPT"
 T
-A <<'T'
+D <<'T'
 cd "$D" && bash fresh.sh
+T
+A <<'T'
+cd "$D" && bash elsewhere.sh
 T
 mkdir -p "${PROJ}/sub"
 cat > "${PROJ}/sub/inner.sh" <<'EOF'
@@ -661,6 +662,252 @@ D <<'T'
 bash tracked.sh
 T
 HOOKCWD="$PROJ"
+
+echo "send-guard-computed-names: bypasses found in review stay refused"
+printf 'echo ok\0\nH=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/nul.sh"
+chmod +x "${PROJ}/nul.sh"
+D <<'T'
+bash nul.sh
+T
+D <<'T'
+./nul.sh
+T
+"$PY" -c 'import zipfile; z = zipfile.ZipFile("'"${PROJ}"'/z.zip", "w"); z.writestr("__main__.py", "import subprocess\nsubprocess.run(cmd)\n"); z.close()'
+D <<'T'
+python3 z.zip
+T
+D <<'T'
+cat > sub/x2.sh <<'EOS'
+H=$(printf 'her%s' dr); $H pane send-text w2:p77 hi
+EOS
+cd sub && bash x2.sh
+T
+D <<'T'
+cat > sub/x3.sh <<'EOS'
+H=$(printf 'her%s' dr); $H pane send-text w2:p77 hi
+EOS
+(cd sub; bash x3.sh)
+T
+D <<'T'
+[ 0 = 1 ] && cd sub; bash fresh.sh
+T
+D <<'T'
+(cd sub; true); bash fresh.sh
+T
+D <<'T'
+bash notyet.sh
+T
+D <<'T'
+tar xf a.tar && bash run.sh
+T
+D <<'T'
+python3 -c 'import subprocess; subprocess.run(["true"], cwd="..")'
+T
+D <<'T'
+python3 -c 'import os; os.chdir("..")'
+T
+D <<'T'
+python3 -c 'import os; os.environ["BASH_ENV"] = "/tmp/e"'
+T
+D <<'T'
+python3 -c 'import os; os.environ.update({"A": "b"})'
+T
+D <<'T'
+python3 -c 'import subprocess; subprocess.run("env bash", shell=True)'
+T
+D <<'T'
+python3 -c 'import subprocess; subprocess.run(["env", "sh"])'
+T
+D <<'T'
+python3 -c 'open("y.py", "w").write("import socket"); import os; os.system("python3 y.py")'
+T
+A <<'T'
+python3 -c 'import os; print(os.environ.get("HOME"), os.environ["HOME"], "X" in os.environ)'
+T
+mkdir -p "${PROJ}/sub2" "${PROJ}/fp"
+printf 'x = 1\n' > "${PROJ}/sub2/json.py"
+: > "${PROJ}/fp/json.txt"
+D <<'T'
+python3 -c "import sys; sys.path.insert(0, 'sub2'); import json"
+T
+D <<'T'
+export PYTHONPATH=sub2; python3 -c 'import json'
+T
+HOOKCWD="${PROJ}/fp"
+A <<'T'
+python3 -c 'import json; print(1)'
+T
+HOOKCWD="$PROJ"
+D <<'T'
+timeout 5 python3 -c 'import socket'
+T
+D <<'T'
+gtimeout -s KILL 5 python3 -c 'import socket'
+T
+D <<'T'
+uv run python -c 'import socket'
+T
+D <<'T'
+uv run --with requests python -c 'import socket'
+T
+D <<'T'
+setsid python3 -c 'import socket'
+T
+D <<'T'
+PYTHONPATH=x timeout 5 python3 -c 'print(1)'
+T
+D <<'T'
+timeout 5 bash fresh.sh
+T
+A <<'T'
+timeout 5 python3 -c 'print(1)'
+T
+D <<'T'
+env -S 'bash fresh.sh'
+T
+D <<'T'
+bash <(echo ok)
+T
+D <<'T'
+source <(cat fresh.sh)
+T
+D <<'T'
+cat fresh-ok.sh | bash
+T
+A <<'T'
+echo hi | bash -c 'cat'
+T
+A <<'T'
+echo 'ls -la' | bash
+T
+A <<'T'
+cat <<'EOF' | bash
+ls -la
+EOF
+T
+D <<'T'
+echo "$X" | bash
+T
+D <<'T'
+printf '%s' "$(cat fresh.sh)" | sh
+T
+A <<'T'
+bash -c 'echo hi'
+T
+D <<'T'
+PATH=./bin:$PATH make
+T
+D <<'T'
+export PATH=.:$PATH; ls
+T
+D <<'T'
+PATH=:/usr/bin ls
+T
+A <<'T'
+PATH=/opt/x:$PATH make
+T
+A <<'T'
+export PATH="$HOME/bin:$PATH"; ls
+T
+D <<'T'
+export PYTHONPATH=sub; python3 -c 'print(1)'
+T
+D <<'T'
+LD_PRELOAD=/tmp/x.so python3 -c 'print(1)'
+T
+D <<'T'
+DYLD_INSERT_LIBRARIES=/tmp/x.dylib python3 -c 'print(1)'
+T
+D <<'T'
+ZDOTDIR=/tmp/z zsh -c 'true'
+T
+D <<'T'
+ENV=/tmp/e.sh sh -c 'true'
+T
+D <<'T'
+python3 -i
+T
+A <<'T'
+PYTHONPATH=src pytest -q
+T
+printf '#!/usr/bin/osascript\nlog "x"\n' > "${PROJ}/s.osa"
+printf '#!/usr/bin/awk -f\nBEGIN { print 1 }\n' > "${PROJ}/s.awk"
+chmod +x "${PROJ}/s.osa" "${PROJ}/s.awk"
+D <<'T'
+./s.osa
+T
+D <<'T'
+./s.awk
+T
+printf 'console.log(1)\n' > "${PROJ}/evil2.js"
+printf 'print 1;\n' > "${PROJ}/evil2.pl"
+D <<'T'
+node -r ./old.js evil2.js
+T
+D <<'T'
+perl -I oldlib evil2.pl
+T
+D <<'T'
+deno run evil2.js
+T
+D <<'T'
+bun run evil2.js
+T
+D <<'T'
+tsx evil2.js
+T
+D <<'T'
+pypy3 fresh.py
+T
+D <<'T'
+TMPDIR=$'1\'\nimport socket\ny = socket.socket\nz = \'1'; python3 -c "x = '$TMPDIR'"
+T
+D <<'T'
+python3 -c 'open(b"/dev/ttys003", "w")'
+T
+D <<'T'
+python3 -c 'open("//dev/ttys003", "w")'
+T
+D <<'T'
+python3 -c 'open("/./dev/ttys003", "w")'
+T
+D <<'T'
+python3 -c 'import os; open(os.path.join("/dev", "ttys003"), "w")'
+T
+A <<'T'
+python3 -c 'open("/dev/null", "w").write("x")'
+T
+D <<'T'
+python3 -c 'import sqlite3; c = sqlite3.connect(":memory:"); c.enable_load_extension(True)'
+T
+for n in 1 2 3 4 5 6 7 8 9 10; do cp "${PROJ}/fresh-ok.sh" "${PROJ}/many${n}.sh"; done
+D <<'T'
+bash many1.sh; bash many2.sh; bash many3.sh; bash many4.sh; bash many5.sh; bash many6.sh; bash many7.sh; bash many8.sh; bash many9.sh; bash many10.sh
+T
+
+A <<'T'
+cat > sub/ok2.sh <<'EOS'
+echo ok
+EOS
+cd sub && bash ok2.sh
+T
+D <<'T'
+python3 -c 'open("fresh-ok.py", "w").write("import socket"); import os; os.system("python3 fresh-ok.py")'
+T
+AS=sess-late
+A <<'T'
+deno run old.sh
+T
+A <<'T'
+bun run old.sh
+T
+A <<'T'
+perl -I oldlib old.sh
+T
+A <<'T'
+node -r nolib old.sh
+T
+AS=sess-worker
 
 echo "send-guard-computed-names: the check refuses instead of allowing when it cannot finish (R10)"
 it "an exception inside the new checks refuses"
