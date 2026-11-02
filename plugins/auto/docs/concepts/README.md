@@ -17,7 +17,7 @@ Auto (one run)                    Programme (one PM, many items)
 - [Backend](auto/backend.md)
 - [Preset](auto/preset.md)
 - [Pulse and dispatcher](auto/pulse-and-dispatcher.md)
-- [Ledger, verdicts and exit predicate](auto/ledger-and-exit-predicate.md)
+- [Verdicts and exit predicate](auto/exit-predicate.md)
 
 ## Programme
 
