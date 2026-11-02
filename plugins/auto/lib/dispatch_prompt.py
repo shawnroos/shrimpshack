@@ -58,6 +58,7 @@ def build_dispatch_prompt(
     *,
     goal: str | None = None,
     skill: str = "/ce-work",
+    repo_root: str | None = None,
 ) -> str:
     """Render the canonical dispatch prompt for one step of an auto run.
 
@@ -69,6 +70,11 @@ def build_dispatch_prompt(
     spawned ``Agent``.
     """
     goal_line = f"\nObjective: {goal}" if goal else ""
+    contract = ""
+    if repo_root is not None:
+        from _bootstrap import load_lib_module
+        section = load_lib_module("worker_contract_apply").step_section(repo_root, run_id)
+        contract = f"\n{section}\n" if section else ""
     verdict_cmd = verdict_write_command(run_id, step_id, attempt)
     return f"""\
 You are a scoped work agent for auto run `{run_id}`, step `{step_id}` (attempt {attempt}).{goal_line}
@@ -79,7 +85,7 @@ and advisor gate are armed for you (R21 — LOAD-BEARING SAFETY):
 
 Then do the work for step `{step_id}` by running `{skill}` scoped to this step —
 implement and verify ONLY this step's contents. Do not touch other steps.
-
+{contract}
 RECORD YOUR VERDICT BEFORE ANY LONG-RUNNING BACKGROUND WAIT (record-before-yield).
 If a check backgrounds (a >120s test suite, a slow build), write your verdict
 FIRST and let the check's outcome fold into a later pass — never yield to wait for
