@@ -32,7 +32,7 @@ programme_carryover = load_lib_module("programme_carryover")
 programme_layered_store = load_lib_module("programme_layered_store")
 programme_terms = load_lib_module("programme_terms")
 behaviour_check = load_lib_module("programme_behaviour_check")
-contract_check = load_lib_module("programme_contract_check")
+behaviour_report = load_lib_module("programme_behaviour_report")
 
 STORE_PATH_ENV = "CLAUDE_AUTO_BEHAVIOURS_STORE"
 STORE_NAME = "behaviours.json"
@@ -65,8 +65,7 @@ _ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _Reject = programme_protocol._Reject
 
 
-class BehaviourError(Exception):
-    pass
+BehaviourError = behaviour_check.BehaviourError
 
 
 def _lines(entry, field) -> None:
@@ -460,45 +459,24 @@ def _from_proposal(host, programme, prompt, proposal) -> dict:
     return dict(entry, state=ACTIVE)
 
 
-def _answers(opts) -> tuple:
-    related = list(dict.fromkeys(opts.get("relates-to") or []))
-    unrelated = []
-    for raw in opts.get("unrelated") or []:
-        ref, sep, reason = raw.partition("=")
-        if not sep or not reason.strip() or not ref.strip():
-            raise BehaviourError(f"--unrelated needs <id>=<reason>, got {raw!r}")
-        unrelated.append({"id": ref.strip(), "reason": programme_sanitize.clean(reason)})
-    return related, unrelated
-
-
-def _check(host, rec, entry, others, *, lines, answers=((), ())) -> dict:
-    snapshot = host.rules_in_force(rec, changes=False, behaviours=False)
-    peers = behaviour_check.check(entry, others)
-    contract = contract_check.check(entry, snapshot)
-    known = {o["id"] for o in others} | contract_check.refs(snapshot) | {r["ref"] for r in peers + contract}
-    related, unrelated = answers
-    for ref in list(related) + [u["id"] for u in unrelated]:
-        if ref not in known:
-            raise BehaviourError(f"no behaviour or contract part {ref!r} to answer for")
-    answered = set(related) | {u["id"] for u in unrelated}
-    if not lines:
-        peers = [{k: v for k, v in r.items() if k != "lines"} for r in peers]
-    return {"behaviours": peers, "contract": contract,
-            "unanswered": sum(r["ref"] not in answered for r in peers + contract),
-            "checked": {"reasons": list(behaviour_check.REASONS), "not_detected": behaviour_check.NOT_DETECTED}}
-
-
 def _h_check(host, argv):
-    positional, opts = host._parse(argv, values=("run",) + _FIELD_VALUES, multi=_FIELD_MULTI)
-    if positional:
-        raise ValueError("usage: check-behaviour " + _FIELDS_DOC + " [--run <id>]")
+    positional, opts = host._parse(argv, values=("run", "from-proposal") + _FIELD_VALUES,
+                                   multi=_FIELD_MULTI + ("conflicts-with",))
+    proposal = opts.get("from-proposal")
+    if positional or (proposal and _has_fields(opts)):
+        raise ValueError("usage: check-behaviour " + _FIELDS_DOC + " [--conflicts-with <id>]... [--run <id>], "
+                         "or check-behaviour --from-proposal <id> [--conflicts-with <id>]... [--run <id>]")
     run_id, _, record = host._locate(opts)
     programme = programme_home.normalize_programme(record.get("programme") or {})
-    entry = _draft(opts, "bcheck")
+    found = _programme_entry(programme, proposal) if proposal else None
+    if proposal and (found is None or found.get("state") != "proposed"):
+        raise BehaviourError(f"no proposed behaviour {proposal!r}")
+    entry = dict(found, state=ACTIVE) if proposal else _draft(opts, "bcheck")
     _refuse(entry, verdict(entry, allow_adoption=False))
     others = _active(programme, load_store(host.prompt_lookup))
+    _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
     host._emit({"ok": True, "run": run_id, "kind": "behaviour_checked", "when": entry["when"]["text"],
-                **_check(host, dict(record, programme=programme), entry, others, lines=True)})
+                **behaviour_report.report(host, dict(record, programme=programme), entry, others, lines=True)})
     return 0
 
 
@@ -514,14 +492,14 @@ def _h_record(host, argv):
     bid = proposal or "b" + secrets.token_hex(3)
     if not proposal:
         _draft(opts, bid)
-    related, unrelated = answers = _answers(opts)
+    related, unrelated = answers = behaviour_report.answers(opts)
 
     def change(programme, prompt, rec):
         entry = _from_proposal(host, programme, prompt, proposal) if proposal else _draft(opts, bid)
         loaded = load_store(host.prompt_lookup)
         others = _active(programme, loaded)
         entry["overrides"] = _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
-        result = _check(host, rec, entry, others, lines=False, answers=answers)
+        result = behaviour_report.report(host, rec, entry, others, lines=False, given=answers)
         if related:
             entry["relates_to"] = related
         if unrelated:
@@ -822,9 +800,12 @@ _SPECS = (
      "proposal, or a prompt that does not name the proposal id. Applies at once at the programme layer and "
      "prints the behaviour and contract check beside the checks. The check never refuses."),
     ("check-behaviour", _h_check,
-     _FIELDS_DOC + " [--run <id>]",
+     _FIELDS_DOC + " [--conflicts-with <id>]... [--run <id>], or --from-proposal <id> [--conflicts-with <id>]... "
+     "[--run <id>]",
      "no --when, or neither --do nor --dont; a bad --applies-to; a do line, skill, tool or agent that names a "
-     "protected escalation. Reads only: it needs no prompt, records nothing and journals nothing."),
+     "protected escalation; a --conflicts-with id that is not a behaviour in force; with --from-proposal, any "
+     "field option or an id that is not a proposal. Reads only: it needs no prompt, records nothing and journals "
+     "nothing."),
     ("propose-behaviour", _h_propose,
      _FIELDS_DOC + " [--run <id>], or --from-term <term-id> [--run <id>]",
      "no --when (unless --from-term), or neither --do nor --dont; an unknown project term; a protected "

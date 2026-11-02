@@ -20,7 +20,7 @@ behaviour_check = load_lib_module("programme_behaviour_check")
 PM_DECIDES = "act"
 NEGATIONS = ("not", "never", "avoid", "dont", "no")
 SKIPS = ("skip", "without", "ignore", "omit")
-TERM_STEMS = {"cadence": ("sweep", "every", "cadence", "wake"), "remit": ("remit",)}
+TERM_STEMS = {"cadence": ("sweep", "cadence", "wake"), "remit": ("remit",)}
 STEM = 6
 # A kind such as merge_at_gate drops "at": a two-letter stem would match any word that starts with it.
 MIN_KIND_WORD = 3
@@ -48,7 +48,7 @@ def _touches_kind(kind, words) -> bool:
 
 
 def _clauses(text) -> list:
-    clean = text
+    clean = text.replace("'", "")
     for mark in CLAUSE_BREAKS:
         clean = clean.replace(mark, "|")
     return [behaviour_check.tokens(c) for c in clean.split("|") if c.strip()]
@@ -88,7 +88,8 @@ def _preferred_tools(entry, snapshot) -> list:
             for clause in clauses:
                 if needed <= set(clause):
                     hit.append(label)
-                    flagged = flagged or bool(set(clause) & set(NEGATIONS))
+                    first = min(clause.index(w) for w in needed)
+                    flagged = flagged or any(w in NEGATIONS for w in clause[:first])
         if hit:
             rows.append(_row("tool:" + str(term.get("id")), "preferred_tool", "names_tool", sorted(set(hit)),
                              f"{term.get('area')}: {term.get('value')}", flag=flagged))
@@ -119,8 +120,8 @@ def _authority(entry, snapshot) -> list:
 
 
 def _done_standards(entry, snapshot) -> list:
-    lines = (entry.get("do") or []) + (entry.get("dont") or [])
-    clauses = [c for line in lines for c in _clauses(line)]
+    clauses = [(c, skip) for lines, skip in ((entry.get("do") or [], True), (entry.get("dont") or [], False))
+               for line in lines for c in _clauses(line)]
     by_deliverable = {}
     for rule in snapshot.get("rules") or []:
         for deliverable in rule.get("requires") or []:
@@ -128,12 +129,21 @@ def _done_standards(entry, snapshot) -> list:
     rows = []
     for deliverable, ids in sorted(by_deliverable.items()):
         stem = deliverable[:5]
-        hit = [c for c in clauses if _starts(c, stem)]
+        hit = [(c, skip) for c, skip in clauses if _starts(c, stem)]
         if hit:
-            skipped = any(set(c) & set(SKIPS) for c in hit)
+            skipped = any(skip and set(c) & set(SKIPS) for c, skip in hit)
             rows.append(_row("done:" + deliverable, "done", "names_deliverable", [deliverable],
                              f"{len(ids)} Done standard(s) require {deliverable}", flag=skipped, ids=sorted(ids)))
     return rows
+
+
+def snapshot(host, rec) -> dict:
+    # rules_in_force leaves out plugin-layer levels, and those defaults are what reserve fix_other_team_code.
+    protocol = host._protocol({})
+    out = host.rules_in_force(rec, {}, protocol, False, behaviours=False)
+    out["autonomy"] = [{"action": a, "level": e["level"], "layer": e["layer"]}
+                       for a, e in sorted(protocol["autonomy"].items())]
+    return out
 
 
 def check(entry, snapshot) -> list:

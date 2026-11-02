@@ -281,7 +281,7 @@ session.
   layer and journals `behaviour_recorded`. Its output lists the drafted checks, the
   undo command, the behaviours in force it applies alongside, the contract parts
   it touches, and how many listed items are unanswered.
-  `check-behaviour` takes the same field flags without a prompt, prints the same
+  `check-behaviour` takes the same field flags (or `--from-proposal <id>`) without a prompt, prints the same
   result with each listed behaviour's lines, and writes nothing.
   `--relates-to <id>` and `--unrelated <id>=<reason>` store the answer on the entry.
   `--conflicts-with <id>` sets the new entry to override that behaviour (the

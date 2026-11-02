@@ -869,8 +869,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - Old journals keep `instruction_recorded`, `instruction_closed` and `decision_recorded` rows,
   which still read.
 - `behaviour_recorded` carries `{behaviour, layer, when, checks, overrides, from_proposal, behaviours,
-  contract, unanswered, checked, undo}` (the record-time check, programme-behaviours-format.md section 10;
-  older rows carry `related`); `behaviour_proposed` carries `{behaviour, state, when, checks, from_term}`;
+  contract, unanswered, checked, undo}` (the record-time check, programme-behaviours-format.md section 10: rows set `flag: may_contradict` where
+  code sees a clash; older rows carry `related`); `behaviour_proposed` carries `{behaviour, state, when, checks, from_term}`;
   `behaviour_moved` carries `{behaviour, from, to, repo_key, target, hash, store_path}`;
   `behaviour_retired` carries `{behaviour, as, layers, target}`. All but `behaviour_proposed` add
   the approval fields. After `behaviour_moved` or `behaviour_retired` commits, the verb journals one

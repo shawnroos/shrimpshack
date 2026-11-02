@@ -398,6 +398,91 @@ prog record-behaviour --run "$RUN" --prompt "$P1" --when "a release is ready" --
 check 1 "$CODE"
 has 'protected_escalation' "$OUT"
 
+it "check-behaviour prints each listed behaviour's lines"
+prog check-behaviour --run "$RUN" --when "$WORKER_DONE_WHEN" --do "then stop; the PM closes the pane once you have stopped" \
+  --dont "do not take new work outside your original remit"
+CHECK_N="$(jfield "$OUT" 'd["unanswered"]')"
+check "2" "$(jfield "$OUT" 'len([r for r in d["behaviours"] if r["ref"] == "bc3f80d"][0]["lines"]["do"])')"
+
+it "record-behaviour leaves the lines out, marks an answered row, and lowers the unanswered count by one"
+P4="$(tprompt "$RUN" "when a worker is finished, close its pane")"
+prog record-behaviour --run "$RUN" --prompt "$P4" --when "$WORKER_DONE_WHEN" --do "then stop; the PM closes the pane once you have stopped" \
+  --dont "do not take new work outside your original remit" --relates-to bc3f80d
+check "False" "$(jfield "$OUT" '"lines" in [r for r in d["behaviours"] if r["ref"] == "bc3f80d"][0]')"
+check "True" "$(jfield "$OUT" '[r for r in d["behaviours"] if r["ref"] == "bc3f80d"][0]["answered"]')"
+check "$((CHECK_N - 1))" "$(jfield "$OUT" 'd["unanswered"]')"
+
+it "check-behaviour changes no journal row"
+BEFORE="$(state "$RUN" "len(pj.read(args[0]))")"
+prog check-behaviour --run "$RUN" --when "a wholly unrelated moment" --do "water the plants"
+check "$BEFORE" "$(state "$RUN" "len(pj.read(args[0]))")"
+
+it "a refused --relates-to records no behaviour"
+BEFORE="$(state "$RUN" "[len(prog['behaviours']), [r['kind'] for r in pj.read(args[0])].count('behaviour_recorded')]")"
+prog record-behaviour --run "$RUN" --prompt "$P4" --when "a wholly unrelated moment" --do "water the plants" --relates-to pnope
+check 1 "$CODE"
+check "$BEFORE" "$(state "$RUN" "[len(prog['behaviours']), [r['kind'] for r in pj.read(args[0])].count('behaviour_recorded')]")"
+
+it "describe lists check-behaviour as a read verb"
+check "True" "$("$PY" -c 'import json,sys; print(json.load(sys.stdin)["verbs"]["check-behaviour"].get("reads"))' <<< "$("$PY" "$PROG" describe 2>/dev/null)")"
+
+it "check-behaviour accepts --from-proposal and --conflicts-with, and refuses an unknown id"
+prog propose-behaviour --run "$RUN" --when "$WORKER_DONE_WHEN" --do "then stop; the PM closes the pane once you have stopped"
+PB2="$(jfield "$OUT" 'd["behaviour"]')"
+prog check-behaviour --run "$RUN" --from-proposal "$PB2" --conflicts-with bc3f80d
+check 0 "$CODE"
+has "behaviour_checked" "$OUT"
+prog check-behaviour --run "$RUN" --from-proposal "$PB2" --conflicts-with pnope
+check 1 "$CODE"
+prog check-behaviour --run "$RUN" --from-proposal pnope
+check 1 "$CODE"
+
+it "a do line touching an action the plugin default reserves lists an Authority row, flagged"
+prog check-behaviour --run "$RUN" --when "a blocker sits in another team's repo" --do "fix other team code when it blocks us"
+check "may_contradict" "$(jfield "$OUT" '[r for r in d["contract"] if r["ref"] == "authority:fix_other_team_code"][0]["flag"]')"
+
+it "a dont line that forbids a skip does not flag the Done standard it agrees with"
+OUT="$(py <<EOF
+pcc = load_lib_module("programme_contract_check")
+$SNAP
+rows = {r["ref"]: r.get("flag") for r in pcc.check(beh("n1", dont=["skip verification when the change is small"]), snap)}
+print(json.dumps(rows))
+EOF
+)"
+has '"done:verified": null' "$OUT"
+
+it "a contracted negation flags the tool it forbids; a clause negating another tool does not flag the one it endorses"
+OUT="$(py <<EOF
+pcc = load_lib_module("programme_contract_check")
+$SNAP
+snap["operating_contract"]["project_terms"] = [
+    {"id": "t3", "area": "figma", "value": "Don't use figma for specs", "reserved": False},
+    {"id": "t4", "area": "browser", "value": "Use agent-browser (never playwright)", "reserved": False}]
+flags = lambda tool: {r["ref"]: r.get("flag") for r in pcc.check(beh("n1", tools=[tool]), snap)}
+print(json.dumps([flags("figma"), flags("agent-browser"), flags("playwright")]))
+EOF
+)"
+check '[{"tool:t3": "may_contradict"}, {"tool:t4": null}, {"tool:t4": "may_contradict"}]' "$OUT"
+
+it "a tool of record the behaviour names gives a plain term row"
+OUT="$(py <<EOF
+pcc = load_lib_module("programme_contract_check")
+$SNAP
+print(json.dumps({r["ref"]: [r.get("flag"), r["reasons"][0]["reason"]] for r in pcc.check(beh("n1", tools=["tracker"]), snap)}))
+EOF
+)"
+check '{"term:tools_of_record": [null, "names_tool"]}' "$OUT"
+
+it "a stored relates_to or unrelated entry with the wrong shape is rejected as bad_value"
+OUT="$(py <<'EOF'
+good = beh("g1", relates_to=["bc3f80d", "term:cadence"], unrelated=[{"id": "ruling:r1", "reason": "different job"}])
+bad = [beh("b1", relates_to=["Bad Id"]), beh("b2", relates_to="bc3f80d"), beh("b3", unrelated=[{"id": "x"}]),
+       beh("b4", unrelated=[{"id": "x", "reason": " "}]), beh("b5", unrelated="x")]
+print(pb.verdict(good, allow_adoption=False)["ok"], [pb.verdict(b, allow_adoption=False)["reason"] for b in bad])
+EOF
+)"
+check "True ['bad_value', 'bad_value', 'bad_value', 'bad_value', 'bad_value']" "$OUT"
+
 echo ""
 echo "programme-behaviour-check.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

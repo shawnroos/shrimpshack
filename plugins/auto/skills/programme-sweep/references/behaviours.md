@@ -5,10 +5,10 @@ Read this when Shawn gives standing guidance on how the work is done, and before
 A behaviour is Shawn's standing guidance on how the work is
 done. It carries no authority and no done bar: who decides stays with
 Authority and Rulings, and acceptance stays with Done standards.
-- Before you record one, run `P check-behaviour` with the fields you drafted. It
+- Before you record one, run `P check-behaviour` with the fields you drafted (or `--from-proposal <id>`). It
   records nothing. It lists the behaviours in force the new one applies
   alongside (`behaviours`) and the parts of the programme contract it touches
-  (`contract`), each with the reason that listed it. `may_contradict` marks a
+  (`contract`), each with the reason that listed it. `flag: may_contradict` marks a
   structural clash. Read each listed pair's `lines` yourself: code does not detect
   opposite meaning, so an empty list is not a pass. When the new one disagrees
   with a behaviour, pass `--conflicts-with <id>`. The new one wins, because the

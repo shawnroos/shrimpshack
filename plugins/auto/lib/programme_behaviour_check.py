@@ -17,6 +17,10 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_naming = load_lib_module("programme_naming")
 
+class BehaviourError(Exception):
+    pass
+
+
 REASONS = ("same_trigger", "shared_when", "instruction_touches_situation", "shared_tool", "equal_do_dont",
            "tool_forbidden_in_dont")
 FLAGGED = ("equal_do_dont", "tool_forbidden_in_dont")
