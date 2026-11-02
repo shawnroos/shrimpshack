@@ -19,14 +19,15 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 run_record_core = load_lib_module("run_record_core")
+worker_contract = load_lib_module("worker_contract")
 
 PULSE_BITES = ("pulse",)
 STEP_BITES = ("step",)
+_block = worker_contract.lenient_block
 
 
-def _block(record):
-    block = record.get("contract") if isinstance(record, dict) else None
-    return block if isinstance(block, dict) else None
+def has_contract(record) -> bool:
+    return _block(record) is not None
 
 
 def _settle(block, bites, keep_answers=False) -> bool:
@@ -60,7 +61,10 @@ def apply_bites(repo_root, run_id, bites, record=None, keep_answers=False) -> di
 
 def apply_at_pulse(repo_root, run_id, record=None) -> dict:
     # A PM answer stays pending until deliver_answers: the pulse may return before any intent carries its text.
-    return apply_bites(repo_root, run_id, PULSE_BITES, record, keep_answers=True)
+    record = apply_bites(repo_root, run_id, PULSE_BITES, record, keep_answers=True)
+    if not has_contract(record):
+        return record
+    return load_lib_module("worker_rebake").complete_due(repo_root, run_id, record)
 
 
 def deliver_answers(repo_root, run_id, versions) -> None:
@@ -93,10 +97,6 @@ def clamp_wave_with_record(repo_root, run_id, cap) -> tuple:
         return cap, record
     ceiling = block.get("fan_out_cap")
     return (min(cap, ceiling) if isinstance(ceiling, int) and not isinstance(ceiling, bool) else cap), record
-
-
-def clamp_wave(repo_root, run_id, cap) -> int:
-    return clamp_wave_with_record(repo_root, run_id, cap)[0]
 
 
 def _names(label, names) -> str:

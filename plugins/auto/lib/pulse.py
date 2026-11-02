@@ -388,8 +388,6 @@ def _pulse_body_inner(
     before = run_record.read_run_record(repo_root, run_id)
     extras = _guidance_extras(repo_root, run_id, before)
     led = worker_contract_apply.apply_at_pulse(repo_root, run_id, before)
-    if "contract" in led:
-        led = load_lib_module("worker_rebake").complete_due(repo_root, run_id, led)
     phase = phase_grammar.current_phase(led)
 
     intent, led = _try_iteration_check(
@@ -433,9 +431,14 @@ def _pulse_body_inner(
 
 
 def _guidance_extras(repo_root, run_id, record):
-    if not isinstance(record.get("contract"), dict):
+    if not worker_contract_apply.has_contract(record):
         return {}
     return load_lib_module("worker_contract_status").guidance_extras(repo_root, run_id, record)
+
+
+def _guidance_with_contract(text, record, extras):
+    extras = extras or {}
+    return worker_contract_apply.append_guidance(text, record, extras.get("effective"), extras.get("answers"))
 
 
 def _deliver_answers(repo_root, run_id, extras):
@@ -580,10 +583,8 @@ def _try_iteration_check(
                 },
                 stalled=[],
                 halted=[],
-                operator_guidance=worker_contract_apply.append_guidance(
-                    pulse_guidance._operator_guidance_for(phase, None, led_now), led_now,
-                    (extras or {}).get("effective"), (extras or {}).get("answers"),
-                ),
+                operator_guidance=_guidance_with_contract(
+                    pulse_guidance._operator_guidance_for(phase, None, led_now), led_now, extras),
             )
             _deliver_answers(repo_root, run_id, extras)
             return intent, led
@@ -788,12 +789,10 @@ def _build_rearm_intent(
         advance=advance_result,
         stalled=newly_stalled,
         halted=halted_ids,
-        operator_guidance=worker_contract_apply.append_guidance(
-            pulse_guidance._operator_guidance_for(phase, advance_result, led_now), led_now,
-            (extras or {}).get("effective"), (extras or {}).get("answers"),
-        ),
+        operator_guidance=_guidance_with_contract(
+            pulse_guidance._operator_guidance_for(phase, advance_result, led_now), led_now, extras),
     )
-    if "contract" in led_now:
+    if worker_contract_apply.has_contract(led_now):
         load_lib_module("goal_binding").annotate(intent, repo_root, run_id, led_now)
     gap_guard = pulse_guidance._gaps_open_guard(phase, led_now)
     if gap_guard is not None:
