@@ -29,18 +29,18 @@ terminal_host = load_lib_module("terminal_host")
 driver_session = load_lib_module("driver_session")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_carryover = load_lib_module("programme_carryover")
+programme_remit_owned = load_lib_module("programme_remit_owned")
 
 END_REASON = "ended_by_shawn"
 EXPIRED_REASON = "agreement_unaccepted"
 MOVABLE_STATES = ("live", "orphaned")
 CONSUMING_KINDS = ("taken_over", "handed_over", "programme_ended")
 _BECOME_PM = "programme.sh become-pm"
-REMIT_CAPS = {"spaces": 8, "repos": 20, "teams": 10, "projects": 20, "initiatives": 10}
+REMIT_CAPS = {"spaces": 8, "repos": programme_remit_owned.REPO_CAP, "teams": 10, "projects": 20, "initiatives": 10}
 REMIT_INPUT_CAP = 1 << 16
 REMIT_NAME_CAP = 100
 REMIT_ID_CAP = 64
 _TEAM_KEY_RE = re.compile(r"[A-Z][A-Z0-9]{0,7}")
-_GITHUB_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 class _Refused(Exception):
@@ -785,16 +785,8 @@ def _named_entry(raw, part, *, key_re=None):
     return entry
 
 
-def _repo_entry(raw):
-    if not isinstance(raw, dict) or not isinstance(raw.get("path"), str):
-        raise _remit_error("each repo is an object with a path")
-    path = raw["path"]
-    if not os.path.isabs(path) or ".." in path.split(os.sep) or not os.path.isdir(path):
-        raise _remit_error(f"repo path must be an absolute directory, got {path!r}")
-    github = raw.get("github")
-    if github is not None and (not isinstance(github, str) or not _GITHUB_RE.fullmatch(github)):
-        raise _remit_error(f"repo github must be owner/name, got {github!r}")
-    return {"path": os.path.normpath(path), "github": github}
+def _repo_entry(raw, stored=()):
+    return programme_remit_owned.parse_repo(raw, stored, _remit_error)
 
 
 def parse_remit(doc, current) -> dict:
@@ -812,7 +804,13 @@ def parse_remit(doc, current) -> dict:
             raise _remit_error("the remit needs at least one space")
         out["spaces"] = spaces
     if "repos" in doc:
-        out["repos"] = [_repo_entry(r) for r in _capped(doc["repos"], "repos", REMIT_CAPS["repos"])]
+        stored = current.get("repos") or []
+        given = _capped(doc["repos"], "repos", REMIT_CAPS["repos"])
+        rows = [_repo_entry(r, stored) for r in given]
+        out["repos"] = [r for r in rows if r is not None]
+        if not out["repos"] and any(r is None for r in rows):
+            # Dropping every stale path would leave an empty list, which means "no limit"; keep the ones given.
+            out["repos"] = [programme_remit_owned.entry_for(stored, r["path"]) for r in given]
     tracker = doc.get("tracker", {})
     if not isinstance(tracker, dict):
         raise _remit_error("tracker is an object of teams, projects and initiatives")
@@ -908,8 +906,10 @@ def _h_set_remit(host, argv):
         accepted = programme["agreement"].get("accepted")
         if accepted and prompt is None:
             raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of a typed prompt")
+        gone = programme_remit_owned.stale_paths(before["repos"])
         if accepted:
-            host.require_named(prompt, *[_names(part, entry) for part, _, entry in changes])
+            host.require_named(prompt, *[_names(part, entry)
+                                         for part, entry in programme_remit_owned.unnamed_removals(changes, gone)])
         moves = _lease_moves(rec["run_id"], changes)
         programme["remit"] = dict(before, **after)
         term = programme["agreement"]["terms"]["remit"]
@@ -919,6 +919,9 @@ def _h_set_remit(host, argv):
             term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
         out = {"remit": after,
                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
+        dropped = programme_remit_owned.dropped_stale(gone, after["repos"])
+        if dropped:
+            out["dropped_stale"] = dropped
         if not accepted:
             # On the JSON files a carried Ruling refuses the write, so neither the store nor a lease may change first.
             moved = host.programme_authority.promoted(home, run)

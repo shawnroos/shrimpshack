@@ -56,10 +56,6 @@ check "herdr True" "$(detect TERM_PROGRAM=ghostty HERDR_PANE_ID=w1:p1)"
 it "a plain terminal announces nothing and falls back to herdr"
 check "herdr False" "$(detect TERM_PROGRAM=Apple_Terminal)"
 
-it "herdr and Rex both announced: refuse, with a fix line naming the variables"
-has "REFUSED start Claude inside one multiplexer only" "$(detect HERDR_PANE_ID=w1:p1 REX_SESSION=abc)"
-it "herdr and Rex both announced inside Ghostty still refuse"
-has "REFUSED" "$(detect HERDR_PANE_ID=w1:p1 REX_SESSION=abc TERM_PROGRAM=ghostty)"
 it "cmux is refused as unsupported, with a fix line"
 has "cmux is not supported" "$(detect CMUX_WORKSPACE_ID=ws1)"
 it "cmux with a herdr pane resolves to herdr (spinoff order: herdr first)"
@@ -81,6 +77,78 @@ check "herdr True" "$(DETECT_PATH="${FAKE}:/usr/bin:/bin" detect TERM_PROGRAM=gh
 printf '#!/bin/bash\necho "status: stopped"\n' > "${FAKE}/herdr"
 it "Ghostty with the herdr server stopped stays Ghostty"
 check "ghostty True" "$(DETECT_PATH="${FAKE}:/usr/bin:/bin" detect TERM_PROGRAM=ghostty)"
+
+echo "terminal-host-detect: two announced hosts are told apart by proof (KTD1)"
+export AUTO_ROOT
+. "${AUTO_ROOT}/tests/helpers/host-fakes.sh"
+BOTH_BIN="${WORK}/both-bin"; REXONLY_BIN="${WORK}/rexonly-bin"; CALLS_LOG="${WORK}/calls.log"
+host_fake_install herdr "$BOTH_BIN"; host_fake_install rex "$BOTH_BIN"; host_fake_install rex "$REXONLY_BIN"
+SID=session:01a18693-5b41-787b-af33-87750812e31e
+BID=block:01a18693-5b44-7cdc-a847-3bcbb92a53ab
+DEADSID=session:00000000-0000-0000-0000-000000000000
+# both <bin-dir> <KEY=VALUE>...: "<name> | <why> | <fix>" for a session that announces two hosts.
+both() {
+  local bin="$1"; shift
+  env -i PATH="${bin}:/usr/bin:/bin" CALLS="$CALLS_LOG" "$@" "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+th = load_lib_module("terminal_host")
+d = th.detect(dict(os.environ))
+print(f"{d.name} | {d.why} | {d.fix}")
+PYEOF
+}
+H_LIVE=(HERDR_PANE_ID=w2:p10)
+H_DEAD=(HERDR_PANE_ID=w9:p9)
+R_LIVE=(REX_SESSION=$SID REX_BLOCK=$BID)
+R_DEAD=(REX_SESSION=$DEADSID REX_BLOCK=$BID)
+
+it "both announced, the herdr pane answers and Rex has no such session: herdr"
+check "herdr" "$(both "$BOTH_BIN" "${H_LIVE[@]}" "${R_DEAD[@]}" | cut -d' ' -f1)"
+it "both announced, Rex lists the block and the herdr pane is unknown: rex"
+check "rex" "$(both "$BOTH_BIN" "${H_DEAD[@]}" "${R_LIVE[@]}" | cut -d' ' -f1)"
+it "both announced inside Ghostty is decided by proof, not by the Ghostty rule"
+check "herdr" "$(both "$BOTH_BIN" "${H_LIVE[@]}" "${R_DEAD[@]}" TERM_PROGRAM=ghostty | cut -d' ' -f1)"
+it "both announced and no herdr command on PATH: Rex proves, so rex"
+check "rex" "$(both "$REXONLY_BIN" "${H_LIVE[@]}" "${R_LIVE[@]}" | cut -d' ' -f1)"
+it "an answer that fell back to the environment pane id is not proof"
+OUT="$(both "$BOTH_BIN" "${H_DEAD[@]}" "${R_DEAD[@]}")"
+has "None | " "$OUT"
+it "neither proving says so and gives an env -u command that works from inside the session"
+has "neither herdr nor Rex" "$OUT"; has "env -u" "$OUT"
+it "both proving says both hold a pane and gives an env -u command"
+OUT="$(both "$BOTH_BIN" "${H_LIVE[@]}" "${R_LIVE[@]}")"
+has "None | " "$OUT"; has "both herdr and Rex prove" "$OUT"; has "env -u" "$OUT"
+it "one announced host, or none, makes no call to either fake (R7)"
+: > "$CALLS_LOG"
+both "$BOTH_BIN" "${H_LIVE[@]}" >/dev/null; both "$BOTH_BIN" "${R_LIVE[@]}" >/dev/null; both "$BOTH_BIN" TERM_PROGRAM=Apple_Terminal >/dev/null
+check "0" "$(wc -l < "$CALLS_LOG" | tr -d ' ')"
+it "two detect calls in one process with a resolved host probe each host once"
+: > "$CALLS_LOG"
+OUT="$(env -i PATH="${BOTH_BIN}:/usr/bin:/bin" CALLS="$CALLS_LOG" "${H_LIVE[@]}" "${R_DEAD[@]}" "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+th = load_lib_module("terminal_host")
+env = dict(os.environ)
+print(th.detect(env).name, th.detect(env).name)
+PYEOF
+)"
+check "herdr herdr" "$OUT"
+check "2" "$(wc -l < "$CALLS_LOG" | tr -d ' ')"
+it "a refusal is not memoised: a failing probe is retried and can then resolve"
+OUT="$(env -i PATH="${BOTH_BIN}:/usr/bin:/bin" CALLS="$CALLS_LOG" "${H_LIVE[@]}" "${R_DEAD[@]}" HOST_FAKE_FORCE=pane-get-missing "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+th = load_lib_module("terminal_host")
+env = dict(os.environ)
+first = th.detect(env).name
+os.environ.pop("HOST_FAKE_FORCE")
+print(first, th.detect(env).name)
+PYEOF
+)"
+check "None herdr" "$OUT"
 
 echo "terminal-host-detect: a host that cannot run refuses with its capability-table fix line"
 it "rex with no rex on PATH answers refuse for list_panes with the capability table fix"
@@ -126,6 +194,18 @@ check "stub--srv--win.jsonl" "$(ls "${CLAUDE_AUTO_DATA_DIR}/sessions" | grep -v 
 rm -rf "${CLAUDE_AUTO_DATA_DIR}"
 hook HERDR_PANE_ID=w1:p1 REX_SESSION=abc
 it "two multiplexers announced: the hook records nothing"
+if [ -z "$(rows)" ]; then pass; else fail "$(rows)"; fi
+
+rm -rf "${CLAUDE_AUTO_DATA_DIR}"; : > "$CALLS_LOG"
+hook PATH="${BOTH_BIN}:/usr/bin:/bin" CALLS="$CALLS_LOG" "${H_LIVE[@]}" "${R_DEAD[@]}"
+it "both announced and only herdr proves: the hook records a herdr row"
+case "$(rows)" in *'"pane_id": "w2:p10"'*) pass ;; *) fail "$(rows)" ;; esac
+it "and asks herdr for the pane once, so the hook stays inside its timeout"
+check "1" "$(grep -c '^herdr pane get' "$CALLS_LOG" | tr -d ' ')"
+
+rm -rf "${CLAUDE_AUTO_DATA_DIR}"
+hook PATH="${BOTH_BIN}:/usr/bin:/bin" "${H_LIVE[@]}" "${R_LIVE[@]}"
+it "both announced and both prove: the hook records nothing"
 if [ -z "$(rows)" ]; then pass; else fail "$(rows)"; fi
 
 hook CMUX_WORKSPACE_ID=ws1

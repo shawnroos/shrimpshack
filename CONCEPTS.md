@@ -281,6 +281,26 @@ and when to stop. It lives at the personal, repo or programme layer, and the nar
 wins. It carries no authority and no done bar; Authority, Done standards and Rulings answer
 those. The auto glossary (`plugins/auto/CONCEPTS.md`) holds its full entry.
 
+### Driver pane
+The terminal pane the person uses to drive a Programme. Only the person types into it: no
+other session may send to it, and no other session may name it in a command, because a
+command that names a pane cannot be reliably told from one that types into it. Which pane
+this is comes from the live terminal host rather than from a session's own environment,
+since a session can inherit a stale pane from whatever started it.
+
+### Send
+Any command that could put text or keystrokes into a pane. A send is judged by where each
+word sits, never by what follows it: the program being run, a plain argument, and the pane
+being targeted are three positions with three different rules. A send whose target cannot
+be proven to be some other session's pane is refused.
+
+### Runtime-built command
+A command whose program name the shell only resolves as it runs, because the name comes
+from a variable, a substitution, a pattern or a path lookup. Such a name is refused by
+default, since nothing in the rest of the command reveals what it will run. The single
+exception is a name set to a plain literal earlier in the same command, where the shell
+could not have reached any other value.
+
 ## Peek
 
 Peek moved to its own repo; its vocabulary lives in https://github.com/shawnroos/peek/blob/main/CONCEPTS.md.
