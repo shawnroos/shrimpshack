@@ -1,6 +1,6 @@
 ---
 name: programme-inbox-reader
-model: sonnet
+model: haiku
 color: cyan
 tools: ["Bash"]
 description: "Reads an auto programme's unread worker claims and returns each one summarised as JSON. Writes nothing to the programme and marks nothing read."

@@ -49,6 +49,8 @@ A behaviour is Shawn's standing guidance on how the PM and its workers do the wo
 | `source` | object | `{prompt_id?, quote?}`: Shawn's typed prompt and its redacted text. |
 | `state` | string | `active` (the default when absent), `proposed` or `retired`. |
 | `overrides` | list of ids | Behaviours this one beats (section 6). |
+| `relates_to` | list of refs | Behaviours and contract parts Shawn or the PM linked at record time (section 10). A ref is a behaviour id, or `term:<key>`, `tool:<id>`, `ruling:<id>`, `authority:<action>` or `done:<deliverable>`. |
+| `unrelated` | list of `{id, reason}` | Listed items marked as not applying, each with a non-empty reason. |
 | `repo_key` | string | Required on the repo layer; refused on any other layer. |
 | `moved_to`, `moved_repo_key` | string | Programme layer only (section 7). `moved_to` is `repo` or `personal`; `moved_repo_key` is required exactly when `moved_to` is `repo`. |
 | `history` | list | Events, each `{event, at, prompt_id?, ...}`: `recorded`, `proposed`, `moved`, `kept`, `retired`, `undone`. |
@@ -128,3 +130,36 @@ Then entries that are not `active` drop out, every entry named in another candid
 `unknown_key`, `missing_field`, `bad_value`, `protected_escalation`, `wrong_layer`, `wrong_key`, and the adoption reasons of programme-protocol-format.md §4 (`not_adopted`, `adoption_malformed`, `adoption_unverified`).
 
 Behaviour files add no reasons of their own. A file with no opening `---` line is `missing_field frontmatter`; a frontmatter block never closed, an unreadable file, a bad line, a repeated key, a bad check prefix or a body outside the Do and Don't lists is `bad_value`; a key outside section 3.1 (including `examples`) is `unknown_key`. One more reason applies only to a personal file: `shadowed`, when a stored personal entry has the same id (the stored entry wins and the file is not loaded). Each rejected file is reported once as a notice, `behaviour file <layer>/<id>.md rejected: <reason>`, and never stops its neighbours; a broken personal file leaves the shipped default of the same id in force.
+
+## 10. The record-time check
+
+`record-behaviour` and the read-only `check-behaviour` compare a new behaviour with the behaviours in force and with the programme contract. The check informs. It never refuses to record, changes no Ruling or Authority level, and gives the behaviour no authority.
+
+**Behaviours.** A behaviour is compared only when both can apply to one item: their audiences intersect, and they are not in different repos. A listed behaviour carries the reasons that listed it, from this closed set:
+
+| Reason | Fires when |
+| --- | --- |
+| `same_trigger` | both set the same `when.trigger` |
+| `shared_when` | the two `when` texts share two or more content words |
+| `instruction_touches_situation` | one `when` text and the other's `do` and `dont` lines share two or more content words |
+| `shared_tool` | both name the same tool, skill or agent |
+| `equal_do_dont` | a `do` line of one equals a `dont` line of the other, ignoring case and punctuation |
+| `tool_forbidden_in_dont` | one names a tool that a `dont` line of the other forbids |
+
+One shared word is not a reason: on the stored behaviours it was noise in 43 of 48 listed pairs. `equal_do_dont` and `tool_forbidden_in_dont` also set `flag: may_contradict` on the row. `check-behaviour` also takes `--from-proposal <id>` and `--conflicts-with`, so the PM can check a proposal before applying it, and adds each listed behaviour's `do`, `dont` and `stop` lines as `lines`, so the PM can judge what code cannot. `record-behaviour` leaves `lines` out because it journals what it returns.
+
+**Contract.** The check reads the `rules_in_force` snapshot and lists the parts the behaviour touches:
+
+| Ref | Part | Listed when | `may_contradict` when |
+| --- | --- | --- | --- |
+| `term:cadence`, `term:remit` | agreement terms | a word starts with sweep, cadence or wake (cadence), or with remit (remit) | never |
+| `term:stop_rule` | agreement term | the behaviour sets `stop` | `stop` shares two or more content words with the stop rule |
+| `term:tools_of_record` | agreement term | the behaviour names a tool of record | never |
+| `tool:<id>` | preferred tool | the behaviour names a tool in the preferred-tool text | a negation word (not, never, avoid, dont, no) comes before the tool name in the same clause |
+| `ruling:<id>` | Ruling | a `do` line names the Ruling's decision kind | the Ruling's effect is `restrict` |
+| `authority:<action>` | Authority level | a `do` line names the action and its level is stricter than `act` | always, once listed |
+| `done:<deliverable>` | Done standards | a `do` or `dont` line names the deliverable; one row lists every standard that requires it | a `do` clause skips it (skip, without, ignore, omit); a `dont` line never flags |
+
+The operating contract line applies to every behaviour, so it is read but never listed. A protected escalation in a `do`, skill, tool or agent line is still refused (section 4).
+
+**Answers.** `--relates-to <ref>` and `--unrelated <ref>=<reason>` store `relates_to` and `unrelated` on the entry. A ref must be a behaviour in force or a part of the contract. Each listed row carries `answered`, and the output counts the unanswered ones as `unanswered`. It also names the reasons it checked and says that opposite meaning is not detected, because a short list is not a pass.
