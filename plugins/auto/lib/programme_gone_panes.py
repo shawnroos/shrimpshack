@@ -7,6 +7,7 @@ answer, including an unknown one, leaves the pane open and says why.
 
 from __future__ import annotations
 
+import copy
 import functools
 import os
 import sys
@@ -16,7 +17,11 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
+programme_authority = load_lib_module("programme_authority")
+programme_domain = load_lib_module("programme_domain")
+programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
+programme_remit_owned = load_lib_module("programme_remit_owned")
 programme_readiness = load_lib_module("programme_readiness")
 programme_sources = load_lib_module("programme_sources")
 terminal_host = load_lib_module("terminal_host")
@@ -51,16 +56,58 @@ def decide(programme, entry, check=None) -> tuple:
     return _merged(programme, entry.get("item"), check)
 
 
-def close_if_eligible(record, entry, *, check=None, host=None) -> dict:
+def _live_view(record, host, pane_id):
+    found = host.list_panes()
+    if not found.ok:
+        return None
+    programme = programme_home.normalize_programme(record.get("programme") or {})
+    views = programme_sources.pane_views(found.value, programme_sources.remit(programme), with_branch=False)
+    return next((v for v in views if v["pane_id"] == pane_id), None)
+
+
+def _unchanged(entry, fresh) -> bool:
+    """The sweep's verdict was about one terminal; a pane id can be reused or its agent can start working before the close lands."""
+    return bool(fresh and entry.get("terminal_id") and fresh.get("terminal_id") == entry["terminal_id"]
+                and fresh.get("agent_status") == IDLE and programme_domain.folder_gone(fresh))
+
+
+def close_if_eligible(record, entry, *, check=None, host=None, live=None) -> dict:
     programme = record.get("programme") or {}
     eligible, why = decide(programme, entry, check)
     out = {"pane": entry["pane"], "item": entry.get("item"), "why": why}
     if not eligible:
         return dict(out, status="reported")
-    closed = (host or terminal_host.current()).close_pane(entry["pane"])
+    host = host or terminal_host.current()
+    fresh = (live or functools.partial(_live_view, record, host))(entry["pane"])
+    if not _unchanged(entry, fresh):
+        return dict(out, status="reported", why="pane changed since the sweep")
+    closed = host.close_pane(entry["pane"])
     if not closed.ok:
         return dict(out, status="reported", why=f"{why}; but the host cannot close it: {closed.why}", fix=closed.fix)
     return dict(out, status="closed")
+
+
+def _drop_remit_entry(host, run_id, home, record, sid, item) -> dict:
+    """Drops the repo entry the PM created for this item. The pane is already closed, so a failure here is reported, not raised."""
+    preview = programme_remit_owned.drop_for_item(
+        copy.deepcopy(programme_home.normalize_programme(record.get("programme") or {})), item)
+    if not preview["dropped"]:
+        return preview
+    seen = {}
+
+    def mutate(rec):
+        programme = rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
+        seen.update(programme_remit_owned.drop_for_item(programme, item))
+
+    def compose(_, rec):
+        return programme_journal.entry("remit_worker_dropped", sid, dict(seen, item=item)) if seen.get("dropped") else None
+
+    try:
+        programme_authority.write(home, run_id, mutate, compose)
+    except Exception as exc:  # noqa: BLE001 - the close already happened; say the entry stayed
+        return {"dropped": None, "reason": f"the remit write failed: {exc}"}
+    host.refresh_view(run_id, home)
+    return dict(seen)
 
 
 def _h_close_gone_pane(host, argv):
@@ -74,6 +121,8 @@ def _h_close_gone_pane(host, argv):
     if entry is None:
         raise ValueError(f"pane {positional[0]!r} is not in this sweep's folder_gone list; run `P sweep` and use a pane it lists")
     out = close_if_eligible(record, entry)
+    if out["status"] == "closed" and entry.get("item"):
+        out["remit"] = _drop_remit_entry(host, run_id, home, record, sid, entry["item"])
     programme_journal.append(run_id, "gone_pane_" + out["status"], sid, out)
     host._emit(out)
     return 0

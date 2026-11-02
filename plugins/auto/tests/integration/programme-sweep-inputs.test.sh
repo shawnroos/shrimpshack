@@ -350,6 +350,11 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
             ('an unreadable behaviours store', {'due': {'total': 0, 'error': 'unreadable'}}, 'behaviours_store_unreadable'),
             ('a behaviour due on the domain', {'domain_due': {'total': 1, 'error': None}}, 'domain_behaviours_due'),
             ('an unreadable store on the domain check', {'domain_due': {'total': 0, 'error': 'unreadable'}}, 'behaviours_store_unreadable'),
+            ('a ritual that is due', {'rituals': {'due': [{'ritual': 'a'}], 'missed': [], 'in_flight': [], 'error': None}}, 'rituals_due'),
+            ('a missed ritual not yet offered', {'rituals': {'due': [], 'missed': [{'ritual': 'a'}], 'in_flight': [], 'error': None}}, 'rituals_due'),
+            ('a missed ritual already offered', {'rituals': {'due': [], 'missed': [{'ritual': 'a', 'offered': True}], 'in_flight': [], 'error': None}}, None),
+            ('an unreadable rituals store', {'rituals': {'due': [], 'missed': [], 'in_flight': [], 'error': 'unreadable'}}, 'rituals_store_unreadable'),
+            ('a rituals table with no keys at all', {'rituals': {}}, None),
             ('recommendations not yet shown', {'recommendations': {'set': [{'pane': 'w3:p1'}], 'shown_current': False}}, 'recommendations_not_shown'),
             ('recommendations already shown', {'recommendations': {'set': [{'pane': 'w3:p1'}], 'shown_current': True}}, None)):
         if code is None:

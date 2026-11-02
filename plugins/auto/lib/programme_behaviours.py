@@ -12,7 +12,6 @@ refused.
 from __future__ import annotations
 
 import functools
-import json
 import os
 import re
 import secrets
@@ -30,6 +29,7 @@ programme_protocol = load_lib_module("programme_protocol")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_naming = load_lib_module("programme_naming")
 programme_carryover = load_lib_module("programme_carryover")
+programme_layered_store = load_lib_module("programme_layered_store")
 programme_terms = load_lib_module("programme_terms")
 
 STORE_PATH_ENV = "CLAUDE_AUTO_BEHAVIOURS_STORE"
@@ -175,13 +175,6 @@ def verdict(entry, *, allow_adoption=True) -> dict:
     return programme_protocol._verdict(lambda: _validate(entry, allow_adoption=allow_adoption))
 
 
-def _refuse(entry, check) -> None:
-    if not check["ok"]:
-        name = entry.get("id") if isinstance(entry, dict) else None
-        detail = f" ({check['detail']})" if check["detail"] else ""
-        raise BehaviourError(f"behaviour {name!r} refused: {check['reason']}{detail}")
-
-
 def put_programme_entry(programme, entry) -> dict:
     check = verdict(entry, allow_adoption=False)
     _refuse(entry, check)
@@ -192,56 +185,18 @@ def put_programme_entry(programme, entry) -> dict:
     return entry
 
 
-def store_path() -> str:
-    override = os.environ.get(STORE_PATH_ENV)
-    if override:
-        return override
-    return os.path.join(os.path.dirname(programme_protocol.personal_path()), STORE_NAME)
-
-
-def _read(path) -> dict:
-    try:
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except FileNotFoundError:
-        return {"format": STORE_FORMAT, "personal": [], "repos": {}}
-    except (OSError, ValueError) as exc:
-        raise BehaviourError(f"behaviours store {path} is unreadable; not overwriting it: {exc}")
-    repos = doc.get("repos", {}) if isinstance(doc, dict) else None
-    if not isinstance(doc, dict) or not isinstance(doc.get("personal", []), list) \
-            or not isinstance(repos, dict) or not all(isinstance(v, list) for v in repos.values()):
-        raise BehaviourError(f"behaviours store {path} is not a behaviours store; not overwriting it")
-    doc.setdefault("format", STORE_FORMAT)
-    doc.setdefault("personal", [])
-    doc.setdefault("repos", {})
-    return doc
-
-
-def read_store() -> dict:
-    return _read(store_path())
-
-
-# The doc is read inside the lock, so what an update decides (the id it replaces, the
-# layer it clears) always acts on the file as it is at the moment of the write.
-def write_store(update) -> None:
-    path = store_path()
-
-    def body():
-        doc = _read(path)
-        if not isinstance(doc["format"], int) or doc["format"] > STORE_FORMAT:
-            raise BehaviourError(f"behaviours store {path} has a newer format; not overwriting it")
-        update(doc)
-        folder = os.path.dirname(os.path.abspath(path))
-        os.makedirs(folder, exist_ok=True)
-
-        def write(fh):
-            json.dump(doc, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-
-        programme_home.atomic_write(path, write, ".behaviours.", folder)
-
-    os.makedirs(programme_home.programmes_dir(), exist_ok=True)
-    run_record_core._flock_run(os.path.join(programme_home.programmes_dir(), STORE_LOCK), body)
+_S = programme_layered_store.LayeredStore(
+    "behaviour", file_name=STORE_NAME, lock_name=STORE_LOCK, path_env=STORE_PATH_ENV, error=BehaviourError,
+    verdict=lambda entry: verdict(entry), target=lambda entry: target(entry))
+_refuse = _S.refuse
+store_path = _S.path
+_read = _S._read
+read_store = _S.read
+write_store = _S.write
+load_store = _S.load
+_is, _without, _place = programme_layered_store._is, programme_layered_store._without, programme_layered_store._place
+_default_lookup = programme_layered_store._default_lookup
+adopt = programme_carryover.adopt
 
 
 def target(entry) -> str:
@@ -250,95 +205,8 @@ def target(entry) -> str:
     return f"behaviour:personal:{entry.get('id')}"
 
 
-adopt = programme_carryover.adopt
-
-
-def _is(e, bid) -> bool:
-    return isinstance(e, dict) and e.get("id") == bid
-
-
-def _without(doc, bid) -> None:
-    doc["personal"] = [e for e in doc["personal"] if not _is(e, bid)]
-    doc["repos"] = {k: [e for e in rows if not _is(e, bid)] for k, rows in doc["repos"].items()}
-    doc["repos"] = {k: rows for k, rows in doc["repos"].items() if rows}
-
-
-def _place(doc, entry) -> None:
-    _without(doc, entry["id"])
-    if entry["layer"] == "personal":
-        doc["personal"].append(entry)
-    else:
-        doc["repos"].setdefault(entry["repo_key"], []).append(entry)
-
-
-# The loader verifies a same-machine entry only through its approval row, so every stored
-# entry gets one. The rows are separate journal writes: call this after the programme
-# write commits, never inside it.
 def store(adopted, prompt, run_id, session_id, how="behaviour") -> None:
-    for entry in adopted:
-        _refuse(entry, verdict(entry))
-        if entry["layer"] not in STORED_LAYERS or "adoption" not in entry:
-            raise BehaviourError(f"behaviour {entry['id']!r} is not an adopted personal or repo entry")
-
-    def update(doc):
-        for entry in adopted:
-            _place(doc, entry)
-
-    write_store(update)
-    for entry in adopted:
-        programme_journal.append(
-            run_id, APPROVAL_KIND, session_id,
-            {"entry": how, "target": target(entry), "hash": entry["adoption"]["hash"],
-             "prompt_id": prompt["prompt_id"], "quote": prompt["quote"]},
-            cites=[prompt["prompt_id"]])
-
-
-def _default_lookup():
-    # Loaded here, not at import: programme.py imports this module. A caller inside
-    # programme.py passes host.prompt_lookup, since its module is __main__ there.
-    programme = load_lib_module("programme")
-    journals = {}
-    return lambda run_id, prompt_id: programme.prompt_lookup(run_id, prompt_id, journals)
-
-
-def _stored_reason(entry, layer, key, lookup):
-    check = verdict(entry)
-    if not check["ok"]:
-        return check["reason"], check["detail"]
-    if entry["layer"] != layer:
-        return "wrong_layer", entry["layer"]
-    if layer == "repo" and entry["repo_key"] != key:
-        return "wrong_key", entry["repo_key"]
-    try:
-        programme_protocol._verify_adoption(entry, lookup, target(entry), local_only=False)
-    except _Reject as exc:
-        return exc.reason, exc.detail
-    return None
-
-
-def _admit(out, layer, key, entry, lookup) -> None:
-    reason = _stored_reason(entry, layer, key, lookup)
-    if reason is None:
-        (out["personal"] if layer == "personal" else out["repos"].setdefault(key, [])).append(entry)
-        return
-    name = entry.get("id") if isinstance(entry, dict) else None
-    out["rejected"].append({"layer": layer, "key": key, "id": name, "reason": reason[0], "detail": reason[1]})
-
-
-def load_store(lookup=None) -> dict:
-    out = {"personal": [], "repos": {}, "rejected": [], "notices": []}
-    try:
-        doc = read_store()
-    except BehaviourError as exc:
-        out["notices"].append(programme_sanitize.clean(str(exc), cap=0))
-        return out
-    lookup = lookup or _default_lookup()
-    for entry in doc["personal"]:
-        _admit(out, "personal", None, entry, lookup)
-    for key, rows in doc["repos"].items():
-        for entry in rows:
-            _admit(out, "repo", key, entry, lookup)
-    return out
+    _S.store(adopted, prompt, run_id, session_id, how)
 
 
 def repo_key_for(programme, repo):

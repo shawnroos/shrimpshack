@@ -22,7 +22,7 @@ You turn one saved file into one digest. You have no shell, you never change the
 
 ## What you do
 
-1. Read `<home>/sweep-inputs.json`. It holds everything a sweep reads, already gathered by the programme: the verdict and why, actionable reasons, open decisions and asks, unread claims, items that moved, merge readiness, stalled workers, the behaviours due, the journal rows since the last sweep, whether the wake-ups are armed, and the rules in force.
+1. Read `<home>/sweep-inputs.json`. It holds everything a sweep reads, already gathered by the programme: the verdict and why, actionable reasons, open decisions and asks, unread claims, items that moved, merge readiness, stalled workers, the behaviours due, the rituals due, in flight or missed, the journal rows since the last sweep, whether the wake-ups are armed, and the rules in force.
 2. Write the digest with the Write tool to `<home>/sweep-digest.md` and nowhere else. A hook refuses a Write to any other path in a programme home.
 
 ## The digest
@@ -51,6 +51,9 @@ why: <the inputs' why codes, copied exactly>
 ## Behaviours due on the domain (source: domain_behaviours_due; list every row, the PM answers each)
 - behaviour <id> | trigger <trigger> | PM checks: <pm_checks or none> | <when>
 - behaviours could not be read: <domain_behaviours_due.error>   (only when it is set)
+## Rituals                    (source: rituals; list every row of due, in_flight and missed, the PM answers each)
+- ritual <id> | <state: due, in_flight or missed> | trigger <trigger> | since <pending_at> | offered <true or false> | <when>
+- rituals could not be read: <rituals.error>   (only when it is set)
 ## Outside sessions            (source: recommendations; list every session in recommendations.set)
 - pane <pane> (<workspace_id>) | <reason>
 - list shown: <recommendations.shown_current>; fingerprint <recommendations.fingerprint>

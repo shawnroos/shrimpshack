@@ -137,6 +137,28 @@ allowed 'grep -nE '\''^\s*(rex|send)'\'' file'
 allowed 'cat $R/intake.md; ls docs/plans 2>/dev/null | tail -5'
 allowed 'python3 -c "import sys; print(sys.argv)" "$(date)"'
 
+echo "send-guard-precision: commands a programme worker really ran, denied before this change"
+# A heredoc body no shell runs is not shell, and a quoted delimiter expands nothing in it either.
+allowed 'cat > probe.mjs <<'\''EOF'\''
+const shot = (kind, extra = {}) => ({ index: 0, kind, ...extra });
+for (const [label, n] of [["kind=sport,", 1]]) { console.log(`${label} ${n}`); }
+EOF'
+allowed 'python3 - <<'\''PY'\''
+import re
+s = open("look-inspector.service.ts").read()
+s = s.replace("    lookEstimate: boolean;", "    sportRouting: boolean;", 1)
+PY'
+# A here-string feeding jq is stdin data, not a script, and a process substitution is an argument.
+allowed 'prev=""; s=$(gh pr checks 497 --json name,bucket); cur=$(jq -r '\''.[] | select(.bucket!="pending")'\'' <<<"$s" | sort); comm -13 <(echo "$prev") <(echo "$cur")'
+# The glue between two substitutions is not a program.
+allowed 'SCRATCH_ROOT="/tmp/compound-engineering-$(id -u)"; RUN_ID=$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d " "); echo "$SCRATCH_ROOT/ce-code-review/$RUN_ID"'
+allowed 'echo "peer-deadline-secs=$(( ${CROSS_MODEL_HARD_SECS:-1200} + 10 ))"'
+# A `>(` inside quoted JavaScript is not a process substitution.
+allowed 'agent-browser --session s eval '\''[...document.querySelectorAll("input[type=file]")].map(i=>({accept:i.accept,id:i.id}))'\'''
+allowed 'bash ~/.claude/tools/honest-run/run.sh --expect "[0-9]+ passed" -- pytest -q'
+# A case pattern is a glob the shell matches, not a command.
+allowed 's=queued; case "$s" in *in_progress*|*queued*) echo wait;; *) echo settled;; esac'
+
 echo "send-guard-precision: real sends stay denied"
 denied 'herdr pane send-text w2:p9T hi'
 denied 'herdr agent prompt $P go'
@@ -237,6 +259,94 @@ denied 'for f in a b; do "$PY" "$f.py"; done'
 denied 'rex send -b rex-blk-X9 go'
 allowed 'rex send -b rex-blk-O1 go'
 
+echo "send-guard-precision: a program name set to a plain literal in the same command resolves"
+allowed 'PY=python3; "$PY" scripts/peer-job-runner.py start --skill ce-code-review'
+allowed 'GIT=git; "$GIT" log --oneline -3'
+# Set from a substitution, so the name is still unknown: ce-code-review's own spine stays denied.
+denied 'PY="$(for c in python3 python py; do command -v "$c"; done)"; "$PY" x.py'
+denied 'PY=$(head -1 "$M" | sed "s/^#!//"); "$PY" -c "import modal"'
+# Resolving to a host program denies, whichever pane it names.
+denied 'H=herdr; $H agent prompt w2:p9T go'
+denied 'H=herdr; $H agent prompt w2:p77 go'
+denied 'H=/opt/homebrew/bin/herdr; $H pane send-text w2:p77 hi'
+# Set in another scan text, set by a loop, or never set: all unresolvable.
+denied 'PY=python3; bash -c '\''"$PY" x.py'\'''
+denied 'for c in python3 py; do "$c" x.py; done'
+denied '$PY x.py'
+
+echo "send-guard-precision: an assignment the shell might skip never names a program (round-2 review)"
+# The written order is not the run order, so neither the first nor the last assignment can be trusted.
+denied 'H=herdr; false && H=cat; $H pane send-text w2:p9T hi'
+denied 'H=cat; true && H=herdr; $H pane send-text w2:p9T hi'
+denied 'H=herdr; false && H=cat; $H pane send-text w2:p77 hi'
+denied '(H=cat); $H pane send-text w2:p9T hi'
+denied 'H=herdr; if false; then H=cat; fi; $H pane send-text w2:p9T hi'
+denied '(H=ls); $H pane send-text $(cat /tmp/t) hi'
+# This filesystem finds a mixed-case name on PATH.
+denied 'A=heRdr; $A pane send-text w2:p77 hi'
+denied 'A=/opt/homebrew/bin/heRdr; $A pane send-text w2:p77 hi'
+# An assignment before the first branch still resolves, so the useful case keeps working.
+allowed 'PY=python3; [ -n "$PY" ] || { echo no; exit 1; }; "$PY" x.py'
+allowed 'PY=python3; cd /tmp && "$PY" x.py'
+
+echo "send-guard-precision: a case block does not latch the pattern state (round-2 review)"
+denied 'case x in a) :;; esac; $H pane send-text w2:p9T hi'
+denied 'case x in a) :;; esac; $H agent prompt w2:p77 go'
+denied 'for f in a; do case $f in b) :;; esac; done; $H pane send-text w2:p9T hi'
+denied 'case x in a) :;; esac; herdr pane send-text w2:p9T hi'
+allowed 'case x in a) echo one;; *) echo other;; esac; echo done'
+
+echo "send-guard-precision: a <<WORD that is not a heredoc does not hide the commands after it (round-2 review)"
+denied '# <<'\''EOF'\''
+H=herdr; $H pane send-text w2:p9T hi'
+denied 'echo '\''<<"EOF"'\''
+H=herdr; $H pane send-text w2:p9T hi'
+# A shell anywhere in the heredoc's pipeline reads the body as a script.
+denied 'S=bash; cat <<'\''EOF'\'' | $S
+herdr pane send-text w2:p9T hi
+EOF'
+denied 'cat <<'\''EOF'\'' | ksh
+herdr pane send-text w2:p9T hi
+EOF'
+# A variable in a path argument does not make a shell read the body.
+allowed 'cat > /tmp/$RUN/probe.mjs <<'\''EOF'\''
+const f = (a = {}) => ({ x: 1 });
+EOF'
+
+echo "send-guard-precision: text no shell runs still yields a send the shell expands into it"
+# A shell consumes the body, so the body is a script however its delimiter is quoted.
+denied 'cat <<'\''EOF'\'' | bash
+herdr pane send-text w2:p9T hi
+EOF'
+# An unquoted delimiter lets the shell expand $H before python reads the body.
+denied 'H=herdr; python3 - <<EOF
+os.system("$H pane send-text w2:p77 hi")
+EOF'
+# The same expansion inside an interpreter string literal.
+denied 'H=herdr; python3 -c "import os; os.system(\"$H pane send-text w2:p77 hi\")"'
+denied 'herdr pane send-text "$(echo w2:p9T)" hi'
+
+echo "send-guard-precision: a scan the hook cannot finish is a scan that fails open (round-2 review)"
+it "denied: deeply nested arithmetic is judged, not met with a recursion error"
+check deny "$(verdict "$(hook sess-worker "echo $(printf '$((%.0s' $(seq 1500))1$(printf '))%.0s' $(seq 1500)); \$H pane send-text \$P hi")")"
+it "fast: a long single-quoted payload is judged well inside the hook's 10 s limit"
+START=$(date +%s)
+V="$(verdict "$(hook sess-worker "python3 -c '$(printf 'a%.0s' $(seq 80000))'")")"
+ELAPSED=$(( $(date +%s) - START ))
+check "allow fast" "$V $([ "$ELAPSED" -lt 5 ] && echo fast || echo "slow:${ELAPSED}s")"
+
+echo "send-guard-precision: a pane herdr cannot confirm stays guarded and says so"
+cat > "$FAKE_HERDR_SNAPSHOT" <<'EOF'
+{"result": {"snapshot": {
+  "panes": [{"pane_id": "w2:p77", "terminal_id": "term_p77", "workspace_id": "w2", "tab_id": "w2:t1"}],
+  "agents": [], "tabs": []}}}
+EOF
+OUT="$(hook sess-worker 'echo w2:p9T')"
+it "a command naming a driver pane herdr reports closed is still denied"
+check deny "$(verdict "$OUT")"
+it "the denial says herdr does not know which pane the driver is in now"
+has "does not say which pane the driver is in now" "$OUT"
+
 echo "send-guard-precision: a moved herdr pane is guarded by its live id"
 cat > "$FAKE_HERDR_SNAPSHOT" <<'EOF'
 {"result": {"snapshot": {
@@ -251,10 +361,18 @@ check deny "$(verdict "$OUT")"
 it "the denial names the live pane"
 has "w2:pAG" "$OUT"
 denied 'herdr pane send-text w2:p9T hi'
+denied 'herdr pane close w2:p9T'
+denied 'herdr pane close w2:pAG'
+denied 'herdr pane close w2:p77'
+denied 'herdr pane close --help'
+denied 'herdr pane close'
+denied '$HERDR_BIN_PATH pane close w2:p77'
 denied 'herdr pane send-text term_pAG hi'
 allowed 'herdr pane send-text w2:p77 hi'
 it "the PM's own session may still send to a worker pane"
 check allow "$(verdict "$(hook pm-mv 'herdr pane send-text w2:p77 hi')")"
+it "the PM's own session may close a worker pane"
+check allow "$(verdict "$(hook pm-mv 'herdr pane close w2:p77')")"
 
 it "after one live sighting, a failed lookup still guards the live pane"
 check deny "$(verdict "$(hook sess-worker 'herdr pane send-text w2:pAG hi' FAKE_HERDR_MODE=fail)")"
@@ -265,6 +383,43 @@ START=$(date +%s)
 V="$(verdict "$(hook sess-worker 'herdr pane send-text w2:pAG hi' FAKE_HERDR_MODE=hang)")"
 ELAPSED=$(( $(date +%s) - START ))
 check "deny fast" "$V $([ "$ELAPSED" -lt 4 ] && echo fast || echo "slow:${ELAPSED}s")"
+
+echo "send-guard-precision: looking up a host's name or driving tmux is not a send"
+allowed 'which rex herdr'
+allowed 'type herdr rex'
+allowed 'whereis rex herdr'
+allowed 'command -v herdr rex'
+allowed 'sed -n 1,50p lib/host_rex.py; grep -n send_prompt lib/host_herdr.py'
+allowed '/opt/homebrew/bin/tmux -S /private/tmp/enf2/s.sock new-session -d -s enf -x 200 -y 50 -c /tmp'
+allowed '/opt/homebrew/bin/tmux -S /private/tmp/enf2/s.sock send-keys -t enf -l "hello"'
+allowed '/opt/homebrew/bin/tmux -S /private/tmp/enf2/s.sock capture-pane -p -t enf | tail -20'
+allowed 'D=/private/tmp/enf2; mkdir -p $D && cd $D && SID=$(uuidgen | tr A-Z a-z) && echo $SID > sid'
+allowed 'L=/x/lib; env -u HERDR_ENV /usr/bin/python3 -I -c "import sys; sys.path.insert(0,'\''$L'\''); print(1)" | tee run'
+allowed 'bash -c '\''. ./env.sh; P add-item test:one --title "login bug" | cut -c1-120'\'''
+
+echo "send-guard-precision: a lookup does not hide a send"
+denied 'which rex herdr; herdr pane send-text $P hi'
+denied 'which herdr && herdr pane send-text $P hi'
+denied 'which rex herdr | xargs herdr pane send-text $P hi'
+denied 'which x $(herdr pane send-text $P hi)'
+denied 'type herdr rex >(herdr pane send-text $P hi)'
+denied 'which x
+herdr pane send-text $P hi'
+denied 'type x
+rex send $P hi'
+denied 'command -v x
+herdr pane send-text w9:zz hi'
+denied 'whereis x
+osascript -e '\''tell application "Ghostty" to input text "x" in terminal 1'\'''
+allowed 'which herdr
+herdr pane list'
+denied 'echo which herdr pane send-text $P hi | sh'
+denied 'echo herdr pane send-text $P hi | sh'
+denied 'echo "herdr pane send-text $P hi" | bash'
+denied 'python3 -c "import os; os.system('\''herdr pane send-text w2:p9T hi'\'')"'
+denied 'ruby -e '\''system("herdr pane send-text w2:p9T hi")'\'''
+denied 'perl -e '\''system("herdr pane send-text w2:p9T hi")'\'''
+denied 'node -e "require('\''child_process'\'').execSync('\''herdr pane send-text w2:p9T hi'\'')"'
 
 echo ""
 echo "send-guard-precision.test.sh: ${PASS} passed, ${FAIL} failed"

@@ -686,6 +686,8 @@ keys and keeps unknown ones.
 | `carryover_offer` | `{at, offered: [Ruling ids]}`, written by `carry-rulings` with no ids: the offer-made marker the stop predicate reads |
 | `decisions[]` | `{id: "d"+6hex, at, kind, by: pm\|shawn, item: <item id>\|"programme", term: <id>\|null, silent, why, outcome?, ask?, choice?, prompt_id?}`. `kind` is a decision kind from `programme_decisions.DECISION_KINDS`, or `agreement` (written by `accept-agreement`) or `unknown` (an answer to an ask handed before kinds existed). This is the decision log; the Rulings live under `context.decisions` and are written by `record-ruling`. `term` is the Ruling or preferred-tool term id the decision cited. `log-decision` writes `by: pm` with `outcome: decided` when it closed a product question, else null; `answer-handed` writes `by: shawn` with `ask` (the ask id, null for an old ask), `choice` and `prompt_id`; `accept-agreement` writes `by: shawn`, item `programme` and `prompt_id`. `why` is the PM's reason, or the quote of Shawn's prompt. A record without the key reads it as `[]` |
 | `behaviours[]` | programme-layer behaviour entries, in every state (`active`, `proposed`, `retired`), with no `adoption`. Written by `record-behaviour`, `propose-behaviour`, `move-behaviour`, `retire-behaviour` and `keep-behaviours`. A moved entry stays with `moved_to` (and `moved_repo_key`) and is never deleted. Entry fields, layers and resolution: programme-behaviours-format.md. A record without the key reads it as `[]` |
+| `rituals[]` | programme-layer ritual entries, in every state, with no `adoption`. Written by `record-ritual`, `propose-ritual`, `move-ritual`, `retire-ritual` and `keep-rituals`. A moved entry stays with `moved_to` and is never deleted. Entry fields, layers and resolution: programme-rituals-format.md. A record without the key reads it as `[]` |
+| `ritual_clock` | `{"<ritual id>": {next_due_at}}`, this programme's next due time for each calendar ritual. Written by `record-ritual`, `run-ritual`, `skip-ritual` and `retire-ritual`; it is per programme because a stored ritual is shared by every programme on the machine. A record without the key reads it as `{}` |
 | `proposed_rules[]` | bare protocol rules (programme-protocol-format §3) with no `adoption`; `adopt-rule` removes the entry |
 | `permission_proposals[]` | `{id: "perm-"+n, destination, settings_file, operations, rules, reach, exclusions, key: {operations, destination}, items, evidence, state, created_at, changed_at, notified_at, answers, explanation, confirmed, verified?, reservation?, attempts?, pending_answer?, outcome?, covering?, redenied_at?}`. A separate list from `proposed_rules`. `state` is open, postponed, rejected, retrying, resolved, ineffective or retry_unobserved. `propose-permission` adds and folds entries, `answer-permission` and `settle-permissions` move them. Fields, states and rules: programme-permission-proposals.md |
 | `items` | `{"<source>:<key>": item}` (below) |
@@ -751,7 +753,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `term_proposed`, `term_noted`, `proposal_cleared`, `project_term_edited`,
 `project_term_amended`, `instruction_recorded`, `instruction_closed`, `behaviour_recorded`,
 `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviour_skipped`,
-`behaviours_kept`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
+`behaviours_kept`, `ritual_recorded`, `ritual_proposed`, `ritual_moved`, `ritual_retired`,
+`rituals_kept`, `ritual_started`, `ritual_ran`, `ritual_failed`, `ritual_skipped`, `ritual_offered`,
+`ritual_event`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
 `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`,
 `item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`, `item_aliased`,
 `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`, `item_handed`,
@@ -806,7 +810,10 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - `approval_refused {verb, target, refused_prompt_id, reason}` is journaled when an approval verb's
   cited prompt is refused after the session guard passed. The run record is unchanged. The prompt id
   sits under its own key so a refused prompt can still be pruned.
-- `blocked_driver_send` carries `{verb, target, pane_id, command}`. `verb` is the
+- `blocked_driver_send` carries `{verb, target, pane_id, command, cause}`. `cause` says why an
+  unproven command was refused: `send` (a send to a pane auto cannot prove is another session's),
+  `variable` (a command word set by a variable with no known value) or `word` (a command word
+  built at run time); it is the empty string for every other refusal. `verb` is the
   parsed herdr verb (for example `agent prompt`), or null when the command was denied
   only because its text names the driver's pane; `target` is then the pane id or
   terminal id it named. `command` is redacted and capped at 2000 characters.
@@ -870,6 +877,18 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   the approval fields. After `behaviour_moved` or `behaviour_retired` commits, the verb journals one
   `rule_adopted` line for the stored entry it wrote, with `entry: move|retire`, `target:
   behaviour:personal:<id>` or `behaviour:repo:<key>:<id>` and the entry's hash.
+- Ritual rows carry the ritual id under `ritual`. `ritual_recorded` carries `{ritual, layer, when, trigger, undo}`;
+  `ritual_proposed` carries `{ritual, state, when, trigger}`; `ritual_moved` carries `{ritual, from, to, repo_key,
+  target, store_path}`; `ritual_retired` carries `{ritual, as, layers, target}`; `rituals_kept` carries `{kept,
+  not_named, to, repo_key, targets, store_path}`. Each of these but `ritual_proposed` adds the approval fields, and
+  a stored entry gets one `rule_adopted` line with `entry: move|retire|keep` and `target: ritual:personal:<id>` or
+  `ritual:repo:<key>:<id>`. `ritual_started` carries `{ritual, trigger, steps}`; `ritual_ran` carries `{ritual,
+  trigger, outcome?}`; `ritual_failed` carries `{ritual, trigger, why}`; `ritual_skipped` carries `{ritual,
+  trigger, why?}`. `ritual_ran` and `ritual_skipped` add the approval fields only when the ritual was missed.
+  `ritual_offered` carries `{offered: [{ritual, pending_at}]}`. `ritual_event` carries `{trigger: "resume",
+  silent_since}`: the one trigger no existing row represents, written after a write that follows a silence longer
+  than two cadence periods. Start, takeover, handover, end and going-quiet read the existing rows
+  `programme_started`, `taken_over`, `handed_over`, `programme_ended` and `stop_quiet`.
 - `behaviour_skipped` is the row of `skip-behaviour`: `{item, behaviour, reason, why}` with `reason` `skipped` (the behaviour does not apply to the item) or `applied_by_pm`. It carries no prompt id, because it records the PM's judgment and approves nothing.
 - `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
   field (the send writes no separate `prompt_sent` row) plus `{behaviour, reason, trigger, trigger_at,
