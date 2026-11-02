@@ -22,6 +22,7 @@ run_record_core = load_lib_module("run_record_core")
 programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_decisions = load_lib_module("programme_decisions")
+programme_remit_owned = load_lib_module("programme_remit_owned")
 programme_context = load_lib_module("programme_context")
 
 pc = programme_context
@@ -163,7 +164,7 @@ def repos_for(programme, targets, every=None) -> frozenset:
     repos = {items[t].get("repo") if t in items else None for t in targets}
     if None in repos:
         repos = set(every) if every is not None else {
-            r.get("path") for r in (programme.get("remit") or {}).get("repos") or [] if isinstance(r, dict)}
+            r.get("path") for r in programme_remit_owned.authority_repos(programme)}
     return frozenset(r for r in repos if r)
 
 

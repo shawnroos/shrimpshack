@@ -48,6 +48,8 @@ KINDS = (
     "issues_recorded",
     "trajectory_changed",
     "remit_set",
+    "remit_worker_added",
+    "remit_worker_dropped",
     "prompts_pruned",
     "agreement_proposed",
     "agreement_accepted",

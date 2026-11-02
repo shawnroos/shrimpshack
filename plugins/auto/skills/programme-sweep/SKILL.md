@@ -236,7 +236,9 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      `mcp__linear__get_issue` and `P record-issues`, then sweep again.
    - `unstaffed` lists in-scope issues no pane works on. Never adopt one by
      itself; start a worker for it (`P add-item`, then `P start-worker`) only
-     when it is the next thing to do. Change the remit with the
+     when it is the next thing to do. `P start-worker` adds the new worker's
+     repo to the remit itself (no typed line); read `remit_added` or
+     `remit_reason` in its output. Change the remit otherwise with the
      `auto:programme-remit` skill.
    - An item whose owner pane now reports a different session: confirm the new
      owner with `P add-item <item> --pane <pane> --session <session>`.
