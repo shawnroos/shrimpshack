@@ -168,6 +168,15 @@
 #                          programme_permission_settle (never the reverse)
 #   programme_settings_guard → programme_home, session_registry,
 #                          programme_permission_rules
+#   programme_behaviour_guard → programme_settings_guard; programme_behaviours [lazy],
+#                          programme_behaviour_files [lazy], programme_protocol [lazy]
+#                          (programme_protocol arrives through programme_behaviour_files)
+#   programme_behaviour_files → programme_behaviours, programme_protocol
+#   programme_view_behaviours → programme_behaviour_files, programme_behaviours
+#   programme_view [lazy]  → programme_view_behaviours
+#   programme_behaviour_file_verbs → programme_behaviours, programme_behaviour_files,
+#                          programme_home, programme_journal, programme_protocol,
+#                          run_record_core
 #   programme            → run_record, run_record_core, programme_home, programme_journal,
 #                          programme_authority, programme_protocol, session_registry,
 #                          driver_session, verb_cli; programme_resume, programme_store,
@@ -209,7 +218,8 @@
 #                          programme_journal [lazy], programme [lazy]
 #   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
 #                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy],
-#                          programme_settings_guard [lazy], programme_store [lazy], send_guard [lazy]
+#                          programme_behaviour_guard [lazy], programme_settings_guard [lazy],
+#                          programme_store [lazy], send_guard [lazy]
 #   send_guard           → terminal_host, session_registry [lazy]
 #   auto-spawn           → driver_session; auto-workspace [lazy]
 #

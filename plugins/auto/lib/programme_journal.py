@@ -172,6 +172,7 @@ KINDS = (
     "permission_verified",
     "permission_settled",
     "blocked_settings_write",
+    "blocked_behaviours_write",
     "worker_question",
     "worker_question_answered",
     "worker_question_escalated",

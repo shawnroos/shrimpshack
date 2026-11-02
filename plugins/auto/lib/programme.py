@@ -925,6 +925,7 @@ worker_contract = load_lib_module("worker_contract")
 worker_question = load_lib_module("worker_question")
 _VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_behaviours_skip").build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_behaviour_file_verbs").build_verbs(sys.modules[__name__]))
 
 programme_rituals = load_lib_module("programme_rituals")
 _VERBS.update(programme_rituals.build_verbs(sys.modules[__name__]))

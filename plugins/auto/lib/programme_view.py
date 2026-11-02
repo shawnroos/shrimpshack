@@ -29,6 +29,7 @@ programme_tasks = load_lib_module("programme_tasks")
 programme_terms = load_lib_module("programme_terms")
 programme_view_work = load_lib_module("programme_view_work")
 programme_view_agreement = load_lib_module("programme_view_agreement")
+programme_view_behaviours = load_lib_module("programme_view_behaviours")
 programme_view_setup = load_lib_module("programme_view_setup")
 programme_focus = load_lib_module("programme_focus")
 programme_domain_state = load_lib_module("programme_domain_state")
@@ -40,7 +41,7 @@ VIEW_NAME = "view.json"
 JUST_DID_LIMIT = 8
 HIDDEN_KINDS = ("prompt",)
 REMIT_WATCHER = "remit"
-HOOK_KINDS = ("blocked_settings_write",)
+HOOK_KINDS = ("blocked_settings_write", "blocked_behaviours_write")
 SUMMARY_KEYS = ("text", "question", "term", "value", "rule", "deliverable", "result",
                 "action", "op", "choice", "reason", "source", "instruction")
 
@@ -522,6 +523,8 @@ def behaviours_view(record, lookup) -> dict:
     rejected = [r for r in base["rejected"] if r.get("layer") != "repo" or r.get("key") in keys]
     entries = programme_behaviours.shown_programme_entries(programme, loaded)
     entries += [e for key in keys for e in loaded["repos"].get(key) or []] + loaded["personal"]
+    entries += programme_view_behaviours.file_entries(loaded)
+    facts = programme_view_behaviours.file_facts(loaded)
     overriders = {}
     for e in forced:
         for name in e.get("overrides") or ():
@@ -535,7 +538,10 @@ def behaviours_view(record, lookup) -> dict:
                 reasons.setdefault(d["id"], []).append(d.get("reason"))
         for bid, rs in reasons.items():
             deliveries.setdefault(bid, []).append({"item": key, "reasons": rs})
-    out = {"behaviours": [_behaviour_row(e, seen, overriders, deliveries) for e in entries]}
+    rows = [_behaviour_row(e, seen, overriders, deliveries) for e in entries]
+    for row, e in zip(rows, entries):
+        programme_view_behaviours.apply(row, e, facts)
+    out = {"behaviours": rows}
     if rejected:
         out["rejected_behaviours"] = [{k: r.get(k) for k in ("id", "layer", "key", "reason")} for r in rejected]
     if base["notices"]:
@@ -579,7 +585,8 @@ def _ritual_text(r) -> str:
 
 def _behaviour_text(b) -> str:
     layer = f"repo {b.get('repo_key')}" if b.get("layer") == "repo" else b.get("layer")
-    status = [layer, b.get("state")]
+    status = [programme_view_behaviours.layer_text(b, layer), b.get("state"),
+              *programme_view_behaviours.show_text(b)]
     if b.get("overridden_by"):
         status.append(f"overridden by {', '.join(b['overridden_by'])}")
     status.append(f"applies to {b.get('applies_to')}")
@@ -588,7 +595,7 @@ def _behaviour_text(b) -> str:
               (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"), ("agent_checks", "agent checks"))
               if b.get(key)]
     parts += [f"{key}: {b[key]}" for key in ("evidence", "stop") if b.get(key)]
-    parts.append(f"source: Shawn: \"{b['quote']}\"" if b.get("quote") else "source: none recorded")
+    parts.append(programme_view_behaviours.source_text(b))
     return f"behaviour {b.get('id')} ({', '.join(status)}): " + "; ".join(parts)
 
 

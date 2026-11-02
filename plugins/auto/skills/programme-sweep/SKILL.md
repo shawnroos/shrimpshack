@@ -196,7 +196,7 @@ re-arming. Next sweep reads changes since expiry.
    | Settle an uncertain action after end | `P dispose-action (--attempt <id>\|--resource <id>) --as abandoned_unknown\|accepted_unknown --prompt <id>` |
 
    **Behaviours.** Read [references/behaviours.md](references/behaviours.md) before you record, move,
-   retire or propose one.
+   retire, propose or adopt one.
 
    **Naming and Rulings.** Read [references/rulings.md](references/rulings.md) before you cite a
    message, record a correction, or record an answer that fits no row as a Ruling.

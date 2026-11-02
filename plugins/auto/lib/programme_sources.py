@@ -663,7 +663,7 @@ def _brief_copy(home, item_id, extra, at, brief, tail) -> list:
     return extra[:at] + [copy] + extra[at + 1:]
 
 
-def _launch_assign(started, session_name, restrictions=(), behaviour_ids=(), payload=None):
+def _launch_assign(started, session_name, restrictions=(), behaviour_ids=(), payload=None, not_briefed_ids=()):
     def assign(prog, op):
         item = prog["items"][programme_record._resolve(prog, op["item"])]
         entry = {k: started.get(k) for k in ("session_id", "pane", "terminal_id", "ok", "reason", "spinoff_exit")}
@@ -676,6 +676,9 @@ def _launch_assign(started, session_name, restrictions=(), behaviour_ids=(), pay
             _record_restrictions(item, restrictions, "start-worker")
             for bid in behaviour_ids:
                 programme_behaviours.record_delivery(item, bid, "brief", "start-worker")
+            # Answers the start trigger of a default no brief carried, or due() would list it forever.
+            for bid in not_briefed_ids:
+                programme_behaviours.record_delivery(item, bid, "not_briefed", "start-worker")
             _join_remit(prog, op, entry, started, payload)
         item["history"].append({"at": entry["at"], "kind": "started" if started.get("ok") else "start_failed",
                                 "session_id": started["session_id"]})
@@ -746,11 +749,13 @@ def _h_start_worker(host, argv):
     key = programme_record._resolve(programme, item_id)
     if programme["items"][key]["state"] in programme_home.FINISHED_ITEM_STATES:
         raise host.ProgrammeError(f"item {key!r} is {programme['items'][key]['state']}")
-    behaviours, held_back = programme_behaviours.brief_entries(
-        dict(record, programme=programme), programme["items"][key], chosen, lookup=host.prompt_lookup)
+    has_handoff = "--handoff" in extra[:-1]
+    behaviours, held_back, not_briefed = programme_behaviours.brief_for_start(
+        dict(record, programme=programme), programme["items"][key], chosen,
+        has_handoff=has_handoff, lookup=host.prompt_lookup)
     behaviour_ids = [b["id"] for b in behaviours]
     # Without a handoff there is no brief to carry the Rulings, and requiring one would refuse plain starts.
-    with_brief = bool(decision_ids or restrictions or behaviours) or "--handoff" in extra[:-1]
+    with_brief = bool(decision_ids or restrictions or behaviours) or has_handoff
     tail = _brief_tail(host, programme, key, decision_ids, restrictions, behaviours, rulings=with_brief)
     start = worker_register.plan_start(host, run_id, home, opts, programme, key)
     if start:
@@ -785,7 +790,7 @@ def _h_start_worker(host, argv):
     programme_recovery.pause(run_id, "after_invoke")
     payload = dict(item=key, started=started["ok"], decision_ids=decision_ids, restrictions=restrictions,
                    behaviour_ids=behaviour_ids, behaviours_held_back=held_back, **{k: v for k, v in started.items() if k != "ok"})
-    assign = _launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids, payload)
+    assign = _launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids, payload, not_briefed)
     if start:
         assign = worker_register.after_launch(assign, key, start)
         payload["launch_mode"] = start["mode"]
