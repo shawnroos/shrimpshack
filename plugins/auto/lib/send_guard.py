@@ -30,13 +30,21 @@ _LOCALE_DOLLAR = re.compile(r"\$(?=\")")
 _HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
 _ID_EDGE = "A-Za-z0-9_"
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
-_RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
+# Each substitution span becomes this one character before the text is lexed, so the shell's own word boundaries
+# survive: `RUN=$(a)-$(b)` stays one assignment instead of lexing into a `-$` word that reads as a program.
+# A private-use character cannot appear in a real command and is not whitespace, a quote or a shlex punctuation char,
+# so it stays glued to its neighbours exactly as the substitution was.
+_MARK = "\ue000"
+_RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]|" + _MARK)
 # A command word holding any of these may become a different program at run time (a leading `=` is zsh's path
 # lookup) and is denied whatever follows it: three review rounds broke every rule that tried to tell from the rest of
 # the command whether it types into a pane. A token made only of shell operators is punctuation the lexer split out
 # (the `)` and `>` of quoted JavaScript), never a program.
-_RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=")
+_RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=|" + _MARK)
 _OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
+# A command word that is exactly one variable, so a plain-literal assignment in the same text can name the program.
+# `${PY:-x}`, `${PY}/bin` and `$PY.sh` deliberately do not match: the shell can still build another name from them.
+_VAR_WORD = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
 _LOOKUPS = frozenset({"which", "whereis", "type"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 # After these an `a=b` word is the program they run, not an assignment.
@@ -94,8 +102,19 @@ def _unquote_dollar(command: str) -> str:
     return _LOCALE_DOLLAR.sub("", _ANSI_C.sub(lambda m: shlex.quote(_ansi_c(m)), command))
 
 
+def _heredoc_consumer(text: str, start: int, line_end: int) -> bool:
+    """Does a shell run this heredoc's body? `cat <<'EOF' | bash` does; `python3 - <<'PY'` does not."""
+    line = text[text.rfind("\n", 0, start) + 1:line_end]
+    words = _lex(line)
+    return any(os.path.basename(w) in _SHELL_BINS or w in ("eval", "source", ".") for w in words)
+
+
 def _split_heredocs(text: str):
-    """(text without heredoc bodies, [bodies]); a body is scanned as its own script."""
+    """(text without heredoc bodies, [(body, a shell runs it, the delimiter was quoted)]).
+
+    A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) is the one case where the shell expands nothing in the
+    body, so such a body cannot become a command through `$VAR` either.
+    """
     kept, bodies, pos = [], [], 0
     while True:
         found = _HEREDOC.search(text, pos)
@@ -104,6 +123,8 @@ def _split_heredocs(text: str):
             kept.append(text[pos:])
             return "".join(kept), bodies
         kept.append(text[pos:line_end + 1])
+        quoted = bool(found.group(1)) or text[found.start(2) - 1:found.start(2)] == "\\"
+        shell = _heredoc_consumer(text, found.start(), line_end)
         lines, cursor = [], line_end + 1
         while cursor < len(text):
             end = text.find("\n", cursor)
@@ -112,30 +133,64 @@ def _split_heredocs(text: str):
             if line.strip() == found.group(2):
                 break
             lines.append(line)
-        bodies.append("\n".join(lines))
+        bodies.append(("\n".join(lines), shell, quoted))
         pos = cursor
         if pos >= len(text):
             return "".join(kept), bodies
 
 
-def _substitutions(text: str) -> list:
-    """Scripts inside $( ), <( ), >( ) and backticks; nested ones are found when the inner text is scanned."""
-    out, i = [], 0
+def _mark_substitutions(text: str):
+    """(text with each outermost $( ), <( ), >( ) and backtick span replaced by one marker, [(contents, arithmetic)]).
+
+    Only outermost spans are returned; nested ones are found when the contents are scanned. An unterminated span
+    swallows the rest of the text, which keeps a half-written send inside it from escaping the scan.
+    """
+    out, spans, i, quote, escaped = [], [], 0, None, False
     while i < len(text):
-        if text[i:i + 2] in ("$(", "<(", ">("):
+        ch = text[i]
+        # Quoting decides what the shell expands: single quotes expand nothing, double quotes expand `$( )` and
+        # backticks but not a process substitution, and a backslash outside single quotes escapes the next char.
+        if escaped:
+            escaped, out, i = False, out + [ch], i + 1
+            continue
+        if ch == "\\" and quote != "'":
+            escaped, out, i = True, out + [ch], i + 1
+            continue
+        if quote == "'":
+            quote, out, i = (None if ch == "'" else quote), out + [ch], i + 1
+            continue
+        if ch == "'" or ch == '"':
+            quote, out, i = (None if ch == quote else ch if quote is None else quote), out + [ch], i + 1
+            continue
+        if text[i:i + 2] == "$(" or (text[i:i + 2] in ("<(", ">(") and quote is None):
+            arithmetic = text[i:i + 3] == "$(("
             depth, j = 1, i + 2
             while j < len(text) and depth:
                 depth += (text[j] == "(") - (text[j] == ")")
                 j += 1
-            out.append(text[i + 2:j - 1] if depth == 0 else text[i + 2:])
-            i += 2
-        elif text[i] == "`":
+            spans.append((text[i + 2:j - 1] if depth == 0 else text[i + 2:], arithmetic))
+            out.append(_MARK)
+            i = j if depth == 0 else len(text)
+        elif ch == "`":
             j = text.find("`", i + 1)
-            out.append(text[i + 1:] if j == -1 else text[i + 1:j])
+            spans.append((text[i + 1:] if j == -1 else text[i + 1:j], False))
+            out.append(_MARK)
             i = len(text) if j == -1 else j + 1
         else:
+            out.append(ch)
             i += 1
-    return out
+    return "".join(out), spans
+
+
+def _substitution_scripts(spans: list) -> list:
+    """The spans that hold commands. Arithmetic holds none, so only its own nested substitutions are returned."""
+    scripts = []
+    for contents, arithmetic in spans:
+        if not arithmetic:
+            scripts.append(contents)
+            continue
+        scripts.extend(_substitution_scripts(_mark_substitutions(contents)[1]))
+    return scripts
 
 
 def _newlines_as_breaks(text: str) -> str:
@@ -205,45 +260,97 @@ def _lookup_names(tokens: list, runs: list) -> set:
     return names
 
 
-def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None) -> None:
+def _literal_vars(tokens: list, assigns: list) -> list:
+    """[(index, name, literal)] for each `NAME=<plain word>` assignment in this text.
+
+    A value the shell could still rebuild — a substitution marker, a glob, a tilde — names no program, so it is
+    skipped and its variable stays unresolvable. `export X=y` and `local X=y` put the word in argument position,
+    where `assigns` is false, so they never reach here.
+    """
+    out = []
+    for k, tok in enumerate(tokens):
+        if not assigns[k]:
+            continue
+        name, _, value = tok.partition("=")
+        if not value or name.endswith("+") or _RUNTIME_WORD.search(value):
+            continue
+        if os.path.basename(value) in _COMMAND_PREFIX:
+            # A precommand runs the next word, and position analysis reads the raw token, so resolving `$W` to
+            # `nice` would leave `$W $H agent prompt $P go` with `$H` in no command position at all.
+            continue
+        out.append((k, name, value))
+    return out
+
+
+def _resolver(tokens: list, assigns: list):
+    """Callable: the plain literal a `$NAME` command word was set to earlier in this same text, or None."""
+    pairs = _literal_vars(tokens, assigns)
+
+    def resolve(index: int, word: str):
+        match = _VAR_WORD.match(word)
+        if match is None:
+            return None
+        seen = [value for k, name, value in pairs if k < index and name == match.group(1)]
+        return seen[-1] if seen else None
+
+    return resolve
+
+
+def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None,
+          shell: bool = True, expands: bool = True) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
-    if depth < MAX_DEPTH:
-        nested = _substitutions(main) + bodies + [ln for body in bodies for ln in body.splitlines()]
-        for script in nested:
-            _scan(script, depth + 1, hosts, pane_ids, found, proven)
-    tokens = _lex(_newlines_as_breaks(main))
-    piped = main + "\n" + "\n".join(bodies)
+    marked, spans = _mark_substitutions(main)
+    tokens = _lex(_newlines_as_breaks(marked))
+    piped = main + "\n" + "\n".join(body for body, _, _ in bodies)
     strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
     positions = _command_positions(tokens)
-    runs = positions[0]
+    runs, assigns, _globbed, progs = positions
+    resolve = _resolver(tokens, assigns)
     looked_up = _lookup_names(tokens, runs)
+
+    def program(index: int) -> str:
+        return resolve(index, tokens[index]) or tokens[index] if 0 <= index < len(tokens) else ""
+
+    if depth < MAX_DEPTH:
+        for script in _substitution_scripts(spans):
+            _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=shell, expands=expands)
+        for body, body_shell, quoted in bodies:
+            for script in [body] + body.splitlines():
+                _scan(script, depth + 1, hosts, pane_ids, found, proven,
+                      shell=shell and body_shell, expands=expands and not quoted)
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
-        script = None
-        if os.path.basename(token) in _SHELL_BINS:
+        prog = resolve(start, token) or token
+        base = os.path.basename(prog)
+        script, script_shell = None, shell
+        if base in _SHELL_BINS:
             script = _shell_script(rest)
-        elif token == "eval":
+        elif prog == "eval":
             script = " ".join(_segment(tokens, start + 1)) or None
+            # `agent-browser eval '<js>'` is not the shell builtin, so its argument is not a script a shell runs.
+            script_shell = shell and runs[start]
         elif token == "<<<" and rest:
-            script = rest[0]
-        if _INTERPRETERS.match(os.path.basename(token)) and depth < MAX_DEPTH and runs[start]:
+            # A here-string is a script only when a shell reads it; for any other program it is stdin data.
+            owner = os.path.basename(program(progs[start]))
+            script = rest[0] if owner in _SHELL_BINS or owner in ("eval", "source", ".") else None
+        if _INTERPRETERS.match(base) and depth < MAX_DEPTH and runs[start]:
             # Inline code of another language can call the host command through a string; scan every string in it.
             for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
-                _scan(literal, depth + 1, hosts, pane_ids, found, proven)
-        if script is None and os.path.basename(token) in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
+                _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
+        if script is None and base in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
             # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be that script.
             for quoted in {t for t in tokens if " " in t}:
-                _scan(quoted, depth + 1, hosts, pane_ids, found, proven)
+                _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
         if script is not None:
             if depth < MAX_DEPTH:
-                _scan(script, depth + 1, hosts, pane_ids, found, proven)
+                _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=script_shell, expands=expands)
             continue
         if start in looked_up:
             continue
         segment = strip(_segment(tokens, start))
         for host in hosts:
             if proven is not None:
-                hit = _unproven(host, tokens, start, segment, piped, proven, positions)
+                hit = _unproven(host, tokens, start, segment, piped, proven, positions, shell, expands, resolve)
             else:
                 hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
             if hit:
@@ -256,10 +363,17 @@ def _command_positions(tokens: list) -> tuple:
     that times out or raises lets the command through. Redirections keep the position; a precommand's flags and
     assignments keep it too."""
     runs, assigns, globbed, stack = [False] * len(tokens), [False] * len(tokens), set(), []
+    progs, cur_prog = [-1] * len(tokens), -1
     at_cmd, prefix, skip, glob_next = True, None, 0, False
+    in_case, patterns = False, False
     for k, tok in enumerate(tokens):
+        progs[k] = cur_prog
         if skip:
             skip -= 1
+            continue
+        if patterns and not _OPERATOR_ONLY.match(tok):
+            # A `case` pattern names no program: `*queued*)` is a glob the shell matches, not a command to run.
+            runs[k] = False
             continue
         nxt = tokens[k + 1] if k + 1 < len(tokens) else None
         glued, glob_next = glob_next, False
@@ -280,19 +394,35 @@ def _command_positions(tokens: list) -> tuple:
                     stack.append([kind, at_cmd, False])
                     at_cmd, prefix = kind != "array", None
                 elif ch == ")":
+                    if patterns:
+                        patterns = False
+                        at_cmd, prefix, glob_next = True, None, False
+                        continue
                     kind, saved, alternation = stack.pop() if stack else ["group", True, False]
                     at_cmd, prefix = (True if kind == "group" else saved), None
                     glob_next = kind == "group" and alternation
                 elif ch in ";|&":
                     if ch == "|" and stack:
                         stack[-1][2] = True
-                    at_cmd, prefix, glob_next = True, None, False
+                    at_cmd, prefix, glob_next, cur_prog = True, None, False, -1
+            if in_case and ";;" in tok:
+                # One branch ended, so the next word is the following branch's pattern.
+                patterns = True
             if tok[-1] in "<>":
                 skip = 1
             continue
         if glued and at_cmd:
             # A word glued to a closing `)` is a zsh glob such as `(re|zz)x`, built when the shell runs it.
             globbed.add(k)
+        if tok == "case" and at_cmd:
+            in_case, patterns, at_cmd, prefix = True, False, False, None
+            continue
+        if in_case and tok == "esac":
+            in_case, patterns, at_cmd, prefix = False, False, False, None
+            continue
+        if in_case and not patterns and tok == "in":
+            patterns = True
+            continue
         if tok in _COMMAND_PREFIX:
             at_cmd, prefix = True, tok
         elif at_cmd and _ASSIGNMENT.match(tok) and not (k and tokens[k - 1] in _RUNS_NEXT_WORD):
@@ -303,22 +433,34 @@ def _command_positions(tokens: list) -> tuple:
             elif tok in _PREFIX_VALUE_OPTS.get(prefix, ()):
                 skip = 1
         else:
+            if at_cmd:
+                cur_prog = k
+                progs[k] = k
             at_cmd, prefix = False, None
-    return runs, assigns, globbed
+    return runs, assigns, globbed, progs
 
 
-def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven, positions):
+def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven, positions,
+              shell: bool, expands: bool, resolve):
     """The one policy for a session that is not the PM. Hosts only say what a send is (send_class) and which targets
     a call names; a send, or a call that cannot be told from one, passes only when every target is a literal id that
-    the registry proves is another session's pane. A command word built at run time is always a hit."""
+    the registry proves is another session's pane. A command word built at run time is a hit unless a plain-literal
+    assignment in the same text names it, and that name is no host program."""
     shape = host.send_class(segment, piped)
     if shape is None:
         word = tokens[start]
-        runs, assigns, globbed = positions
-        if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or assigns[start]:
+        runs, assigns, globbed, _progs = positions
+        if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or assigns[start] or not runs[start]:
+            return None
+        if not shell and (not expands or word[:1] not in ("$", "`", _MARK)):
+            # Text no shell runs holds no command words. The one exception is a word the shell expands before
+            # another program reads the text, which it does for $VAR and $( ) in an unquoted heredoc.
+            return None
+        literal = resolve(start, word)
+        if literal is not None and host.send_class([os.path.basename(literal)] + list(segment[1:]), piped) is None:
             return None
         built = _RUNTIME_WORD.search(word) or start in globbed
-        return ("runtime-built command", "") if built and runs[start] else None
+        return ("runtime-built command", "") if built else None
     kind, targets = shape
     if kind == "read":
         return None
@@ -446,11 +588,14 @@ def _live_ids(driver: dict, snap: dict, server) -> list:
         driver.get("session_id"), row, snap, load_lib_module("programme_sources").session_of,
         current_server=server, clean=sr._clean)
     facts = found.value if found.ok else None
-    if not isinstance(facts, dict) or facts.get("state") == "gone" or not facts.get("pane_in_snapshot"):
-        return []
+    if not isinstance(facts, dict):
+        # The lookup itself failed, so herdr says nothing either way about where the driver is.
+        return [], None
+    if facts.get("state") == "gone" or not facts.get("pane_in_snapshot"):
+        return [], False
     pane = facts.get("pane_id")
     terminal = next((p.get("terminal_id") for p in snap["panes"] if isinstance(p, dict) and p.get("pane_id") == pane), None)
-    return [i for i in (pane, terminal) if isinstance(i, str) and i]
+    return [i for i in (pane, terminal) if isinstance(i, str) and i], True
 
 
 def _with_live_ids(drivers: list) -> None:
@@ -463,14 +608,17 @@ def _with_live_ids(drivers: list) -> None:
     local = [d for d in herdr_drivers if d.get("server") == server]
     snap = load_lib_module("host_herdr").guard_snapshot() if local else None
     for driver in herdr_drivers:
-        live = []
+        live, hosting = [], None
         if snap is not None and driver in local:
             try:
-                live = _live_ids(driver, snap, server)
+                live, hosting = _live_ids(driver, snap, server)
             except Exception:
                 # One driver's bad row must not drop the live ids of the others.
                 pass
         seen = _seen_ids(driver)
+        # herdr answered and says the recorded pane does not host the driver, and nothing else names a pane for it:
+        # the id below still guards (a live pane auto cannot see must not become sendable), but it is not confirmed.
+        driver["unconfirmed"] = hosting is False and not live and not seen
         if live and not set(live) <= set(seen):
             _remember(driver, live + [i for i in seen if i not in live])
         driver["ids"] = list(dict.fromkeys(_ids(driver) + live + seen))
@@ -500,9 +648,13 @@ def denial(session_id, command):
         unproven = verb in _UNPROVEN_VERBS
         what = (f"a command ({verb}) that auto cannot prove is not aimed at pane" if unproven else
                 f"`{host} {verb}` into pane" if verb else "a command naming pane")
+        whose = (f"the last pane auto saw programme {driver['run']!r}'s driver in. herdr reports that pane "
+                 "closed and does not say which pane the driver is in now, so the id is still guarded"
+                 if driver.get("unconfirmed") else
+                 f"the driver's pane of programme {driver['run']!r}")
         reason = (
-            f"auto: blocked {what} {driver['pane_id']}, the driver's pane of programme "
-            f"{driver['run']!r}. Only the person types into the programme driver's pane, "
+            f"auto: blocked {what} {driver['pane_id']}, {whose}. "
+            "Only the person types into the programme driver's pane, "
             "and other sessions may not name it in any command; report through the "
             "programme's inbox instead. This attempt is journaled."
             + (" Fix: send only to a literal pane id that another session's registry row shows, with no variable, "

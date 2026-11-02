@@ -137,6 +137,28 @@ allowed 'grep -nE '\''^\s*(rex|send)'\'' file'
 allowed 'cat $R/intake.md; ls docs/plans 2>/dev/null | tail -5'
 allowed 'python3 -c "import sys; print(sys.argv)" "$(date)"'
 
+echo "send-guard-precision: commands a programme worker really ran, denied before this change"
+# A heredoc body no shell runs is not shell, and a quoted delimiter expands nothing in it either.
+allowed 'cat > probe.mjs <<'\''EOF'\''
+const shot = (kind, extra = {}) => ({ index: 0, kind, ...extra });
+for (const [label, n] of [["kind=sport,", 1]]) { console.log(`${label} ${n}`); }
+EOF'
+allowed 'python3 - <<'\''PY'\''
+import re
+s = open("look-inspector.service.ts").read()
+s = s.replace("    lookEstimate: boolean;", "    sportRouting: boolean;", 1)
+PY'
+# A here-string feeding jq is stdin data, not a script, and a process substitution is an argument.
+allowed 'prev=""; s=$(gh pr checks 497 --json name,bucket); cur=$(jq -r '\''.[] | select(.bucket!="pending")'\'' <<<"$s" | sort); comm -13 <(echo "$prev") <(echo "$cur")'
+# The glue between two substitutions is not a program.
+allowed 'SCRATCH_ROOT="/tmp/compound-engineering-$(id -u)"; RUN_ID=$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d " "); echo "$SCRATCH_ROOT/ce-code-review/$RUN_ID"'
+allowed 'echo "peer-deadline-secs=$(( ${CROSS_MODEL_HARD_SECS:-1200} + 10 ))"'
+# A `>(` inside quoted JavaScript is not a process substitution.
+allowed 'agent-browser --session s eval '\''[...document.querySelectorAll("input[type=file]")].map(i=>({accept:i.accept,id:i.id}))'\'''
+allowed 'bash ~/.claude/tools/honest-run/run.sh --expect "[0-9]+ passed" -- pytest -q'
+# A case pattern is a glob the shell matches, not a command.
+allowed 's=queued; case "$s" in *in_progress*|*queued*) echo wait;; *) echo settled;; esac'
+
 echo "send-guard-precision: real sends stay denied"
 denied 'herdr pane send-text w2:p9T hi'
 denied 'herdr agent prompt $P go'
@@ -236,6 +258,46 @@ denied '$R frobnicate -b rex-blk-O1'
 denied 'for f in a b; do "$PY" "$f.py"; done'
 denied 'rex send -b rex-blk-X9 go'
 allowed 'rex send -b rex-blk-O1 go'
+
+echo "send-guard-precision: a program name set to a plain literal in the same command resolves"
+allowed 'PY=python3; "$PY" scripts/peer-job-runner.py start --skill ce-code-review'
+allowed 'GIT=git; "$GIT" log --oneline -3'
+# Set from a substitution, so the name is still unknown: ce-code-review's own spine stays denied.
+denied 'PY="$(for c in python3 python py; do command -v "$c"; done)"; "$PY" x.py'
+denied 'PY=$(head -1 "$M" | sed "s/^#!//"); "$PY" -c "import modal"'
+# Resolving to a host program denies, whichever pane it names.
+denied 'H=herdr; $H agent prompt w2:p9T go'
+denied 'H=herdr; $H agent prompt w2:p77 go'
+denied 'H=/opt/homebrew/bin/herdr; $H pane send-text w2:p77 hi'
+# Set in another scan text, set by a loop, or never set: all unresolvable.
+denied 'PY=python3; bash -c '\''"$PY" x.py'\'''
+denied 'for c in python3 py; do "$c" x.py; done'
+denied '$PY x.py'
+
+echo "send-guard-precision: text no shell runs still yields a send the shell expands into it"
+# A shell consumes the body, so the body is a script however its delimiter is quoted.
+denied 'cat <<'\''EOF'\'' | bash
+herdr pane send-text w2:p9T hi
+EOF'
+# An unquoted delimiter lets the shell expand $H before python reads the body.
+denied 'H=herdr; python3 - <<EOF
+os.system("$H pane send-text w2:p77 hi")
+EOF'
+# The same expansion inside an interpreter string literal.
+denied 'H=herdr; python3 -c "import os; os.system(\"$H pane send-text w2:p77 hi\")"'
+denied 'herdr pane send-text "$(echo w2:p9T)" hi'
+
+echo "send-guard-precision: a pane herdr cannot confirm stays guarded and says so"
+cat > "$FAKE_HERDR_SNAPSHOT" <<'EOF'
+{"result": {"snapshot": {
+  "panes": [{"pane_id": "w2:p77", "terminal_id": "term_p77", "workspace_id": "w2", "tab_id": "w2:t1"}],
+  "agents": [], "tabs": []}}}
+EOF
+OUT="$(hook sess-worker 'echo w2:p9T')"
+it "a command naming a driver pane herdr reports closed is still denied"
+check deny "$(verdict "$OUT")"
+it "the denial says herdr does not know which pane the driver is in now"
+has "does not say which pane the driver is in now" "$OUT"
 
 echo "send-guard-precision: a moved herdr pane is guarded by its live id"
 cat > "$FAKE_HERDR_SNAPSHOT" <<'EOF'
