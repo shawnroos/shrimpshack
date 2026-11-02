@@ -167,11 +167,8 @@ print(json.dumps([k for k in ("skills", "tools", "agents") if e.get(k)]))
 EOF
 )"
 
-it "the SKILL.md worker clause list carries the prompt-scoped line"
-check 1 "$(grep -cF -- '- In a prompt to a running worker (a start brief gets it from the shipped behaviour file): "Record before any long background wait: send your claim first."' "$SKILL")"
-
-it "the SKILL.md worker clause list no longer carries the sentence as a bare clause"
-check 0 "$(grep -cF -- "- \"${SENTENCE}\"" "$SKILL")"
+it "the SKILL.md worker clause list still carries the sentence for prompts to a running worker"
+check 1 "$(grep -cF -- "- \"${SENTENCE}\"" "$SKILL")"
 
 it "mutation check: with an empty shipped folder the same start brief lacks the sentence"
 export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="$EMPTY_SHIPPED"

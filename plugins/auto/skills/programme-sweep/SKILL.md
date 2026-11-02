@@ -187,9 +187,6 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    | Keep a behaviour where it is | Nothing to run |
    | Move a behaviour to the repo, make it global, or bring it back to this programme | `P move-behaviour <behaviour-id> --to repo\|personal\|programme --prompt <id>` (add `--repo <key>` when the remit has several repos) |
    | Apply a behaviour you proposed | `P record-behaviour --from-proposal <behaviour-id> --prompt <id>` |
-   | Adopt a behaviour file he approved by hash | `P adopt-behaviour-file <id> --file <path> --prompt <id>` |
-   | Copy a shipped default to edit | `P copy-default <id> --prompt <id>` |
-   | Settle a shipped default's update | `P settle-default-update <id> --as shown\|keep\|take\|merge [--file <path>] [--prompt <id>]` |
    | Retire a behaviour | `P retire-behaviour <behaviour-id> --as retired --prompt <id>` |
    | Undo a behaviour you just recorded | `P retire-behaviour <behaviour-id> --as undone --prompt <id>` |
    | Settle a conflict you named: the new behaviour wins | Nothing to run: you recorded it with `--conflicts-with` |
@@ -201,7 +198,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    | Settle an uncertain action after end | `P dispose-action (--attempt <id>\|--resource <id>) --as abandoned_unknown\|accepted_unknown --prompt <id>` |
 
    **Behaviours.** Read [references/behaviours.md](references/behaviours.md) before you record, move,
-   retire, propose or adopt one (the file flow is there).
+   retire, propose or adopt one (file verbs too).
 
    **Naming and Rulings.** Read [references/rulings.md](references/rulings.md) before you cite a
    message, record a correction, or record an answer that fits no row as a Ruling.
@@ -383,7 +380,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      - The assignment it works under, by id: the Ruling revision and its
        limits from `P context --item <item>` (for example `decision:browser-first@2`,
        "no Linux work"). Quote the limits; do not paraphrase them.
-     - In a prompt to a running worker (a start brief gets it from the shipped behaviour file): "Record before any long background wait: send your claim first."
+     - "Record before any long background wait: send your claim first."
      - "Never prompt the PM's pane. Report with
        `bash <plugin root>/lib/programme.sh claim --run <run> --item <item> --deliverable <name> --ref <ref>`."
      - "When a command is denied permission, do not run it again, and do not try
