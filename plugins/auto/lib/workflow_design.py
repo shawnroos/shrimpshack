@@ -28,7 +28,7 @@ worker_contract = load_lib_module("worker_contract")
 workflows = load_lib_module("workflows")
 
 KIND = "workflow_change"
-FIELD_NAMES = ("authority", "autonomy", "decision", "decisions", "asks", "allow", "allowed", "mode")
+FIELD_NAMES = ("authority", "autonomy", "decisions", "asks", "allow", "allowed", "mode")
 AUTHORITY_KEYS = frozenset(FIELD_NAMES) | frozenset(programme_decisions.DECISION_KINDS) | frozenset(
     worker_contract.MODES) | frozenset(worker_contract.ASKS)
 
@@ -38,7 +38,7 @@ def authority_keys_in(value, path="") -> list:
     if isinstance(value, dict):
         for key, inner in value.items():
             here = f"{path}.{key}" if path else str(key)
-            if key in AUTHORITY_KEYS:
+            if key in AUTHORITY_KEYS or f"{key}s" in AUTHORITY_KEYS:
                 found.append(here)
             found.extend(authority_keys_in(inner, here))
     elif isinstance(value, list):

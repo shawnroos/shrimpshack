@@ -21,6 +21,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 worker_contract = load_lib_module("worker_contract")
 workflows = load_lib_module("workflows")
+phase_grammar = load_lib_module("phase-grammar")
 
 NO_CONTRACT = "no_contract"
 CURRENT = "current"
@@ -54,7 +55,7 @@ def _differs(record, block) -> bool:
 
 def _due(record):
     block = _block(record)
-    if block is None or record.get("loop_phase") == "done":
+    if block is None or record.get(phase_grammar.LOOP_PHASE_KEY) == "done":
         return None
     applied = block.get("applied_version", 0)
     if applied < block["version"] or block.get("pending_versions"):
@@ -79,7 +80,7 @@ def state(record) -> dict:
 
 def _phases(record):
     order = record.get("phase_order") or DEFAULT_PHASES
-    phase = record.get("loop_phase")
+    phase = record.get(phase_grammar.LOOP_PHASE_KEY)
     return order, (order.index(phase) if phase in order else 0)
 
 
@@ -137,7 +138,7 @@ def _new_steps(workflow, record, version) -> list:
         step = workflows.step_for(u, workflow)
         step["id"] = ids[u["id"]]
         step["depends_on"] = [ids.get(d, d) for d in step["depends_on"] if d not in earlier]
-        out.append(run_record_core._normalize_step(step, loop_phase=record.get("loop_phase", "work")))
+        out.append(run_record_core._normalize_step(step, loop_phase=record.get(phase_grammar.LOOP_PHASE_KEY, "work")))
     return out
 
 

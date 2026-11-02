@@ -171,7 +171,8 @@ check '[true, true, true, true]' "$(run_py <<'EOF'
 kinds = set(load_lib_module("programme_decisions").DECISION_KINDS)
 print(json.dumps([{"act_and_tell", "propose", "never", "act", "pm", "shawn"} <= wd.AUTHORITY_KEYS,
                   kinds <= wd.AUTHORITY_KEYS,
-                  {"authority", "autonomy", "decision", "asks", "allow"} <= wd.AUTHORITY_KEYS,
+                  {"authority", "autonomy", "asks", "allow"} <= wd.AUTHORITY_KEYS
+                  and wd.authority_keys_in({"decision": 1}) == ["decision"],
                   wd.authority_keys_in({"steps": [{"id": "U1", "invokes": {"backend_op": "review"}}]}) == []]))
 EOF
 )"

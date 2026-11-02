@@ -33,6 +33,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_decisions = load_lib_module("programme_decisions")
 worker_contract = load_lib_module("worker_contract")
 worker_question = load_lib_module("worker_question")
+phase_grammar = load_lib_module("phase-grammar")
 
 GOAL_KIND = "goal_amend"
 JOURNAL_KIND = "goal_written"
@@ -219,7 +220,7 @@ def _commit(repo, run_id, programme_run, worker_session, inputs, *, caller, spac
         block = worker_contract.contract_of(rec)
         if block is None:
             raise GoalError("the worker's run record has no contract", "no_contract")
-        if (rec.get("loop") or {}).get("loop_phase") == "done":
+        if (rec.get("loop") or {}).get(phase_grammar.LOOP_PHASE_KEY) == "done":
             raise GoalError(f"run {run_id} is done; start a follow-up run from a copy of its contract", "run_done")
         path = goal_path(repo, run_id)
         if os.path.exists(path) != existed:

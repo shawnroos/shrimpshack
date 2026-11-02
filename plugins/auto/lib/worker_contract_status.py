@@ -26,6 +26,7 @@ programme_record = load_lib_module("programme_record")
 worker_contract = load_lib_module("worker_contract")
 worker_question = load_lib_module("worker_question")
 worker_register = load_lib_module("worker_register")
+phase_grammar = load_lib_module("phase-grammar")
 
 CONTRACT, NO_CONTRACT, UNRESOLVABLE, LAUNCHED = "contract", "no contract", "unresolvable", "launched"
 SEEN_NAME = "contract-seen.json"
@@ -124,7 +125,7 @@ def item_status(key, item, questions) -> dict:
         "applied_version": block.get("applied_version", 0), "stale": worker_contract.is_stale(block),
         "pending_versions": _pending(block), "steps": _steps(record), "exit_predicate": cached,
         "last_beat_at": (record.get("loop") or {}).get("last_beat_at"),
-        "loop_phase": (record.get("loop") or {}).get("loop_phase"), "mtime_ns": _mtime(path, run_id),
+        phase_grammar.LOOP_PHASE_KEY: (record.get("loop") or {}).get(phase_grammar.LOOP_PHASE_KEY), "mtime_ns": _mtime(path, run_id),
         "unverified_external": missing, "questions": _questions(questions),
     }, **_done(cached, missing))
 
