@@ -920,7 +920,7 @@ _VERBS["status"] = _Verb(
 )
 
 _VERBS["host"] = _Verb(
-    lambda argv: (_emit(load_lib_module("terminal_host").explain()), 0)[1],
+    lambda argv: load_lib_module("programme_host").verb(sys.modules[__name__], argv),
     "(prints which terminal host this session resolves to, which fact decided it, and what was missing when it is refused)",
     reads=True,
     rejects="nothing; read-only. It reads the environment, PATH and the session registry, and writes nothing.",

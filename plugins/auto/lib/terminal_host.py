@@ -226,6 +226,10 @@ RUNG_ROW = "this session's registry row"
 FALLBACK_RUNGS = (RUNG_INSTALLED, RUNG_ROW)
 
 
+# The environment variable that names a host's pane, and the registry field that kept its value at record time.
+_ROW_PANE_FIELD = {"herdr": ("HERDR_PANE_ID", "env_pane"), "rex": ("REX_BLOCK", "pane_id")}
+
+
 def _herdr_server_up() -> bool:
     if not _server_probe:
         _server_probe.append(load_lib_module("host_herdr").server_running())
@@ -282,9 +286,8 @@ def _recorded_host(env, installed) -> str | None:
         return None
     if host not in installed:
         return None
-    seen = env.get("HERDR_PANE_ID") if host == "herdr" else env.get("REX_BLOCK")
-    stored = row.get("env_pane") if host == "herdr" else row.get("pane_id")
-    return host if not seen or seen == stored else None
+    variable, field = _ROW_PANE_FIELD[host]
+    return host if not env.get(variable) or env[variable] == row.get(field) else None
 
 
 def detect(env=None) -> Detection:
