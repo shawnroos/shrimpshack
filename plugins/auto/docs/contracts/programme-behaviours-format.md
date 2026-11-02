@@ -155,10 +155,10 @@ One shared word is not a reason: on the stored behaviours it was noise in 43 of 
 | `term:cadence`, `term:remit` | agreement terms | a word starts with sweep, cadence or wake (cadence), or with remit (remit) | never |
 | `term:stop_rule` | agreement term | the behaviour sets `stop` | `stop` shares two or more content words with the stop rule |
 | `term:tools_of_record` | agreement term | the behaviour names a tool of record | never |
-| `tool:<id>` | preferred tool | the behaviour names a tool in the preferred-tool text | a negation word (not, never, avoid, dont, no) comes before the tool name in the same clause |
+| `tool:<id>` | preferred tool | the behaviour names a tool in the preferred-tool text | a negation word (not, never, avoid, dont, no) comes before the tool name, or within two words after it, in the same clause; commas, semicolons, colons, full stops and parentheses end a clause, and a curly apostrophe reads like a plain one |
 | `ruling:<id>` | Ruling | a `do` line names the Ruling's decision kind | the Ruling's effect is `restrict` |
 | `authority:<action>` | Authority level | a `do` line names the action and its level is stricter than `act` | always, once listed |
-| `done:<deliverable>` | Done standards | a `do` or `dont` line names the deliverable; one row lists every standard that requires it | a `do` clause skips it (skip, without, ignore, omit); a `dont` line never flags |
+| `done:<deliverable>` | Done standards | a `do` or `dont` line names the deliverable; one row lists every standard that requires it | a `do` clause skips it (skip, without, ignore, omit) with no negation before the skip word; a `dont` line never flags |
 
 The operating contract line applies to every behaviour, so it is read but never listed. A protected escalation in a `do`, skill, tool or agent line is still refused (section 4).
 
