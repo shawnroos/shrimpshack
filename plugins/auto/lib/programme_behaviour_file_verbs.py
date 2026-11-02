@@ -32,6 +32,7 @@ BehaviourError = programme_behaviours.BehaviourError
 ADOPTED = programme_behaviours.APPROVAL_KIND
 LOCK_NAME = programme_behaviour_files.LOCK_NAME
 MODES = ("shown", "keep", "take", "merge")
+SPENT = "_approvals_spent"
 MAX_BYTES = 64 * 1024
 seen_path = programme_behaviour_files.seen_path
 
@@ -136,9 +137,22 @@ def _seen_doc() -> dict:
     return doc
 
 
-def _record(bid, **fields) -> None:
+def _use_key(prompt, verb, bid, mode, digest) -> str:
+    return "|".join((prompt["prompt_id"], verb, bid, mode, digest))
+
+
+def _unspent(used) -> None:
+    if used in (_seen_doc().get(SPENT) or {}):
+        raise BehaviourError("this approval was already used for this change; ask Shawn to approve it again")
+
+
+# The spent mark is written in the same file write as seen, so a write that failed spends nothing.
+def _record(bid, used=None, **fields) -> None:
     doc = _seen_doc()
-    doc[bid] = dict(doc.get(bid) or {}, **fields)
+    if bid:
+        doc[bid] = dict(doc.get(bid) or {}, **fields)
+    if used:
+        doc.setdefault(SPENT, {})[used] = {"at": run_record_core.now_iso()}
     _atomic(seen_path(), json.dumps(doc, indent=2, sort_keys=True) + "\n")
 
 
@@ -173,13 +187,14 @@ def _approve(host, rec, prompt, bid, digest) -> None:
         f"approval must name {bid} and carry the content hash {digest}")
 
 
-def _write_file(bid, text, *, replace) -> None:
+def _write_file(bid, text, *, replace, used) -> None:
     def body():
         path = _personal_path(bid)
+        _unspent(used)
         if os.path.exists(path) and not replace and _read_text(path) != text:
             raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder; "
                                  "settle-default-update --as merge replaces it")
-        _atomic(path, text)
+        _with_rollback(path, lambda: _atomic(path, text), lambda: _record(None, used=used))
 
     _locked(body)
 
@@ -202,7 +217,7 @@ def _h_adopt(host, argv):
                                  "would be rejected as shadowed")
         digest = draft_hash(text, bid)
         _approve(host, rec, prompt, bid, digest)
-        _write_file(bid, text, replace=False)
+        _write_file(bid, text, replace=False, used=_use_key(prompt, "adopt-behaviour-file", bid, "adopt", digest))
         return _adopted(bid, digest, path=_personal_path(bid))
 
     return host._write(opts, change, ADOPTED, prompt_id=opts.get("prompt"), needs_prompt=True,
@@ -219,12 +234,14 @@ def _h_copy(host, argv):
         text, digest = _shipped_read(bid)
         host.require_named(prompt, bid)
 
+        used = _use_key(prompt, "copy-default", bid, "copy", digest)
+
         def body():
-            _seen_doc()
+            _unspent(used)
             if os.path.exists(_personal_path(bid)):
                 raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder")
             _with_rollback(_personal_path(bid), lambda: _atomic(_personal_path(bid), text),
-                           lambda: _record(bid, seen=digest))
+                           lambda: _record(bid, used=used, seen=digest))
 
         _locked(body)
         return _adopted(bid, digest, path=_personal_path(bid))
@@ -246,9 +263,11 @@ def _settle(host, rec, prompt, bid, mode, text) -> dict:
         written = draft_hash(text, bid)
         _approve(host, rec, prompt, bid, written)
 
+    used = _use_key(prompt, "settle-default-update", bid, mode, written)
+
     def body():
-        # Before any file change: a corrupt seen file must refuse with nothing half done.
-        _seen_doc()
+        # Before any file change: a corrupt seen file or a spent approval must refuse with nothing half done.
+        _unspent(used)
         path = _personal_path(bid)
         if mode == "merge":
             change = lambda: _atomic(path, text)
@@ -256,7 +275,7 @@ def _settle(host, rec, prompt, bid, mode, text) -> dict:
             change = lambda: os.unlink(path)
         else:
             change = lambda: None
-        _with_rollback(path, change, lambda: _record(bid, seen=digest))
+        _with_rollback(path, change, lambda: _record(bid, used=used, seen=digest))
 
     _locked(body)
     return _adopted(bid, written, **{"as": mode, "shipped_hash": digest})
