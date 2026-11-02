@@ -666,6 +666,87 @@ has "unreadable" "$OUT"
 check "{ not json" "$(cat "$CLAUDE_AUTO_RITUALS_STORE")"
 rm -f "$CLAUDE_AUTO_RITUALS_STORE"
 
+# ---- ritual improvements: U1 refusal detail, U2 offers, U3 first-due report ----
+RUN_I="$(new_run)"
+PI="$(tprompt "$RUN_I" "record the version check ritual")"
+
+it "U1: a refusal names the step number and the word that matched"
+check "protected_escalation full_release: step 2" "$(run_py <<'EOF'
+v = pr.verdict(ritual("r1", steps=["check every plugin version", "publish the plugin now"]))
+print(v["reason"], v["detail"][:len("full_release: step 2")])
+EOF
+)"
+has 'publish' "$(run_py <<'EOF'
+print(pr.verdict(ritual("r1", steps=["check it", "publish the plugin now"]))["detail"])
+EOF
+)"
+
+it "U1: record-ritual output names the step and tells the PM to reword, not to ask for an approval"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --step "publish the plugin"
+check 1 "$CODE"
+has "step 2" "$OUT"
+has "reword" "$OUT"
+case "$OUT" in *"type the approval"*) fail "fix still tells the PM to ask for a typed approval: $OUT" ;; *) pass ;; esac
+
+it "U2: an offer line may name a protected action while the same text as a step is refused"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --offer "ask Shawn whether to publish the plugin now"
+check 0 "$CODE"
+OFFER_ID="$(jfield "$OUT" 'd["ritual"]')"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "ask Shawn whether to publish the plugin now"
+check 1 "$CODE"
+has "protected_escalation" "$OUT"
+
+it "U2: offers alone, without a step, are refused"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --offer "ask whether to publish"
+check 1 "$CODE"
+
+it "U2: the stored ritual keeps its offers and an offer never changes the step scan"
+check "['ask Shawn whether to publish the plugin now']" "$(q "$RUN_I" "[e for e in prog['rituals'] if e['id'] == '$OFFER_ID'][0]['offers']")"
+check "None" "$(run_py "$RUN_I" "$OFFER_ID" <<'EOF'
+e = [e for e in record(args[0])["programme"]["rituals"] if e["id"] == args[1]][0]
+print(pr.protected_kind(e))
+EOF
+)"
+
+it "U2: a due row and the Programme view show the offer"
+check "['ask Shawn whether to publish the plugin now']" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-02T09:00:00Z"}})
+got = due.due(record(run), run, now=at("2026-11-02T09:30:00Z"), store={"personal": [], "repos": {}, "rejected": [], "notices": []}, rows=[])
+print(got["due"][0]["offers"])
+EOF
+)"
+
+it "U2: an offers value that is not a list of non-empty strings is rejected"
+check "bad_value offers" "$(run_py <<'EOF'
+v = pr.verdict(ritual("r1", offers=["ok", ""]))
+print(v["reason"], v["detail"])
+EOF
+)"
+
+it "U3: record-ritual reports the first due time and the clock it reads"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions"
+check 0 "$CODE"
+has "first_due_at" "$OUT"
+has "clock" "$OUT"
+
+it "U3: first due time is strictly after now for a slot already passed today"
+check "2026-11-03T09:00:00Z" "$(run_py <<'EOF'
+print(iso(pr.next_after({"every": "day", "at": "09:00"}, at("2026-11-02T09:30:00Z"))))
+EOF
+)"
+
+it "U3: --ran-now recorded before the slot moves the first due time to tomorrow"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --ran-now --outcome "all versions bumped"
+check 0 "$CODE"
+check "True" "$(jfield "$OUT" 'd["ran_now"]')"
+check "True" "$(jfield "$OUT" 'd["first_due_at"] > __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")')"
+
+it "U3: --ran-now on an event ritual is refused"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "at start" --trigger start --step "read the journal" --ran-now
+check 1 "$CODE"
+has "ran-now" "$OUT"
+
 echo
 echo "${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
