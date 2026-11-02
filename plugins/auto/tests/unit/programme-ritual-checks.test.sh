@@ -163,6 +163,52 @@ print(r["result"], r["reason"])
 EOF
 )"
 
+it "review: a repo-set gpg.program with log.showSignature is never run by a check"
+check "no True" "$(run_py <<'EOF'
+repo = make("r13")
+marker = os.path.join(W, "GPG-RAN")
+script = os.path.join(W, "evil-gpg.sh")
+open(script, "w").write("#!/bin/sh\ntouch " + marker + "\nexit 1\n"); os.chmod(script, 0o755)
+git(repo, "config", "log.showSignature", "true"); git(repo, "config", "gpg.program", script)
+git(repo, "config", "diff.external", script)
+write(repo, ".claude-plugin/marketplace.json", market("1.0.0"))
+write(repo, "plugins/foo/.claude-plugin/plugin.json", pj("1.0.1")); commit(repo, "bump plugin.json")
+raw = git(repo, "cat-file", "commit", "HEAD")
+head, _, msg = raw.partition("\n\n")
+signed = head + "\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n\n" + msg + "\n"
+oid = subprocess.run(["git", "-C", repo, "hash-object", "-t", "commit", "-w", "--stdin"], input=signed, env=ENV, check=True, capture_output=True, text=True).stdout.strip()
+git(repo, "update-ref", "refs/heads/main", oid)
+r = pc.run_check("versions-bumped", repo, "main")
+print("no" if not os.path.exists(marker) else "RAN", r["result"] in ("fail", "pass", "error"))
+EOF
+)"
+
+it "review: a shallow clone is an error, never a pass"
+check "error shallow_clone" "$(run_py <<'EOF'
+repo = make("r14")
+write(repo, "plugins/foo/lib/code.py", "x = 5\n"); commit(repo, "second")
+clone = os.path.join(W, "r14-shallow")
+subprocess.run(["git", "clone", "-q", "--depth", "1", "file://" + repo, clone], env=ENV, check=True, capture_output=True)
+r = pc.run_check("versions-bumped", clone, "origin/main")
+print(r["result"], r["reason"])
+EOF
+)"
+
+it "review: a plugin whose manifest is present but not valid JSON is an error even when another plugin was read"
+check "error manifest_unreadable" "$(run_py <<'EOF'
+repo = make("r15")
+write(repo, "plugins/bar/.claude-plugin/plugin.json", "{ not json"); commit(repo, "broken manifest")
+r = pc.run_check("versions-bumped", repo, "main")
+print(r["result"], r["reason"])
+EOF
+)"
+
+it "review: a plugin folder name ending in a newline is refused"
+check "error bad_plugin_name" "$(run_py <<'EOF'
+print("error bad_plugin_name" if pc._PLUGIN_RE.fullmatch("foo\n") is None and pc._PLUGIN_RE.match("foo\n") else "fullmatch not used")
+EOF
+)"
+
 echo
 echo "${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
