@@ -9,7 +9,6 @@ the launch. The worker's ``register-run`` copies that seed into its run record, 
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import json
 import os
@@ -40,18 +39,12 @@ CONTRACT_FIELDS = ("authority", "done_bar", "workflow", "fan_out_cap")
 PLAN_CAP = 300
 
 
-class RegisterError(Exception):
+class RegisterError(worker_contract.ContractError):
     def __init__(self, message, code="refused"):
-        super().__init__(message)
-        self.code = code
+        super().__init__(message, code)
 
 
-@contextlib.contextmanager
-def refusals(host):
-    try:
-        yield
-    except (RegisterError, worker_contract.ContractError) as exc:
-        raise host.ProgrammeError(f"refused ({exc.code}): {exc}") from None
+refusals = worker_contract.refusals
 
 
 def _window() -> float:
@@ -235,10 +228,7 @@ def _record_refusals(programme, key, repo, auto_run) -> dict:
         record = run_record_core.read_run_record(repo, auto_run)
     except run_record_core.RunRecordError as exc:
         raise RegisterError(f"no run record {auto_run!r} under {repo}: {exc}", "no_record") from None
-    owner = _expected_owner(programme["items"][key])
-    if record.get("driving_session_id") != owner:
-        raise RegisterError(f"run record session {record.get('driving_session_id')} is not the item's owner "
-                            f"session {owner}", "session_mismatch")
+    worker_contract.require_owner(record, _expected_owner(programme["items"][key]), RegisterError)
     if (programme["items"][key].get(ITEM_KEY) or {}).get("contract"):
         worker_contract.require_capable(record, RegisterError)
     return record

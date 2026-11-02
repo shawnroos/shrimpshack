@@ -7,7 +7,6 @@ them through ``build_verbs(host)``.
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import os
 import sys
@@ -25,12 +24,7 @@ ESCALATED_KIND = "worker_questions_escalated"
 ANSWER_KIND = "worker_question_answer"
 
 
-@contextlib.contextmanager
-def _refusals(host):
-    try:
-        yield
-    except (worker_question.QuestionError, worker_contract.ContractError) as exc:
-        raise host.ProgrammeError(f"refused ({exc.code}): {exc}") from None
+_refusals = worker_contract.refusals
 
 
 def _limit(opts) -> int:

@@ -39,9 +39,7 @@ def next_seed(block, sid, now=None) -> dict:
     """The old contract as the new run's seed: version + 1, same terms, every pending entry bound at the pulse."""
     seed = copy.deepcopy(block)
     pending = [dict(entry, bite="pulse") for entry in seed.get("pending_versions") or []]
-    seed["version"] = block["version"] + 1
-    seed["set_at"] = now or run_record_core.now_iso()
-    seed["set_by"] = sid
+    worker_contract.bump(seed, sid, now)
     seed["pending_versions"] = pending + [{"version": seed["version"], "bite": "pulse"}]
     seed["applied_version"] = 0
     if "goal_bound_version" in seed:
@@ -52,12 +50,9 @@ def next_seed(block, sid, now=None) -> dict:
 def _close_old(run_id, repo, auto_run, worker, sid, space_of) -> dict:
     def close(rec):
         fresh = worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
-        worker_contract_write._open_for_writes(fresh)
+        worker_contract_write.open_for_writes(fresh)
         worker_contract.require_capable(rec)
-        if rec.get("driving_session_id") != worker:
-            raise worker_contract.ContractError(
-                f"run record session {rec.get('driving_session_id')} is not the item's owner session {worker}",
-                "session_mismatch")
+        worker_contract.require_owner(rec, worker)
         block = worker_contract.contract_of(rec)
         if block is None:
             raise worker_contract.ContractError("the run record has no contract to hand over", "no_contract")
@@ -70,7 +65,7 @@ def _close_old(run_id, repo, auto_run, worker, sid, space_of) -> dict:
 def _move_pointer(run_id, home, key, repo, auto_run, worker, seed, sid, space_of) -> dict:
     def edit(rec):
         worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
-        worker_contract_write._open_for_writes(rec)
+        worker_contract_write.open_for_writes(rec)
         programme = rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         item = programme["items"][key]
         live = item.get(worker_register.ITEM_KEY) or {}
@@ -97,17 +92,14 @@ def _move_pointer(run_id, home, key, repo, auto_run, worker, seed, sid, space_of
 def handover(run_id, item_id, *, caller=None, space_of=None, now=None) -> dict:
     sid = caller or driver_session.driving_session_id()
     home = programme_home.home_path(run_id)
-    key, state, worker = worker_contract_write._locate_target(run_record_core.read_run_record(home, run_id), item_id)
+    key, state, worker = worker_contract_write.locate_target(run_record_core.read_run_record(home, run_id), item_id)
     if state.get("state") != worker_register.BOUND:
         raise worker_contract.ContractError(
             f"item {key!r} is {state.get('state')}, not bound: a launched item's contract is edited with "
             "set-contract, and only a bound run is handed over", "not_bound")
     record = worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
-    worker_contract_write._open_for_writes(record)
-    if os.path.exists(os.path.join(home, programme_home.COMPACT_FLAG)):
-        raise worker_contract.ContractError(
-            "context was compacted or handed over: read the rules in force, then run `programme.py rules --ack`",
-            "compacted")
+    worker_contract_write.open_for_writes(record)
+    worker_contract_write.refuse_if_compacted(home)
     repo, auto_run = state.get("path"), state.get("run_id")
     block = _close_old(run_id, repo, auto_run, worker, sid, space_of)
     return _move_pointer(run_id, home, key, repo, auto_run, worker, next_seed(block, sid, now), sid, space_of)
@@ -118,7 +110,7 @@ def _h_handover_contract(host, argv):
     if positional or not opts.get("item"):
         raise ValueError("usage: handover-contract --item <id> [--run <programme run>]")
     run_id, home, _record = host._locate(opts)
-    with worker_contract_write._refusals(host, run_id, opts["item"], VERB):
+    with worker_contract_write.journaled_refusals(host, run_id, opts["item"], VERB):
         out = handover(run_id, opts["item"])
     host.refresh_view(run_id, home)
     host._emit(dict(out, ok=True, run=run_id, kind=HANDOVER_KIND,

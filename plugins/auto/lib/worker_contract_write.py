@@ -97,7 +97,14 @@ def _revise(block, change, bite, programme, key, sid, now, queue):
     return new, {"version": new["version"], "bite": chosen, "fields": _fields(change), "queued": queue}
 
 
-def _open_for_writes(record) -> None:
+def refuse_if_compacted(home) -> None:
+    if os.path.exists(os.path.join(home, programme_home.COMPACT_FLAG)):
+        raise worker_contract.ContractError(
+            "context was compacted or handed over: read the rules in force, then run `programme.py rules --ack`",
+            "compacted")
+
+
+def open_for_writes(record) -> None:
     if (record.get("programme") or {}).get("ended"):
         raise worker_contract.ContractError("the programme has ended", "ended")
 
@@ -109,7 +116,7 @@ def _refuse_done(rec, key, auto_run) -> None:
             "from a copy of this contract (start-worker --contract) and register it", "run_done")
 
 
-def _locate_target(record, item_id):
+def locate_target(record, item_id):
     programme = programme_home.normalize_programme(record.get("programme") or {})
     key = programme_record._resolve(programme, programme_record.check_item_id(item_id))
     item = programme["items"][key]
@@ -127,7 +134,7 @@ def _locate_target(record, item_id):
 def _edit_seed(run_id, key, worker, change, bite, sid, space_of, now) -> dict:
     def edit(rec):
         worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
-        _open_for_writes(rec)
+        open_for_writes(rec)
         programme = rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         live = programme["items"][key].get(worker_register.ITEM_KEY) or {}
         if live.get("state") != worker_register.LAUNCHED:
@@ -147,13 +154,10 @@ def _edit_run(run_id, key, state, worker, change, bite, sid, space_of, now) -> d
 
     def edit(rec):
         fresh = worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
-        _open_for_writes(fresh)
+        open_for_writes(fresh)
         worker_contract.require_capable(rec)
         _refuse_done(rec, key, auto_run)
-        if rec.get("driving_session_id") != worker:
-            raise worker_contract.ContractError(
-                f"run record session {rec.get('driving_session_id')} is not the item's owner session {worker}",
-                "session_mismatch")
+        worker_contract.require_owner(rec, worker)
         block = worker_contract.contract_of(rec)
         if block is None:
             raise worker_contract.ContractError("the run record has no contract yet; register-run copies the seed",
@@ -174,15 +178,12 @@ def _edit_run(run_id, key, state, worker, change, bite, sid, space_of, now) -> d
 def set_contract(run_id, item_id, change, *, bite=None, caller=None, space_of=None, now=None, approved=None) -> dict:
     sid = caller or driver_session.driving_session_id()
     home = programme_home.home_path(run_id)
-    key, state, worker = _locate_target(run_record_core.read_run_record(home, run_id), item_id)
+    key, state, worker = locate_target(run_record_core.read_run_record(home, run_id), item_id)
     record = worker_contract.guard(run_id, worker, caller=sid, space_of=space_of)
-    _open_for_writes(record)
+    open_for_writes(record)
     if "workflow" in change:
         worker_rebake.check_change(record, key, state, change["workflow"])
-    if os.path.exists(os.path.join(home, programme_home.COMPACT_FLAG)):
-        raise worker_contract.ContractError(
-            "context was compacted or handed over: read the rules in force, then run `programme.py rules --ack`",
-            "compacted")
+    refuse_if_compacted(home)
     waiting, tell = workflow_design.gate(record, run_id, key, state, change["workflow"], approved=approved,
                                          now=now) if "workflow" in change else (None, None)
     if waiting:
@@ -235,7 +236,7 @@ def _log_refusal(run_id, sid, item_id, exc, verb=VERB) -> None:
 
 
 @contextlib.contextmanager
-def _refusals(host, run_id, item_id, verb=VERB):
+def journaled_refusals(host, run_id, item_id, verb=VERB):
     try:
         yield
     except worker_contract.ContractError as exc:
@@ -252,7 +253,7 @@ def _h_set_contract(host, argv):
                          "[--workflow <name>] [--fan-out-cap <n>] [--bite pulse|step] [--approved <ask id>]")
     change = parse_change(opts)
     run_id, home, _record = host._locate(opts)
-    with _refusals(host, run_id, opts["item"]):
+    with journaled_refusals(host, run_id, opts["item"]):
         out = set_contract(run_id, opts["item"], change, bite=opts.get("bite"), approved=opts.get("approved"))
     host.refresh_view(run_id, home)
     host._emit(dict(out, ok=True, run=run_id, kind=SET_KIND))

@@ -61,10 +61,8 @@ _RULES = (
 _COMPILED = tuple((kind, re.compile(pattern, re.I | re.S)) for kind, pattern in _RULES)
 
 
-class QuestionError(Exception):
-    def __init__(self, message, code="invalid"):
-        super().__init__(message)
-        self.code = code
+class QuestionError(worker_contract.ContractError):
+    pass
 
 
 def _flat(value, cap) -> str:

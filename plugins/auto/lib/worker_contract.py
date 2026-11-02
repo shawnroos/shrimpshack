@@ -10,6 +10,7 @@ Rulings at every read; ``guard`` is the one write check every contract-writing v
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import os
 import re
@@ -168,6 +169,20 @@ def contract_of(record):
 def require_capable(record, exc=ContractError) -> None:
     if not record.get("contract_capable"):
         raise exc("run predates contracts", "predates_contracts")
+
+
+def require_owner(record, worker, exc=ContractError) -> None:
+    if record.get("driving_session_id") != worker:
+        raise exc(f"run record session {record.get('driving_session_id')} is not the item's owner session {worker}",
+                  "session_mismatch")
+
+
+@contextlib.contextmanager
+def refusals(host):
+    try:
+        yield
+    except ContractError as exc:
+        raise host.ProgrammeError(f"refused ({exc.code}): {exc}") from None
 
 
 def bump(block, set_by, now=None) -> None:
