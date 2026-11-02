@@ -415,8 +415,10 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
                 _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
         if script is None and base in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
-            # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be that script.
-            for quoted in {t for t in tokens if " " in t}:
+            # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be
+            # that script. Lex the unmarked text for this: `bash <(echo '<send>')` holds the script inside a
+            # substitution span, which the marked token list no longer carries.
+            for quoted in {t for t in tokens + _lex(_newlines_as_breaks(main)) if " " in t}:
                 _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
         if script is not None:
             if depth < MAX_DEPTH:
