@@ -139,7 +139,7 @@ EOF
 it "AE3: a step that deploys to production is rejected with the escalation kind named"
 check "protected_escalation prod_deploy" "$(run_py <<'EOF'
 v = pr.verdict(ritual("r1", steps=["deploy it to production yourself"]))
-print(v["reason"], v["detail"])
+print(v["reason"], v["detail"].split(":")[0])
 EOF
 )"
 
@@ -620,6 +620,13 @@ prog keep-rituals "$PROP" --to repo --prompt "$T4" --run "$RUN8"
 check 0 "$CODE"
 check "acme/alpha $PROP@repo" "$(q "$RUN8" "' '.join(pr.read_store()['repos']) + ' ' + ' '.join('%s@%s' % (r['id'], r['layer']) for r in pr.in_force(rec))")"
 
+it "U5: a repo-layer ritual lives in the machine store file; nothing is written inside the repo directory"
+check "0" "$(find "${WORK}/alpha" -type f | wc -l | tr -d ' ')"
+check "${WORK}/stores/rituals.json" "$(run_py <<'EOF'
+print(pr.store_path())
+EOF
+)"
+
 it "keep-rituals --to repo with two remit repos and no --repo is refused, and a --repo outside the remit is refused"
 prog record-ritual --run "$RUN8" --prompt "$T1" --when "at end" --trigger end --step "write the wrap-up"
 SECOND="$(jfield "$OUT" 'd["ritual"]')"
@@ -665,6 +672,171 @@ check 1 "$CODE"
 has "unreadable" "$OUT"
 check "{ not json" "$(cat "$CLAUDE_AUTO_RITUALS_STORE")"
 rm -f "$CLAUDE_AUTO_RITUALS_STORE"
+
+# ---- ritual improvements: U1 refusal detail, U2 offers, U3 first-due report ----
+RUN_I="$(new_run)"
+PI="$(tprompt "$RUN_I" "record the version check ritual")"
+
+it "U1: a refusal names the step number and the word that matched"
+check "protected_escalation full_release: step 2" "$(run_py <<'EOF'
+v = pr.verdict(ritual("r1", steps=["check every plugin version", "publish the plugin now"]))
+print(v["reason"], v["detail"][:len("full_release: step 2")])
+EOF
+)"
+has 'publish' "$(run_py <<'EOF'
+print(pr.verdict(ritual("r1", steps=["check it", "publish the plugin now"]))["detail"])
+EOF
+)"
+
+it "U1: record-ritual output names the step and tells the PM to reword, not to ask for an approval"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --step "publish the plugin"
+check 1 "$CODE"
+has "step 2" "$OUT"
+has "reword" "$OUT"
+case "$OUT" in *"type the approval"*) fail "fix still tells the PM to ask for a typed approval: $OUT" ;; *) pass ;; esac
+
+it "U2: an offer line may name a protected action while the same text as a step is refused"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --offer "ask Shawn whether to publish the plugin now"
+check 0 "$CODE"
+OFFER_ID="$(jfield "$OUT" 'd["ritual"]')"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "ask Shawn whether to publish the plugin now"
+check 1 "$CODE"
+has "protected_escalation" "$OUT"
+
+it "U2: offers alone, without a step, are refused"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --offer "ask whether to publish"
+check 2 "$CODE"
+has "at least one --step" "$OUT"
+
+it "U2: the stored ritual keeps its offers and an offer never changes the step scan"
+check "['ask Shawn whether to publish the plugin now']" "$(q "$RUN_I" "[e for e in prog['rituals'] if e['id'] == '$OFFER_ID'][0]['offers']")"
+check "None" "$(run_py "$RUN_I" "$OFFER_ID" <<'EOF'
+e = [e for e in record(args[0])["programme"]["rituals"] if e["id"] == args[1]][0]
+print(pr.protected_kind(e))
+EOF
+)"
+
+it "U2: a due row and the Programme view show the offer"
+check "['ask Shawn whether to publish the plugin now']" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-02T09:00:00Z"}})
+got = due.due(record(run), run, now=at("2026-11-02T09:30:00Z"), store={"personal": [], "repos": {}, "rejected": [], "notices": []}, rows=[])
+print(got["due"][0]["offers"])
+EOF
+)"
+
+it "U2: an offers value that is not a list of non-empty strings is rejected"
+check "bad_value offers" "$(run_py <<'EOF'
+v = pr.verdict(ritual("r1", offers=["ok", ""]))
+print(v["reason"], v["detail"])
+EOF
+)"
+
+it "U3: record-ritual reports the first due time and the clock it reads"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions"
+check 0 "$CODE"
+has "first_due_at" "$OUT"
+has "clock" "$OUT"
+
+it "U3: first due time is strictly after now for a slot already passed today"
+check "2026-11-03T09:00:00Z" "$(run_py <<'EOF'
+print(iso(pr.next_after({"every": "day", "at": "09:00"}, at("2026-11-02T09:30:00Z"))))
+EOF
+)"
+
+it "U3: --ran-now recorded before the slot moves the first due time to tomorrow"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --ran-now --outcome "all versions bumped"
+check 0 "$CODE"
+check "True" "$(jfield "$OUT" 'd["ran_now"]')"
+check "True" "$(jfield "$OUT" 'd["first_due_at"] > __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")')"
+
+it "U3: --ran-now on an event ritual is refused"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "at start" --trigger start --step "read the journal" --ran-now
+check 1 "$CODE"
+has "ran-now" "$OUT"
+
+it "U4: the Programme view shows the next due time in local time with the zone, and the offers"
+has "= " "$(run_py <<'EOF'
+import datetime
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
+pv = load_lib_module("programme_view")
+rows = pv.rituals_view(record(run), [])
+print(pv._ritual_text(rows[0]))
+EOF
+)"
+has "UTC machine local time" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
+pv = load_lib_module("programme_view")
+print(pv._ritual_text(pv.rituals_view(record(run), [])[0]))
+EOF
+)"
+has "offers (ask Shawn, never act)" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
+pv = load_lib_module("programme_view")
+print(pv._ritual_text(pv.rituals_view(record(run), [])[0]))
+EOF
+)"
+
+it "U4: daily 09:00 stays 09:00 local across spring-forward and fall-back"
+check "2026-03-08T13:00:00Z 2026-11-01T14:00:00Z" "$(run_py <<'EOF'
+import time
+os.environ["TZ"] = "America/New_York"; time.tzset()
+sched = {"every": "day", "at": "09:00"}
+print(iso(pr.next_after(sched, at("2026-03-07T15:00:00Z"))), iso(pr.next_after(sched, at("2026-10-31T14:00:00Z"))))
+EOF
+)"
+
+it "U3: the clock sentence names the zone"
+has "machine local time (UTC)" "$(run_py <<'EOF'
+print(pr.describe_clock())
+EOF
+)"
+
+it "review: --ran-now before today's slot skips that slot, and after it does not skip tomorrow's"
+check "2026-11-03T09:00:00Z 2026-11-03T09:00:00Z" "$(run_py <<'EOF'
+daily = ritual("rd", when={"text": "daily", "trigger": "calendar", "schedule": {"every": "day", "at": "09:00"}})
+def first(now_text):
+    programme = {}
+    pr.advance_clock(programme, daily, now=at(now_text), first_slot_done=True)
+    return programme["ritual_clock"]["rd"]["next_due_at"]
+print(first("2026-11-02T08:00:00Z"), first("2026-11-02T09:30:00Z"))
+EOF
+)"
+
+it "review: the zone label belongs to the due time, not to today"
+has "09:00 EDT" "$(run_py <<'EOF'
+import time
+os.environ["TZ"] = "America/New_York"; time.tzset()
+print(pr.local_text(at("2026-07-01T13:00:00Z")))
+EOF
+)"
+
+it "review: --outcome without --ran-now is refused instead of dropped"
+prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --step "check versions" --outcome "all bumped"
+check 2 "$CODE"
+has "--outcome" "$OUT"
+
+it "review: --from-proposal accepts --ran-now, as the skill tells the PM"
+prog propose-ritual --run "$RUN_I" --when "daily check" --schedule "daily 09:00" --step "check versions" --offer "ask whether to publish"
+check 0 "$CODE"
+has "ask whether to publish" "$OUT"
+PROP_I="$(jfield "$OUT" 'd["ritual"]')"
+PI2="$(tprompt "$RUN_I" "record ${PROP_I}")"
+prog record-ritual --run "$RUN_I" --from-proposal "$PROP_I" --prompt "$PI2" --ran-now --outcome "all bumped"
+check 0 "$CODE"
+check "True" "$(jfield "$OUT" 'd["ran_now"]')"
+
+it "review: start-ritual and a due row carry offers with the rule that they are questions"
+has "never actions" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-02T09:00:00Z"}})
+got = due.due(record(run), run, now=at("2026-11-02T09:30:00Z"), store={"personal": [], "repos": {}, "rejected": [], "notices": []}, rows=[])
+print(got["due"][0]["offers_rule"])
+EOF
+)"
 
 echo
 echo "${PASS} passed, ${FAIL} failed"

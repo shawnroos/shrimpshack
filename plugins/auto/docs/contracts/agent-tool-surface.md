@@ -281,9 +281,13 @@ session.
   `--agent-check`, `--applies-to`, skills, tools, agents, formats, communication
   lines, evidence, stop, examples and why) applies one at once at the programme
   layer and journals `behaviour_recorded`. Its output lists the drafted checks, the
-  undo command and the behaviours in force whose situation or tools share words
-  with the new one, so the PM can name a conflict to Shawn. `--conflicts-with <id>`
-  sets the new entry to override that behaviour (the narrower layer wins). A do
+  undo command, the behaviours in force it applies alongside, the contract parts
+  it touches, and how many listed items are unanswered.
+  `check-behaviour` takes the same field flags (or `--from-proposal <id>`) without a prompt, prints the same
+  result with each listed behaviour's lines, and writes nothing.
+  `--relates-to <id>` and `--unrelated <id>=<reason>` store the answer on the entry.
+  `--conflicts-with <id>` sets the new entry to override that behaviour (the
+  narrower layer wins). A do
   line, skill, tool or agent that names a protected escalation (production deploys,
   releases, spend over cap, merging around the gate, refused permissions) is
   refused. `propose-behaviour` stores a proposal with no prompt, because a proposal
