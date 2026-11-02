@@ -741,6 +741,19 @@ print(" ".join(e["id"] for e in got) + "|" + " ".join(held))
 EOF
 )"
 
+it "brief_for_start keeps a stored behaviour whether or not a handoff is passed, and reports nothing as not briefed"
+check "wnone|0 wnone|0" "$(run_py <<'EOF'
+run = setup([beh("wnone", applies_to="workers", when={"text": "always", "checks": []})])
+rec = record(run)
+item = rec["programme"]["items"]["linear:AI-1"]
+out = []
+for handoff in (False, True):
+    got, held, nb = pb.brief_for_start(rec, item, has_handoff=handoff, lookup=lambda r, p: None)
+    out.append(" ".join(e["id"] for e in got) + "|" + str(len(nb)))
+print(" ".join(out))
+EOF
+)"
+
 it "a PM-checked behaviour the PM names with --behaviour joins the brief"
 check "wpm wag" "$(run_py <<'EOF'
 run = setup([beh("wpm", applies_to="workers"),

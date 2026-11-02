@@ -111,6 +111,13 @@ P="$(tprompt "$RUN" "adopt evil with ${HASH_A}")"
 prog adopt-behaviour-file ../evil --file "${WORK}/drafts/a.md" --prompt "$P" --run "$RUN"
 check "2 absent" "$CODE $([ -e "${WORK}/personal/evil.md" ] && echo present || echo absent)"
 
+it "adopt-behaviour-file: an id the file loader would reject (leading digit, underscore) is refused up front"
+P="$(tprompt "$RUN" "adopt 0lead with ${HASH_A}")"
+prog adopt-behaviour-file 0lead --file "${WORK}/drafts/a.md" --prompt "$P" --run "$RUN"
+GOT="$CODE $([ -e "${PERS}/0lead.md" ] && echo present || echo absent)"
+prog adopt-behaviour-file under_score --file "${WORK}/drafts/a.md" --prompt "$P" --run "$RUN"
+check "2 absent 2 absent" "$GOT $CODE $([ -e "${PERS}/under_score.md" ] && echo present || echo absent)"
+
 it "adopt-behaviour-file: the approved draft is written, byte for byte, and journals rule_adopted"
 P="$(tprompt "$RUN" "adopt p1 with ${HASH_A}")"
 prog adopt-behaviour-file p1 --file "${WORK}/drafts/a.md" --prompt "$P" --run "$RUN"

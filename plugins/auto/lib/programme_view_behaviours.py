@@ -12,7 +12,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-programme_behaviour_file_verbs = load_lib_module("programme_behaviour_file_verbs")
+programme_behaviour_files = load_lib_module("programme_behaviour_files")
 programme_behaviours = load_lib_module("programme_behaviours")
 
 SHIPPED = "shipped"
@@ -28,24 +28,17 @@ def file_entries(loaded) -> list:
 def _seen() -> dict:
     # Read-only: the view must never create or repair the record, and a bad record means no tag.
     try:
-        with open(programme_behaviour_file_verbs.seen_path(), encoding="utf-8") as fh:
+        with open(programme_behaviour_files.seen_path(), encoding="utf-8") as fh:
             doc = json.load(fh)
     except (OSError, ValueError):
         return {}
     return doc if isinstance(doc, dict) else {}
 
 
-def _shipped_now(bid):
-    try:
-        return programme_behaviour_file_verbs.shipped_hash(bid)
-    except Exception:
-        return None
-
-
 def file_facts(loaded) -> dict:
     shipped = loaded.get("shipped") or []
     files = loaded.get("files") or []
-    shipped_ids = {e["id"] for e in shipped}
+    shipped_by_id = {e["id"]: e for e in shipped}
     file_ids = {f["id"] for f in files}
     seen = _seen()
     facts = {}
@@ -53,9 +46,9 @@ def file_facts(loaded) -> dict:
         facts[(SHIPPED, e["id"])] = {"label": SHIPPED,
                                      "replaced_by": [e["id"]] if e["id"] in file_ids else []}
     for e in files:
-        copy = e["id"] in shipped_ids
+        copy = e["id"] in shipped_by_id
         record = seen.get(e["id"]) if isinstance(seen.get(e["id"]), dict) else {}
-        current = _shipped_now(e["id"]) if copy else None
+        current = programme_behaviour_files.entry_hash(shipped_by_id[e["id"]]) if copy else None
         stale = bool(copy and record.get("seen") and current and record["seen"] != current)
         facts[("personal", e["id"])] = {"label": REPLACES if copy else PERSONAL_FILE, "update_available": stale,
                                         "needs_show": stale and record.get("shown") != current,

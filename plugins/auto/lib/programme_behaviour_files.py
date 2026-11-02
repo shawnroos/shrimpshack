@@ -31,6 +31,8 @@ LISTS = ("checks", "overrides", "skills", "tools", "agents", "formats", "comms")
 KEYS = SCALARS + LISTS
 MAX_FILE_BYTES = 64 * 1024
 MAX_LINE_CHARS = 500
+SEEN_NAME = "behaviours-seen.json"
+LOCK_NAME = ".behaviour-files.lock"
 
 _Reject = programme_protocol._Reject
 _KEY_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
@@ -155,7 +157,7 @@ def _entry(bid, fields, body, mtime) -> dict:
     return entry
 
 
-def _read_file(path):
+def read_file(path):
     folder = os.path.realpath(os.path.dirname(path))
     try:
         if stat.S_ISLNK(os.lstat(path).st_mode) and os.path.commonpath([os.path.realpath(path), folder]) != folder:
@@ -179,9 +181,8 @@ def _read_file(path):
         raise _Reject("bad_value", "file")
 
 
-def _parse(path, bid) -> dict:
-    text, mtime = _read_file(path)
-    # _line_kind is quadratic in the words of a line, so a long line is refused before it runs.
+def parse_text(text, bid, mtime=0.0) -> dict:
+    # line_kind is quadratic in the words of a line, so a long line is refused before it runs.
     if any(len(line) > MAX_LINE_CHARS for line in _LINES.split(text)):
         raise _Reject("bad_value", "line length")
     head, body = _split(text)
@@ -210,17 +211,16 @@ def _clean_only(entry) -> None:
 # File entries scan every rendered text field; the stored PROTECTED_FIELDS stay as they are.
 def _scan(entry) -> None:
     for _, line in _texts(entry):
-        kind = programme_behaviours._line_kind(line)
+        kind = programme_behaviours.line_kind(line)
         if kind:
             raise _Reject("protected_escalation", kind)
 
 
 # source is set after verdict: the stored schema types it as an object, a file entry's is the string "file".
-def _read_one(path, bid, layer) -> dict:
-    # fullmatch: the verdict's "$" anchor accepts a trailing newline in an id taken from a file name.
-    if not re.fullmatch(programme_behaviours._ID_RE.pattern, bid):
+def entry_from_text(text, bid, layer, mtime=0.0) -> dict:
+    if not programme_behaviours.ID_RE.fullmatch(bid):
         raise _Reject("bad_value", "id")
-    entry = _parse(path, bid)
+    entry = parse_text(text, bid, mtime)
     _clean_only(entry)
     check = programme_behaviours.verdict(entry, allow_adoption=False)
     if not check["ok"]:
@@ -228,6 +228,20 @@ def _read_one(path, bid, layer) -> dict:
     _scan(entry)
     entry["layer"], entry["source"] = layer, "file"
     return entry
+
+
+def read_entry(path, bid, layer) -> dict:
+    text, mtime = read_file(path)
+    return entry_from_text(text, bid, layer, mtime)
+
+
+# "at" is the file's mtime, which changes on every write; an approval must survive a rewrite.
+def entry_hash(entry) -> str:
+    return programme_protocol.content_hash({k: v for k, v in entry.items() if k != "at"})
+
+
+def seen_path() -> str:
+    return os.path.join(os.path.dirname(programme_behaviours.store_path()), SEEN_NAME)
 
 
 def _load_dir(folder, layer, out) -> None:
@@ -238,7 +252,7 @@ def _load_dir(folder, layer, out) -> None:
     for name in names:
         bid = name[:-3]
         try:
-            out["entries"].append(_read_one(os.path.join(folder, name), bid, layer))
+            out["entries"].append(read_entry(os.path.join(folder, name), bid, layer))
         except _Reject as exc:
             out["rejected"].append({"layer": layer, "key": None, "id": bid,
                                     "reason": exc.reason, "detail": exc.detail})

@@ -61,8 +61,15 @@ PROTECTED_FIELDS = ("do", "skills", "tools", "agents")
 # is ordinary guidance here, unlike in a project term.
 UNPROTECTED_KINDS = ("risk_or_cost_limit", "settled_human_choice")
 
-_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+ID_RE = re.compile(r"[a-z][a-z0-9-]*")
 _Reject = programme_protocol._Reject
+
+
+def check_id(bid) -> str:
+    # fullmatch, not "$": "$" accepts a trailing newline, and an id also names a file in the behaviours folders.
+    if not isinstance(bid, str) or not ID_RE.fullmatch(bid):
+        raise ValueError("a behaviour id is lowercase letters, digits and -, and starts with a letter")
+    return bid
 
 
 class BehaviourError(Exception):
@@ -125,7 +132,7 @@ def _check_extras(entry) -> None:
     if "source" in entry:
         _sub(entry["source"], (), ("prompt_id", "quote"), "source")
     overrides = entry.get("overrides", [])
-    if not isinstance(overrides, list) or not all(isinstance(o, str) and _ID_RE.match(o) for o in overrides):
+    if not isinstance(overrides, list) or not all(isinstance(o, str) and ID_RE.fullmatch(o) for o in overrides):
         raise _Reject("bad_value", "overrides")
     if not isinstance(entry.get("history", []), list):
         raise _Reject("bad_value", "history")
@@ -135,7 +142,7 @@ def _check_extras(entry) -> None:
 
 # Unlike programme_terms.protected_kind, a stem counts only where a word starts, so
 # "reproduction" does not match "production" while "deployed" still matches "deploy".
-def _line_kind(line):
+def line_kind(line):
     words = programme_naming.name_words(line)
     tails = ["".join(words[i:]) for i in range(len(words))]
     for kind, stems in programme_terms.PROTECTED_STEMS.items():
@@ -147,7 +154,7 @@ def _line_kind(line):
 def protected_kind(entry):
     for field in PROTECTED_FIELDS:
         for line in entry.get(field) or ():
-            kind = _line_kind(line)
+            kind = line_kind(line)
             if kind:
                 return kind
     return None
@@ -155,7 +162,7 @@ def protected_kind(entry):
 
 def _validate(entry, *, allow_adoption=True) -> None:
     programme_protocol._keys(entry, REQUIRED, OPTIONAL + (("adoption",) if allow_adoption else ()))
-    if not isinstance(entry["id"], str) or not _ID_RE.match(entry["id"]):
+    if not isinstance(entry["id"], str) or not ID_RE.fullmatch(entry["id"]):
         raise _Reject("bad_value", "id")
     _check_layer(entry)
     _check_when(entry["when"])
@@ -459,6 +466,15 @@ def brief_entries(record, item, chosen=(), *, lookup=None) -> tuple:
     rows = in_force(record, item, audience="workers", store=loaded)
     taken = [e for e in rows if not _pm_checked_only(e) or e["id"] in chosen]
     return taken, [e["id"] for e in rows if e not in taken]
+
+
+# Shipped defaults are optional context: a plain start (no handoff, nothing chosen) has no brief to carry
+# them, and they must not make it refuse. Stored and personal behaviours still do.
+def brief_for_start(record, item, chosen=(), *, has_handoff, lookup=None) -> tuple:
+    taken, held_back = brief_entries(record, item, chosen, lookup=lookup)
+    if not has_handoff and not chosen and all(e.get("layer") == "shipped" for e in taken):
+        return [], held_back, [e["id"] for e in taken]
+    return taken, held_back, []
 
 
 def _short(entry) -> str:

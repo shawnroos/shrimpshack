@@ -33,12 +33,12 @@ def _guard() -> tuple:
     # programme_behaviours pulls in many modules that only a "behaviours" call needs.
     programme_behaviours = load_lib_module("programme_behaviours")
     programme_behaviour_files = load_lib_module("programme_behaviour_files")
-    verbs = load_lib_module("programme_behaviour_file_verbs")
     programme_home = load_lib_module("programme_home")
     # Casefolded: the macOS file system is case-insensitive, so Behaviours/ is the same folder.
     files = {os.path.realpath(programme_behaviours.store_path()).casefold(),
-             os.path.realpath(verbs.seen_path()).casefold(),
-             os.path.realpath(os.path.join(programme_home.programmes_dir(), verbs.LOCK_NAME)).casefold()}
+             os.path.realpath(programme_behaviour_files.seen_path()).casefold(),
+             os.path.realpath(os.path.join(programme_home.programmes_dir(),
+                                           programme_behaviour_files.LOCK_NAME)).casefold()}
     return os.path.realpath(programme_behaviour_files.personal_dir()).casefold(), files
 
 

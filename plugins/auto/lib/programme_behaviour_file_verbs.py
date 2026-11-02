@@ -14,9 +14,7 @@ from __future__ import annotations
 import functools
 import json
 import os
-import re
 import sys
-import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -32,17 +30,10 @@ run_record_core = load_lib_module("run_record_core")
 
 BehaviourError = programme_behaviours.BehaviourError
 ADOPTED = programme_behaviours.APPROVAL_KIND
-SEEN_NAME = "behaviours-seen.json"
-LOCK_NAME = ".behaviour-files.lock"
+LOCK_NAME = programme_behaviour_files.LOCK_NAME
 MODES = ("shown", "keep", "take", "merge")
 MAX_BYTES = 64 * 1024
-_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
-
-
-def _check_id(bid) -> str:
-    if not _ID.fullmatch(bid or ""):
-        raise ValueError("a behaviour id is lowercase letters, digits, - and _, and starts with a letter or digit")
-    return bid
+seen_path = programme_behaviour_files.seen_path
 
 
 def _target(bid) -> str:
@@ -57,49 +48,30 @@ def _shipped_path(bid) -> str:
     return os.path.join(programme_behaviour_files.shipped_dir(), bid + ".md")
 
 
-def seen_path() -> str:
-    return os.path.join(os.path.dirname(programme_behaviours.store_path()), SEEN_NAME)
-
-
-def _validated(path, bid, layer) -> dict:
+def _valid(bid, build) -> dict:
     try:
-        return programme_behaviour_files._read_one(path, bid, layer)
+        return build()
     except programme_protocol._Reject as exc:
         raise BehaviourError(f"behaviour file {bid}.md is not valid: {exc.reason}"
                              + (f" ({exc.detail})" if exc.detail else ""))
 
 
-def _entry_hash(entry) -> str:
-    # "at" is the file's mtime, which changes on every write; the approval must survive a rewrite.
-    return programme_protocol.content_hash({k: v for k, v in entry.items() if k != "at"})
-
-
-def _text_hash(text, bid, layer) -> str:
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, bid + ".md")
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        return _entry_hash(_validated(path, bid, layer))
-
-
 def draft_hash(text, bid) -> str:
-    return _text_hash(text, bid, "personal")
+    return programme_behaviour_files.entry_hash(
+        _valid(bid, lambda: programme_behaviour_files.entry_from_text(text, bid, "personal")))
 
 
-def shipped_hash(bid) -> str:
-    if not os.path.isfile(_shipped_path(bid)):
-        raise BehaviourError(f"no shipped behaviour {bid!r}")
-    return _entry_hash(_validated(_shipped_path(bid), bid, "shipped"))
-
-
-def _shipped_text_and_hash(bid) -> tuple:
+def _shipped_read(bid) -> tuple:
     # One read: the approved hash must describe the very bytes copy-default writes.
     if not os.path.isfile(_shipped_path(bid)):
         raise BehaviourError(f"no shipped behaviour {bid!r}")
-    text = _read_text(_shipped_path(bid))
-    if text is None:
-        raise BehaviourError(f"behaviour file {bid}.md is not valid: bad_value (file)")
-    return text, _text_hash(text, bid, "shipped")
+    text, mtime = _valid(bid, lambda: programme_behaviour_files.read_file(_shipped_path(bid)))
+    entry = _valid(bid, lambda: programme_behaviour_files.entry_from_text(text, bid, "shipped", mtime))
+    return text, programme_behaviour_files.entry_hash(entry)
+
+
+def shipped_hash(bid) -> str:
+    return _shipped_read(bid)[1]
 
 
 def _locked(body):
@@ -194,7 +166,7 @@ def _h_adopt(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt", "file"))
     if len(positional) != 1:
         raise ValueError("usage: adopt-behaviour-file <id> --file <path> --prompt <id>")
-    bid = _check_id(positional[0])
+    bid = programme_behaviours.check_id(positional[0])
     text = _draft_text(opts)
 
     def change(programme, prompt, rec):
@@ -215,10 +187,10 @@ def _h_copy(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt"))
     if len(positional) != 1:
         raise ValueError("usage: copy-default <id> --prompt <id>")
-    bid = _check_id(positional[0])
+    bid = programme_behaviours.check_id(positional[0])
 
     def change(programme, prompt, rec):
-        text, digest = _shipped_text_and_hash(bid)
+        text, digest = _shipped_read(bid)
         host.require_named(prompt, bid)
 
         def body():
@@ -266,7 +238,7 @@ def _h_settle(host, argv):
     if len(positional) != 1 or opts.get("as") not in MODES or (opts.get("file") and opts["as"] != "merge"):
         raise ValueError("usage: settle-default-update <id> --as shown|keep|take|merge [--prompt <id>] "
                          "[--file <path>] (--file only with merge; shown needs no --prompt)")
-    bid, mode = _check_id(positional[0]), opts["as"]
+    bid, mode = programme_behaviours.check_id(positional[0]), opts["as"]
     if mode != "shown" and not opts.get("prompt"):
         raise ValueError(f"--as {mode} needs --prompt <id> of Shawn's typed approval")
     text = _draft_text(opts) if mode == "merge" else None
