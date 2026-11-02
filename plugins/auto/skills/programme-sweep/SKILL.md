@@ -269,9 +269,9 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      tracker` line is expected: the watcher cannot read through the MCP. Do not
      record it; record the issues through the MCP again instead.
    The sweep records the changes it saw itself, including unsupported sources.
-7. **Read the inbox.** The digest lists the unread claims with their index, each
-   cut to one line; read the ones you act on in full with `P inbox`. Act on them,
-   then `P mark-read --offset <n>` with `next_offset` from the verdict. Never read `claims.jsonl`: it is an export and can be stale.
+7. **Read the inbox.** The digest lists unread claims; read the
+   ones you act on with `P inbox`, then `P mark-read --offset <n>` with `next_offset` from the verdict.
+   A `worker_question` row is no claim: [references/worker-questions.md](references/worker-questions.md).
 8. **Check claims.** First send back work that skips a behaviour. For each
    claim, take each worker behaviour in force for the item that names evidence
    and whose checks held for this work. Look for that evidence in the claim's

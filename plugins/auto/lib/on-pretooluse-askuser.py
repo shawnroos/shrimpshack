@@ -62,6 +62,7 @@ from _bootstrap import (  # noqa: E402
 # Read the phase via the ONE phase-decision module so the AST lint can forbid a
 # raw phase literal anywhere else in lib/ (KTD-3).
 phase_grammar = load_lib_module("phase-grammar")
+CONTRACT_KEY = "contract"
 
 
 def _read_session_id(raw: str):
@@ -145,14 +146,18 @@ def _owns_session(led, *, run_record, session_id, skip_staleness, stale_threshol
 
 
 def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:
+    return _owned_run(repo_root, session_id, now) is not None
+
+
+def _owned_run(repo_root: str, session_id, now=None):
     """Scan <repo>/.claude/auto/*.json for a live self-driven run owning ``session_id``.
 
     Per-worktree glob only — fan-out sub-runs have their OWN session_id and are
     out of this hook's scope by design (KTD-5 two-handoff split: they carry the
-    prompt-embedded instruction instead). No batch-sidecar walk.
+    prompt-embedded instruction instead). No batch-sidecar walk. Returns (run_id, record) or None.
     """
     if not session_id:
-        return False
+        return None
     run_record = load_run_record()
     skip_staleness = test_hatch_enabled("CLAUDE_AUTO_TEST_NO_STALENESS_CHECK")
     stale_threshold = run_record.DRIVER_SELF_STALE_SECONDS
@@ -163,8 +168,8 @@ def _live_run_owns_session(repo_root: str, session_id, now=None) -> bool:
             led, run_record=run_record, session_id=session_id,
             skip_staleness=skip_staleness, stale_threshold=stale_threshold, now=now,
         ):
-            return True
-    return False
+            return _run_id, led
+    return None
 
 
 # The redirect prose the denied agent reads (KTD-4 classification rule). Contains
@@ -184,6 +189,19 @@ _REDIRECT_REASON = (
 )
 
 
+def _worker_reason(owned, repo_root, session_id, stdin_raw):
+    try:
+        tool_input = json.loads(stdin_raw).get("tool_input")
+        routed = load_lib_module("worker_question").route(
+            owned[1][CONTRACT_KEY], repo_root=repo_root, run_id=owned[0], session_id=session_id,
+            tool_input=tool_input if isinstance(tool_input, dict) else {})
+    except Exception:
+        return None  # fail open: the operator is asked directly, never the advisor
+    if routed is None:
+        return None
+    return _REDIRECT_REASON if routed["route"] == "advisor" else routed["guidance"]
+
+
 def decide(repo_root: str, stdin_raw: str, env=None) -> dict | None:
     """Return the deny decision dict to print, or None to allow silently.
 
@@ -198,8 +216,15 @@ def decide(repo_root: str, stdin_raw: str, env=None) -> dict | None:
                 "permissionDecisionReason": _PREFILL_REASON,
             }
         }
-    if not repo_root or not _live_run_owns_session(repo_root, session_id):
+    owned = _owned_run(repo_root, session_id) if repo_root else None
+    if owned is None:
         return None  # not our run (or no session) => allow normal AskUserQuestion.
+    reason = _REDIRECT_REASON
+    if isinstance(owned[1].get(CONTRACT_KEY), dict):
+        # A contract marks a programme worker: its PM-owned questions never reach the advisor. Unroutable => allow.
+        reason = _worker_reason(owned, repo_root, session_id, stdin_raw)
+        if reason is None:
+            return None
     if test_hatch_enabled("CLAUDE_AUTO_TEST_DENY_UNSUPPORTED"):
         # FAIL OPEN (the question gate's asymmetry vs the action backstop —
         # KTD-4 / plan VERIFY (a)): with no deny contract, ALLOW the question
@@ -211,14 +236,14 @@ def decide(repo_root: str, stdin_raw: str, env=None) -> dict | None:
             "systemMessage": (
                 "auto advisor gate: the PreToolUse deny contract is unavailable "
                 "— allowing this AskUserQuestion through to the operator (fail "
-                "open). " + _REDIRECT_REASON
+                "open). " + reason
             )
         }
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": _REDIRECT_REASON,
+            "permissionDecisionReason": reason,
         }
     }
 
