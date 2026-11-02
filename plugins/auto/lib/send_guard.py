@@ -37,6 +37,7 @@ _RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]")
 # (the `)` and `>` of quoted JavaScript), never a program.
 _RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=")
 _OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
+_LOOKUPS = frozenset({"which", "whereis", "type"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 # After these an `a=b` word is the program they run, not an assignment.
 _RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "xargs", "builtin"})
@@ -137,6 +138,24 @@ def _substitutions(text: str) -> list:
     return out
 
 
+def _newlines_as_breaks(text: str) -> str:
+    """The shell ends a command at a newline, but the lexer reads one as a space; a quoted or escaped newline stays."""
+    out, quote, escaped = [], None, False
+    for ch in text:
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "\n":
+            ch = " ;\n"
+        out.append(ch)
+    return "".join(out)
+
+
 def _lex(text: str) -> list:
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
@@ -171,17 +190,33 @@ def _strip_redirects(words: list) -> list:
     return out
 
 
+def _lookup_names(tokens: list, runs: list) -> set:
+    """Indices of words that only name a program for `which`, `type`, `whereis` or `command -v` to look up, so
+    `which rex herdr` is not read as a `rex` call with the verb `herdr`. The words end at the next shell break."""
+    names = set()
+    for k, tok in enumerate(tokens):
+        lookup = os.path.basename(tok) in _LOOKUPS or (tok == "command" and tokens[k + 1:k + 2] in (["-v"], ["-V"]))
+        if not (lookup and runs[k]):
+            continue
+        j = k + 1
+        while j < len(tokens) and tokens[j] not in _SHELL_BREAKS and not _OPERATOR_ONLY.match(tokens[j]):
+            names.add(j)
+            j += 1
+    return names
+
+
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     if depth < MAX_DEPTH:
         nested = _substitutions(main) + bodies + [ln for body in bodies for ln in body.splitlines()]
         for script in nested:
             _scan(script, depth + 1, hosts, pane_ids, found, proven)
-    tokens = _lex(main)
+    tokens = _lex(_newlines_as_breaks(main))
     piped = main + "\n" + "\n".join(bodies)
     strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
     positions = _command_positions(tokens)
     runs = positions[0]
+    looked_up = _lookup_names(tokens, runs)
     for start, token in enumerate(tokens):
         rest = tokens[start + 1:]
         script = None
@@ -202,6 +237,8 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         if script is not None:
             if depth < MAX_DEPTH:
                 _scan(script, depth + 1, hosts, pane_ids, found, proven)
+            continue
+        if start in looked_up:
             continue
         segment = strip(_segment(tokens, start))
         for host in hosts:

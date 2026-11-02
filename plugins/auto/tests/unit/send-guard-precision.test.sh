@@ -266,6 +266,43 @@ V="$(verdict "$(hook sess-worker 'herdr pane send-text w2:pAG hi' FAKE_HERDR_MOD
 ELAPSED=$(( $(date +%s) - START ))
 check "deny fast" "$V $([ "$ELAPSED" -lt 4 ] && echo fast || echo "slow:${ELAPSED}s")"
 
+echo "send-guard-precision: looking up a host's name or driving tmux is not a send"
+allowed 'which rex herdr'
+allowed 'type herdr rex'
+allowed 'whereis rex herdr'
+allowed 'command -v herdr rex'
+allowed 'sed -n 1,50p lib/host_rex.py; grep -n send_prompt lib/host_herdr.py'
+allowed '/opt/homebrew/bin/tmux -S /private/tmp/enf2/s.sock new-session -d -s enf -x 200 -y 50 -c /tmp'
+allowed '/opt/homebrew/bin/tmux -S /private/tmp/enf2/s.sock send-keys -t enf -l "hello"'
+allowed '/opt/homebrew/bin/tmux -S /private/tmp/enf2/s.sock capture-pane -p -t enf | tail -20'
+allowed 'D=/private/tmp/enf2; mkdir -p $D && cd $D && SID=$(uuidgen | tr A-Z a-z) && echo $SID > sid'
+allowed 'L=/x/lib; env -u HERDR_ENV /usr/bin/python3 -I -c "import sys; sys.path.insert(0,'\''$L'\''); print(1)" | tee run'
+allowed 'bash -c '\''. ./env.sh; P add-item test:one --title "login bug" | cut -c1-120'\'''
+
+echo "send-guard-precision: a lookup does not hide a send"
+denied 'which rex herdr; herdr pane send-text $P hi'
+denied 'which herdr && herdr pane send-text $P hi'
+denied 'which rex herdr | xargs herdr pane send-text $P hi'
+denied 'which x $(herdr pane send-text $P hi)'
+denied 'type herdr rex >(herdr pane send-text $P hi)'
+denied 'which x
+herdr pane send-text $P hi'
+denied 'type x
+rex send $P hi'
+denied 'command -v x
+herdr pane send-text w9:zz hi'
+denied 'whereis x
+osascript -e '\''tell application "Ghostty" to input text "x" in terminal 1'\'''
+allowed 'which herdr
+herdr pane list'
+denied 'echo which herdr pane send-text $P hi | sh'
+denied 'echo herdr pane send-text $P hi | sh'
+denied 'echo "herdr pane send-text $P hi" | bash'
+denied 'python3 -c "import os; os.system('\''herdr pane send-text w2:p9T hi'\'')"'
+denied 'ruby -e '\''system("herdr pane send-text w2:p9T hi")'\'''
+denied 'perl -e '\''system("herdr pane send-text w2:p9T hi")'\'''
+denied 'node -e "require('\''child_process'\'').execSync('\''herdr pane send-text w2:p9T hi'\'')"'
+
 echo ""
 echo "send-guard-precision.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
