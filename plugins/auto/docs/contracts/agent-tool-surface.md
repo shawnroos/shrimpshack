@@ -454,6 +454,16 @@ session.
   (args: `--fingerprint`) records that the outside-session list was shown and refuses a fingerprint that is
   not current. `answer-domain-behaviour` (args: behaviour id, `--as`, `--why`) answers a behaviour owed on
   the domain.
+- **Contracted worker start**: `start-worker <item> --contract <file> --plan <plan> -- <spinoff arguments>`
+  seeds version 1 of the contract on the item (its `auto_run` block, state "launched") and launches the
+  worker with a kickoff of `/auto <plan>` (launch mode 1). A second start after the registration window uses
+  mode 2, a kickoff that tells the worker to run `/auto` as its first action. After two failed modes the
+  item's state reads "launch-blocked" and the choice returns to Shawn. `register-run` (args: `--run`,
+  `--item`, `--auto-run`, `--repo`) is called by the item's owner session: it refuses a caller that is not
+  the owner, a run record whose own session is not the owner, a path outside the remit's repos, a run bound
+  to another item, an item that already has a bound run, and a run that predates contracts. It copies the
+  seed into the run record, then marks the item "bound"; a repeat after a crash between the two completes
+  the bind with no duplicate.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the Rulings kept under

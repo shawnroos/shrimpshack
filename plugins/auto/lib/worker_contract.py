@@ -94,10 +94,15 @@ def _check_pending(version, pending, applied) -> None:
     if not isinstance(pending, list):
         raise ContractError("pending_versions must be a list", "bad_pending")
     for entry in pending:
-        if (not isinstance(entry, dict) or set(entry) != {"version", "bite"}
+        if (not isinstance(entry, dict) or not {"version", "bite"} <= set(entry) <= {"version", "bite", "answer"}
                 or not _is_int(entry["version"]) or entry["version"] < 1 or entry["bite"] not in BITES):
             raise ContractError(f"pending_versions entry {entry!r} needs an integer version and a bite of "
                                 f"{list(BITES)}", "bad_pending")
+        answer = entry.get("answer")
+        if "answer" in entry and (not isinstance(answer, dict) or set(answer) != {"question_id", "text", "by"}
+                                  or answer["by"] != "pm" or not all(isinstance(v, str) for v in answer.values())):
+            raise ContractError(f"pending_versions answer in {entry!r} needs question_id, text and by 'pm'",
+                                "bad_pending")
     if not _is_int(applied) or applied < 0 or applied > version:
         raise ContractError(f"applied_version {applied!r} must be an integer from 0 to the contract version {version}",
                             "bad_applied")
@@ -228,11 +233,13 @@ def _lease_held(programme_home, run_id, caller) -> bool:
     return False
 
 
-def guard(run_id, worker_session, *, caller=None, space_of=None) -> dict:
+def guard(run_id, worker_session, *, caller=None, space_of=None, check_worker=True) -> dict:
     """Refuse unless the caller drives programme ``run_id`` and holds its lease and the worker is in its remit.
 
     Reads the programme record fresh on every call, and takes no lock itself, so a verb calls it once
     before taking the run-record lock and again inside it: a takeover between the two is refused.
+    ``check_worker=False`` skips the remit check for a worker the caller is about to launch: it has no
+    session yet, and start-worker already refuses an item outside the remit.
     """
     programme_home = load_lib_module("programme_home")
     session_registry = load_lib_module("session_registry")
@@ -245,6 +252,7 @@ def guard(run_id, worker_session, *, caller=None, space_of=None) -> dict:
     if not _lease_held(programme_home, run_id, sid):
         raise ContractError("this session no longer holds the programme's lease; a handover or takeover moved "
                             "write authority", "lease_lost")
-    if not worker_session or not _remit_has_worker(record, worker_session, space_of or session_registry.space_of_session):
+    if check_worker and (not worker_session
+                         or not _remit_has_worker(record, worker_session, space_of or session_registry.space_of_session)):
         raise ContractError(f"worker session {worker_session!r} is not in the programme's remit", "outside_remit")
     return record

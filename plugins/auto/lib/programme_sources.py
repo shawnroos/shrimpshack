@@ -39,6 +39,7 @@ programme_behaviours = load_lib_module("programme_behaviours")
 programme_focus = load_lib_module("programme_focus")
 programme_domain = load_lib_module("programme_domain")
 programme_domain_state = load_lib_module("programme_domain_state")
+worker_register = load_lib_module("worker_register")
 
 WORKER_WAIT_ENV = "CLAUDE_AUTO_WORKER_WAIT"
 SPINOFF_TIMEOUT_ENV = "CLAUDE_AUTO_SPINOFF_TIMEOUT"
@@ -704,12 +705,12 @@ def _h_start_worker(host, argv):
     own, extra = argv[:cut], argv[cut + 1:]
     own, decision_ids = _take(own, "--decision")
     own, chosen = _take(own, "--behaviour")
-    positional, opts = host._parse(own, values=("run", "session-name"),
+    positional, opts = host._parse(own, values=("run", "session-name", "contract", "plan"),
                                    multi=("restriction", "source", "despite"))
     if len(positional) != 1 or not extra:
         raise ValueError("usage: start-worker <item> [--session-name <name>] [--despite <attempt>]... "
                          "[--decision <id>]... [--behaviour <id>]... [--restriction <text> --source <source>]... "
-                         "-- <spinoff arguments>")
+                         "[--contract <file> --plan <plan>] -- <spinoff arguments>")
     if any(a == "--session-id" or a.startswith("--session-id=") for a in extra):
         raise host.ProgrammeError("start-worker mints the session id; do not pass --session-id")
     item_id = programme_record.check_item_id(positional[0])
@@ -726,6 +727,9 @@ def _h_start_worker(host, argv):
     # Without a handoff there is no brief to carry the Rulings, and requiring one would refuse plain starts.
     with_brief = bool(decision_ids or restrictions or behaviours) or "--handoff" in extra[:-1]
     tail = _brief_tail(host, programme, key, decision_ids, restrictions, behaviours, rulings=with_brief)
+    start = worker_register.plan_start(host, run_id, home, opts, programme, key)
+    if start:
+        tail += worker_register.registration_section(run_id, key)
     refusal = programme_context.unsafe_reason(programme, key, "start_worker")
     if refusal:
         raise host.ProgrammeError(refusal)
@@ -750,13 +754,18 @@ def _h_start_worker(host, argv):
         raise host.ProgrammeError(f"start refused before spinoff ran: {reason}")
     if brief:
         extra = _brief_copy(home, key, extra, *brief, tail)
+    if start:
+        extra = worker_register.begin_launch(host, run_id, home, key, start, op["target"]["session_id"], extra)
     started = launch_worker(spinoff, extra, op["target"]["session_id"])
     programme_recovery.pause(run_id, "after_invoke")
     payload = dict(item=key, started=started["ok"], decision_ids=decision_ids, restrictions=restrictions,
                    behaviour_ids=behaviour_ids, behaviours_held_back=held_back, **{k: v for k, v in started.items() if k != "ok"})
+    assign = _launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids)
+    if start:
+        assign = worker_register.after_launch(assign, key, start)
+        payload["launch_mode"] = start["mode"]
     done = _settled(host, run_id, home, op, "worker_started" if started["ok"] else "worker_start_failed",
-                    payload, started["outcome"],
-                    assign=_launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids))
+                    payload, started["outcome"], assign=assign)
     host._emit(dict({"ok": True, "run": run_id, "kind": "worker_started" if started["ok"] else
                      "worker_start_failed", "attempt": op["attempt"], "operation_state": done["state"],
                      "late": not done["receipt"]["authority_current"]}, **payload))
@@ -923,8 +932,9 @@ _SPECS = (
      "A source the agreement's tools_of_record term turns off is not read and reports state off."),
     ("start-worker", _h_start_worker,
      "<item> [--session-name <name>] [--despite <attempt>]... [--decision <id>]... "
-     "[--restriction <text> --source <source>]... [--run <id>] -- <spinoff arguments>",
-     "an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments; an "
+     "[--restriction <text> --source <source>]... [--contract <file> --plan <plan>] [--run <id>] -- <spinoff arguments>",
+     "--contract without --plan or the reverse; an item whose run is bound, or launch-blocked after two "
+     "failed launch modes; a second launch inside the registration window; an unknown or finished item; spinoff arguments that carry --session-id; no spinoff arguments; an "
      "earlier launch on the item that is admitted or uncertain, unless named with --despite; ended or "
      "moved ownership between admission and the launch; a decision id that is neither in the decision log "
      "nor an accepted decision record; a restriction without its own --source or with a source outside "

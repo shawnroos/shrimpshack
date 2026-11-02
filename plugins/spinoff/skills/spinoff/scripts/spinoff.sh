@@ -1705,11 +1705,13 @@ SESSION_TRANSCRIPT=""        # explicit originating-session transcript (set by t
 SESSION_CWD=""               # cwd of the originating session, for the resume one-liner
 SESSION_ID=""                # optional: the new session's id, minted by the caller
 SESSION_ID_GIVEN=0
+KICKOFF_FILE=""              # optional: a file whose text replaces the default first turn
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
     --label) LABEL="$2"; shift 2 ;;
     --handoff) HANDOFF_SRC="$2"; shift 2 ;;
+    --kickoff-file) KICKOFF_FILE="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
     --repo) REPO="$2"; shift 2 ;;
     --base) BASE="$2"; shift 2 ;;
     --branch-prefix) PREFIX="$2"; shift 2 ;;
@@ -1754,6 +1756,9 @@ CLAUDE_SID_ARG=""
 case "$LABEL" in -*) die "--label must not start with '-' (got: $LABEL)" ;; esac
 [ -n "$HANDOFF_SRC" ] || die "missing --handoff <path-to-handoff.md>"
 [ -f "$HANDOFF_SRC" ] || die "handoff file not found: $HANDOFF_SRC"
+if [ -n "$KICKOFF_FILE" ]; then
+  [ -s "$KICKOFF_FILE" ] || die "kickoff file missing or empty: $KICKOFF_FILE"
+fi
 case "$TARGET" in
   tab|workspace|split) ;;
   *) die "invalid --target '$TARGET' (expected: tab | workspace | split)" ;;
@@ -2123,6 +2128,8 @@ note_unnamed() { UNNAMED_SURFACES="${UNNAMED_SURFACES}${UNNAMED_SURFACES:+$'\n'}
 # directional" framing already lives authoritatively in every generated handoff
 # (the banner injected above + the handoff body), so the brief only points at it.
 KICKOFF="Read docs/handoff.md — it's the brief for this worktree (treat it as directional: orient and validate against the code, don't execute literally). Get oriented, then recommend the next compound-engineering step (/ce-brainstorm if ambiguous, /ce-plan if clear) with a one-line rationale, and wait for my direction."
+# An Auto-run worker cannot "wait for my direction" in an unattended pane, so the caller may swap the text.
+[ -n "$KICKOFF_FILE" ] && KICKOFF="$(cat "$KICKOFF_FILE")"
 
 # The brief rides the LAUNCH itself as claude's positional prompt, instead of being
 # typed into an already-running TUI afterward. That removes the whole staged-send

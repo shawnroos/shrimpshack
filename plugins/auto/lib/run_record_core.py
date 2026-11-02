@@ -748,14 +748,15 @@ def init_run_record(
 
 
 def _run_kind_fields(kind, programme, steps, loop_phase) -> dict:
-    # Task records stay key-for-key identical to before run kinds existed: an
-    # absent run_kind is what every reader treats as "task".
+    # Task records stay key-for-key identical to before run kinds existed, plus the contract stamp: an
+    # absent run_kind is what every reader treats as "task". The stamp lives here because
+    # init_run_record is at its function-size waiver.
     if kind is not None and kind not in RUN_KINDS:
         raise RunRecordError(f"invalid run_kind: {kind!r}")
     if kind != "programme":
         if programme is not None:
             raise RunRecordError("a programme block needs run_kind='programme'")
-        return {}
+        return {"contract_capable": True}
     if steps:
         raise RunRecordError("a programme run has no steps")
     if loop_phase != "work":

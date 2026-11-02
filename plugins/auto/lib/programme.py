@@ -965,6 +965,7 @@ _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__n
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("worker_register").build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":
