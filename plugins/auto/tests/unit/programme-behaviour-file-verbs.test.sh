@@ -310,6 +310,33 @@ prog settle-default-update d1 --as merge --file "${WORK}/drafts/m2.md" --prompt 
 check "1 same" "$CODE $(cmp -s "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d1.md" "${PERS}/d1.md" && echo same || echo different)"
 rm -f "$SEEN"
 
+# The seen file is absent and its folder is read-only: the personal-file write succeeds, then recording
+# seen fails. A verb that fails must leave the personal folder as it found it (#196).
+draft_shipped d5 "write a changelog"
+draft_shipped d6 "write a summary"
+draft_shipped d7 "write a diagram"
+cp "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d6.md" "${PERS}/d6.md"
+cp "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d7.md" "${PERS}/d7.md"
+draft d7 "write a diagram, then caption it"
+HM7="$(dhash "${WORK}/drafts/d7.md" d7)"
+chmod 555 "$(dirname "$SEEN")"
+
+it "a failed seen write: copy-default fails and leaves no personal file"
+P="$(tprompt "$RUN" "copy d5 into my folder")"
+prog copy-default d5 --prompt "$P" --run "$RUN"
+check "1 absent" "$CODE $([ -e "${PERS}/d5.md" ] && echo present || echo absent)"
+
+it "a failed seen write: take fails and the personal copy is still there"
+P="$(tprompt "$RUN" "take d6 theirs")"
+prog settle-default-update d6 --as take --prompt "$P" --run "$RUN"
+check "1 present" "$CODE $([ -e "${PERS}/d6.md" ] && echo present || echo absent)"
+
+it "a failed seen write: merge fails and the personal copy keeps its old content"
+P="$(tprompt "$RUN" "merge d7 with ${HM7}")"
+prog settle-default-update d7 --as merge --file "${WORK}/drafts/d7.md" --prompt "$P" --run "$RUN"
+check "1 same" "$CODE $(cmp -s "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d7.md" "${PERS}/d7.md" && echo same || echo different)"
+chmod 755 "$(dirname "$SEEN")"
+
 echo
 echo "passed: $PASS failed: $FAIL"
 [ "$FAIL" -eq 0 ]

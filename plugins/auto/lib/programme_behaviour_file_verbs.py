@@ -96,6 +96,32 @@ def _read_text(path):
         return None
 
 
+def _snapshot(path):
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BehaviourError(f"cannot read {path} to keep it safe; nothing was changed: {exc}")
+
+
+# The file change and the seen record are two writes. A failed record puts the file back, so a
+# retry starts from the state the verb found and a take or merge never loses the user's copy.
+def _with_rollback(path, change, record) -> None:
+    before = _snapshot(path)
+    change()
+    try:
+        record()
+    except BaseException:
+        if before is None:
+            if os.path.lexists(path):
+                os.unlink(path)
+        else:
+            _atomic(path, before)
+        raise
+
+
 def _seen_doc() -> dict:
     path = seen_path()
     try:
@@ -197,8 +223,8 @@ def _h_copy(host, argv):
             _seen_doc()
             if os.path.exists(_personal_path(bid)):
                 raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder")
-            _atomic(_personal_path(bid), text)
-            _record(bid, seen=digest)
+            _with_rollback(_personal_path(bid), lambda: _atomic(_personal_path(bid), text),
+                           lambda: _record(bid, seen=digest))
 
         _locked(body)
         return _adopted(bid, digest, path=_personal_path(bid))
@@ -223,11 +249,14 @@ def _settle(host, rec, prompt, bid, mode, text) -> dict:
     def body():
         # Before any file change: a corrupt seen file must refuse with nothing half done.
         _seen_doc()
+        path = _personal_path(bid)
         if mode == "merge":
-            _atomic(_personal_path(bid), text)
+            change = lambda: _atomic(path, text)
         elif mode == "take":
-            os.unlink(_personal_path(bid))
-        _record(bid, seen=digest)
+            change = lambda: os.unlink(path)
+        else:
+            change = lambda: None
+        _with_rollback(path, change, lambda: _record(bid, seen=digest))
 
     _locked(body)
     return _adopted(bid, written, **{"as": mode, "shipped_hash": digest})
