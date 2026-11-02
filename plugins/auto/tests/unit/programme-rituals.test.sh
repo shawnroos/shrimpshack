@@ -139,7 +139,7 @@ EOF
 it "AE3: a step that deploys to production is rejected with the escalation kind named"
 check "protected_escalation prod_deploy" "$(run_py <<'EOF'
 v = pr.verdict(ritual("r1", steps=["deploy it to production yourself"]))
-print(v["reason"], v["detail"])
+print(v["reason"], v["detail"].split(":")[0])
 EOF
 )"
 
@@ -620,6 +620,13 @@ prog keep-rituals "$PROP" --to repo --prompt "$T4" --run "$RUN8"
 check 0 "$CODE"
 check "acme/alpha $PROP@repo" "$(q "$RUN8" "' '.join(pr.read_store()['repos']) + ' ' + ' '.join('%s@%s' % (r['id'], r['layer']) for r in pr.in_force(rec))")"
 
+it "U5: a repo-layer ritual lives in the machine store file; nothing is written inside the repo directory"
+check "0" "$(find "${WORK}/alpha" -type f | wc -l | tr -d ' ')"
+check "${WORK}/stores/rituals.json" "$(run_py <<'EOF'
+print(pr.store_path())
+EOF
+)"
+
 it "keep-rituals --to repo with two remit repos and no --repo is refused, and a --repo outside the remit is refused"
 prog record-ritual --run "$RUN8" --prompt "$T1" --when "at end" --trigger end --step "write the wrap-up"
 SECOND="$(jfield "$OUT" 'd["ritual"]')"
@@ -698,7 +705,8 @@ has "protected_escalation" "$OUT"
 
 it "U2: offers alone, without a step, are refused"
 prog record-ritual --run "$RUN_I" --prompt "$PI" --when "daily check" --schedule "daily 09:00" --offer "ask whether to publish"
-check 1 "$CODE"
+check 2 "$CODE"
+has "at least one --step" "$OUT"
 
 it "U2: the stored ritual keeps its offers and an offer never changes the step scan"
 check "['ask Shawn whether to publish the plugin now']" "$(q "$RUN_I" "[e for e in prog['rituals'] if e['id'] == '$OFFER_ID'][0]['offers']")"
@@ -746,6 +754,46 @@ it "U3: --ran-now on an event ritual is refused"
 prog record-ritual --run "$RUN_I" --prompt "$PI" --when "at start" --trigger start --step "read the journal" --ran-now
 check 1 "$CODE"
 has "ran-now" "$OUT"
+
+it "U4: the Programme view shows the next due time in local time with the zone, and the offers"
+has "= " "$(run_py <<'EOF'
+import datetime
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
+pv = load_lib_module("programme_view")
+rows = pv.rituals_view(record(run), [])
+print(pv._ritual_text(rows[0]))
+EOF
+)"
+has "UTC machine local time" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
+pv = load_lib_module("programme_view")
+print(pv._ritual_text(pv.rituals_view(record(run), [])[0]))
+EOF
+)"
+has "offers (ask Shawn, never act)" "$(run_py <<'EOF'
+e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
+run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
+pv = load_lib_module("programme_view")
+print(pv._ritual_text(pv.rituals_view(record(run), [])[0]))
+EOF
+)"
+
+it "U4: daily 09:00 stays 09:00 local across spring-forward and fall-back"
+check "2026-03-08T13:00:00Z 2026-11-01T14:00:00Z" "$(run_py <<'EOF'
+import time
+os.environ["TZ"] = "America/New_York"; time.tzset()
+sched = {"every": "day", "at": "09:00"}
+print(iso(pr.next_after(sched, at("2026-03-07T15:00:00Z"))), iso(pr.next_after(sched, at("2026-10-31T14:00:00Z"))))
+EOF
+)"
+
+it "U3: the clock sentence names the zone"
+has "machine local time (UTC)" "$(run_py <<'EOF'
+print(pr.describe_clock())
+EOF
+)"
 
 echo
 echo "${PASS} passed, ${FAIL} failed"

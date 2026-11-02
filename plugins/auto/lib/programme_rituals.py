@@ -52,7 +52,7 @@ EVERY = ("day", "week", "month")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 REQUIRED = ("id", "layer", "when", "steps")
-OPTIONAL = ("why", "source", "state", "repo_key", "moved_to", "moved_repo_key", "history", "at")
+OPTIONAL = ("why", "offers", "source", "state", "repo_key", "moved_to", "moved_repo_key", "history", "at")
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -105,12 +105,30 @@ def _check_layer(entry) -> None:
         raise _Reject("bad_value", "moved_repo_key")
 
 
-def protected_kind(entry):
-    for line in entry.get("steps") or ():
+programme_terms = load_lib_module("programme_terms")
+
+
+def _hit_word(line, kind):
+    words = programme_naming.name_words(line)
+    tails = ["".join(words[i:]) for i in range(len(words))]
+    for stem in programme_terms.PROTECTED_STEMS.get(kind, ()):
+        if any(t.startswith(stem) for t in tails):
+            return stem
+    return next((w for w in words if programme_terms.PROTECTED_WORDS.get(w) == kind), None)
+
+
+def _scan(entry):
+    """``(step number from 1, kind, matched word)`` of the first step that names a protected escalation."""
+    for number, line in enumerate(entry.get("steps") or (), 1):
         kind = programme_behaviours._line_kind(line)
         if kind:
-            return kind
+            return number, kind, _hit_word(line, kind)
     return None
+
+
+def protected_kind(entry):
+    hit = _scan(entry)
+    return hit[1] if hit else None
 
 
 def _validate(entry, *, allow_adoption=True) -> None:
@@ -126,15 +144,21 @@ def _validate(entry, *, allow_adoption=True) -> None:
         raise _Reject("bad_value", "state")
     if "why" in entry:
         programme_protocol._text(entry["why"], "why")
+    if "offers" in entry:
+        offers = entry["offers"]
+        if not isinstance(offers, list) or not offers or not all(isinstance(o, str) and o.strip() for o in offers):
+            raise _Reject("bad_value", "offers")
     if "source" in entry:
         programme_protocol._keys(entry["source"], (), ("prompt_id", "quote"))
     if not isinstance(entry.get("history", []), list):
         raise _Reject("bad_value", "history")
     if "at" in entry and run_record_core.parse_iso(entry["at"]) is None:
         raise _Reject("bad_value", "at")
-    kind = protected_kind(entry)
-    if kind:
-        raise _Reject("protected_escalation", kind)
+    hit = _scan(entry)
+    if hit:
+        number, kind, word = hit
+        raise _Reject("protected_escalation", f'{kind}: step {number} names "{word}"; reword that step, '
+                                              "or put the question in an offer so Shawn decides")
 
 
 def verdict(entry, *, allow_adoption=True) -> dict:
@@ -208,7 +232,19 @@ def next_after(schedule, after) -> datetime.datetime:
 _S = programme_layered_store.LayeredStore(
     "ritual", file_name=STORE_NAME, lock_name=STORE_LOCK, path_env=STORE_PATH_ENV, error=RitualError,
     verdict=lambda entry: verdict(entry), target=lambda entry: target(entry))
-_refuse = _S.refuse
+REWORD_FIX = ("reword the named step so it no longer names the protected action; typing an approval does not "
+              "change this. To ask Shawn about the action, put the question in --offer")
+
+
+def _refuse(entry, check) -> None:
+    try:
+        _S.refuse(entry, check)
+    except RitualError as exc:
+        if check.get("reason") == "protected_escalation":
+            exc.fix = REWORD_FIX
+        raise
+
+
 store_path = _S.path
 read_store = _S.read
 write_store = _S.write
@@ -296,7 +332,7 @@ OFFERED = "ritual_offered"
 ENDINGS = ("retired", "undone")
 LAYER_WORDS = {"programme": ("programme",), "repo": ("repo",), "personal": ("personal", "global", "all projects")}
 _FIELDS_DOC = ("--when <text> (--trigger start|takeover|handover|end|resume|quiet | --schedule 'daily HH:MM'|"
-               "'weekly mon HH:MM'|'monthly 1-31 HH:MM') --step <line>... [--why <text>]")
+               "'weekly mon HH:MM'|'monthly 1-31 HH:MM') --step <line>... [--offer <line>...] [--why <text>]")
 
 
 _clean = programme_behaviours._clean
@@ -321,6 +357,9 @@ def _draft(opts, rid) -> dict:
              "steps": steps}
     if opts.get("why"):
         entry["why"] = _clean(opts["why"], "--why")
+    offers = [_clean(o, "--offer") for o in opts.get("offer") or []]
+    if offers:
+        entry["offers"] = offers
     return entry
 
 
@@ -335,20 +374,34 @@ _stored_rows = programme_behaviours._stored_rows
 _stored_entry = programme_behaviours._stored_entry
 
 
-def advance_clock(programme, entry, now=None) -> None:
-    """Past now, not one slot after the old time: otherwise a three-week-old miss is offered again."""
+def describe_clock() -> str:
+    zone = datetime.datetime.now().astimezone().tzname()
+    return f"machine local time ({zone}); a schedule such as 'daily 09:00' reads in this clock"
+
+
+def local_text(when_utc) -> str:
+    return _local(when_utc).strftime("%Y-%m-%d %H:%M ") + datetime.datetime.now().astimezone().tzname()
+
+
+def advance_clock(programme, entry, now=None, first_slot_done=False) -> None:
+    """Past now, not one slot after the old time: otherwise a three-week-old miss is offered again.
+
+    ``first_slot_done`` also steps past the next slot, for a ritual whose first run was done by hand before that slot.
+    """
     schedule = entry["when"].get("schedule")
     if schedule:
         stamp = now or datetime.datetime.now(datetime.timezone.utc)
+        if first_slot_done:
+            stamp = next_after(schedule, stamp)
         programme.setdefault("ritual_clock", {})[entry["id"]] = {
             "next_due_at": next_after(schedule, stamp).strftime(TIME_FORMAT)}
 
 
 def _h_record(host, argv):
-    positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal", "when", "trigger", "schedule", "why"),
-                                   multi=("step",))
+    positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal", "when", "trigger", "schedule", "why", "outcome"),
+                                   flags=("ran-now",), multi=("step", "offer"))
     proposal = opts.get("from-proposal")
-    given = any(opts.get(k) for k in ("when", "trigger", "schedule", "step", "why"))
+    given = any(opts.get(k) for k in ("when", "trigger", "schedule", "step", "offer", "why", "ran-now", "outcome"))
     if positional or (proposal and given):
         raise ValueError("usage: record-ritual --prompt <id> " + _FIELDS_DOC + ", or record-ritual "
                          "--from-proposal <id> --prompt <id>")
@@ -366,17 +419,27 @@ def _h_record(host, argv):
         else:
             entry = _draft(opts, rid)
         entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
+        schedule = entry["when"].get("schedule")
+        if opts.get("ran-now") and not schedule:
+            raise RitualError("--ran-now only applies to a scheduled ritual; an event ritual has no first slot to mark done")
         entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
-        advance_clock(programme, entry)
-        return {"ritual": rid, "layer": "programme", "when": entry["when"]["text"], "trigger": entry["when"]["trigger"],
-                "undo": f"retire-ritual {rid} --as undone --prompt <id>"}
+        advance_clock(programme, entry, first_slot_done=bool(opts.get("ran-now")))
+        out = {"ritual": rid, "layer": "programme", "when": entry["when"]["text"], "trigger": entry["when"]["trigger"],
+               "undo": f"retire-ritual {rid} --as undone --prompt <id>"}
+        if schedule:
+            due_at = programme["ritual_clock"][rid]["next_due_at"]
+            out.update(first_due_at=due_at, first_due_local=local_text(run_record_core.parse_iso(due_at)),
+                       clock=describe_clock(), ran_now=bool(opts.get("ran-now")))
+            if opts.get("ran-now") and opts.get("outcome"):
+                out["outcome"] = _clean(opts["outcome"], "--outcome")
+        return out
 
     return host._write(opts, change, RECORDED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="record-ritual", target=rid)
 
 
 def _h_propose(host, argv):
-    positional, opts = host._parse(argv, values=("run", "when", "trigger", "schedule", "why"), multi=("step",))
+    positional, opts = host._parse(argv, values=("run", "when", "trigger", "schedule", "why"), multi=("step", "offer"))
     if positional:
         raise ValueError("usage: propose-ritual " + _FIELDS_DOC)
     rid = "r" + secrets.token_hex(3)
