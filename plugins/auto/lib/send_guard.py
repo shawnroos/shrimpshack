@@ -320,26 +320,72 @@ def _lookup_names(tokens: list, runs: list) -> set:
     return names
 
 
-def _literal_vars(tokens: list, assigns: list) -> list:
-    """[(index, name, literal)] for each `NAME=<plain word>` assignment in this text.
+def _literal_vars(tokens: list, assigns: list, spans: list):
+    """([(index, name, values)], names with an assignment the guard cannot read, substitution bodies read as values).
 
-    A value the shell could still rebuild — a substitution marker, a glob, a tilde — names no program, so it is
-    skipped and its variable stays unresolvable. `export X=y` and `local X=y` put the word in argument position,
-    where `assigns` is false, so they never reach here.
+    A value is a plain word, a copy of an earlier variable, or a substitution that only echoes literal words
+    (`PY="$(for c in python3 python; do ...; echo "$c"; done)"`), so a name can hold several values. Any other value
+    the shell could rebuild — a glob, a tilde, any other substitution — leaves the name unresolvable even when
+    another assignment to it is readable. `export X=y` and `local X=y` put the word in argument position, where
+    `assigns` is false, so they never reach here.
     """
-    out = []
+    values_of = load_lib_module("send_guard_values")
+    out, unreadable, bodies_ok, marks = [], set(), set(), 0
     for k, tok in enumerate(tokens):
+        first_mark, marks = marks, marks + tok.count(_MARK)
         if not assigns[k]:
             continue
         name, _, value = tok.partition("=")
-        if not value or name.endswith("+") or _RUNTIME_WORD.search(value):
+        copy = values_of.ref_name(value)
+        if not value or name.endswith("+"):
+            found = None
+        elif value == _MARK and first_mark < len(spans) and not spans[first_mark][1]:
+            found = values_of.body_values(spans[first_mark][0], lambda t: _lex(_newlines_as_breaks(t)))
+            if found:
+                bodies_ok.add(spans[first_mark][0])
+        elif copy:
+            found = next((vals for _k, n, vals in reversed(out) if n == copy), None)
+        else:
+            found = None if _RUNTIME_WORD.search(value) else [value]
+        # A precommand runs the next word, and position analysis reads the raw token, so resolving `$W` to `nice`
+        # would leave `$W $H agent prompt $P go` with `$H` in no command position at all.
+        if found and not any(os.path.basename(v) in _COMMAND_PREFIX for v in found):
+            out.append((k, name, tuple(found)))
+        else:
+            unreadable.add(name.rstrip("+"))
+    return out, unreadable, bodies_ok
+
+
+def _loop_vars(tokens: list) -> dict:
+    """{name: [(values, first, last)]} for each `for NAME in <literal words>; do … done`: inside the loop body, from
+    the `do` to the `done`, the variable holds one of the listed words."""
+    out = {}
+    for k, tok in enumerate(tokens):
+        if tok != "for" or tokens[k + 2:k + 3] != ["in"]:
             continue
-        if os.path.basename(value) in _COMMAND_PREFIX:
-            # A precommand runs the next word, and position analysis reads the raw token, so resolving `$W` to
-            # `nice` would leave `$W $H agent prompt $P go` with `$H` in no command position at all.
+        words, j = [], k + 3
+        while j < len(tokens) and tokens[j] not in (";", "do"):
+            words.append(tokens[j])
+            j += 1
+        while tokens[j:j + 1] == [";"]:
+            j += 1
+        if (tokens[j:j + 1] != ["do"] or not words
+                or any(_RUNTIME_WORD.search(w) or os.path.basename(w) in _COMMAND_PREFIX for w in words)):
             continue
-        out.append((k, name, value))
+        depth, end = 1, j + 1
+        while end < len(tokens) and depth:
+            depth += tokens[end] in ("for", "while", "until")
+            depth -= tokens[end] == "done"
+            end += 1
+        out.setdefault(tokens[k + 1], []).append((tuple(words), j, end))
     return out
+
+
+def _harmless(value: str, hosts: list) -> bool:
+    """Is this program name certainly neither a terminal host, a shell, nor a word that runs another program."""
+    base = os.path.basename(value).casefold()
+    return (base not in _SHELL_NAMES and base not in _SHELL_BINS and base not in _COMMAND_PREFIX
+            and base not in ("eval", "source", ".") and all(h.send_class([base], "") is None for h in hosts))
 
 
 # A word that means the shell may not reach what follows it in the order it was written. An assignment cannot be
@@ -349,32 +395,47 @@ _CONTROL_WORDS = frozenset({"&&", "||", "|", "if", "then", "else", "elif", "fi",
                             "for", "case", "esac", "select", "!", "&"})
 
 
-def _resolver(tokens: list, assigns: list):
-    """Callable: the plain literal a `$NAME` command word was certainly set to earlier in this same text, or None.
+def _resolver(tokens: list, assigns: list, spans: list, main: str, hosts: list, loops_ok: bool = False):
+    """Callable: the program a `$NAME` command word was certainly set to earlier in this same text, or None.
 
     Resolution holds only in a straight-line command list. Any control word, group or pipeline before the use
-    means the shell's own order is not the written order, so the name stays unknown.
+    means the shell's own order is not the written order, so the name stays unknown. A name with several values
+    resolves only when none of them is a host, a shell or a word that runs another program.
     """
-    pairs = _literal_vars(tokens, assigns)
+    pairs, unreadable, bodies_ok = _literal_vars(tokens, assigns, spans)
     branch = next((k for k, tok in enumerate(tokens)
                    if tok in _CONTROL_WORDS or (_OPERATOR_ONLY.match(tok) and set(tok) & set("()|&"))), len(tokens))
     # A name assigned anywhere the shell might skip, or might reach in another order, is unknown however many
     # other assignments it has: both `H=cat; true && H=herdr; $H` and `H=herdr; false && H=cat; $H` run the
     # assignment the written order does not end on.
-    unknown = {name for k, name, _value in pairs if k >= branch}
+    unknown = {name for k, name, _values in pairs if k >= branch} | unreadable
+    values_of = load_lib_module("send_guard_values")
+    loops, written = (_loop_vars(tokens) if loops_ok else {}), []
 
     def resolve(index: int, word: str):
         match = _VAR_WORD.match(word)
         if match is None or match.group(1) in unknown:
             return None
-        seen = [value for k, name, value in pairs if k < min(index, branch) and name == match.group(1)]
-        return seen[-1] if seen else None
+        name = match.group(1)
+        seen = [values for k, name_, values in pairs if k < min(index, branch) and name_ == name]
+        if name in loops and not any(name_ == name for _k, name_, _v in pairs):
+            seen = [values for values, first, last in loops[name] if first < index < last]
+        if not seen or (len(seen[-1]) > 1 and not all(_harmless(v, hosts) for v in seen[-1])):
+            return None
+        if not written:
+            # Writes the text does not spell out (`eval "X=…"`, `printf -v`, `source`, `+=`) are read once, on the
+            # first variable the text sets and uses: most texts never do, and the read is linear in the text.
+            written.append(None if values_of.DROP_ALL.search(main) else values_of.tainted_names(main))
+        if written[0] is None or name in written[0]:
+            return None
+        return seen[-1][0]
 
+    resolve.value_bodies = bodies_ok
     return resolve
 
 
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None,
-          shell: bool = True, expands: bool = True) -> None:
+          shell: bool = True, expands: bool = True, loops_ok: bool = False) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
     marked, spans = _mark_substitutions(main)
     tokens = _lex(_newlines_as_breaks(marked))
@@ -382,7 +443,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
     strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
     positions = _command_positions(tokens)
     runs, assigns, _globbed, progs = positions
-    resolve = _resolver(tokens, assigns)
+    resolve = _resolver(tokens, assigns, spans, main, hosts, loops_ok)
     looked_up = _lookup_names(tokens, runs)
 
     def program(index: int) -> str:
@@ -390,7 +451,9 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
 
     if depth < MAX_DEPTH:
         for script in _substitution_scripts(spans):
-            _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=shell, expands=expands)
+            # A loop variable resolves only inside a body whose output sets a variable: that body is read as a value.
+            _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=shell, expands=expands,
+                  loops_ok=script in resolve.value_bodies)
         for body, body_shell, quoted in bodies:
             for script in [body] + body.splitlines():
                 _scan(script, depth + 1, hosts, pane_ids, found, proven,
@@ -433,7 +496,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             else:
                 hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
             if hit:
-                found.append((host.name, hit[0], hit[1]))
+                found.append((host.name, hit[0], hit[1], hit[2] if len(hit) > 2 else ""))
 
 
 def _command_positions(tokens: list) -> tuple:
@@ -543,13 +606,13 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven,
                 [os.path.basename(literal).casefold()] + list(segment[1:]), piped) is None:
             return None
         built = _RUNTIME_WORD.search(word) or start in globbed
-        return ("runtime-built command", "") if built else None
+        return ("runtime-built command", "", "variable" if _VAR_WORD.match(word) else "word") if built else None
     kind, targets = shape
     if kind == "read":
         return None
     if targets and not any(_RUNTIME.search(t) or not proven(t) for t in targets):
         return None
-    return "send to a pane auto cannot prove is not the driver's", ""
+    return "send to a pane auto cannot prove is not the driver's", "", "send"
 
 
 def host_sends(command: str, pane_ids: list, proven=None) -> list:
@@ -617,7 +680,7 @@ def _driver_hit(command: str, session_id, driver: dict, sender: dict):
         # One session sends, so every driver shares one workspace lookup, made only when a send was found.
         if "workspace" not in sender:
             sender["workspace"] = _sender_workspace(session_id)
-        for host, verb, target in sends:
+        for host, verb, target, _cause in sends:
             if _targets_pane(target, driver, sender["workspace"]):
                 return host, verb, target
     if session_id == driver.get("session_id"):
@@ -634,7 +697,7 @@ def _strict_hit(command: str, session_id, drivers: list, sender: dict):
     ids = [i for d in drivers for i in _ids(d)]
     unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers))
     if unproven:
-        return unproven[0][0], unproven[0][1], drivers[0]["pane_id"]
+        return unproven[0][0], unproven[0][1], drivers[0]["pane_id"], unproven[0][3]
     return (None, "tty write", drivers[0]["pane_id"]) if _tty_write(command) else None
 
 
@@ -710,6 +773,19 @@ def _with_live_ids(drivers: list) -> None:
             driver["pane_id"] = live[0]
 
 
+_FIXES = {
+    "variable": "this command runs a program named by a variable whose value auto cannot read. Write the program name "
+                "as a literal word, or set the variable earlier in the same command from literal words "
+                "(`PY=python3`, or `PY=\"$(for c in python3 python; do ...; echo \"$c\"; done)\"`) before any `&&`, "
+                "`||`, `if` or loop, and use it only as a whole word, `$PY`.",
+    "word": "this command runs a program whose name is built at run time (a `$(...)`, glob, brace or `~` joined into "
+            "the word). Write the program name as one literal word.",
+    "send": "send only to a literal pane id that another session's registry row shows, with no variable, "
+            "substitution or file in the command word or the target; run osascript only with -e and a script "
+            "that does not mention Ghostty, a terminal, key presses or string joins; never write to a tty device.",
+}
+
+
 def denial(session_id, command):
     drivers = load_lib_module("session_registry").driver_panes()
     try:
@@ -725,9 +801,10 @@ def denial(session_id, command):
             driver = drivers[0]
         if hit is None:
             continue
-        host, verb, target = hit
+        host, verb, target, *extra = hit
+        cause = extra[0] if extra else ""
         row = (driver["run"], "blocked_driver_send", session_id, {
-            "verb": verb, "target": target, "pane_id": driver["pane_id"], "command": command})
+            "verb": verb, "target": target, "pane_id": driver["pane_id"], "command": command, "cause": cause})
         unproven = verb in _UNPROVEN_VERBS
         what = (f"a command ({verb}) that auto cannot prove is not aimed at pane" if unproven else
                 f"`{host} {verb}` into pane" if verb else "a command naming pane")
@@ -740,10 +817,7 @@ def denial(session_id, command):
             "Only the person types into the programme driver's pane, "
             "and other sessions may not name it in any command; report through the "
             "programme's inbox instead. This attempt is journaled."
-            + (" Fix: send only to a literal pane id that another session's registry row shows, with no variable, "
-               "substitution or file in the command word or the target; run osascript only with -e and a script "
-               "that does not mention Ghostty, a terminal, key presses or string joins; never write to a tty device."
-               if unproven else "")
+            + (f" Fix: {_FIXES.get(cause, _FIXES['send'])}" if unproven else "")
         )
         return {"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
