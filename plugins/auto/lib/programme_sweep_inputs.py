@@ -130,9 +130,9 @@ def _due(host, run_id, record):
         return {"total": 0, "rows": [], "overflow": 0, "overflow_ids": [], "error": f"{type(exc).__name__}: {exc}"}
 
 
-def _rituals_due(host, run_id, record):
+def _rituals_due(host, run_id, record, rows):
     try:
-        return programme_rituals_due.due(record, run_id, lookup=host.prompt_lookup)
+        return programme_rituals_due.due(record, run_id, rows=rows, lookup=host.prompt_lookup)
     except Exception as exc:  # noqa: BLE001 — same rule as _due: a bad store degrades the sweep, never ends it
         return {"due": [], "missed": [], "in_flight": [], "total": 0, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -179,7 +179,7 @@ def _facts(host, run_id, home, record):
         "refs": refs, "prs": _readiness(programme, refs), "armed": _armed(programme, record),
         "reread_requested": reread is not None and (acked is None or reread > acked),
         "rules": host.rules_in_force(record).get("rules") or [],
-        "due": due, "domain_due": _domain_due(host, record), "rituals": _rituals_due(host, run_id, record),
+        "due": due, "domain_due": _domain_due(host, record), "rituals": _rituals_due(host, run_id, record, rows),
         "recommendations": programme_domain_state.recommendations(programme),
     }
 

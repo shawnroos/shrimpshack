@@ -44,8 +44,10 @@ STORED_LAYERS = ("repo", "personal")
 STATES = ("active", "proposed", "retired")
 ACTIVE = "active"
 TRIGGERS = ("calendar", "start", "takeover", "handover", "end", "resume", "quiet")
+RESUME_EVENT = "ritual_event"
 EVENT_ROWS = {"start": "programme_started", "takeover": "taken_over", "handover": "handed_over",
-              "end": "programme_ended", "quiet": "stop_quiet", "resume": "ritual_event"}
+              "end": "programme_ended", "quiet": "stop_quiet", "resume": RESUME_EVENT}
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 EVERY = ("day", "week", "month")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
@@ -146,8 +148,7 @@ def _refuse(entry, check) -> None:
         raise RitualError(f"ritual {name!r} refused: {check['reason']}{detail}")
 
 
-def _is(e, rid) -> bool:
-    return isinstance(e, dict) and e.get("id") == rid
+_is = programme_behaviours._is
 
 
 def put_programme_entry(programme, entry) -> dict:
@@ -161,7 +162,7 @@ def put_programme_entry(programme, entry) -> dict:
 def parse_schedule(text) -> dict:
     """``daily 09:00``, ``weekly mon 09:00`` or ``monthly 1 09:00``."""
     words = (text or "").lower().split()
-    usage = "--schedule must read 'daily HH:MM', 'weekly mon HH:MM' or 'monthly 1-31 HH:MM'"
+    schedule = None
     try:
         if words[0] == "daily" and len(words) == 2:
             schedule = {"every": "day", "at": words[1]}
@@ -169,12 +170,10 @@ def parse_schedule(text) -> dict:
             schedule = {"every": "week", "weekday": WEEKDAYS.index(words[1][:3]), "at": words[2]}
         elif words[0] == "monthly" and len(words) == 3:
             schedule = {"every": "month", "day": int(words[1]), "at": words[2]}
-        else:
-            raise ValueError(usage)
     except (ValueError, IndexError):
-        raise ValueError(usage)
-    if not programme_protocol._verdict(lambda: _check_schedule(schedule))["ok"]:
-        raise ValueError(usage)
+        schedule = None
+    if schedule is None or not programme_protocol._verdict(lambda: _check_schedule(schedule))["ok"]:
+        raise ValueError("--schedule must read 'daily HH:MM', 'weekly mon HH:MM' or 'monthly 1-31 HH:MM'")
     return schedule
 
 
@@ -196,7 +195,7 @@ def _month_day(year, month, day):
 
 
 def next_after(schedule, after) -> datetime.datetime:
-    """The first scheduled time strictly after ``after`` (UTC-aware), in the machine's local clock."""
+    """UTC-aware; the schedule itself reads in the machine's local clock."""
     local = _local(after)
     today = local.date()
     if schedule["every"] == "day":
@@ -242,6 +241,11 @@ def read_store() -> dict:
     return _read(store_path())
 
 
+def _require_readable_store() -> None:
+    # load_store swallows an unreadable file into notices, so a verb that must refuse on one reads it directly.
+    read_store()
+
+
 # The doc is read inside the lock, so an update that replaces an id acts on the file as it is at
 # the moment of the write.
 def write_store(update) -> None:
@@ -274,18 +278,8 @@ def target(entry) -> str:
 adopt = programme_carryover.adopt
 
 
-def _without(doc, rid) -> None:
-    doc["personal"] = [e for e in doc["personal"] if not _is(e, rid)]
-    doc["repos"] = {k: [e for e in rows if not _is(e, rid)] for k, rows in doc["repos"].items()}
-    doc["repos"] = {k: rows for k, rows in doc["repos"].items() if rows}
-
-
-def _place(doc, entry) -> None:
-    _without(doc, entry["id"])
-    if entry["layer"] == "personal":
-        doc["personal"].append(entry)
-    else:
-        doc["repos"].setdefault(entry["repo_key"], []).append(entry)
+_without = programme_behaviours._without
+_place = programme_behaviours._place
 
 
 # The loader verifies a same-machine entry only through its approval row, so every stored entry
@@ -309,12 +303,7 @@ def store(adopted, prompt, run_id, session_id, how="ritual") -> None:
             cites=[prompt["prompt_id"]])
 
 
-def _default_lookup():
-    # Loaded here, not at import: programme.py imports this module. A caller inside programme.py
-    # passes host.prompt_lookup, since its module is __main__ there.
-    programme = load_lib_module("programme")
-    journals = {}
-    return lambda run_id, prompt_id: programme.prompt_lookup(run_id, prompt_id, journals)
+_default_lookup = programme_behaviours._default_lookup
 
 
 def _stored_reason(entry, layer, key, lookup):
@@ -385,11 +374,6 @@ def _held(loaded, entry, keys) -> bool:
     return any(e["id"] == entry["id"] for e in rows or ())
 
 
-def shown_programme_entries(programme, loaded) -> list:
-    keys = programme_carryover.repo_keys(programme)
-    return [e for e in _programme_entries(programme, []) if not _held(loaded, e, keys)]
-
-
 def resolve(record, *, lookup=None, store=None) -> dict:
     """Active rituals in force for this programme; the narrower layer wins when ids collide."""
     programme = (record or {}).get("programme") or {}
@@ -409,10 +393,7 @@ def in_force(record, *, lookup=None, store=None) -> list:
     return resolve(record, lookup=lookup, store=store)["in_force"]
 
 
-def since(entry):
-    starts = [h.get("at") for h in entry.get("history") or []
-              if isinstance(h, dict) and h.get("event") in ("recorded", "moved", "kept")]
-    return starts[-1] if starts else entry.get("at")
+since = programme_behaviours.since
 
 
 RECORDED = "ritual_recorded"
@@ -431,11 +412,7 @@ _FIELDS_DOC = ("--when <text> (--trigger start|takeover|handover|end|resume|quie
                "'weekly mon HH:MM'|'monthly 1-31 HH:MM') --step <line>... [--why <text>]")
 
 
-def _clean(value, what) -> str:
-    text = programme_sanitize.clean(value)
-    if not text:
-        raise ValueError(f"{what} needs a non-empty value")
-    return text
+_clean = programme_behaviours._clean
 
 
 def _draft(opts, rid) -> dict:
@@ -460,32 +437,24 @@ def _draft(opts, rid) -> dict:
     return entry
 
 
-def _mark(entry, event, prompt=None, **extra) -> dict:
-    row = {"event": event, "at": run_record_core.now_iso(), **extra}
-    if prompt:
-        row["prompt_id"] = prompt["prompt_id"]
-    return dict(entry, history=list(entry.get("history") or []) + [row])
+_mark = programme_behaviours._mark
 
 
 def _programme_entry(programme, rid):
     return next((e for e in programme.get("rituals") or [] if _is(e, rid)), None)
 
 
-def _stored_rows(loaded) -> list:
-    return loaded["personal"] + [e for es in loaded["repos"].values() for e in es]
-
-
-def _stored_entry(loaded, rid):
-    return next((e for e in _stored_rows(loaded) if e["id"] == rid), None)
+_stored_rows = programme_behaviours._stored_rows
+_stored_entry = programme_behaviours._stored_entry
 
 
 def advance_clock(programme, entry, now=None) -> None:
-    """Move this programme's next-due time to the first scheduled time after now, so an old miss is never re-offered."""
+    """Past now, not one slot after the old time: otherwise a three-week-old miss is offered again."""
     schedule = entry["when"].get("schedule")
     if schedule:
         stamp = now or datetime.datetime.now(datetime.timezone.utc)
         programme.setdefault("ritual_clock", {})[entry["id"]] = {
-            "next_due_at": next_after(schedule, stamp).strftime("%Y-%m-%dT%H:%M:%SZ")}
+            "next_due_at": next_after(schedule, stamp).strftime(TIME_FORMAT)}
 
 
 def _h_record(host, argv):
@@ -561,13 +530,7 @@ def _placed(entry, to, key) -> dict:
     return out
 
 
-def _pointer(local, to, key) -> dict:
-    out = {k: v for k, v in local.items() if k not in ("moved_to", "moved_repo_key")}
-    if to != "programme":
-        out["moved_to"] = to
-    if to == "repo":
-        out["moved_repo_key"] = key
-    return out
+_pointer = programme_behaviours._pointer
 
 
 def _current(programme, loaded, rid) -> tuple:
@@ -581,7 +544,7 @@ def _current(programme, loaded, rid) -> tuple:
 
 
 def _move(host, programme, prompt, rec, rid, to, wanted) -> dict:
-    read_store()
+    _require_readable_store()
     loaded = load_store(host.prompt_lookup)
     entry, local = _current(programme, loaded, rid)
     key = _repo_key(programme, wanted) if to == "repo" else None
@@ -634,7 +597,7 @@ def _h_move(host, argv):
 def _retire(host, programme, prompt, rec, rid, how) -> dict:
     local = _programme_entry(programme, rid)
     if local is None or local.get("moved_to"):
-        read_store()
+        _require_readable_store()
     stored = _stored_entry(load_store(host.prompt_lookup), rid)
     live = [e for e in (local, stored) if e is not None and e.get("state", ACTIVE) != "retired"]
     if not live:
@@ -674,7 +637,7 @@ def _h_keep(host, argv):
 
     def change(programme, prompt, rec):
         _check_layer_named(host, prompt, None, to)
-        read_store()
+        _require_readable_store()
         named = [r for r in wanted if not programme_naming.missing(programme_journal.named_text(prompt), [r])]
         if not named:
             raise RitualError(f"prompt {prompt['prompt_id']!r} names none of {', '.join(wanted)}")
@@ -697,16 +660,16 @@ def _h_keep(host, argv):
 
 
 def note_gap(run_id, session_id, previous_beat, record) -> bool:
-    """Journal one ``resume`` event when the PM was silent longer than the lease's orphan threshold.
-
-    Runs after the write that refreshed ``last_beat_at``, so a second write never sees the same gap.
-    """
-    before, now = run_record_core.parse_iso(previous_beat or ""), run_record_core.parse_iso(run_record_core.now_iso())
+    """Runs after the write that refreshed ``last_beat_at``, so a second write never sees the same gap."""
+    before = run_record_core.parse_iso(previous_beat or "")
+    if before is None:
+        return False
+    now = datetime.datetime.now(datetime.timezone.utc)
     limit = programme_home.ORPHAN_CADENCE_PERIODS * programme_home.cadence_seconds(record)
-    if before is None or (now - before).total_seconds() <= limit:
+    if (now - before).total_seconds() <= limit:
         return False
     try:
-        programme_journal.append(run_id, "ritual_event", session_id, {"trigger": "resume", "silent_since": previous_beat})
+        programme_journal.append(run_id, RESUME_EVENT, session_id, {"trigger": "resume", "silent_since": previous_beat})
     except programme_journal.JournalError:
         # A programme that ended between the write and this row has no PM left to run a resume ritual.
         return False
@@ -720,9 +683,14 @@ def _find(host, programme, rec, rid):
     return entry
 
 
+def _due(host, programme, rec) -> dict:
+    # Loaded here, not at import: the due module imports this one.
+    return load_lib_module("programme_rituals_due").due(dict(rec, programme=programme), rec["run_id"],
+                                                         lookup=host.prompt_lookup)
+
+
 def _state_of(host, programme, rec, rid) -> str | None:
-    due = load_lib_module("programme_rituals_due").due(dict(rec, programme=programme), rec["run_id"],
-                                                        lookup=host.prompt_lookup)
+    due = _due(host, programme, rec)
     for bucket in ("in_flight", "missed", "due"):
         if any(r["ritual"] == rid for r in due[bucket]):
             return bucket
@@ -802,8 +770,7 @@ def _h_offer(host, argv):
     wanted = list(dict.fromkeys(positional))
 
     def change(programme, _prompt, rec):
-        due = load_lib_module("programme_rituals_due").due(dict(rec, programme=programme), rec["run_id"],
-                                                            lookup=host.prompt_lookup)
+        due = _due(host, programme, rec)
         waiting = {r["ritual"]: r for r in due["missed"] + due["in_flight"]}
         absent = [r for r in wanted if r not in waiting]
         if absent:

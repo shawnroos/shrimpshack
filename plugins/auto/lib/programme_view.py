@@ -546,8 +546,9 @@ def behaviours_view(record, lookup) -> dict:
 def rituals_view(record, journal_entries) -> list:
     """Rituals in force with their state, read from the record and journal alone so a programme with no live PM still shows a miss."""
     try:
-        got = programme_rituals_due.due(record, record.get("run_id"), rows=journal_entries)
-        in_force = programme_rituals.resolve(record)["in_force"]
+        loaded = programme_rituals.load_store()
+        got = programme_rituals_due.due(record, record.get("run_id"), rows=journal_entries, store=loaded)
+        in_force = programme_rituals.resolve(record, store=loaded)["in_force"]
     except Exception as exc:  # noqa: BLE001 — a bad rituals store degrades the view, never blocks it
         return [{"id": "rituals", "state": "unreadable", "detail": f"{type(exc).__name__}: {exc}"}]
     pending = {r["ritual"]: r for bucket in ("due", "missed", "in_flight") for r in got[bucket]}
