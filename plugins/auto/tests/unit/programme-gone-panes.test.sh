@@ -34,7 +34,10 @@ def prog(result='pending', ref='o/r#7'):
     return {'items': {'issue:A': {'state': 'open', 'owner': {'pane': 'w2:pR'},
                                   'deliverables': {'merged': {'ref': ref, 'result': result}}}}}
 def entry(status='idle', item='issue:A'):
-    return {'pane': 'w2:pR', 'item': item, 'agent_status': status, 'why': 'folder_gone'}
+    return {'pane': 'w2:pR', 'item': item, 'agent_status': status, 'terminal_id': 'T1', 'why': 'folder_gone'}
+live = lambda pane_id: {'pane_id': pane_id, 'agent_status': 'idle', 'terminal_id': 'T1', 'cwd': '/nonexistent/gone'}
+_close = g.close_if_eligible
+g.close_if_eligible = lambda rec, ent, **kw: _close(rec, ent, **{'live': live, **kw})
 $1
 "
 }

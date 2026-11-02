@@ -120,7 +120,7 @@ def _hit_word(line, kind):
 def _scan(entry):
     """``(step number from 1, kind, matched word)`` of the first step that names a protected escalation."""
     for number, line in enumerate(entry.get("steps") or (), 1):
-        kind = programme_behaviours._line_kind(line)
+        kind = programme_behaviours.line_kind(line)
         if kind:
             return number, kind, _hit_word(line, kind)
     return None

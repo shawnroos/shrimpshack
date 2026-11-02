@@ -68,7 +68,8 @@ def order(programme, panes) -> list:
 
 def gone_entry(programme, pane) -> dict:
     key, _ = item_of(programme, pane["pane_id"])
-    return {"pane": pane["pane_id"], "workspace_id": pane.get("workspace_id"), "title": pane.get("title"),
+    return {"pane": pane["pane_id"], "workspace_id": pane.get("workspace_id"), "terminal_id": pane.get("terminal_id"),
+            "title": pane.get("title"),
             "cwd": pane.get("cwd"), "agent": pane.get("agent"), "agent_status": pane.get("agent_status"),
             "item": key, "why": FOLDER_GONE}
 

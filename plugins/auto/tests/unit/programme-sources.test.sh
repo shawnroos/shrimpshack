@@ -29,6 +29,11 @@ export CLAUDE_CODE_SESSION_ID="sess-pm"
 export CLAUDE_AUTO_SOURCE_TIMEOUT="2"
 export CLAUDE_AUTO_WORKER_WAIT="1"
 export CLAUDE_AUTO_TASKS_DIR="${WORK}/tasks"
+EMPTY_SHIPPED="${WORK}/files/shipped-empty"
+EMPTY_PERSONAL="${WORK}/files/personal-empty"
+mkdir -p "$EMPTY_SHIPPED" "$EMPTY_PERSONAL"
+export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="$EMPTY_SHIPPED"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="$EMPTY_PERSONAL"
 unset HERDR_PANE_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_BIN_PATH HERDR_ENV CLAUDE_AUTO_REPO LINEAR_API_KEY 2>/dev/null || true
 : > "$CLAUDE_AUTO_SECRETS_FILE"
 
@@ -825,6 +830,71 @@ lacks "--handoff" "$(grep '^spinoff ' "$CALLS")"
 it "that start records no behaviour delivery and names the held-back behaviour"
 check "null" "$(field 'items["linear:AI-792"].get("behaviour_deliveries")')"
 has '"behaviours_held_back": ["bpm"]' "$OUT"
+
+SHIP_DIR="${WORK}/files/ship"
+PERS_DIR="${WORK}/files/pers"
+mkdir -p "$SHIP_DIR" "$PERS_DIR"
+export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="$SHIP_DIR"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="$PERS_DIR"
+printf -- '---\nwhen: the work changes UI\ntrigger: start\nskills: slate-editor-testing\nformats: a short list\ncomms: say it plainly\n---\nDo:\n- browser-verify the change\n' > "${SHIP_DIR}/shipui.md"
+
+write_snapshot base
+prog add-item linear:AI-880 --title "Shipped default, plain start"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-880 -- --name shipplain --target tab
+it "KTD12: a plain start-worker still starts when the only behaviour in force is a shipped one"
+check 0 "$CODE"
+lacks "--handoff" "$(grep '^spinoff ' "$CALLS")"
+it "that start records only a not_briefed delivery (never brief) and carries no behaviour id"
+check '["not_briefed"]' "$(field '[d["reason"] for d in items["linear:AI-880"].get("behaviour_deliveries") or []]')"
+has '"behaviour_ids": []' "$OUT"
+
+write_snapshot base
+prog add-item linear:AI-881 --title "Shipped default, with handoff"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-881 -- --name shipbrief --handoff "$BRIEF"
+it "a shipped start-trigger file appears in the brief block when --handoff is given"
+check 0 "$CODE"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | tail -1 | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+has "- shipui: when the work changes UI" "$COPY"
+it "R10: the brief line carries the file's skills, formats and comms"
+has "skills: slate-editor-testing" "$COPY"
+has "formats: a short list" "$COPY"
+has "comms: say it plainly" "$COPY"
+it "the shipped brief delivery is recorded on the item"
+check '[["shipui", "brief", "start-worker"]]' "$(field '[[d["id"], d["reason"], d["via"]] for d in items["linear:AI-881"]["behaviour_deliveries"]]')"
+
+write_snapshot base
+printf -- '---\nwhen: the work edits docs\n---\nDo:\n- spell check\n' > "${PERS_DIR}/mydocs.md"
+prog add-item linear:AI-882 --title "Personal file, plain start"
+: > "$CALLS"
+prog start-worker linear:AI-882 -- --name perplain --target tab
+it "KTD12: a personal-file behaviour in force still needs --handoff"
+check 2 "$CODE"
+has "needs --handoff" "$OUT"
+lacks "spinoff" "$(calls)"
+rm -f "${PERS_DIR}/mydocs.md"
+
+write_snapshot base
+printf -- '---\nwhen: the work edits docs\nchecks:\n  - pm: the item is a docs change\n---\nDo:\n- spell check\n' > "${PERS_DIR}/pmdocs.md"
+prog add-item linear:AI-883 --title "PM-check-only personal file"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-883 -- --name pmcheck --handoff "$BRIEF"
+it "a PM-check-only file stays out of the worker brief unless it is named"
+check 0 "$CODE"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | tail -1 | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+lacks "- pmdocs:" "$COPY"
+prog add-item linear:AI-884 --title "PM-check-only personal file named"
+write_snapshot base
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-884 --behaviour pmdocs -- --name pmnamed --handoff "$BRIEF"
+it "a PM-check-only file joins the worker brief when named with --behaviour"
+check 0 "$CODE"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | tail -1 | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+has "- pmdocs: when the work edits docs" "$COPY"
+rm -f "${PERS_DIR}/pmdocs.md" "${SHIP_DIR}/shipui.md"
+export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="$EMPTY_SHIPPED"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="$EMPTY_PERSONAL"
 
 write_snapshot base
 seed_behaviours '[{"id": "bui", "layer": "programme", "applies_to": "workers", "state": "active", "at": "2026-01-01T00:00:00Z",

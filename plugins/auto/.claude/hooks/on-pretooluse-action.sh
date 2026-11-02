@@ -72,6 +72,9 @@ shopt -s nocasematch
 if [ "$__cd_any_lease" = 1 ] && [[ $__cd_stdin_json == *settings.local.json* ]]; then
   __cd_settings=1
 fi
+if [ "$__cd_any_lease" = 1 ] && [[ $__cd_stdin_json == *behaviours* ]]; then
+  __cd_settings=1
+fi
 shopt -u nocasematch
 if [ -z "$__cd_repo" ]; then
   [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
