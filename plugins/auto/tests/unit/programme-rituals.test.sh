@@ -537,11 +537,11 @@ check "refused ok" "$(run_py "$RUN6" <<'EOF'
 lc = load_lib_module("programme_lifecycle")
 run = args[0]
 try:
-    lc._gate_rituals(run, "handover", "live", {})
+    due.gate(run, "handover", "live", {}, lc._Refused)
     first = "passed"
 except lc._Refused as exc:
     first = "refused" if "hh" in exc.reason and exc.fix else "wrong"
-lc._gate_rituals(run, "handover", "live", {"without-rituals": True})
+due.gate(run, "handover", "live", {"without-rituals": True}, lc._Refused)
 print(first, "ok")
 EOF
 )"
@@ -550,7 +550,7 @@ check 0 "$CODE"
 check "passed" "$(run_py "$RUN6" <<'EOF'
 lc = load_lib_module("programme_lifecycle")
 try:
-    lc._gate_rituals(args[0], "handover", "live", {})
+    due.gate(args[0], "handover", "live", {}, lc._Refused)
     print("passed")
 except lc._Refused:
     print("refused")

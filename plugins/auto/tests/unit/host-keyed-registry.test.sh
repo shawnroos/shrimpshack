@@ -260,7 +260,7 @@ as() { local sid="$1"; shift; OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_PANE_ID
 BEFORE="$(ls "$LEASES" | tr '\n' ' ')"
 as sess-new-two start
 it "start with both herdr and Rex announced refuses with a fix line"
-case "$OUT" in *"both herdr and Rex"*"one multiplexer only"*) pass ;; *) fail "exit $CODE: $OUT" ;; esac
+case "$OUT" in *"neither herdr nor Rex could prove"*"env -u"*"one multiplexer only"*) pass ;; *) fail "exit $CODE: $OUT" ;; esac
 it "and writes no lease"
 check "$BEFORE" "$(ls "$LEASES" | tr '\n' ' ')"
 as() { local sid="$1"; shift; OUT="$(CLAUDE_CODE_SESSION_ID="$sid" CMUX_WORKSPACE_ID=ws1 "$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }

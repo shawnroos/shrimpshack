@@ -142,6 +142,13 @@ def waiting_before(record, run_id, trigger, *, lookup=None, store=None, rows=Non
     return waiting
 
 
+def gate(run_id, trigger, status, opts, refused) -> None:
+    """Raise ``refused`` (the lifecycle's refusal class) while a ritual for a handover or end is unanswered in the tenure."""
+    waiting = [] if opts.get("without-rituals") else waiting_before(programme_home._read_record(run_id) or {}, run_id, trigger)
+    if waiting:
+        raise refused(f"{trigger} ritual {', '.join(waiting)} has not run in this tenure", status, fix=GATE_FIX)
+
+
 def due(record, run_id, *, now=None, lookup=None, store=None, rows=None, cap=CAP) -> dict:
     programme, scoped, loaded, index = _context(record, run_id, lookup, store, rows)
     clock_now = now or datetime.datetime.now(datetime.timezone.utc)

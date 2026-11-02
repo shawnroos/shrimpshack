@@ -19,8 +19,10 @@ echo "programme-hooks.test.sh"
 WORK="$(mktemp -d -t auto-prog-hooks.XXXXXX)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
-for v in $(env | sed -n 's/^\(HERDR_[A-Z_]*\)=.*/\1/p'); do unset "$v"; done
-unset CLAUDE_CODE_SESSION_ID
+# Every terminal-host variable goes, not just herdr's: run from a Rex or Ghostty pane, a leftover REX_ or GHOSTTY_
+# variable puts the session in a host this suite never set up, and the presence gate then writes a registry row.
+for v in $(env | grep -oE '^(HERDR|REX|GHOSTTY|AUTO_TEST)_[A-Z_]*'); do unset "$v"; done
+unset CLAUDE_CODE_SESSION_ID CMUX_WORKSPACE_ID TERM_PROGRAM 2>/dev/null || true
 
 FAKEBIN="${WORK}/bin"
 mkdir -p "$FAKEBIN"
