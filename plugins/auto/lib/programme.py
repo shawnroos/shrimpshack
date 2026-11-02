@@ -929,6 +929,7 @@ _VERBS["host"] = _Verb(
 programme_behaviours = load_lib_module("programme_behaviours")
 _VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_behaviours_skip").build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_behaviour_file_verbs").build_verbs(sys.modules[__name__]))
 
 programme_rituals = load_lib_module("programme_rituals")
 _VERBS.update(programme_rituals.build_verbs(sys.modules[__name__]))

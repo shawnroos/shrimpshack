@@ -897,6 +897,9 @@ it "status text is still the view rows, line for line"
 check "True" "$(acc_q '"\n".join(r["text"] for r in d["rows"]) == sys.argv[3]' "$ACC_TEXT")"
 
 export CLAUDE_AUTO_BEHAVIOURS_STORE="${WORK}/beh/behaviours.json"
+export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="${WORK}/beh-files/shipped"
+export CLAUDE_AUTO_BEHAVIOURS_DIR="${WORK}/beh-files/personal"
+mkdir -p "$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR" "$CLAUDE_AUTO_BEHAVIOURS_DIR"
 BEH_ALPHA="${WORK}/repos/alpha"
 mkdir -p "$BEH_ALPHA"
 export BEH_ALPHA
@@ -938,6 +941,8 @@ elif spec == "states":
     seed_programme([beh("bprop", state="proposed", source=src), beh("bret", state="retired"),
                     beh("bwin", overrides=["bloser"]), beh("bmov", moved_to="personal")])
     keep([beh("bloser", "personal"), beh("bmov", "personal"), beh("bzeta", "repo", repo_key="acme/zeta")])
+elif spec == "files":
+    seed_programme([])
 elif spec == "split":
     def two(p):
         p["remit"]["repos"] = [{"path": os.environ["BEH_ALPHA"], "github": "acme/alpha"},
@@ -1019,6 +1024,83 @@ BEH_RULES2="$("$PY" "$PROG" rules --run "$BEH_RUN2" 2>&1)"
 check "0" "$?"
 has "behaviour bprop (programme, proposed" "$BEH_RULES2"
 has "behaviours store:" "$BEH_RULES2"
+
+rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
+# bwf <dir> <id> <do line>: a behaviour file in the shape the loader reads
+bwf() { printf -- '---\nwhen: when the work is a bug\n---\nDo:\n- %s\n' "$3" > "$1/$2.md"; }
+BEH_SHIPPED="$CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR"
+BEH_PERSONAL="$CLAUDE_AUTO_BEHAVIOURS_DIR"
+rm -f "$BEH_SHIPPED"/*.md "$BEH_PERSONAL"/*.md "${WORK}/beh/behaviours-seen.json"
+BEH_RUNF="$(new_run w3f)"
+beh_seed "$BEH_RUNF" files >/dev/null
+bwf "$BEH_SHIPPED" sdef "shipped default"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUNF" --json 2>&1)"
+BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+it "a shipped default shows layer shipped and in force"
+check "sdef:shipped:True" "$(beh_q '" ".join("%s:%s:%s" % (b["id"], b["layer"], b["in_force"]) for b in d["contract"]["behaviours"])')"
+it "the shipped default's text line says shipped"
+has "behaviour sdef (shipped, active, applies to" "$BEH_STATUS3"
+
+bwf "$BEH_PERSONAL" sdef "my own take"
+bwf "$BEH_PERSONAL" mine "only mine"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUNF" --json 2>&1)"
+BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+it "a copied default shows yours (replaces shipped) and a lone personal file shows personal file"
+has "behaviour sdef (yours (replaces shipped), active" "$BEH_STATUS3"
+has "behaviour mine (personal file, active" "$BEH_STATUS3"
+it "the shipped row is not in force and is overridden by the copy"
+check "sdef:shipped:False:['sdef']" "$(beh_q '" ".join("%s:%s:%s:%s" % (b["id"], b["layer"], b["in_force"], b["overridden_by"]) for b in d["contract"]["behaviours"] if b["layer"] == "shipped")')"
+it "a copy with no seen record carries no update tag"
+lacks "update available" "$BEH_STATUS3"
+it "P rules shows the same labelled rows"
+BEH_RULES3="$("$PY" "$PROG" rules --run "$BEH_RUNF" 2>&1)"
+has "behaviour sdef (yours (replaces shipped), active" "$BEH_RULES3"
+
+it "AE3: after the shipped file changes, the copy's row carries update available"
+BEH_OLD_HASH="$(run_py <<'EOF'
+print(load_lib_module("programme_behaviour_file_verbs").shipped_hash("sdef"))
+EOF
+)"
+printf '{"sdef": {"seen": "%s", "shown": "%s"}}\n' "$BEH_OLD_HASH" "$BEH_OLD_HASH" > "${WORK}/beh/behaviours-seen.json"
+BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+lacks "update available" "$BEH_STATUS3"
+bwf "$BEH_SHIPPED" sdef "shipped default, revised"
+BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+has "behaviour sdef (yours (replaces shipped), update available, active" "$BEH_STATUS3"
+it "the view never writes the seen record"
+check "$BEH_OLD_HASH" "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["sdef"]["seen"])' "${WORK}/beh/behaviours-seen.json")"
+
+it "a shipped change after the last shown hash sets needs_show and the row says not yet shown"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUNF" --json 2>&1)"
+check "True" "$(beh_q '[b["needs_show"] for b in d["contract"]["behaviours"] if b["layer"] == "personal" and b["id"] == "sdef"][0]')"
+has "update available, active, not yet shown" "$BEH_STATUS3"
+it "once shown equals the current shipped hash, needs_show is false and the text drops not yet shown"
+BEH_NEW_HASH="$(run_py <<'EOF'
+print(load_lib_module("programme_behaviour_file_verbs").shipped_hash("sdef"))
+EOF
+)"
+printf '{"sdef": {"seen": "%s", "shown": "%s"}}\n' "$BEH_OLD_HASH" "$BEH_NEW_HASH" > "${WORK}/beh/behaviours-seen.json"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUNF" --json 2>&1)"
+BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+check "True False" "$(beh_q '"%s %s" % tuple([(b["update_available"], b["needs_show"]) for b in d["contract"]["behaviours"] if b["layer"] == "personal" and b["id"] == "sdef"][0])')"
+has "update available" "$BEH_STATUS3"
+lacks "not yet shown" "$BEH_STATUS3"
+it "a shipped row and a personal file row with no quote name their source"
+has "source: shipped" "$(printf '%s\n' "$BEH_STATUS3" | grep 'behaviour sdef (shipped')"
+has "source: personal file" "$(printf '%s\n' "$BEH_STATUS3" | grep 'behaviour mine')"
+
+it "a broken personal file appears under rejected behaviours with its file name"
+printf 'no frontmatter here\n' > "$BEH_PERSONAL/broken.md"
+BEH_STATUS3="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+has "rejected behaviours: 1 (broken" "$BEH_STATUS3"
+BEH_JSON="$("$PY" "$PROG" status --run "$BEH_RUNF" --json 2>&1)"
+has "broken" "$(beh_q '[(r["id"], r["layer"], r["key"], r["reason"]) for r in d["model"]["rules_in_force"]["rejected_behaviours"]]')"
+rm -f "$BEH_PERSONAL/broken.md"
+
+it "with both folders empty a programme renders the same as without file support"
+rm -f "$BEH_SHIPPED"/*.md "$BEH_PERSONAL"/*.md
+BEH_EMPTY_A="$("$PY" "$PROG" status --run "$BEH_RUNF" 2>&1)"
+check "False" "$(case "$BEH_EMPTY_A" in *"shipped"*|*"update available"*|*"personal file"*) echo True ;; *) echo False ;; esac)"
 
 rm -f "$CLAUDE_AUTO_BEHAVIOURS_STORE"
 BEH_NONE="$(new_run w33)"
