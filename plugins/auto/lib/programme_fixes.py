@@ -68,6 +68,7 @@ FIXES = {
     "check-mergeable": _ITEM,
     "claim": ("`programme.sh context --item <id> --run <id>` lists the item's deliverables; "
               "rerun `programme.sh claim` with one of them and a reference with no spaces"),
+    "check-behaviour": _READ,
     "clear-blocker": _ITEM,
     "clear-proposal": _WRITE,
     "close-ruling": _TYPED,

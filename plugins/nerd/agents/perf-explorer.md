@@ -1,6 +1,6 @@
 ---
 name: perf-explorer
-model: sonnet
+model: haiku
 color: blue
 tools: ["Read", "Glob", "Grep"]
 description: "Maps codebase for performance research — identifies hot paths, I/O boundaries, complex functions, and areas of interest. Produces a structured area map that guides specialist agent dispatch."

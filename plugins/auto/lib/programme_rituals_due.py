@@ -113,11 +113,17 @@ def _pending_time(programme, entry, index):
     return happened
 
 
+def _cap(text):
+    return text if len(text) <= TEXT_CAP else text[:TEXT_CAP - 1] + "…"
+
+
 def _row(entry, state, pending):
     text = " ".join(entry["when"]["text"].split())
     return {"ritual": entry["id"], "layer": entry["layer"], "trigger": entry["when"]["trigger"], "state": state,
             "pending_at": pending.strftime(programme_rituals.TIME_FORMAT),
-            "when": text if len(text) <= TEXT_CAP else text[:TEXT_CAP - 1] + "…", "steps": list(entry["steps"])}
+            "when": text if len(text) <= TEXT_CAP else text[:TEXT_CAP - 1] + "…", "steps": list(entry["steps"]),
+            **({"offers": [_cap(o) for o in entry["offers"]], "offers_rule": programme_rituals.OFFERS_RULE}
+               if entry.get("offers") else {})}
 
 
 def _context(record, run_id, lookup, store, rows):

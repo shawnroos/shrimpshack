@@ -17,6 +17,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_home = load_lib_module("programme_home")
 programme_permission_rules = load_lib_module("programme_permission_rules")
 programme_behaviours = load_lib_module("programme_behaviours")
+run_record_core = load_lib_module("run_record_core")
 programme_rituals = load_lib_module("programme_rituals")
 programme_rituals_due = load_lib_module("programme_rituals_due")
 programme_carryover = load_lib_module("programme_carryover")
@@ -563,7 +564,8 @@ def rituals_view(record, journal_entries) -> list:
     parked = [e for e in _dict(record.get("programme")).get("rituals") or []
               if isinstance(e, dict) and e.get("id") not in live and e.get("state") in ("proposed", "retired")]
     rows = [{"id": e["id"], "layer": e.get("layer"), "trigger": _dict(e.get("when")).get("trigger"),
-             "when": _dict(e.get("when")).get("text"), "steps": list(e.get("steps") or []), "state": e["state"]}
+             "when": _dict(e.get("when")).get("text"), "steps": list(e.get("steps") or []), "state": e["state"],
+             "offers": list(e.get("offers") or [])}
             for e in parked]
     rows += [{"id": r.get("id"), "layer": r.get("layer"), "state": "rejected", "when": r.get("reason")}
              for r in programme_rituals.resolve(record, store=loaded)["rejected"]]
@@ -572,15 +574,24 @@ def rituals_view(record, journal_entries) -> list:
         rows.append({"id": e["id"], "layer": e["layer"], "trigger": e["when"]["trigger"], "when": e["when"]["text"],
                      "steps": list(e["steps"]), "state": hit["state"] if hit else "scheduled",
                      "pending_at": hit and hit["pending_at"], "offered": bool(hit and hit.get("offered")),
-                     "next_due_at": _dict(clock.get(e["id"])).get("next_due_at")})
+                     "next_due_at": _dict(clock.get(e["id"])).get("next_due_at"),
+                     "next_due_local": _local_due(_dict(clock.get(e["id"])).get("next_due_at")),
+                     "offers": list(e.get("offers") or [])})
     return rows
+
+
+def _local_due(stamp):
+    parsed = run_record_core.parse_iso(stamp) if stamp else None
+    return programme_rituals.local_text(parsed) if parsed else None
 
 
 def _ritual_text(r) -> str:
     when = f"{r.get('trigger')}: {r.get('when')}"
-    due = f", since {r['pending_at']}" if r.get("pending_at") else (f", next {r['next_due_at']}" if r.get("next_due_at") else "")
+    local = f" = {r['next_due_local']} machine local time" if r.get("next_due_local") else ""
+    due = f", since {r['pending_at']}" if r.get("pending_at") else (f", next {r['next_due_at']}{local}" if r.get("next_due_at") else "")
+    offers = f"; offers (ask Shawn, never act): {' / '.join(r['offers'])}" if r.get("offers") else ""
     flag = {"missed": " [MISSED, ask Shawn]", "in_flight": " [IN FLIGHT, finish or offer]", "due": " [due]"}.get(r.get("state"), "")
-    return f"ritual {r.get('id')} ({r.get('layer')}, {r.get('state')}{due}){flag}: {when}"
+    return f"ritual {r.get('id')} ({r.get('layer')}, {r.get('state')}{due}){flag}: {when}{offers}"
 
 
 def _behaviour_text(b) -> str:
