@@ -376,16 +376,14 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      states it in its pane. Weigh it with section 6 of
      [references/judgment.md](references/judgment.md). Send no message that
      changes no decision (section 7).
-   - Every brief or prompt to a worker carries these clauses:
-     - The assignment it works under, by id: the Ruling revision and its
-       limits from `P context --item <item>` (for example `decision:browser-first@2`,
-       "no Linux work"). Quote the limits; do not paraphrase them.
-     - "Record before any long background wait: send your claim first."
-     - "Never prompt the PM's pane. Report with
-       `bash <plugin root>/lib/programme.sh claim --run <run> --item <item> --deliverable <name> --ref <ref>`."
-     - "When a command is denied permission, do not run it again, and do not try
-       another tool, wrapper or worker for it. Continue the work that does not
-       need it; the PM reads the refusal from your transcript."
+   - Every brief or prompt to a worker names the assignment it works under, by
+     id: the Ruling revision and its limits from `P context --item <item>` (for
+     example `decision:browser-first@2`, "no Linux work"). Quote the limits; do
+     not paraphrase them. The standing worker clauses (record before a long
+     wait, never prompt the PM's pane, a blocked command) are shipped files in
+     `behaviours/`, and you never retype them. A start with a handoff carries
+     them. For a start without a handoff, and for a later prompt, add
+     `--standing` to `P prompt-item`.
    - Before a long wait on a worker, and before any cleanup of its worktree,
      keep what it made: `P collect-result --item <item> --attempt <token> --source <path> --root <worktree>`
      for each result file, and `P preserve-code --source <worktree>` for its code.

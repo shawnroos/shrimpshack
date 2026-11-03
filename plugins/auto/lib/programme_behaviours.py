@@ -345,7 +345,33 @@ def brief_for_start(record, item, chosen=(), *, has_handoff, lookup=None) -> tup
     return taken, held_back, []
 
 
-def _short(entry) -> str:
+# A shipped file cannot know the run, the item or where the plugin sits, so it names a placeholder and
+# the code that renders a brief or a reminder fills it. A name this table lacks is refused at load.
+PLACEHOLDERS = ("claim_command",)
+_PLACEHOLDER = re.compile(r"\{([^{}\s]*)\}")
+
+
+def unknown_placeholder(text):
+    return next((n for n in _PLACEHOLDER.findall(text) if n not in PLACEHOLDERS), None)
+
+
+def fills_for(run_id, item_key) -> dict:
+    program = os.path.join(os.path.dirname(_LIB_DIR), "lib", "programme.sh")
+    return {"claim_command": f"bash {program} claim --run {run_id} --item {item_key} --deliverable <name> --ref <ref>"}
+
+
+def _fill(text, fills) -> str:
+    return _PLACEHOLDER.sub(lambda m: fills.get(m.group(1), m.group(0)), text) if fills else text
+
+
+# What prompt-item --standing sends: the worker behaviours that start with the work, minus those only
+# the PM can judge (the same ones a start brief holds back until the PM names them).
+def standing_entries(record, item, lookup=None) -> list:
+    rows = in_force(record, item, audience="workers", lookup=lookup)
+    return [e for e in rows if trigger_of(e) == "start" and not _pm_checked_only(e)]
+
+
+def _short(entry, fills=None) -> str:
     parts = [f"{entry['id']}: when {entry['when']['text']}"]
     for label, field in (("do", "do"), ("don't", "dont")):
         if entry.get(field):
@@ -356,11 +382,11 @@ def _short(entry) -> str:
     judged = [c["text"] for c in entry["when"].get("checks") or [] if c["by"] == "agent"]
     if judged:
         parts.append(f"you judge: {'; '.join(judged)}")
-    return ". ".join(parts)
+    return _fill(". ".join(parts), fills)
 
 
-def brief_lines(entries) -> list:
-    return ["Behaviours this work follows:"] + ["- " + _short(e) for e in entries] if entries else []
+def brief_lines(entries, fills=None) -> list:
+    return ["Behaviours this work follows:"] + ["- " + _short(e, fills) for e in entries] if entries else []
 
 
 # A move or keep is when the behaviour began reaching other items, so it counts as a start
@@ -778,11 +804,11 @@ _OPENERS = {
 }
 
 
-def _reminder(entry, reason, when, count, cap) -> str:
+def _reminder(entry, reason, when, count, cap, fills=None) -> str:
     opener = _OPENERS.get((reason, when), "This applies to your work now.")
     if reason == "sent_back" and count > 1:
         opener += f" This is send-back {count} for this behaviour."
-    lines = [f"Behaviour {entry['id']}: {opener}", _short(entry)]
+    lines = [f"Behaviour {entry['id']}: {opener}", _short(entry, fills)]
     return programme_sanitize.clean("\n".join(lines), cap, keep_newlines=True)
 
 
@@ -815,7 +841,7 @@ def _h_remind(host, argv):
         record_delivery(sent_item, bid, reason, "remind-behaviour", **facts)
 
     return sources.send_to_item(
-        host, opts, (run_id, home, record, sid), programme, key, _reminder(entry, reason, when, count, sources.PROMPT_CAP),
+        host, opts, (run_id, home, record, sid), programme, key, _reminder(entry, reason, when, count, sources.PROMPT_CAP, fills_for(run_id, key)),
         kind=REMINDED, on_sent=on_sent,
         extra=dict(facts, behaviour=bid, reason=reason, sent_back_count=count,
                    already_reminded=any(d.get("reason") in REASONS for d in before)))

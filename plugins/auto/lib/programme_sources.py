@@ -589,7 +589,7 @@ def _decision_line(decision_id, logged, records) -> str:
             f"reason: {current.get('reason')}; limits: {limits}")
 
 
-def _brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(), *, rulings=False) -> str:
+def _brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(), *, rulings=False, fills=None) -> str:
     logged = {d.get("id"): d for d in programme.get("decisions") or [] if isinstance(d, dict)}
     try:
         records = programme_context.block(programme)["decisions"]
@@ -632,7 +632,7 @@ def _brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(),
     if restrictions:
         lines.append("Restrictions on this work:")
         lines += [f"- {r['text']} (source: {r['source']})" for r in restrictions]
-    lines += programme_behaviours.brief_lines(behaviours)
+    lines += programme_behaviours.brief_lines(behaviours, fills)
     return "\n\n" + "\n".join(lines) if lines else ""
 
 
@@ -755,7 +755,8 @@ def _h_start_worker(host, argv):
     behaviour_ids = [b["id"] for b in behaviours]
     # Without a handoff there is no brief to carry the Rulings, and requiring one would refuse plain starts.
     with_brief = bool(decision_ids or restrictions or behaviours) or has_handoff
-    tail = _brief_tail(host, programme, key, decision_ids, restrictions, behaviours, rulings=with_brief)
+    tail = _brief_tail(host, programme, key, decision_ids, restrictions, behaviours, rulings=with_brief,
+                       fills=programme_behaviours.fills_for(run_id, key))
     refusal = programme_context.unsafe_reason(programme, key, "start_worker")
     if refusal:
         raise host.ProgrammeError(refusal)
@@ -844,10 +845,10 @@ def check_target(owner, record) -> dict:
 
 def _h_prompt_item(host, argv):
     argv, decision_ids = _take(argv, "--decision")
-    positional, opts = host._parse(argv, values=("run",), multi=("restriction", "source", "despite"))
+    positional, opts = host._parse(argv, values=("run",), flags=("standing",), multi=("restriction", "source", "despite"))
     if len(positional) != 2:
         raise ValueError("usage: prompt-item <item> <text> [--despite <attempt>]... [--decision <id>]... "
-                         "[--restriction <text> --source <source>]...")
+                         "[--restriction <text> --source <source>]... [--standing]")
     item_id = programme_record.check_item_id(positional[0])
     restrictions = _restrictions(opts)
     text = programme_sanitize.clean(positional[1], PROMPT_CAP, keep_newlines=True)
@@ -857,7 +858,10 @@ def _h_prompt_item(host, argv):
     sid = host._guard(home, record)
     programme = programme_home.normalize_programme(record.get("programme") or {})
     key = programme_record._resolve(programme, item_id)
-    tail = _brief_tail(host, programme, key, decision_ids, restrictions, rulings=bool(decision_ids or restrictions))
+    standing = programme_behaviours.standing_entries(dict(record, programme=programme), programme["items"][key],
+                                                     host.prompt_lookup) if opts.get("standing") else ()
+    tail = _brief_tail(host, programme, key, decision_ids, restrictions, standing,
+                       rulings=bool(decision_ids or restrictions), fills=programme_behaviours.fills_for(run_id, key))
     if tail:
         text = programme_sanitize.clean(positional[1], 0, keep_newlines=True) + tail
         if len(text) > PROMPT_CAP:
@@ -967,11 +971,12 @@ _SPECS = (
      "copy of the handoff file in the programme home and passes the copy."),
     ("prompt-item", _h_prompt_item,
      "<item> <text> [--despite <attempt>]... [--decision <id>]... [--restriction <text> --source <source>]... "
-     "[--run <id>]",
+     "[--standing] [--run <id>]",
      "an item with no pane; a driver's pane or a tracker pane; a pane whose terminal changed; a pane "
      "with no live agent; a pane whose reported session is not the item's owner; an unknown decision "
      "id; a restriction without a valid source; text that its decisions and restrictions push over "
-     "4000 characters. Refusals are journaled. An earlier prompt to the item that is admitted or "
+     "4000 characters. --standing appends the worker behaviours that start with the work, the same lines a start "
+     "brief carries. Refusals are journaled. An earlier prompt to the item that is admitted or "
      "uncertain refuses unless named with --despite."),
     ("reconcile-operations", _h_reconcile, "[--run <id>]",
      "any session but the current driving one. Works after end. Settles an admitted launch when a live "

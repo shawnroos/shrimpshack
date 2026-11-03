@@ -65,6 +65,8 @@ A file is one entry: the file name without `.md` is the `id`, and a file with no
 
 - Frontmatter keys: `when` (required, one scalar line), and the optional scalars `trigger`, `applies_to` (default `both`), `evidence`, `stop`, `why`; and the optional lists `checks` (each item starts `pm:` or `agent:`), `overrides`, `skills`, `tools`, `agents`, `formats`, `comms`. Any other key, including `examples`, is `unknown_key`. A key given twice, a line that is not `key: value`, or a bad check prefix is `bad_value`.
 - The body holds a `Do:` heading and a `Don't:` heading, each followed by `-` or `*` bullets. Text outside a bullet list is `bad_value body`. At least one Do or Don't line is required (section 3).
+- A line may hold the placeholder `{claim_command}`. A start brief, a reminder and `prompt-item --standing` replace it with the `programme.sh claim` command for that run and item; the status and rules views show it unfilled. Any other `{name}` is `bad_value placeholder` and the file does not load.
+- `prompt-item <item> <text> --standing` appends the worker behaviours with trigger `start` that are in force for the item, as the same "Behaviours this work follows:" block a start brief carries. A start with no handoff carries no brief, so its first prompt uses this flag.
 - The file goes through the same entry check as a stored entry (sections 3 and 4), and `formats` and `comms` lines are also scanned for protected escalations.
 - A file entry has state `active`, a `source` that is the string `file` (not the object of section 3), and no `history` or `adoption`. Its `at` is the file's modification time, so editing a file restarts its start (section 8).
 
