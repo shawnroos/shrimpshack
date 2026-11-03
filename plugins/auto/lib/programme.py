@@ -934,6 +934,7 @@ _VERBS.update(load_lib_module("programme_behaviour_file_verbs").build_verbs(sys.
 programme_rituals = load_lib_module("programme_rituals")
 _VERBS.update(programme_rituals.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_ritual_run").build_verbs(sys.modules[__name__]))
+_VERBS.update(load_lib_module("programme_ritual_file_verbs").build_verbs(sys.modules[__name__]))
 AFTER_BEAT.append(programme_rituals.note_gap)
 
 _ERRORS = (

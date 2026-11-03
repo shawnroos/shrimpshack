@@ -137,6 +137,7 @@ mkrepo() {
   git -C "${WORK}/${name}" add -A
   git -C "${WORK}/${name}" "${GITENV[@]}" commit -q -m initial
   git -C "${WORK}/${name}" push -q origin main 2>/dev/null
+  git -C "${WORK}/${name}" fetch -q origin 2>/dev/null
   git -C "${WORK}/${name}" remote set-head origin main >/dev/null 2>&1
 }
 push_file() { # name file text: commit a new version of a ritual file and push it to origin/main
@@ -164,7 +165,7 @@ print(json.dumps({"in_force": sorted(e["id"] for e in got["in_force"]),
                   "proposals": sorted((p["id"], p["state"]) for p in fr["proposals"]),
                   "adopted": sorted((a["id"], a["state"]) for a in fr["adopted"]),
                   "rejected": sorted((r["id"], r["reason"]) for r in got["rejected"]),
-                  "notices": got["notices"]}))
+                  "notices": got["notices"]}, sort_keys=True))
 EOF
 }
 fh() { # run -> short hash of the first proposal
@@ -180,7 +181,8 @@ RUN1="$(files_run r1)"
 it "F1: a committed ritual file on origin/HEAD is proposed, not in force"
 check '{"adopted": [], "in_force": [], "notices": [], "proposals": [["plugin-versions", "proposed"]], "rejected": []}' "$(fview "$RUN1")"
 
-it "F2: an uncommitted edit, a new local branch and an unpushed local commit change nothing"
+it "F2: an uncommitted edit, a new local branch and an unpushed local commit change nothing (same hash as before)"
+HBEFORE="$(fh "$RUN1")"
 printf '%s' "---
 when: edited
 schedule: daily 10:00
@@ -193,7 +195,11 @@ git -C "${WORK}/r1" checkout -q -b worker
 git -C "${WORK}/r1" add -A
 git -C "${WORK}/r1" "${GITENV[@]}" commit -q -m "worker edit"
 check '{"adopted": [], "in_force": [], "notices": [], "proposals": [["plugin-versions", "proposed"]], "rejected": []}' "$(fview "$RUN1")"
+check "$HBEFORE" "$(fh "$RUN1")"
 git -C "${WORK}/r1" checkout -q main
+git -C "${WORK}/r1" "${GITENV[@]}" merge -q worker 2>/dev/null
+check "$HBEFORE" "$(fh "$RUN1")"
+git -C "${WORK}/r1" reset -q --hard origin/main
 
 it "F2b: an origin/HEAD that does not resolve is a visible notice, with no fallback to local main"
 mkrepo r2
@@ -205,7 +211,7 @@ print(got["file_rituals"]["proposals"] == [], any("origin/HEAD" in n for n in go
 EOF
 )"
 
-it "F3: a symlinked rituals folder, a symlinked file and a gitlink are never read"
+it "F3: a symlinked rituals folder and a symlinked file are never read"
 mkrepo r3 ""
 rm -rf "${WORK}/r3/.auto/rituals"
 mkdir -p "${WORK}/r3/real"; printf '%s' "$FILE_OK" > "${WORK}/r3/real/plugin-versions.md"
@@ -218,6 +224,13 @@ ln -s /etc/hosts "${WORK}/r4/.auto/rituals/linked.md"
 git -C "${WORK}/r4" add -A; git -C "${WORK}/r4" "${GITENV[@]}" commit -q -m "symlinked file"; git -C "${WORK}/r4" push -q origin main 2>/dev/null
 RUN4="$(files_run r4)"
 check "[[\"linked\", \"bad_value\"]]" "$(fview "$RUN4" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rejected"]))')"
+
+it "F3b: a gitlink named like a ritual file is rejected, never read"
+mkrepo r10 ""
+git -C "${WORK}/r10" update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,.auto/rituals/sub.md
+git -C "${WORK}/r10" "${GITENV[@]}" commit -q -m "gitlink"; git -C "${WORK}/r10" push -q origin main 2>/dev/null
+RUN10="$(files_run r10)"
+check "[[\"sub\", \"bad_value\"]]" "$(fview "$RUN10" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rejected"]))')"
 
 it "F4: a bad file is a rejected row naming the id and the reason, and never stops the others"
 mkrepo r5 "bad.md" "---
@@ -260,6 +273,19 @@ RUN6="$(files_run r6)"
 check '[["check", "bad_value"], ["step", "protected_escalation"]]' "$(fview "$RUN6" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rejected"]))')"
 check '[["offer", "proposed"]]' "$(fview "$RUN6" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["proposals"]))')"
 
+it "F4c: the ritual file this repo ships is valid, its check is in the list, and the ask is an offer"
+EXAMPLE_DIR="${AUTO_ROOT}/../../.auto/rituals"
+if [ -d "$EXAMPLE_DIR" ]; then
+  check "plugin-versions-bumped versions-bumped True" "$(run_py "${EXAMPLE_DIR}/plugin-versions-bumped.md" <<'EOF'
+prf = load_lib_module("programme_ritual_files")
+e = prf.parse_text(open(args[0]).read(), "plugin-versions-bumped", "shawnroos/shrimpshack")
+print(e["id"], e["check"]["name"], "publish" not in " ".join(e["steps"]) and bool(e["offers"]))
+EOF
+)"
+else
+  echo "  skipped: .auto/rituals is not above the plugin folder (an installed copy)"; pass
+fi
+
 # ---- adoption by content hash ----
 it "F5: adopt-ritual-file needs typed words naming the id, the check and the hash, and puts it in force"
 H1="$(fh "$RUN1")"
@@ -267,10 +293,31 @@ P_NO="$(tprompt "$RUN1" "adopt plugin-versions")"
 prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_NO" --run "$RUN1"
 check 1 "$CODE"
 has "does not name" "$OUT"
+P_NOHASH="$(tprompt "$RUN1" "adopt plugin-versions with the versions bumped check")"
+prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_NOHASH" --run "$RUN1"
+check 1 "$CODE"
+has "${H1}" "$OUT"
 P_OK="$(tprompt "$RUN1" "adopt plugin-versions ${H1} with the versions bumped check")"
 prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_OK" --run "$RUN1"
 check 0 "$CODE"
 check '{"adopted": [["plugin-versions", "adopted"]], "in_force": ["plugin-versions"], "notices": [], "proposals": [], "rejected": []}' "$(fview "$RUN1")"
+
+it "F5b: a prompt that names the id and hash but not the check is refused for a file that carries a check"
+mkrepo r11
+RUN11="$(files_run r11)"
+H11="$(fh "$RUN11")"
+P_NOCHK="$(tprompt "$RUN11" "adopt plugin-versions ${H11}")"
+prog adopt-ritual-file acme/r11/plugin-versions --prompt "$P_NOCHK" --run "$RUN11"
+check 1 "$CODE"
+has "versions bumped" "$OUT"
+check '{"adopted": [], "in_force": [], "notices": [], "proposals": [["plugin-versions", "proposed"]], "rejected": []}' "$(fview "$RUN11")"
+
+it "F5c: the adopted ritual is a repo-layer ritual with its repo key and check, and it counts as a file ritual"
+check "repo acme/r1 versions-bumped" "$(run_py "$RUN1" <<'EOF'
+e = [e for e in pr.in_force(record(args[0])) if e["id"] == "plugin-versions"][0]
+print(e["layer"], e["repo_key"], e["check"]["name"])
+EOF
+)"
 
 it "F6: a prompt that names a stale hash is refused"
 mkrepo r7
@@ -333,6 +380,13 @@ EOF
 )"
 check '[["plugin-versions", "id_collision"], ["plugin-versions", "id_collision"]]' "$(fview "$RUN89" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rejected"]))')"
 check '["plugin-versions"]' "$(fview "$RUN89" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["in_force"]))')"
+
+it "F9b: the due digest lists proposed files so the PM can put them to Shawn"
+check "[('plugin-versions', 'proposed')]" "$(run_py "$RUN11" <<'EOF'
+d = due.due(record(args[0]), args[0])
+print([(p["ritual"], p["state"]) for p in d["file_proposals"]])
+EOF
+)"
 
 it "F10: the Programme view shows the layer, the commit, the age of the clone and the adoption state"
 RUNV="$(files_run r5)"
