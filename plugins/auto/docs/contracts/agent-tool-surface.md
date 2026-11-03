@@ -86,7 +86,9 @@ A programme's agreement (Scope and Rulings) and the protocol (Authority and Done
 programme is found by `--run <id>`, or else by the lease that names the caller's
 session.
 
-- **Read**: `describe`; `rules` prints the rules in force (the agreement's Scope
+- **Read**: `describe`; `host` prints which terminal host this session resolves to, the fact that decided it
+  (live pane proof, the one installed host command, or this session's registry row) and, when it refuses, what
+  was missing; it writes nothing; `rules` prints the rules in force (the agreement's Scope
   terms, active Rulings, Done standards, Authority entries outside the plugin layer,
   protocol changes, Ruling conflicts and old reservations to record again), rebuilt from the run record and wrapped in
   an `<auto-rules>` tag as data, followed by the restored context (decisions,
