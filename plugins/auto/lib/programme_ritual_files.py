@@ -37,7 +37,7 @@ MAX_FILE_BYTES = programme_behaviour_files.MAX_FILE_BYTES
 MAX_LINE_CHARS = programme_behaviour_files.MAX_LINE_CHARS
 KEYS = ("when", "schedule", "trigger", "check", "check_base", "why")
 CACHE_SECONDS = 20.0
-APPROVAL_STATES = ("proposed", "changed", "declined")
+SHORT = 20
 
 _NAME_RE = re.compile(r"[a-z][a-z0-9-]*\.md")
 _OID_RE = re.compile(r"[0-9a-f]{40,64}")
@@ -113,13 +113,23 @@ def entry_hash(entry) -> str:
     return programme_protocol.content_hash({"schema": SCHEMA, "entry": entry})[len("sha256:"):]
 
 
+_ID_LABEL = re.compile(r"[a-z][a-z0-9-]*")
+
+
 def _rejected(key, rid, exc) -> dict:
-    return {"layer": "repo", "key": key, "id": rid, "reason": exc.reason, "detail": exc.detail, "source": "file"}
+    # The id of a rejected file comes from a file name anyone with push access chose; only a safe slug is shown.
+    label = rid if _ID_LABEL.fullmatch(rid) else "<unnamed file>"
+    return {"layer": "repo", "key": key, "id": label, "reason": exc.reason, "detail": exc.detail, "source": "file"}
 
 
 def _read_repo(path, key) -> dict:
-    """Entries, rejected rows and a notice from one remit repo's default branch; never raises."""
-    out = {"entries": [], "rejected": [], "notice": None, "commit": None, "ref_age_seconds": None, "read": False}
+    """Entries, rejected rows and a notice from one remit repo's default branch; never raises.
+
+    ``read`` is True only when the whole listing was handled. ``listed`` holds every ``.md`` name the
+    default branch has, valid or not, so a file that turns invalid is told apart from one that is gone.
+    """
+    out = {"entries": [], "rejected": [], "notice": None, "commit": None, "ref": None, "ref_age_seconds": None,
+           "read": False, "listed": set()}
     checks = programme_ritual_checks
     try:
         if not os.path.isabs(path) or not os.path.isdir(path):
@@ -138,23 +148,23 @@ def _read_repo(path, key) -> dict:
                                  "(there is no fallback to a local branch)")
                 return out
             commit = repo.text(["rev-parse", "--verify", "--end-of-options", head + "^{commit}"])
-            out.update(commit=commit, ref_age_seconds=checks._fetch_age(repo), read=True)
+            out.update(commit=commit, ref=head, ref_age_seconds=checks._fetch_age(repo))
             listing = repo.run(["ls-tree", "-z", "-l", commit, FOLDER + "/"]).split(b"\0")
-            files = [line for line in listing if line]
-            if len(files) > MAX_FILES:
-                out["notice"] = f"{key} has more than {MAX_FILES} ritual files; none read"
-                return out
-            for line in files:
+            items = []
+            for line in listing:
                 meta, _, name = line.decode("utf-8", "replace").partition("\t")
                 name = name[len(FOLDER) + 1:]
                 parts = meta.split()
-                if len(parts) != 4 or not name.endswith(".md"):
-                    continue
-                mode, kind, oid, size = parts
+                if len(parts) == 4 and parts[1] != "tree" and name.endswith(".md"):
+                    items.append((parts, name))
+            out["listed"] = {name[:-3] for _, name in items}
+            if len(items) > MAX_FILES:
+                out["notice"] = f"{key} has more than {MAX_FILES} ritual files; none read"
+                out["read"] = True
+                return out
+            for (mode, kind, oid, size), name in items:
                 rid = name[:-3]
                 try:
-                    if kind == "tree":
-                        continue
                     if not _NAME_RE.fullmatch(name) or mode not in ("100644", "100755") or kind != "blob" \
                             or not _OID_RE.fullmatch(oid):
                         raise _Reject("bad_value", "file")
@@ -168,37 +178,64 @@ def _read_repo(path, key) -> dict:
                     out["entries"].append({"entry": entry, "hash": entry_hash(entry), "path": f"{FOLDER}/{name}"})
                 except _Reject as exc:
                     out["rejected"].append(_rejected(key, rid, exc))
+            out["read"] = True
     except checks._Stop as stop:
-        out["notice"] = f"ritual files in {key} not read: {stop.reason}"
+        out.update(entries=[], rejected=[], read=False, notice=f"ritual files in {key} not read: {stop.reason}")
     except programme_gitio.GitError as exc:
-        out["notice"] = f"ritual files in {key} not read: {exc.code}"
+        out.update(entries=[], rejected=[], read=False, notice=f"ritual files in {key} not read: {exc.code}")
     except Exception:  # noqa: BLE001 — a broken repo must degrade to a notice, never stop a sweep
-        out["notice"] = f"ritual files in {key} not read: internal"
+        out.update(entries=[], rejected=[], read=False, notice=f"ritual files in {key} not read: internal")
     return out
 
 
 def _cached(path, key, fresh):
     now = time.monotonic()
-    hit = _cache.get(path)
+    hit = _cache.get((path, key))
     if hit is not None and not fresh and now - hit[0] < CACHE_SECONDS:
         return hit[1]
     got = _read_repo(path, key)
-    _cache[path] = (now, got)
+    _cache[(path, key)] = (now, got)
     return got
 
 
 def _row(item, key, repo, state, entry=None) -> dict:
     entry = entry or item["entry"]
-    return {"id": entry["id"], "repo_key": key, "state": state, "hash": item["hash"], "hash_short": item["hash"][:12],
-            "entry": entry, "file": {"path": item["path"], "commit": repo["commit"],
+    return {"id": entry["id"], "repo_key": key, "state": state, "hash": item["hash"], "hash_short": item["hash"][:SHORT],
+            "entry": entry, "file": {"path": item["path"], "commit": repo["commit"], "ref": repo["ref"],
                                       "ref_age_seconds": repo["ref_age_seconds"]}}
+
+
+def _snapshot(record, key, rid, out):
+    """The adopted entry, judged again by today's validator; a malformed or no-longer-valid one is a rejected row."""
+    programme_rituals = load_lib_module("programme_rituals")
+    snap = record.get("snapshot")
+    if not isinstance(snap, dict):
+        out["rejected"].append({"layer": "repo", "key": key, "id": rid, "reason": "adoption_malformed",
+                                "detail": "the adoption record holds no snapshot", "source": "file"})
+        return None
+    bare = {k: v for k, v in snap.items() if k not in ("source", "at")}
+    check = programme_rituals.verdict(bare, allow_adoption=False)
+    if not check["ok"]:
+        out["rejected"].append({"layer": "repo", "key": key, "id": rid, "reason": check["reason"],
+                                "detail": check["detail"], "source": "file"})
+        return None
+    return dict(bare, source="file", at=record.get("adopted_at"))
+
+
+def _unseen_row(snap, key, state, record) -> dict:
+    return {"id": snap["id"], "repo_key": key, "state": state, "hash": record.get("hash"),
+            "hash_short": str(record.get("hash"))[:SHORT], "entry": snap,
+            "file": {"path": f"{FOLDER}/{snap['id']}.md", "commit": None, "ref": None, "ref_age_seconds": None}}
 
 
 def file_layer(programme, taken, *, fresh=False) -> dict:
     """What the remit repos' ritual files mean for this programme.
 
-    ``taken`` is the set of ids another layer already holds: a file with such an id is rejected and
-    the established ritual is left alone. Two files with one id are both rejected.
+    ``taken`` is the set of ids another layer already holds: a file with such an id is rejected and the
+    established ritual is left alone. Two unadopted files with one id are both rejected; an adopted one
+    keeps its place. An adopted snapshot stays in force until Shawn adopts or declines the new content,
+    whatever happens to the file: it leaves force only when the repo was read and the file is gone, when
+    its repo left the remit, or when an established ritual holds its id.
     """
     adoptions = programme.get("ritual_adoptions") or {}
     out = {"in_force": [], "adopted": [], "proposals": [], "declined": [], "rejected": [], "notices": []}
@@ -218,19 +255,23 @@ def file_layer(programme, taken, *, fresh=False) -> dict:
     count = {}
     for _, item in seen:
         count[item["entry"]["id"]] = count.get(item["entry"]["id"], 0) + 1
-    present = set()
+    matched = set()
     for key, item in seen:
         entry = item["entry"]
         rid = entry["id"]
-        if rid in taken or count[rid] > 1:
+        name = f"{key}/{rid}"
+        record = adoptions.get(name) or {}
+        adopted = record.get("state") == "adopted"
+        if rid in taken or (count[rid] > 1 and not adopted):
             out["rejected"].append({"layer": "repo", "key": key, "id": rid, "reason": "id_collision", "source": "file",
                                     "detail": "another ritual or another repo's file has this id"})
             continue
-        present.add(f"{key}/{rid}")
-        record = adoptions.get(f"{key}/{rid}") or {}
         repo = loaded[key]
-        if record.get("state") == "adopted":
-            snap = dict(record["snapshot"], source="file", at=record.get("adopted_at"))
+        if adopted:
+            snap = _snapshot(record, key, rid, out)
+            matched.add(name)
+            if snap is None:
+                continue
             out["in_force"].append(snap)
             same = record.get("hash") == item["hash"]
             out["adopted"].append(_row(dict(item, hash=record.get("hash", item["hash"])), key, repo,
@@ -242,17 +283,15 @@ def file_layer(programme, taken, *, fresh=False) -> dict:
         else:
             out["proposals"].append(_row(item, key, repo, "proposed"))
     for name, record in adoptions.items():
-        key = name.rsplit("/", 1)[0]
-        if record.get("state") != "adopted" or name in present:
+        key, _, rid = name.rpartition("/")
+        got = loaded.get(key)
+        if record.get("state") != "adopted" or name in matched or got is None:
             continue
-        # A repo that was read and no longer holds the file removed the ritual; one that could not be read keeps its snapshot.
-        if loaded.get(key, {}).get("read"):
+        if rid in taken or (got["read"] and rid not in got["listed"]):
             continue
-        if record.get("snapshot", {}).get("id") in taken:
+        snap = _snapshot(record, key, rid, out)
+        if snap is None:
             continue
-        snap = dict(record["snapshot"], source="file", at=record.get("adopted_at"))
         out["in_force"].append(snap)
-        out["adopted"].append({"id": snap["id"], "repo_key": key, "state": "unread", "hash": record.get("hash"),
-                               "hash_short": str(record.get("hash"))[:12], "entry": snap,
-                               "file": {"path": f"{FOLDER}/{snap['id']}.md", "commit": None, "ref_age_seconds": None}})
+        out["adopted"].append(_unseen_row(snap, key, "unverified" if got["read"] else "unread", record))
     return out

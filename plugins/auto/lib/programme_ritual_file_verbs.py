@@ -26,7 +26,7 @@ run_record_core = load_lib_module("run_record_core")
 RitualError = programme_rituals.RitualError
 ADOPTED = "ritual_file_adopted"
 DECLINED = "ritual_file_declined"
-_HASH_WORD = re.compile(r"(?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f])")
+_HASH_WORD = re.compile(r"(?<![0-9a-f])[0-9a-f]{%d}(?![0-9a-f])" % programme_ritual_files.SHORT)
 
 
 def _rows(host, programme, rec, ref) -> list:
@@ -90,7 +90,8 @@ def _h_decline(host, argv):
         programme.setdefault("ritual_adoptions", {})[ref] = {
             "state": "declined", "hash": row["hash"], "declined_at": run_record_core.now_iso(),
             "prompt_id": prompt["prompt_id"]}
-        programme.setdefault("ritual_clock", {}).pop(row["id"], None)
+        if not any(e.get("id") == row["id"] for e in programme.get("rituals") or []):
+            programme.setdefault("ritual_clock", {}).pop(row["id"], None)
         return {"ritual": row["id"], "repo_key": row["repo_key"], "hash": row["hash"]}
 
     return host._write(opts, change, DECLINED, prompt_id=opts.get("prompt"), needs_prompt=True,

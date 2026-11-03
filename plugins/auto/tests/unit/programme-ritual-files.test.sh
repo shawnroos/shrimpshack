@@ -502,23 +502,24 @@ check '[["<unnamed file>", "bad_value"]]' "$(fview "$RUNG7" | python3 -c 'import
 it "G8: an adoption record whose snapshot is no longer valid, or has none, never takes the resolver down"
 mkrepo g8
 RUNG8="$(adopted_run g8)"
+push_file g8 "second.md" "$FILE_OK"
 run_py "$RUNG8" <<'EOF'
 def mutate(rec):
     a = rec["programme"]["ritual_adoptions"]["acme/g8/plugin-versions"]
     a["snapshot"]["steps"] = ["publish the plugin"]
-    rec["programme"]["ritual_adoptions"]["acme/g8/ghost"] = {"state": "adopted", "hash": "0" * 64}
+    rec["programme"]["ritual_adoptions"]["acme/g8/second"] = {"state": "adopted", "hash": "0" * 64}
 core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
 EOF
 check "[] []" "$(snapshot "$RUNG8")"
 check "True True" "$(fview "$RUNG8" | python3 -c 'import json,sys; r = [x[1] for x in json.load(sys.stdin)["rejected"]]; print("protected_escalation" in r, "adoption_malformed" in r)')"
 
-it "G9: two programmes in one process that list one path under different keys each see their own key"
-check "acme/g9 /" "$(run_py <<'EOF'
+it "G9: two programmes in one process that list one path under different keys each get entries and hashes built for their own key"
+check "acme/g9 True True" "$(run_py <<'EOF'
 mkp = lambda repo: {"remit": {"repos": [repo]}, "ritual_adoptions": {}}
-path = os.path.join(W, "g9") if False else os.path.join(os.environ["WORK"], "r1")
-a = pr.resolve({"programme": mkp({"path": path, "github": "acme/g9"})})["file_rituals"]["proposals"]
-b = pr.resolve({"programme": mkp({"path": path})})["file_rituals"]["proposals"]
-print(a[0]["repo_key"], "/" if b[0]["repo_key"].startswith("/") else b[0]["repo_key"])
+path = os.path.join(os.environ["WORK"], "r1")
+a = pr.resolve({"programme": mkp({"path": path, "github": "acme/g9"})})["file_rituals"]["proposals"][0]
+b = pr.resolve({"programme": mkp({"path": path})})["file_rituals"]["proposals"][0]
+print(a["entry"]["repo_key"], b["entry"]["repo_key"] == path, a["hash"] != b["hash"])
 EOF
 )"
 

@@ -623,7 +623,8 @@ def _ritual_text(r) -> str:
     if file:
         layer = f"repo (file) {file.get('repo_key')} {file.get('path')}"
         commit = f"commit {str(file['commit'])[:7]}" if file.get("commit") else "commit unread"
-        layer += f" {commit} hash {file.get('hash_short')}, {_age_text(file.get('ref_age_seconds'))}"
+        layer += (f" {file.get('ref') or 'unread branch'} {commit} hash {file.get('hash_short')}, "
+                  f"{_age_text(file.get('ref_age_seconds'))}")
         if r.get("adoption"):
             layer += f", {r['adoption']}"
     return f"ritual {r.get('id')} ({layer}, {r.get('state')}{due}){flag}: {when}{offers}"

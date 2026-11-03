@@ -333,7 +333,8 @@ def resolve(record, *, lookup=None, store=None) -> dict:
     narrow = [e for e in _programme_entries(programme, rejected) if not _held(loaded, e, keys)]
     repo = [e for key in keys for e in loaded["repos"].get(key) or []]
     # A repo file is the new, unreviewed party: it never replaces an established ritual with its id.
-    files = load_lib_module("programme_ritual_files").file_layer(programme, {e["id"] for e in loaded["personal"] + repo})
+    files = load_lib_module("programme_ritual_files").file_layer(
+        programme, {e["id"] for e in loaded["personal"] + repo + narrow})
     rejected += files["rejected"]
     chosen = {}
     for entry in loaded["personal"] + repo + files["in_force"] + narrow:
