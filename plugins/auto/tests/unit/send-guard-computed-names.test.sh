@@ -1062,6 +1062,106 @@ python3 -c 'import csv; print(1)'
 T
 HOOKCWD="$PROJ"
 
+echo "send-guard-computed-names: bypasses found in the third review round stay refused"
+D <<'T'
+ksh -c '$X pane send-text w9:zz hi'
+T
+D <<'T'
+fish -c 'herdr pane send-text w9:zz hi'
+T
+D <<'T'
+env ksh -c '$X pane send-text w9:zz hi'
+T
+A <<'T'
+ksh -c 'echo hi'
+T
+D <<'T'
+python3 - <<'EOF'
+open('json.py', 'w').write('x = 1')
+import json
+EOF
+T
+A <<'T'
+python3 -c 'open("out.txt", "w").write("x"); import json'
+T
+printf '#!/bin/sh %s/pb.sh\n' "$PROJ" > "${PROJ}/shebangarg.sh"
+printf 'H=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/pb.sh"
+chmod +x "${PROJ}/shebangarg.sh"
+D <<'T'
+./shebangarg.sh
+T
+A <<'T'
+cat > x9.sh <<'EOS'
+echo ok
+EOS
+bash X9.SH
+T
+A <<'T'
+cat > /tmp/zz-alias.sh <<'EOS'
+echo ok
+EOS
+bash /private/tmp/zz-alias.sh
+T
+D <<'T'
+cat > x9.sh <<'EOS'
+H=$(printf 'her%s' dr); $H pane send-text w2:p77 hi
+EOS
+bash X9.SH
+T
+ln -s nowhere "${PROJ}/dangle.sh"
+D <<'T'
+bash dangle.sh
+T
+D <<'T'
+printf '%s%s pane send-text 1:1 hi' her dr > fresh-ok.sh; bash fresh-ok.sh
+T
+D <<'T'
+taskset -c 0 python3 -c 'import socket'
+T
+D <<'T'
+timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 python3 -c 'import socket'
+T
+D <<'T'
+timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 python3 -c 'import socket'
+T
+printf 'H=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/sendx"
+chmod +x "${PROJ}/sendx"
+D <<'T'
+bun run sendx
+T
+A <<'T'
+PATH=$VOLTA_HOME/bin:$PATH npx tool
+T
+A <<'T'
+PATH="$(brew --prefix)/bin:$PATH" ls
+T
+A <<'T'
+PATH=$PATH:$(go env GOPATH)/bin ls
+T
+A <<'T'
+python3 -c 'import os; print(dict(os.environ), sorted(os.environ))'
+T
+A <<'T'
+python3 -c 'import os
+for k in os.environ:
+    print(k)'
+T
+D <<'T'
+python3 -c 'import os; e = os.environ; e["BASH_ENV"] = "/tmp/e"'
+T
+it "denial() answers inside the hook limit for a heredoc of 30,000 lines plus a computed send"
+V="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import send_guard
+cmd = "cat <<'EOF'\n" + "ls\n" * 30000 + "EOF\n$X pane send-text w9:zz hi"
+t0 = time.monotonic()
+out = send_guard.denial("sess-worker", cmd)
+print("deny" if out else "allow", "fast" if time.monotonic() - t0 < 8 else "slow")
+PYEOF
+)"
+check "deny fast" "$V"
+
 echo "send-guard-computed-names: a command too large to read in time is refused, not left to the hook's kill (R10)"
 HUGE="$("$PY" -c 'print("bash a.sh; " * 3000)')"
 T0=$(date +%s)

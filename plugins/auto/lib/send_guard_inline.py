@@ -87,6 +87,7 @@ _NATIVE_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xf
                  b"\xca\xfe\xba\xbe", b"MZ")
 _SHELL_SHEBANGS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash"})
 _MODULE_SUFFIXES = frozenset({"py", "pyc", "pyo", "so", "pyd", "zip", "egg"})
+_COPIERS = frozenset({"dict", "sorted", "list", "set", "tuple", "len", "str", "repr", "print", "enumerate", "iter"})
 _ENVIRON_READS = frozenset({"get", "copy", "keys", "items", "values"})
 _FILE_MODE = frozenset("rwxabt+U")
 # A device path is how a script reaches a terminal without a command: `open('/dev/pts/3', 'w')`.
@@ -186,6 +187,10 @@ def _environ_read(node, up, parent) -> bool:
         return isinstance(up.ctx, ast.Load)
     if isinstance(up, ast.Attribute) and up.value is node:
         return up.attr in _ENVIRON_READS and isinstance(parent.get(up), ast.Call)
+    if isinstance(up, ast.Call):
+        return isinstance(up.func, ast.Name) and up.func.id in _COPIERS
+    if isinstance(up, (ast.For, ast.comprehension)):
+        return up.iter is node
     return isinstance(up, ast.Compare)
 
 
@@ -343,6 +348,10 @@ def shadowed(code: str, directories):
     nodes = list(ast.walk(tree))
     modules = {a.name.split(".")[0] for n in nodes if isinstance(n, ast.Import) for a in n.names}
     modules |= {n.module.split(".")[0] for n in nodes if isinstance(n, ast.ImportFrom) and n.module}
+    for name in written_names(code):
+        if os.path.basename(name).split(".")[0] in modules and name.rsplit(".", 1)[-1] in _MODULE_SUFFIXES:
+            return (f"the code writes `{name}` and imports a module of that name, so it would run the file it just "
+                    "wrote")
     folders = [d for d in directories if d]
     base = folders[0] if folders else None
     for n in nodes:
@@ -422,7 +431,7 @@ def plan(kind: str, rest: list) -> tuple:
             i += 1
             continue
         if kind in ("bun", "deno", "swift") and not _SCRIPT_WORD.search(tok):
-            return "none", None
+            return "file_maybe", tok
         return "file", tok
     return "stdin", None
 
@@ -438,6 +447,9 @@ class Context:
 
     def expired(self) -> bool:
         return time.monotonic() > self.deadline
+
+    def remaining(self) -> float:
+        return self.deadline - time.monotonic()
 
 
 def _git(args: list, cwd: str):
@@ -490,9 +502,12 @@ def fresh_text(path: str, ctx: Context):
     (None, reason) for one that cannot be read."""
     try:
         lst = os.lstat(path)
-        st = os.stat(path)
     except OSError:
         return None, None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None, "it is a link to a file that does not exist yet"
     newest = max(lst.st_mtime, lst.st_ctime, st.st_mtime, st.st_ctime)
     if newest < ctx.session_start:
         return None, None
@@ -518,10 +533,15 @@ def fresh_text(path: str, ctx: Context):
     return data.decode("utf-8", "replace"), None
 
 
+def shebang_words(text: str) -> list:
+    """The words on a `#!` line, else []."""
+    first = text.split("\n", 1)[0]
+    return first[2:].split() if first.startswith("#!") else []
+
+
 def shebang_interpreter(text: str):
     """The program path on a `#!` line, else None."""
-    first = text.split("\n", 1)[0]
-    words = first[2:].split() if first.startswith("#!") else []
+    words = shebang_words(text)
     return words[0] if words else None
 
 

@@ -33,6 +33,8 @@ _Body = collections.namedtuple("_Body", "text shell quoted target readers")
 _INLINE_FAULT = "CLAUDE_AUTO_TEST_SEND_GUARD_INLINE_FAULT"
 # The hook is killed at 10 s and a killed hook denies nothing, so a command too large to read in time is refused.
 COMMAND_CAP = 100_000
+# The lexer and the passes around it cost under 40 us a character, so a scan that cannot fit in the time left is refused.
+SCAN_SECONDS_PER_CHAR = 4e-5
 _TOO_LARGE = ("inline", "runtime-built command", "",
               "inline:the command is too large for auto to read in the time allowed; split it into smaller commands")
 # Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
@@ -482,7 +484,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=shell, expands=expands,
                   loops_ok=script in resolve.value_bodies, ctx=ctx)
         for body in bodies:
-            for script in [body.text] + body.text.splitlines():
+            for script in dict.fromkeys([body.text] + [line for line in body.text.splitlines() if line.strip()]):
                 if ctx is not None and ctx.expired():
                     found.append(_TOO_LARGE)
                     return
@@ -497,7 +499,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         prog = resolve(start, token) or token
         base = os.path.basename(prog)
         script, script_shell = None, shell
-        if base in _SHELL_BINS:
+        if base.casefold() in _SHELL_NAMES:
             script = _shell_script(rest)
         elif prog == "eval":
             script = " ".join(_segment(tokens, start + 1)) or None
@@ -511,7 +513,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
             # Inline code of another language can call the host command through a string; scan every string in it.
             for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
                 _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=ctx)
-        if script is None and base in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
+        if script is None and base.casefold() in _SHELL_NAMES and depth < MAX_DEPTH and runs[start]:
             # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be
             # that script. Lex the unmarked text for this: `bash <(echo '<send>')` holds the script inside a
             # substitution span, which the marked token list no longer carries.
@@ -655,15 +657,17 @@ def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven,
     return "send to a pane auto cannot prove is not the driver's", "", "send"
 
 
-def host_sends(command: str, pane_ids: list, proven=None, cwd=None, session_start=None) -> list:
+def host_sends(command: str, pane_ids: list, proven=None, cwd=None, session_start=None, ctx=None) -> list:
     """(host, verb, target) for every host command in ``command`` that types into a pane.
 
-    proven (a callable, for a session that is not the driver) switches to the allow-list policy in _unproven."""
+    proven (a callable, for a session that is not the driver) switches to the allow-list policy in _unproven.
+    ctx carries the one deadline every scan of a hook call shares; _TOO_LARGE in the result means it ran out."""
     terminal_host = load_lib_module("terminal_host")
     hosts = [terminal_host.host_named(name) for name in terminal_host.key_hosts()]
     found = []
-    ctx = load_lib_module("send_guard_inline").Context(cwd, session_start) if proven is not None else None
-    if ctx is not None and len(command) > COMMAND_CAP:
+    if ctx is None:
+        ctx = load_lib_module("send_guard_inline").Context(cwd, session_start)
+    if (proven is not None and len(command) > COMMAND_CAP) or ctx.remaining() < len(command) * SCAN_SECONDS_PER_CHAR:
         return [_TOO_LARGE]
     _scan(command, 0, hosts, [i for i in pane_ids if i], found, proven, ctx=ctx)
     return found
@@ -717,8 +721,11 @@ def _tty_write(command: str) -> bool:
     return _TTY_PATH.search(text) is not None and _TTY_WRITE.search(text) is not None
 
 
-def _driver_hit(command: str, session_id, driver: dict, sender: dict):
-    sends = host_sends(command, _ids(driver))
+def _driver_hit(command: str, session_id, driver: dict, sender: dict, ctx=None):
+    sends = host_sends(command, _ids(driver), ctx=ctx)
+    if _TOO_LARGE in sends and session_id != driver.get("session_id"):
+        # The scan ran out of time: a hook killed at 10 s denies nothing, so another session's command is refused.
+        return _TOO_LARGE[0], _TOO_LARGE[1], driver["pane_id"], _TOO_LARGE[3]
     if sends:
         # One session sends, so every driver shares one workspace lookup, made only when a send was found.
         if "workspace" not in sender:
@@ -732,14 +739,18 @@ def _driver_hit(command: str, session_id, driver: dict, sender: dict):
     return (None, None, named) if named else None
 
 
-def _strict_hit(command: str, session_id, drivers: list, sender: dict, cwd=None):
+def _strict_hit(command: str, session_id, drivers: list, sender: dict, cwd=None, ctx=None):
     """Allow-list for a session that drives no programme: its command may type into a pane only by proving the
     target is another session's pane, and may not write to a tty device."""
     if any(d.get("session_id") == session_id for d in drivers):
         return None
     ids = [i for d in drivers for i in _ids(d)]
     started = load_lib_module("session_registry").session_start(session_id)
-    unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers), cwd=cwd, session_start=started)
+    if ctx is not None:
+        ctx.cwd = cwd
+        ctx.session_start = started if started is not None else ctx.session_start
+    unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers), cwd=cwd,
+                          session_start=started, ctx=ctx)
     if unproven:
         return unproven[0][0], unproven[0][1], drivers[0]["pane_id"], unproven[0][3]
     return (None, "tty write", drivers[0]["pane_id"]) if _tty_write(command) else None
@@ -852,11 +863,12 @@ def denial(session_id, command, cwd=None):
     sender = {}
     # Checked before any lexing: the lexer costs about 25 us a character, and a hook killed at 10 s denies nothing.
     oversize = len(command) > COMMAND_CAP and not any(d.get("session_id") == session_id for d in drivers)
+    ctx = load_lib_module("send_guard_inline").Context(cwd)
     for driver in drivers:
         hit = (_TOO_LARGE[0], _TOO_LARGE[1], driver["pane_id"], _TOO_LARGE[3]) if oversize else _driver_hit(
-            command, session_id, driver, sender)
+            command, session_id, driver, sender, ctx)
         if hit is None and driver is drivers[-1]:
-            hit = _strict_hit(command, session_id, drivers, sender, cwd)
+            hit = _strict_hit(command, session_id, drivers, sender, cwd, ctx)
             driver = drivers[0]
         if hit is None:
             continue
