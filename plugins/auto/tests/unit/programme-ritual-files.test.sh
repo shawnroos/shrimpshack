@@ -399,6 +399,129 @@ print("repo (file)" in text and "proposed" in text and good["file"]["commit"][:7
 EOF
 )"
 
+# ---- code review round 1 ----
+adopted_run() { # name -> a programme that has adopted <name>'s plugin-versions file
+  local run hash prompt
+  run="$(files_run "$1")"
+  hash="$(fh "$run")"
+  prompt="$(tprompt "$run" "adopt plugin-versions ${hash} with the versions bumped check")"
+  prog adopt-ritual-file "acme/$1/plugin-versions" --prompt "$prompt" --run "$run"
+  echo "$run"
+}
+snapshot() { # run -> in_force ids and adopted states, as the resolver reports them
+  run_py "$1" <<'EOF'
+got = pr.resolve(record(args[0]))
+print(sorted(e["id"] for e in got["in_force"]), sorted((a["id"], a["state"]) for a in got["file_rituals"]["adopted"]))
+EOF
+}
+
+it "G1: a git read that fails part-way keeps the adopted snapshot in force as unread"
+mkrepo g1
+RUNG1="$(adopted_run g1)"
+check "['plugin-versions'] [('plugin-versions', 'unread')]" "$(run_py "$RUNG1" <<'EOF'
+prf = load_lib_module("programme_ritual_files")
+checks = prf.programme_ritual_checks
+orig = checks._Repo.run
+def broken(self, argv, **kw):
+    if argv[0] == "cat-file":
+        raise checks._Stop("timeout")
+    return orig(self, argv, **kw)
+checks._Repo.run = broken
+prf.invalidate()
+got = pr.resolve(record(args[0]))
+print(sorted(e["id"] for e in got["in_force"]), sorted((a["id"], a["state"]) for a in got["file_rituals"]["adopted"]))
+EOF
+)"
+
+it "G2: an adopted file that turns invalid stays in force as unverified, and the bad content is a rejected row"
+mkrepo g2
+RUNG2="$(adopted_run g2)"
+push_file g2 "plugin-versions.md" "---
+when: x
+bogus: 1
+---
+Steps:
+- y
+"
+check "['plugin-versions'] [('plugin-versions', 'unverified')]" "$(snapshot "$RUNG2")"
+check '[["plugin-versions", "unknown_key"]]' "$(fview "$RUNG2" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rejected"]))')"
+
+it "G3: another repo shipping the same id does not switch off the adopted ritual"
+mkrepo g3a
+RUNG3="$(adopted_run g3a)"
+mkrepo g3b
+run_py "$RUNG3" <<'EOF'
+def mutate(rec):
+    rec["programme"]["remit"]["repos"].append({"path": os.path.join(os.environ["WORK"], "g3b"), "github": "acme/g3b"})
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+check "['plugin-versions'] [('plugin-versions', 'adopted')]" "$(snapshot "$RUNG3")"
+check '[["plugin-versions", "id_collision"]]' "$(fview "$RUNG3" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rejected"]))')"
+
+it "G4: a folder over the file cap keeps the adopted snapshot as unverified"
+mkrepo g4
+RUNG4="$(adopted_run g4)"
+push_file g4 "second.md" "$FILE_OK"
+check "['plugin-versions'] [('plugin-versions', 'unverified')]" "$(run_py "$RUNG4" <<'EOF'
+prf = load_lib_module("programme_ritual_files")
+prf.MAX_FILES = 1
+prf.invalidate()
+got = pr.resolve(record(args[0]))
+print(sorted(e["id"] for e in got["in_force"]), sorted((a["id"], a["state"]) for a in got["file_rituals"]["adopted"]))
+EOF
+)"
+
+it "G5: the hash a prompt must name is 20 characters, and the view names the default branch it was read from"
+check "20 refs/remotes/origin/main" "$(run_py "$RUN11" <<'EOF'
+row = pr.resolve(record(args[0]))["file_rituals"]["proposals"][0]
+print(len(row["hash_short"]), row["file"]["ref"])
+EOF
+)"
+check "True" "$(run_py "$RUN11" <<'EOF'
+pv = load_lib_module("programme_view")
+rows = pv.rituals_view(record(args[0]), [])
+print("refs/remotes/origin/main" in pv._ritual_text([r for r in rows if r["id"] == "plugin-versions"][0]))
+EOF
+)"
+
+it "G6: an adopted ritual whose repo has left the remit is out of force"
+mkrepo g6
+RUNG6="$(adopted_run g6)"
+run_py "$RUNG6" <<'EOF'
+def mutate(rec):
+    rec["programme"]["remit"]["repos"] = []
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+check "[] []" "$(snapshot "$RUNG6")"
+
+it "G7: a file named with spaces or capitals is rejected under a safe label, never its raw name"
+mkrepo g7 "Bad Name.md" "x"
+RUNG7="$(files_run g7)"
+check '[["<unnamed file>", "bad_value"]]' "$(fview "$RUNG7" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rejected"]))')"
+
+it "G8: an adoption record whose snapshot is no longer valid, or has none, never takes the resolver down"
+mkrepo g8
+RUNG8="$(adopted_run g8)"
+run_py "$RUNG8" <<'EOF'
+def mutate(rec):
+    a = rec["programme"]["ritual_adoptions"]["acme/g8/plugin-versions"]
+    a["snapshot"]["steps"] = ["publish the plugin"]
+    rec["programme"]["ritual_adoptions"]["acme/g8/ghost"] = {"state": "adopted", "hash": "0" * 64}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+check "[] []" "$(snapshot "$RUNG8")"
+check "True True" "$(fview "$RUNG8" | python3 -c 'import json,sys; r = [x[1] for x in json.load(sys.stdin)["rejected"]]; print("protected_escalation" in r, "adoption_malformed" in r)')"
+
+it "G9: two programmes in one process that list one path under different keys each see their own key"
+check "acme/g9 /" "$(run_py <<'EOF'
+mkp = lambda repo: {"remit": {"repos": [repo]}, "ritual_adoptions": {}}
+path = os.path.join(W, "g9") if False else os.path.join(os.environ["WORK"], "r1")
+a = pr.resolve({"programme": mkp({"path": path, "github": "acme/g9"})})["file_rituals"]["proposals"]
+b = pr.resolve({"programme": mkp({"path": path})})["file_rituals"]["proposals"]
+print(a[0]["repo_key"], "/" if b[0]["repo_key"].startswith("/") else b[0]["repo_key"])
+EOF
+)"
+
 echo
 echo "${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
