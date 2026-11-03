@@ -35,6 +35,7 @@ SAFE_CONFIG = (
     "core.hooksPath=/dev/null", "core.fsmonitor=false", "core.untrackedCache=false",
     "core.pager=cat", "gc.auto=0", "maintenance.auto=false", "protocol.allow=never",
     "submodule.recurse=false", "fetch.recurseSubmodules=false", "credential.helper=",
+    "log.showSignature=false", "diff.external=",
 )
 GITLINK = "160000"
 ZERO_OID = "0" * 40

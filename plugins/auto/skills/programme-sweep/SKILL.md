@@ -108,7 +108,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
 1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
    Bash call of the form `{ echo SWEEP-START; <step 2's prune, which finds the run
    from this session's lease>; P validate; P sweep --record-sources;
-   P propose-permission; P settle-permissions; P sweep-inputs --save; } 2>&1 | tail -c 6000`. If
+   P propose-permission; P settle-permissions; P run-ritual-checks; P sweep-inputs --save; } 2>&1 | tail -c 6000`. If
    `P beat` refuses because the programme ended, stop. `P expire` ends a
    programme whose agreement was never accepted; if it prints `"ended": true`,
    tell Shawn in one line and stop. The last JSON in that output is the verdict of
@@ -256,7 +256,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      <behaviour-id> --applied --why "<what you did>"`. The sweep stays open
      until that list is empty. `P rules` prints each behaviour's checks.
 5b. **Domain check.** Answer the digest's domain behaviours (domain.md).
-5c. **Rituals.** Answer the digest's Rituals: [references/rituals.md](references/rituals.md).
+5c. **Rituals.** [references/rituals.md](references/rituals.md).
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;
