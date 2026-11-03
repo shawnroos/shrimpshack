@@ -26,6 +26,8 @@ run_record_core = load_lib_module("run_record_core")
 programme_decisions = load_lib_module("programme_decisions")
 phase_grammar = load_lib_module("phase-grammar")
 
+VERB_MODULES = ("goal_doc", "worker_register", "worker_contract_write", "worker_handover", "worker_question_verbs",
+                "worker_contract_status")
 CONTRACT_KEY = "contract"
 NO_CONTRACT = "no_contract"
 HAS_CONTRACT = "contract"
