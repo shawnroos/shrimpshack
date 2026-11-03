@@ -12,6 +12,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 behaviour_check = load_lib_module("programme_behaviour_check")
+behaviour_synergy = load_lib_module("programme_behaviour_synergy")
 contract_check = load_lib_module("programme_contract_check")
 programme_sanitize = load_lib_module("programme_sanitize")
 
@@ -39,8 +40,13 @@ def report(host, rec, entry, others, *, lines, given=((), ())) -> dict:
     answered = set(related) | {u["id"] for u in unrelated}
     for r in peers + contract:
         r["answered"] = r["ref"] in answered
+    synergies = behaviour_synergy.classify(entry, others, peers)
+    for r in synergies:
+        r["answered"] = r["ref"] in answered
     if not lines:
         peers = [{k: v for k, v in r.items() if k != "lines"} for r in peers]
-    return {"behaviours": peers, "contract": contract,
+        synergies = [{k: v for k, v in r.items() if k != "lines"} for r in synergies]
+    return {"behaviours": peers, "contract": contract, "synergies": synergies,
             "unanswered": sum(r["ref"] not in answered for r in peers + contract),
-            "checked": {"reasons": list(behaviour_check.REASONS), "not_detected": behaviour_check.NOT_DETECTED}}
+            "checked": {"reasons": list(behaviour_check.REASONS), "synergies": list(behaviour_synergy.KINDS),
+                        "not_detected": behaviour_check.NOT_DETECTED}}

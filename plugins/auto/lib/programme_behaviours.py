@@ -55,7 +55,7 @@ TEXT_FIELDS = ("evidence", "stop", "why")
 REQUIRED = ("id", "layer", "when", "applies_to")
 OPTIONAL = LIST_FIELDS + TEXT_FIELDS + (
     "repo_key", "examples", "source", "state", "overrides", "moved_to", "moved_repo_key", "history", "at",
-    "relates_to", "unrelated",
+    "relates_to", "unrelated", "edit_of",
 )
 # The other fields stay unscanned: stop conditions and "don't" lines need words such as
 # "cost", "limit" and "publish", which are protected stems.
@@ -370,9 +370,10 @@ def brief_lines(entries) -> list:
 
 # A move or keep is when the behaviour began reaching other items, so it counts as a start
 # too; otherwise a behaviour kept from another programme could send back earlier claims.
+# An edit changes what the behaviour asks for, so it restarts the start as a file edit does.
 def since(entry):
     starts = [h.get("at") for h in entry.get("history") or []
-              if isinstance(h, dict) and h.get("event") in ("recorded", "moved", "kept")]
+              if isinstance(h, dict) and h.get("event") in ("recorded", "moved", "kept", "edited")]
     return starts[-1] if starts else entry.get("at")
 
 
@@ -498,6 +499,48 @@ def _overrides(entry, conflicts, known) -> list:
     return sorted(set(entry.get("overrides") or []) | set(conflicts))
 
 
+def _editable(programme, bid) -> dict:
+    target = _programme_entry(programme, bid)
+    if target is None or target.get("state", ACTIVE) != ACTIVE:
+        raise BehaviourError(f"no active programme behaviour {bid!r} to edit; a repo, personal or shipped "
+                             "behaviour changes through the route its synergy row names")
+    return target
+
+
+def _edit_fields(opts, target) -> dict:
+    """The target's fields under the options given, so an edit names only what changes."""
+    merged = dict(opts)
+    when = target["when"]
+    merged.setdefault("when", when["text"])
+    if when.get("trigger"):
+        merged.setdefault("trigger", when["trigger"])
+    merged.setdefault("applies-to", target["applies_to"])
+    if not any(opts.get(by + "-check") for by in CHECK_BY):
+        for by in CHECK_BY:
+            merged[by + "-check"] = [c["text"] for c in when.get("checks") or [] if c.get("by") == by]
+    for opt, field in _LIST_OPTS:
+        if not opts.get(opt) and target.get(field):
+            merged[opt] = list(target[field])
+    for field in TEXT_FIELDS:
+        if not opts.get(field) and target.get(field):
+            merged[field] = target[field]
+    for name, text in (target.get("examples") or {}).items():
+        merged.setdefault(name, text)
+    return merged
+
+
+def _apply_edit(entry, target, prompt, proposal) -> dict:
+    """The checked proposal laid over the target, which keeps its id, start time, history and earlier answers."""
+    edited = {k: v for k, v in entry.items() if k not in ("edit_of", "history")}
+    for field in ("at", "relates_to", "unrelated"):
+        if field in target and field not in edited:
+            edited[field] = target[field]
+    edited["at"] = target.get("at", edited.get("at"))
+    edited["overrides"] = sorted(set(target.get("overrides") or []) | set(entry.get("overrides") or []))
+    edited["state"] = ACTIVE
+    return _mark(dict(edited, history=list(target.get("history") or [])), "edited", prompt, from_proposal=proposal)
+
+
 def _from_proposal(host, programme, prompt, proposal) -> dict:
     entry = _programme_entry(programme, proposal)
     if entry is None or entry.get("state") != "proposed":
@@ -521,6 +564,9 @@ def _h_check(host, argv):
     entry = dict(found, state=ACTIVE) if proposal else _draft(opts, "bcheck")
     _refuse(entry, verdict(entry, allow_adoption=False))
     others = _active(programme, load_store(host.prompt_lookup))
+    if entry.get("edit_of"):
+        entry = dict(entry, id=_editable(programme, entry["edit_of"])["id"])
+        others = [o for o in others if o["id"] != entry["id"]]
     _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
     host._emit({"ok": True, "run": run_id, "kind": "behaviour_checked", "when": entry["when"]["text"],
                 **behaviour_report.report(host, dict(record, programme=programme), entry, others, lines=True)})
@@ -542,9 +588,12 @@ def _h_record(host, argv):
     related, unrelated = answers = behaviour_report.answers(opts)
 
     def change(programme, prompt, rec):
-        entry = _from_proposal(host, programme, prompt, proposal) if proposal else _draft(opts, bid)
+        proposed = _from_proposal(host, programme, prompt, proposal) if proposal else _draft(opts, bid)
+        target = _editable(programme, proposed["edit_of"]) if proposed.get("edit_of") else None
+        # The check sees an edit as the edited behaviour itself, against everything else in force.
+        entry = dict(proposed, id=target["id"]) if target else proposed
         loaded = load_store(host.prompt_lookup)
-        others = _active(programme, loaded)
+        others = [o for o in _active(programme, loaded) if not target or o["id"] != target["id"]]
         entry["overrides"] = _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
         result = behaviour_report.report(host, rec, entry, others, lines=False, given=answers)
         if related:
@@ -552,10 +601,16 @@ def _h_record(host, argv):
         if unrelated:
             entry["unrelated"] = unrelated
         entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
-        entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
-        return {"behaviour": bid, "layer": "programme", "when": entry["when"]["text"],
+        if target:
+            applied = _mark(dict(_programme_entry(programme, proposal), state="retired"), "applied", prompt,
+                            edited=target["id"])
+            put_programme_entry(programme, applied)
+            entry = put_programme_entry(programme, _apply_edit(entry, target, prompt, proposal))
+        else:
+            entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
+        return {"behaviour": entry["id"], "layer": "programme", "when": entry["when"]["text"],
                 "trigger": trigger_of(entry), "checks": entry["when"]["checks"], "overrides": entry["overrides"],
-                "from_proposal": proposal, **result, "undo": f"retire-behaviour {bid} --as undone --prompt <id>"}
+                "from_proposal": proposal, "edited": bool(target), **result, "undo": f"retire-behaviour {entry['id']} --as undone --prompt <id>"}
 
     return host._write(opts, change, RECORDED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="record-behaviour", target=bid)
@@ -569,14 +624,20 @@ def _term(programme, term_id) -> dict:
 
 
 def _h_propose(host, argv):
-    positional, opts = host._parse(argv, values=("run", "from-term") + _FIELD_VALUES, multi=_FIELD_MULTI)
-    if positional:
-        raise ValueError("usage: propose-behaviour " + _FIELDS_DOC + ", or propose-behaviour --from-term <term-id>")
+    positional, opts = host._parse(argv, values=("run", "from-term", "edit-of") + _FIELD_VALUES, multi=_FIELD_MULTI)
+    if positional or (opts.get("edit-of") and opts.get("from-term")):
+        raise ValueError("usage: propose-behaviour " + _FIELDS_DOC + ", or propose-behaviour --from-term <term-id>, "
+                         "or propose-behaviour --edit-of <id> with the fields to change")
     bid = "b" + secrets.token_hex(3)
 
     def change(programme, prompt, rec):
         term = _term(programme, opts["from-term"]) if opts.get("from-term") else None
-        if term:
+        if opts.get("edit-of"):
+            if not _has_fields(opts):
+                raise BehaviourError("an edit proposal needs at least one field to change")
+            target = _editable(programme, opts["edit-of"])
+            entry = dict(_draft(_edit_fields(opts, target), bid), edit_of=target["id"])
+        elif term:
             area, value = term.get("area"), term.get("value")
             entry = _draft(opts, bid, when=f"choosing a tool for {area}", tools=[value],
                            do=[f"use {value} for {area}"])
@@ -585,7 +646,8 @@ def _h_propose(host, argv):
         entry = dict(entry, state="proposed")
         entry = put_programme_entry(programme, _mark(entry, "proposed", **({"from_term": term["id"]} if term else {})))
         return {"behaviour": bid, "state": "proposed", "when": entry["when"]["text"],
-                "checks": entry["when"]["checks"], "from_term": term and term["id"]}
+                "checks": entry["when"]["checks"], "from_term": term and term["id"],
+                "edit_of": entry.get("edit_of")}
 
     return host._write(opts, change, PROPOSED)
 
@@ -855,9 +917,13 @@ _SPECS = (
      "field option or an id that is not a proposal. Reads only: it needs no prompt, records nothing and journals "
      "nothing."),
     ("propose-behaviour", _h_propose,
-     _FIELDS_DOC + " [--run <id>], or --from-term <term-id> [--run <id>]",
-     "no --when (unless --from-term), or neither --do nor --dont; an unknown project term; a protected "
-     "escalation in a do line, skill, tool or agent. Needs no prompt: a proposal applies nothing."),
+     _FIELDS_DOC + " [--run <id>], or --from-term <term-id> [--run <id>], or --edit-of <id> <the fields to change> "
+     "[--run <id>]",
+     "no --when (unless --from-term or --edit-of), or neither --do nor --dont; an unknown project term; a protected "
+     "escalation in a do line, skill, tool or agent; with --edit-of, no field to change or a target that is not an "
+     "active programme behaviour (a repo, personal or shipped one changes through the route its synergy row "
+     "names). Needs no prompt: a proposal applies nothing. An edit proposal copies the target's fields and "
+     "replaces the ones given; applying it with record-behaviour --from-proposal replaces the target in place."),
     ("move-behaviour", _h_move,
      "<id> --to programme|repo|personal --prompt <id> [--repo <key>] [--run <id>]",
      "no typed prompt from the driving session; a prompt that does not name the behaviour id and the layer "

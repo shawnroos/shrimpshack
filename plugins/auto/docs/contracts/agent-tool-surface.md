@@ -282,7 +282,9 @@ session.
   undo command, the behaviours in force it applies alongside, the contract parts
   it touches, and how many listed items are unanswered.
   `check-behaviour` takes the same field flags (or `--from-proposal <id>`) without a prompt, prints the same
-  result with each listed behaviour's lines, and writes nothing.
+  result with each listed behaviour's lines, and writes nothing. Both print a synergies list beside
+  the behaviour and contract results: how the new behaviour should link to, or be edited against, a listed one,
+  with the target of an offered edit and no wording. Nothing blocks recording.
   `--relates-to <id>` and `--unrelated <id>=<reason>` store the answer on the entry.
   `--conflicts-with <id>` sets the new entry to override that behaviour (the
   narrower layer wins). A do
@@ -290,7 +292,8 @@ session.
   releases, spend over cap, merging around the gate, refused permissions) is
   refused. `propose-behaviour` stores a proposal with no prompt, because a proposal
   applies nothing; `--from-term <term-id>` drafts one from a project term's area and
-  value and leaves the term unchanged. It journals `behaviour_proposed`.
+  value and leaves the term unchanged. `--edit-of <id>` plus the fields to change proposes an edit of an
+  active programme behaviour; applying it replaces the target in place. It journals `behaviour_proposed`.
   `record-behaviour --from-proposal <id> --prompt <id>` applies a proposal; the
   prompt must name the proposal id. `move-behaviour` (`<id> --to programme|repo|personal
   --prompt <id>`) needs a prompt that names the id and the layer ("programme",
