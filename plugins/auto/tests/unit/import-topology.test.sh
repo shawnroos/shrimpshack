@@ -787,8 +787,12 @@ done
 
 it "programme.py registers the worker verb modules after its verb table (build_verbs(host))"
 _reg=0
+# programme.py loops worker_contract.VERB_MODULES; a module missing from that list is never registered.
+_listed="$(sed -n '/^VERB_MODULES/,/)$/p' "$LIB/worker_contract.py")"
+grep -qE "for _mod in worker_contract\.VERB_MODULES:" "$LIB/programme.py" \
+  && grep -qE "load_lib_module\(_mod\)\.build_verbs\(" "$LIB/programme.py" || _reg=$((_reg + 6))
 for _w in goal_doc worker_register worker_contract_write worker_handover worker_question_verbs worker_contract_status; do
-  grep -qE "load_lib_module\(\"${_w}\"\)\.build_verbs\(" "$LIB/programme.py" || _reg=$((_reg + 1))
+  case "$_listed" in *"\"${_w}\""*) ;; *) _reg=$((_reg + 1)) ;; esac
 done
 if [ "$_reg" -eq 0 ]; then pass; else fail "${_reg} worker verb module(s) are not registered through build_verbs in programme.py"; fi
 
