@@ -740,6 +740,8 @@ has "clock" "$OUT"
 
 it "U3: first due time is strictly after now for a slot already passed today"
 check "2026-11-03T09:00:00Z" "$(run_py <<'EOF'
+import time
+os.environ["TZ"] = "UTC"; time.tzset()
 print(iso(pr.next_after({"every": "day", "at": "09:00"}, at("2026-11-02T09:30:00Z"))))
 EOF
 )"
@@ -755,30 +757,25 @@ prog record-ritual --run "$RUN_I" --prompt "$PI" --when "at start" --trigger sta
 check 1 "$CODE"
 has "ran-now" "$OUT"
 
-it "U4: the Programme view shows the next due time in local time with the zone, and the offers"
-has "= " "$(run_py <<'EOF'
-import datetime
+it "U4: the Programme view shows the next due time in local time with the zone, whatever the machine zone"
+view_text() {
+  run_py "$1" <<'EOF'
+import time, datetime
+from zoneinfo import ZoneInfo
+zone = args[0]
+os.environ["TZ"] = zone; time.tzset()
+due_at = (datetime.datetime.now(UTC) + datetime.timedelta(days=3)).replace(second=0, microsecond=0)
 e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
-run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
+run = setup([e], clock={"r9": {"next_due_at": iso(due_at)}})
 pv = load_lib_module("programme_view")
-rows = pv.rituals_view(record(run), [])
-print(pv._ritual_text(rows[0]))
+text = pv._ritual_text(pv.rituals_view(record(run), [])[0])
+local = due_at.astimezone(ZoneInfo(zone)).strftime("%Y-%m-%d %H:%M %Z")
+print("next " + iso(due_at) + " = " + local + " machine local time" in text, "offers (ask Shawn, never act)" in text)
 EOF
-)"
-has "UTC machine local time" "$(run_py <<'EOF'
-e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
-run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
-pv = load_lib_module("programme_view")
-print(pv._ritual_text(pv.rituals_view(record(run), [])[0]))
-EOF
-)"
-has "offers (ask Shawn, never act)" "$(run_py <<'EOF'
-e = ritual("r9", offers=["ask Shawn whether to publish the plugin now"])
-run = setup([e], clock={"r9": {"next_due_at": "2026-11-03T09:00:00Z"}})
-pv = load_lib_module("programme_view")
-print(pv._ritual_text(pv.rituals_view(record(run), [])[0]))
-EOF
-)"
+}
+check "True True" "$(view_text UTC)"
+check "True True" "$(view_text America/New_York)"
+check "True True" "$(view_text Africa/Johannesburg)"
 
 it "U4: daily 09:00 stays 09:00 local across spring-forward and fall-back"
 check "2026-03-08T13:00:00Z 2026-11-01T14:00:00Z" "$(run_py <<'EOF'
@@ -791,12 +788,16 @@ EOF
 
 it "U3: the clock sentence names the zone"
 has "machine local time (UTC)" "$(run_py <<'EOF'
+import time
+os.environ["TZ"] = "UTC"; time.tzset()
 print(pr.describe_clock())
 EOF
 )"
 
 it "review: --ran-now before today's slot skips that slot, and after it does not skip tomorrow's"
 check "2026-11-03T09:00:00Z 2026-11-03T09:00:00Z" "$(run_py <<'EOF'
+import time
+os.environ["TZ"] = "UTC"; time.tzset()
 daily = ritual("rd", when={"text": "daily", "trigger": "calendar", "schedule": {"every": "day", "at": "09:00"}})
 def first(now_text):
     programme = {}
