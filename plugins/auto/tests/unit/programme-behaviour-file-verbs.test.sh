@@ -311,7 +311,7 @@ check "1 same" "$CODE $(cmp -s "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d1.md" "${
 rm -f "$SEEN"
 
 # The seen file is absent and its folder is read-only: the personal-file write succeeds, then recording
-# seen fails. A verb that fails must leave the personal folder as it found it (#196).
+# seen fails. A verb that fails must leave the personal folder as it found it.
 draft_shipped d5 "write a changelog"
 draft_shipped d6 "write a summary"
 draft_shipped d7 "write a diagram"
@@ -337,7 +337,7 @@ prog settle-default-update d7 --as merge --file "${WORK}/drafts/d7.md" --prompt 
 check "1 same" "$CODE $(cmp -s "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d7.md" "${PERS}/d7.md" && echo same || echo different)"
 chmod 755 "$(dirname "$SEEN")"
 
-# One approval applies once (#195): the prompt, verb, id and content it approved are spent after the write.
+# One approval applies once: the prompt, verb, id and content it approved are spent after the write.
 draft_shipped d8 "write a retro"
 draft_shipped d9 "write a plan note"
 draft p9 "reproduce the bug first"

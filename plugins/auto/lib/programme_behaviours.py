@@ -356,7 +356,7 @@ def unknown_placeholder(text):
 
 
 def fills_for(run_id, item_key) -> dict:
-    program = os.path.join(os.path.dirname(_LIB_DIR), "lib", "programme.sh")
+    program = os.path.join(_LIB_DIR, "programme.sh")
     return {"claim_command": f"bash {program} claim --run {run_id} --item {item_key} --deliverable <name> --ref <ref>"}
 
 
@@ -367,8 +367,7 @@ def _fill(text, fills) -> str:
 # What prompt-item --standing sends: the worker behaviours that start with the work, minus those only
 # the PM can judge (the same ones a start brief holds back until the PM names them).
 def standing_entries(record, item, lookup=None) -> list:
-    rows = in_force(record, item, audience="workers", lookup=lookup)
-    return [e for e in rows if trigger_of(e) == "start" and not _pm_checked_only(e)]
+    return [e for e in brief_entries(record, item, lookup=lookup)[0] if trigger_of(e) == "start"]
 
 
 def _short(entry, fills=None) -> str:

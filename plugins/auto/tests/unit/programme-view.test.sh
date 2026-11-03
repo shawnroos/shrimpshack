@@ -1050,9 +1050,9 @@ has "behaviour sdef (yours (replaces shipped), active" "$BEH_STATUS3"
 has "behaviour mine (personal file, active" "$BEH_STATUS3"
 it "the shipped row is not in force and is overridden by the copy"
 check "sdef:shipped:False:['sdef']" "$(beh_q '" ".join("%s:%s:%s:%s" % (b["id"], b["layer"], b["in_force"], b["overridden_by"]) for b in d["contract"]["behaviours"] if b["layer"] == "shipped")')"
-it "the shipped row's text line says it is overridden by the copy (#194)"
+it "the shipped row's text line says it is overridden by the copy"
 has "behaviour sdef (shipped, active, overridden by sdef, applies to" "$BEH_STATUS3"
-it "a personal file shadowed by a stored personal entry shows in the rejected list with its id (#194)"
+it "a personal file shadowed by a stored personal entry shows in the rejected list with its id"
 BEH_SHADOW="$("$PY" - "$AUTO_ROOT" "$BEH_PERSONAL" <<'EOF' 2>&1
 import sys, os, json
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))

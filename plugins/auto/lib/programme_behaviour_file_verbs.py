@@ -32,6 +32,7 @@ BehaviourError = programme_behaviours.BehaviourError
 ADOPTED = programme_behaviours.APPROVAL_KIND
 LOCK_NAME = programme_behaviour_files.LOCK_NAME
 MODES = ("shown", "keep", "take", "merge")
+# Shares the seen document with the per-id records; ids start with a letter, so no behaviour can collide.
 SPENT = "_approvals_spent"
 MAX_BYTES = 64 * 1024
 seen_path = programme_behaviour_files.seen_path
@@ -235,16 +236,16 @@ def _h_copy(host, argv):
         host.require_named(prompt, bid)
 
         used = _use_key(prompt, "copy-default", bid, "copy", digest)
+        path = _personal_path(bid)
 
         def body():
             _unspent(used)
-            if os.path.exists(_personal_path(bid)):
+            if os.path.exists(path):
                 raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder")
-            _with_rollback(_personal_path(bid), lambda: _atomic(_personal_path(bid), text),
-                           lambda: _record(bid, used=used, seen=digest))
+            _with_rollback(path, lambda: _atomic(path, text), lambda: _record(bid, used=used, seen=digest))
 
         _locked(body)
-        return _adopted(bid, digest, path=_personal_path(bid))
+        return _adopted(bid, digest, path=path)
 
     return host._write(opts, change, ADOPTED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="copy-default", target=bid)
@@ -269,12 +270,10 @@ def _settle(host, rec, prompt, bid, mode, text) -> dict:
         # Before any file change: a corrupt seen file or a spent approval must refuse with nothing half done.
         _unspent(used)
         path = _personal_path(bid)
-        if mode == "merge":
-            change = lambda: _atomic(path, text)
-        elif mode == "take":
-            change = lambda: os.unlink(path)
-        else:
-            change = lambda: None
+        if mode == "keep":
+            _record(bid, used=used, seen=digest)
+            return
+        change = (lambda: _atomic(path, text)) if mode == "merge" else (lambda: os.unlink(path))
         _with_rollback(path, change, lambda: _record(bid, used=used, seen=digest))
 
     _locked(body)
