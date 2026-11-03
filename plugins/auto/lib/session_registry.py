@@ -126,6 +126,8 @@ def record_session(hook_input: dict, env, tty=None) -> dict | None:
     found = terminal_host.detect(env)
     if found.name is None or not isinstance(session_id, str) or not session_id:
         return None
+    if found.rung in terminal_host.FALLBACK_RUNGS:
+        return None
     # With two hosts announced, detect() already ran this probe; a second one could overrun the 5 s hook timeout.
     place = _entry(found.proof or terminal_host.host_named(found.name).own_pane(env, tty=tty), found.name)
     return _store(hook_input, env, found.name, place, tty) if place else None
