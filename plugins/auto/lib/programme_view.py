@@ -601,8 +601,8 @@ def _local_due(stamp):
 def _age_text(seconds) -> str:
     if seconds is None:
         return "clone never fetched"
-    unit = f"{seconds // 86400}d" if seconds >= 86400 else f"{seconds // 3600}h" if seconds >= 3600 else f"{seconds // 60}m"
-    return f"clone last fetched {unit} ago"
+    age = f"{seconds // 86400}d" if seconds >= 86400 else f"{seconds // 3600}h" if seconds >= 3600 else f"{seconds // 60}m"
+    return f"clone last fetched {age} ago"
 
 
 def _ritual_text(r) -> str:
