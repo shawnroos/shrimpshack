@@ -473,6 +473,41 @@ EOF
 )"
 check '[{"tool:t3": "may_contradict"}, {"tool:t4": null}, {"tool:t4": "may_contradict"}]' "$OUT"
 
+it "a negation right after the tool name flags it, and the curly apostrophe reads as a contraction"
+OUT="$(py <<EOF
+pcc = load_lib_module("programme_contract_check")
+$SNAP
+snap["operating_contract"]["project_terms"] = [
+    {"id": "t5", "area": "figma", "value": "Figma is not allowed for specs", "reserved": False},
+    {"id": "t6", "area": "curly", "value": "Don’t use sketch", "reserved": False}]
+flags = lambda tool: {r["ref"]: r.get("flag") for r in pcc.check(beh("n1", tools=[tool]), snap)}
+print(json.dumps([flags("figma"), flags("sketch")]))
+EOF
+)"
+check '[{"tool:t5": "may_contradict"}, {"tool:t6": "may_contradict"}]' "$OUT"
+
+it "a negation inside parentheses aims at the tool it precedes and not at the tool before the parenthesis"
+OUT="$(py <<EOF
+pcc = load_lib_module("programme_contract_check")
+$SNAP
+snap["operating_contract"]["project_terms"] = [
+    {"id": "t4", "area": "browser", "value": "Use agent-browser (never playwright)", "reserved": False}]
+flags = lambda tool: {r["ref"]: r.get("flag") for r in pcc.check(beh("n1", tools=[tool]), snap)}
+print(json.dumps([flags("agent-browser"), flags("playwright")]))
+EOF
+)"
+check '[{"tool:t4": null}, {"tool:t4": "may_contradict"}]' "$OUT"
+
+it "a do line that says never skip a deliverable is not flagged as skipping it; skip without a negation still is"
+OUT="$(py <<EOF
+pcc = load_lib_module("programme_contract_check")
+$SNAP
+flag = lambda line: {r["ref"]: r.get("flag") for r in pcc.check(beh("n1", do=[line]), snap)}.get("done:verified")
+print(json.dumps([flag("never skip verification"), flag("skip verification")]))
+EOF
+)"
+check '[null, "may_contradict"]' "$OUT"
+
 it "a tool of record the behaviour names gives a plain term row"
 OUT="$(py <<EOF
 pcc = load_lib_module("programme_contract_check")

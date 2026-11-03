@@ -24,7 +24,11 @@ TERM_STEMS = {"cadence": ("sweep", "cadence", "wake"), "remit": ("remit",)}
 STEM = 6
 # A kind such as merge_at_gate drops "at": a two-letter stem would match any word that starts with it.
 MIN_KIND_WORD = 3
-CLAUSE_BREAKS = ",;.:"
+# Parentheses break a clause so "Use agent-browser (never playwright)" aims "never" at playwright alone.
+CLAUSE_BREAKS = ",;.:()"
+APOSTROPHES = ("'", "’")
+# "Figma is not allowed" negates the name two words later; one further on belongs to another tool.
+AFTER_NAME = 2
 
 
 def _row(ref, kind, reason, detail, text, flag=False, **extra) -> dict:
@@ -48,7 +52,9 @@ def _touches_kind(kind, words) -> bool:
 
 
 def _clauses(text) -> list:
-    clean = text.replace("'", "")
+    clean = text
+    for mark in APOSTROPHES:
+        clean = clean.replace(mark, "")
     for mark in CLAUSE_BREAKS:
         clean = clean.replace(mark, "|")
     return [behaviour_check.tokens(c) for c in clean.split("|") if c.strip()]
@@ -88,8 +94,9 @@ def _preferred_tools(entry, snapshot) -> list:
             for clause in clauses:
                 if needed <= set(clause):
                     hit.append(label)
-                    first = min(clause.index(w) for w in needed)
-                    flagged = flagged or any(w in NEGATIONS for w in clause[:first])
+                    spots = [clause.index(w) for w in needed]
+                    around = clause[:min(spots)] + clause[max(spots) + 1:max(spots) + 1 + AFTER_NAME]
+                    flagged = flagged or any(w in NEGATIONS for w in around)
         if hit:
             rows.append(_row("tool:" + str(term.get("id")), "preferred_tool", "names_tool", sorted(set(hit)),
                              f"{term.get('area')}: {term.get('value')}", flag=flagged))
@@ -119,6 +126,10 @@ def _authority(entry, snapshot) -> list:
             if a.get("level") != PM_DECIDES and _touches_kind(a["action"], words)]
 
 
+def _skips(clause) -> bool:
+    return any(w in SKIPS and not set(clause[:i]) & set(NEGATIONS) for i, w in enumerate(clause))
+
+
 def _done_standards(entry, snapshot) -> list:
     clauses = [(c, skip) for lines, skip in ((entry.get("do") or [], True), (entry.get("dont") or [], False))
                for line in lines for c in _clauses(line)]
@@ -131,7 +142,7 @@ def _done_standards(entry, snapshot) -> list:
         stem = deliverable[:5]
         hit = [(c, skip) for c, skip in clauses if _starts(c, stem)]
         if hit:
-            skipped = any(skip and set(c) & set(SKIPS) for c, skip in hit)
+            skipped = any(skip and _skips(c) for c, skip in hit)
             rows.append(_row("done:" + deliverable, "done", "names_deliverable", [deliverable],
                              f"{len(ids)} Done standard(s) require {deliverable}", flag=skipped, ids=sorted(ids)))
     return rows
