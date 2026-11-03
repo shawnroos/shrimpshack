@@ -113,6 +113,17 @@ has "picked herdr only announced host installed" "$OUT"; has "recorded None" "$O
 it "and the registry file has no row for that session"
 check "0" "$(grep -c 55555555 "${CLAUDE_AUTO_DATA_DIR}"/sessions/*.jsonl | awk -F: '{s+=$2} END {print s+0}')"
 
+it "the installed check reads the session env PATH, not the process PATH"
+OUT="$(env -i PATH="${BOTH_BIN}:/usr/bin:/bin" "$PY" - "$AUTO_ROOT" "${HERDRONLY_BIN}:/usr/bin:/bin" <<'PYEOF' 2>&1
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+th = load_lib_module("terminal_host")
+print(th._installed_hosts({"PATH": sys.argv[2]}), th._installed_hosts({"PATH": os.environ["PATH"]}))
+PYEOF
+)"
+check "['herdr'] ['herdr', 'rex']" "$OUT"
+
 it "a registry lookup that raises falls through to refuse"
 OUT="$(env -i PATH="${BOTH_BIN}:/usr/bin:/bin" CLAUDE_AUTO_DATA_DIR="$CLAUDE_AUTO_DATA_DIR" "${H_STALE[@]}" "${R_DEAD[@]}" CLAUDE_CODE_SESSION_ID=$MINE "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
 import os, sys

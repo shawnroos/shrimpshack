@@ -230,6 +230,12 @@ FALLBACK_RUNGS = (RUNG_INSTALLED, RUNG_ROW)
 _ROW_PANE_FIELD = {"herdr": ("HERDR_PANE_ID", "env_pane"), "rex": ("REX_BLOCK", "pane_id")}
 
 
+def _installed_hosts(env) -> list:
+    """Hosts whose command is on the PATH of `env`, the PATH the session announced from, not this process's."""
+    return [name for name in ("herdr", "rex")
+            if any(shutil.which(b, path=env.get("PATH")) for b in host_named(name).binaries)]
+
+
 def _herdr_server_up() -> bool:
     if not _server_probe:
         _server_probe.append(load_lib_module("host_herdr").server_running())
@@ -255,7 +261,7 @@ def _tell_apart(env) -> Detection:
     if proven:
         return Detection(None, True, "both herdr and Rex prove this session's pane, so auto cannot tell which one to type into",
                          _FIX_AMBIGUOUS)
-    installed = [name for name in ("herdr", "rex") if host_named(name).installed()]
+    installed = _installed_hosts(env)
     # Fallback picks are never memoised: the registry row and the installed set can change under a long-lived watcher.
     if len(installed) == 1:
         return Detection(installed[0], True, rung=RUNG_INSTALLED)
@@ -319,7 +325,7 @@ def explain(env=None) -> dict:
             "why": found.why, "fix": found.fix,
             "announced": [n for n, hit in (("herdr", env.get("HERDR_PANE_ID") or env.get("HERDR_ENV")),
                                            ("rex", env.get("REX_SESSION"))) if hit],
-            "installed": [n for n in ("herdr", "rex") if host_named(n).installed()],
+            "installed": _installed_hosts(env),
             "session_id_set": bool(env.get("CLAUDE_CODE_SESSION_ID"))}
 
 
