@@ -52,10 +52,11 @@ CHECK_BY = ("pm", "agent")
 TRIGGERS = ("claim", "merge", "block", "start", "domain")
 LIST_FIELDS = ("do", "dont", "skills", "tools", "agents", "formats", "comms")
 TEXT_FIELDS = ("evidence", "stop", "why")
+EDITABLE_FIELDS = ("when", "applies_to", "examples") + LIST_FIELDS + TEXT_FIELDS
 REQUIRED = ("id", "layer", "when", "applies_to")
 OPTIONAL = LIST_FIELDS + TEXT_FIELDS + (
     "repo_key", "examples", "source", "state", "overrides", "moved_to", "moved_repo_key", "history", "at",
-    "relates_to", "unrelated", "edit_of",
+    "relates_to", "unrelated", "edit_of", "edit_base",
 )
 # The other fields stay unscanned: stop conditions and "don't" lines need words such as
 # "cost", "limit" and "publish", which are protected stems.
@@ -531,14 +532,22 @@ def _edit_fields(opts, target) -> dict:
 
 def _apply_edit(entry, target, prompt, proposal) -> dict:
     """The checked proposal laid over the target, which keeps its id, start time, history and earlier answers."""
-    edited = {k: v for k, v in entry.items() if k not in ("edit_of", "history")}
+    edited = {k: v for k, v in entry.items() if k not in ("edit_of", "edit_base", "history")}
     for field in ("relates_to", "unrelated"):
         if field in target:
             edited.setdefault(field, target[field])
     edited.update(at=target.get("at", edited.get("at")), state=ACTIVE,
                   overrides=sorted(set(target.get("overrides") or []) | set(entry.get("overrides") or [])),
                   history=list(target.get("history") or []))
-    return _mark(edited, "edited", prompt, from_proposal=proposal)
+    previous = {k: target[k] for k in EDITABLE_FIELDS if k in target}
+    return _mark(edited, "edited", prompt, from_proposal=proposal, previous=previous)
+
+
+def _undo(entry, edited) -> str:
+    if edited:
+        return (f"the replaced wording is kept as 'previous' on the last 'edited' event of {entry['id']}: "
+                f"propose it back with propose-behaviour --edit-of {entry['id']} and apply it on Shawn's typed reply")
+    return f"retire-behaviour {entry['id']} --as undone --prompt <id>"
 
 
 def _edit_view(programme, entry, others) -> tuple:
@@ -546,6 +555,10 @@ def _edit_view(programme, entry, others) -> tuple:
     target = _editable(programme, entry["edit_of"]) if entry.get("edit_of") else None
     if not target:
         return entry, others, None
+    # The proposal copied the target's fields, so applying it after another edit landed would undo that edit.
+    if entry.get("edit_base") != len(target.get("history") or []):
+        raise BehaviourError(f"{target['id']!r} changed since this edit was proposed; propose the edit again "
+                             "so it starts from the current wording")
     return dict(entry, id=target["id"]), [o for o in others if o["id"] != target["id"]], target
 
 
@@ -613,7 +626,7 @@ def _h_record(host, argv):
         return {"behaviour": entry["id"], "layer": "programme", "when": entry["when"]["text"],
                 "trigger": trigger_of(entry), "checks": entry["when"]["checks"], "overrides": entry["overrides"],
                 "from_proposal": proposal, "edited": bool(target), **result,
-                "undo": f"retire-behaviour {entry['id']} --as undone --prompt <id>"}
+                "undo": _undo(entry, bool(target))}
 
     return host._write(opts, change, RECORDED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="record-behaviour", target=bid)
@@ -639,7 +652,8 @@ def _h_propose(host, argv):
             if not _has_fields(opts):
                 raise BehaviourError("an edit proposal needs at least one field to change")
             target = _editable(programme, opts["edit-of"])
-            entry = dict(_draft(_edit_fields(opts, target), bid), edit_of=target["id"])
+            entry = dict(_draft(_edit_fields(opts, target), bid), edit_of=target["id"],
+                         edit_base=len(target.get("history") or []))
         elif term:
             area, value = term.get("area"), term.get("value")
             entry = _draft(opts, bid, when=f"choosing a tool for {area}", tools=[value],
