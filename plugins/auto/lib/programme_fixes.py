@@ -57,6 +57,7 @@ FIXES = {
     "ask-shown": _ITEM,
     "answer-domain-behaviour": _WRITE,
     "close-gone-pane": _WRITE,
+    "host": "`programme.sh host` takes no arguments; rerun it as `programme.sh host`",
     "recommendations-shown": _WRITE,
     "assign-item": _ITEM,
     "beat": _WRITE,
