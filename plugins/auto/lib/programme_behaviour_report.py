@@ -28,6 +28,10 @@ def answers(opts) -> tuple:
     return related, unrelated
 
 
+def _without_lines(rows) -> list:
+    return [{k: v for k, v in r.items() if k != "lines"} for r in rows]
+
+
 def report(host, rec, entry, others, *, lines, given=((), ())) -> dict:
     snapshot = contract_check.snapshot(host, rec)
     peers = behaviour_check.check(entry, others)
@@ -38,14 +42,11 @@ def report(host, rec, entry, others, *, lines, given=((), ())) -> dict:
         if ref not in known:
             raise behaviour_check.BehaviourError(f"no behaviour or contract part {ref!r} to answer for")
     answered = set(related) | {u["id"] for u in unrelated}
-    for r in peers + contract:
-        r["answered"] = r["ref"] in answered
     synergies = behaviour_synergy.classify(entry, others, peers)
-    for r in synergies:
+    for r in peers + contract + synergies:
         r["answered"] = r["ref"] in answered
     if not lines:
-        peers = [{k: v for k, v in r.items() if k != "lines"} for r in peers]
-        synergies = [{k: v for k, v in r.items() if k != "lines"} for r in synergies]
+        peers, synergies = _without_lines(peers), _without_lines(synergies)
     return {"behaviours": peers, "contract": contract, "synergies": synergies,
             "unanswered": sum(r["ref"] not in answered for r in peers + contract),
             "checked": {"reasons": list(behaviour_check.REASONS), "synergies": list(behaviour_synergy.KINDS),

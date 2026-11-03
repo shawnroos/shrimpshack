@@ -532,13 +532,21 @@ def _edit_fields(opts, target) -> dict:
 def _apply_edit(entry, target, prompt, proposal) -> dict:
     """The checked proposal laid over the target, which keeps its id, start time, history and earlier answers."""
     edited = {k: v for k, v in entry.items() if k not in ("edit_of", "history")}
-    for field in ("at", "relates_to", "unrelated"):
-        if field in target and field not in edited:
-            edited[field] = target[field]
-    edited["at"] = target.get("at", edited.get("at"))
-    edited["overrides"] = sorted(set(target.get("overrides") or []) | set(entry.get("overrides") or []))
-    edited["state"] = ACTIVE
-    return _mark(dict(edited, history=list(target.get("history") or [])), "edited", prompt, from_proposal=proposal)
+    for field in ("relates_to", "unrelated"):
+        if field in target:
+            edited.setdefault(field, target[field])
+    edited.update(at=target.get("at", edited.get("at")), state=ACTIVE,
+                  overrides=sorted(set(target.get("overrides") or []) | set(entry.get("overrides") or [])),
+                  history=list(target.get("history") or []))
+    return _mark(edited, "edited", prompt, from_proposal=proposal)
+
+
+def _edit_view(programme, entry, others) -> tuple:
+    """An edit proposal as the check sees it: the edited behaviour itself, against everything else in force."""
+    target = _editable(programme, entry["edit_of"]) if entry.get("edit_of") else None
+    if not target:
+        return entry, others, None
+    return dict(entry, id=target["id"]), [o for o in others if o["id"] != target["id"]], target
 
 
 def _from_proposal(host, programme, prompt, proposal) -> dict:
@@ -564,9 +572,7 @@ def _h_check(host, argv):
     entry = dict(found, state=ACTIVE) if proposal else _draft(opts, "bcheck")
     _refuse(entry, verdict(entry, allow_adoption=False))
     others = _active(programme, load_store(host.prompt_lookup))
-    if entry.get("edit_of"):
-        entry = dict(entry, id=_editable(programme, entry["edit_of"])["id"])
-        others = [o for o in others if o["id"] != entry["id"]]
+    entry, others, _ = _edit_view(programme, entry, others)
     _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
     host._emit({"ok": True, "run": run_id, "kind": "behaviour_checked", "when": entry["when"]["text"],
                 **behaviour_report.report(host, dict(record, programme=programme), entry, others, lines=True)})
@@ -589,11 +595,7 @@ def _h_record(host, argv):
 
     def change(programme, prompt, rec):
         proposed = _from_proposal(host, programme, prompt, proposal) if proposal else _draft(opts, bid)
-        target = _editable(programme, proposed["edit_of"]) if proposed.get("edit_of") else None
-        # The check sees an edit as the edited behaviour itself, against everything else in force.
-        entry = dict(proposed, id=target["id"]) if target else proposed
-        loaded = load_store(host.prompt_lookup)
-        others = [o for o in _active(programme, loaded) if not target or o["id"] != target["id"]]
+        entry, others, target = _edit_view(programme, proposed, _active(programme, load_store(host.prompt_lookup)))
         entry["overrides"] = _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
         result = behaviour_report.report(host, rec, entry, others, lines=False, given=answers)
         if related:
@@ -610,7 +612,8 @@ def _h_record(host, argv):
             entry = put_programme_entry(programme, _mark(entry, "recorded", prompt))
         return {"behaviour": entry["id"], "layer": "programme", "when": entry["when"]["text"],
                 "trigger": trigger_of(entry), "checks": entry["when"]["checks"], "overrides": entry["overrides"],
-                "from_proposal": proposal, "edited": bool(target), **result, "undo": f"retire-behaviour {entry['id']} --as undone --prompt <id>"}
+                "from_proposal": proposal, "edited": bool(target), **result,
+                "undo": f"retire-behaviour {entry['id']} --as undone --prompt <id>"}
 
     return host._write(opts, change, RECORDED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="record-behaviour", target=bid)
