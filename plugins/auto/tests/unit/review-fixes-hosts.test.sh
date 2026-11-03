@@ -480,8 +480,11 @@ check "[]" "$OUT"
 # ---------------------------------------------------------------- RefusedHost in the source paths (finding 4)
 echo "review-fixes: a refused host does not crash the sweep, launch or send paths (finding 4)"
 BOTH=(HERDR_PANE_ID=w1:2 REX_SESSION=s)
+. "${AUTO_ROOT}/tests/helpers/host-fakes.sh"
+BOTH_INSTALLED="$(mktemp -d -t auto-both-hosts.XXXXXX)"
+host_fake_install herdr "$BOTH_INSTALLED"; host_fake_install rex "$BOTH_INSTALLED"
 refused_py() {
-  env "${BOTH[@]}" "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
+  env PATH="${BOTH_INSTALLED}:${PATH}" "${BOTH[@]}" "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module

@@ -919,6 +919,13 @@ _VERBS["status"] = _Verb(
     reads=True,
 )
 
+_VERBS["host"] = _Verb(
+    lambda argv: load_lib_module("programme_host").verb(sys.modules[__name__], argv),
+    "(prints which terminal host this session resolves to, which fact decided it, and what was missing when it is refused)",
+    reads=True,
+    rejects="nothing; read-only. It reads the environment, PATH and the session registry, and writes nothing.",
+)
+
 programme_behaviours = load_lib_module("programme_behaviours")
 _VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_behaviours_skip").build_verbs(sys.modules[__name__]))

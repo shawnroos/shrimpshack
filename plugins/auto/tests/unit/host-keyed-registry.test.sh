@@ -256,7 +256,10 @@ it "a Ghostty session with no space of its own cannot become-pm in a rex space"
 if [ "$CODE" -ne 0 ] || [ -z "$(ls "$LEASES" | grep ghostty)" ]; then pass; else fail "$OUT"; fi
 
 echo "host-keyed-registry: start refuses when the environment announces two multiplexers"
-as() { local sid="$1"; shift; OUT="$(CLAUDE_CODE_SESSION_ID="$sid" HERDR_PANE_ID=w5:p1 HERDR_WORKSPACE_ID=w5 REX_SESSION=abc "$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
+. "${AUTO_ROOT}/tests/helpers/host-fakes.sh"
+BOTH_INSTALLED="$(mktemp -d -t auto-both-hosts.XXXXXX)"
+host_fake_install herdr "$BOTH_INSTALLED"; host_fake_install rex "$BOTH_INSTALLED"
+as() { local sid="$1"; shift; OUT="$(PATH="${BOTH_INSTALLED}:${PATH}" CLAUDE_CODE_SESSION_ID="$sid" HERDR_PANE_ID=w5:p1 HERDR_WORKSPACE_ID=w5 REX_SESSION=abc "$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
 BEFORE="$(ls "$LEASES" | tr '\n' ' ')"
 as sess-new-two start
 it "start with both herdr and Rex announced refuses with a fix line"

@@ -86,7 +86,9 @@ A programme's agreement (Scope and Rulings) and the protocol (Authority and Done
 programme is found by `--run <id>`, or else by the lease that names the caller's
 session.
 
-- **Read**: `describe`; `rules` prints the rules in force (the agreement's Scope
+- **Read**: `describe`; `host` prints which terminal host this session resolves to, the fact that decided it
+  (live pane proof, the one installed host command, or this session's registry row) and, when it refuses, what
+  was missing; it writes nothing; `rules` prints the rules in force (the agreement's Scope
   terms, active Rulings, Done standards, Authority entries outside the plugin layer,
   protocol changes, Ruling conflicts and old reservations to record again), rebuilt from the run record and wrapped in
   an `<auto-rules>` tag as data, followed by the restored context (decisions,
@@ -272,7 +274,7 @@ session.
   exact label `approval-label` prints; `record-ritual` and `propose-ritual` do not. `run-ritual`, `skip-ritual` and `retire-ritual` move the programme's next-due time past
   now. `handover` and `end` refuse while a ritual for their trigger is unanswered in the tenure that is
   ending; `--without-rituals` goes ahead and leaves it missed. The ritual verbs, in the order a run uses them:
-  `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`.
+  `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`. `run-ritual-checks` (with `--ritual <id>` to re-run one) runs the named check of each due or missed calendar ritual that carries one and has not been checked for its slot, outside the programme lock: a pass moves the clock and journals `ritual_checked`, a fail or error journals it and leaves the ritual due. It is chained in the sweep's step 1 and writes only when the caller drives the programme; otherwise the ritual stays due and is listed as `not_recorded`.
 - **Behaviours**: standing guidance on how the PM and its workers do the work. A
   behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
   --when <text>`) with `--do` or `--dont` lines (plus optional `--trigger claim|merge|block|start`, `--pm-check`,

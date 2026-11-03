@@ -576,7 +576,8 @@ def rituals_view(record, journal_entries) -> list:
                      "pending_at": hit and hit["pending_at"], "offered": bool(hit and hit.get("offered")),
                      "next_due_at": _dict(clock.get(e["id"])).get("next_due_at"),
                      "next_due_local": _local_due(_dict(clock.get(e["id"])).get("next_due_at")),
-                     "offers": list(e.get("offers") or [])})
+                     "offers": list(e.get("offers") or []),
+                     "check": programme_rituals_due.last_check(e, journal_entries) if e.get("check") else None})
     return rows
 
 
@@ -590,6 +591,11 @@ def _ritual_text(r) -> str:
     local = f" = {r['next_due_local']} machine local time" if r.get("next_due_local") else ""
     due = f", since {r['pending_at']}" if r.get("pending_at") else (f", next {r['next_due_at']}{local}" if r.get("next_due_at") else "")
     offers = f"; offers (ask Shawn, never act): {' / '.join(r['offers'])}" if r.get("offers") else ""
+    got = r.get("check")
+    if got:
+        age = f", clone last fetched {got['ref_age_seconds'] // 3600}h ago" if got.get("ref_age_seconds") is not None else ""
+        failed = f", failed: {', '.join(f['plugin'] for f in got.get('failed') or [])}" if got.get("failed") else ""
+        offers += f"; check {got['name']}: {got['result']}" + (f" ({got['reason']})" if got.get("reason") else "") + failed + age
     flag = {"missed": " [MISSED, ask Shawn]", "in_flight": " [IN FLIGHT, finish or offer]", "due": " [due]"}.get(r.get("state"), "")
     return f"ritual {r.get('id')} ({r.get('layer')}, {r.get('state')}{due}){flag}: {when}{offers}"
 
