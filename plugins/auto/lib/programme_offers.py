@@ -132,9 +132,9 @@ def _label(text) -> str:
     return _shown(str(text).replace(", ", " and "), LABEL_CAP)
 
 
-def _rendered(label, description="", facts=None, authority=False, named=None, content=None, whole=False) -> dict:
-    return {"label": _label(label), "description": _shown(description, DRAFT_TEXT_CAP if whole else TEXT_CAP),
-            "facts": facts, "authority": authority, "named": named, "content": content}
+def _rendered(label, description="", facts=None, authority=False, named=None, content=None, cap=TEXT_CAP) -> dict:
+    return {"label": _label(label), "description": _shown(description, cap), "facts": facts, "authority": authority,
+            "named": named, "content": content}
 
 
 def _item(programme, ident) -> tuple:
@@ -316,7 +316,7 @@ def _accept_ruling(context, ident, revisions) -> dict:
     wider = _widens(revision.get("effect"), context.in_force(revisions), delta)
     verb = "Widen by accepting" if wider else "Accept"
     return _rendered(f"{verb} Ruling {ident}", f"{revision.get('scope')} ({_ruling_words(revision, delta)})",
-                     revision, authority=wider, whole=True)
+                     revision, authority=wider, cap=DRAFT_TEXT_CAP)
 
 
 def _record_ruling(cmd, programme) -> dict:
@@ -344,7 +344,7 @@ def _record_ruling(cmd, programme) -> dict:
         f"Widen by loosening restrict Ruling {ident}" if wider else f"Record {effect} Ruling {ident} on {kind}")
     why = f" Why: {cmd.opt('reason')}." if cmd.opt("reason") else ""
     return _rendered(label, f"{scope} ({_ruling_words(content, delta)}){why}", {"revisions": revisions, "draft": scope},
-                     authority=wider, content=scope, whole=True)
+                     authority=wider, content=scope, cap=DRAFT_TEXT_CAP)
 
 
 def _close_ruling(cmd, programme) -> dict:
@@ -361,7 +361,7 @@ def _close_ruling(cmd, programme) -> dict:
     back = f" This hands {current.get('kind')} back to the PM." if restrict else ""
     return _rendered(label, f"{current.get('scope')} ({current.get('effect')} {current.get('kind')}).{back} "
                             f"Closed as {ending}. Why: {why or 'none given'}.",
-                     {"revisions": revisions, "draft": why}, authority=restrict, content=why, whole=True)
+                     {"revisions": revisions, "draft": why}, authority=restrict, content=why, cap=DRAFT_TEXT_CAP)
 
 
 def _define_requirement(cmd, programme) -> dict:
@@ -369,7 +369,7 @@ def _define_requirement(cmd, programme) -> dict:
     existing = load_lib_module("programme_context").block(programme)["requirements"].get(ident)
     text = _draft(cmd.opt("text"))
     return _rendered(f"Set requirement {ident}", f"{text} Checks: {cmd.opt('check')}.", {"revisions": existing, "draft": text},
-                     whole=True)
+                     cap=DRAFT_TEXT_CAP)
 
 
 def _edit_term(cmd, programme) -> dict:
@@ -378,7 +378,7 @@ def _edit_term(cmd, programme) -> dict:
     entry = load_lib_module("programme_terms")._find(programme, cmd.pos[0])
     text = _draft(cmd.pos[1])
     return _rendered(f"Change preferred tool {entry.get('area')}", f"New: {text} Now: {entry.get('value')}",
-                     {"value": entry.get("value"), "draft": text}, content=text, whole=True)
+                     {"value": entry.get("value"), "draft": text}, content=text, cap=DRAFT_TEXT_CAP)
 
 
 def _lift_pause(cmd, programme) -> dict:
@@ -389,23 +389,34 @@ def _lift_pause(cmd, programme) -> dict:
     return _rendered(f"Lift pause {ident}", entry.get("reason") or "", entry)
 
 
-_PERMISSION_WORDS = {"applied": "Allow permission", "not-now": "Hold permission", "no": "Refuse permission"}
+_PERMISSION_WORDS = {"applied": "Check the rule added by hand for permission", "not-now": "Hold permission",
+                     "no": "Refuse permission"}
+# Shawn approves the reach and the exclusions along with the rule, so the usual cap must not cut them off.
+_ALLOW_TEXT_CAP = 2000
+
+
+def _allow_permission(ident, proposal, programme) -> dict:
+    plan = load_lib_module("programme_permission_settle").allow_plan(programme, proposal)
+    shown = {key: plan[key] for key in ("rules", "file", "reach", "exclusions")}
+    text = (f"Auto writes {' and '.join(plan['rules'])} to {plan['file']}. This widens what the session may do. "
+            f"Reach: {' '.join(plan['reach'])} Still not allowed: {'; '.join(plan['exclusions'])}.")
+    return _rendered(f"Widen by allowing permission {ident}", text,
+                     dict(shown, state=proposal.get("state"), changed_at=proposal.get("changed_at")), authority=True,
+                     cap=_ALLOW_TEXT_CAP)
 
 
 def _permission(cmd, programme) -> dict:
-    if len(cmd.pos) != 2 or cmd.pos[1] not in _PERMISSION_WORDS:
-        raise OfferError("usage: answer-permission <perm-id> applied|not-now|no")
+    if len(cmd.pos) != 2 or cmd.pos[1] not in ("allow", *_PERMISSION_WORDS):
+        raise OfferError("usage: answer-permission <perm-id> allow|applied|not-now|no")
     ident, choice = cmd.pos
     proposal = load_lib_module("programme_permission_state").find(programme, ident)
     if proposal is None:
         raise OfferError(f"no permission proposal {ident!r}")
-    allow = choice == "applied"
+    if choice == "allow":
+        return _allow_permission(ident, proposal, programme)
     rules = ", ".join(str(r) for r in proposal.get("rules") or [])
-    text = f"Rules: {rules}." + (" This widens what the session may do." if allow else "")
-    word = load_lib_module("programme_permission").CHOICE_WORDS[choice][0]
-    return _rendered(f"{_PERMISSION_WORDS[choice]} {ident}", text,
-                     {k: proposal.get(k) for k in ("rules", "state", "changed_at")}, authority=allow,
-                     named=f"{word} {ident}")
+    return _rendered(f"{_PERMISSION_WORDS[choice]} {ident}", f"Rules: {rules}.",
+                     {k: proposal.get(k) for k in ("rules", "state", "changed_at")})
 
 
 def _dispose(cmd, _programme) -> dict:

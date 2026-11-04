@@ -2,9 +2,9 @@
 """Refuse the PM's write to a settings file a permission proposal targets.
 
 Best effort: the driving session is refused Write, Edit, MultiEdit or Bash calls that name
-that settings.local.json. Only Shawn applies rules; workers are not checked. While the
-programme's record cannot be read, the driver is refused any .claude/settings.local.json:
-which one a proposal targets cannot be known.
+that settings.local.json. Only `answer-permission <id> allow` writes it, after Shawn's pick;
+workers are not checked. While the programme's record cannot be read, the driver is refused any
+.claude/settings.local.json: which one a proposal targets cannot be known.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ SETTINGS_FILE = rules.DESTINATION_FILE
 _TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
 _TOKEN = re.compile(r"[^\s;&|<>()`]*\.claude/settings\.local\.json(?![\w.-])", re.IGNORECASE)
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
+_ONLY_THE_VERB = "Only `programme.sh answer-permission <perm-id> allow` writes this file, after Shawn's pick."
 
 
 def _held_read(lease):
@@ -130,14 +131,14 @@ def decision(stdin_raw: str):
     if programme is None:
         return _deny(
             f"auto: this call names {target}, and the record of programme {run_id!r} cannot be read "
-            "right now, so no settings file can be cleared. Only Shawn applies permission rules; "
-            "retry once the programme is readable, or continue the work that does not need this."), None
+            f"right now, so no settings file can be cleared. {_ONLY_THE_VERB} "
+            "Retry once the programme is readable, or continue the work that does not need this."), None
     payload = {"tool": tool_name, "path": target}
     if tool_name == "Bash":
         payload["command"] = tool_input.get("command")
     return _deny(
         f"auto: this call names {target}, the settings file a permission proposal of "
-        f"programme {run_id!r} targets. Only Shawn applies permission rules; continue the "
+        f"programme {run_id!r} targets. {_ONLY_THE_VERB} Offer that answer and wait for his pick, or continue the "
         "work that does not need this. The attempt is journaled once the programme is free."), \
         (run_id, "blocked_settings_write", session_id, payload)
 

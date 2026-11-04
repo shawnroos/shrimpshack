@@ -469,10 +469,25 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     check('adopt-autonomy --widening puts the decline first', authority(printed), options(printed))
     result = verb(sid, run, 'adopt-autonomy', 'flip_terms_change_stage', 'act', '--widening', '--prompt', picked(sid, run, printed))
     check('adopt-autonomy --widening is approved through offer, with the widen check in force', ok(result), said(result))
-    printed = offer(sid, run, 'allow', 'answer-permission perm-ok applied')
+    allow_repo = pathlib.Path(os.path.realpath(work)) / 'allow-repo'
+    (allow_repo / '.git').mkdir(parents=True)
+    allow_file = allow_repo / '.claude' / 'settings.local.json'
+
+    def seed_allow(rec):
+        prog = rec['programme']
+        prog['remit']['repos'] = [{'path': str(allow_repo), 'github': None}]
+        prog['items']['mem:comma']['repo'] = str(allow_repo)
+        prog['permission_proposals'].append(
+            {'id': 'perm-allow', 'state': 'open', 'operations': ['pr_checks'], 'rules': ['Bash(gh pr checks *)'],
+             'settings_file': str(allow_file), 'items': ['mem:comma'], 'answers': [],
+             'changed_at': '2026-01-01T00:00:00Z'})
+    edit(run, seed_allow)
+    printed = offer(sid, run, 'allow', 'answer-permission perm-allow allow')
     check('allowing a permission puts the decline first', authority(printed), options(printed))
-    printed = offer(sid, run, 'mixed', 'reopen-item mem:comma', 'answer-permission perm-ok applied')
+    printed = offer(sid, run, 'mixed', 'reopen-item mem:comma', 'answer-permission perm-allow allow')
     check('one authority move in a picker puts the decline first', authority(printed), options(printed))
+    printed = offer(sid, run, 'hand', 'answer-permission perm-ok applied')
+    check('applied writes nothing, so it is no authority move', not authority(printed), options(printed))
 
     # ---- accept: the terms digest is the offer's subject ----
     a_sid = 'offer-accept'
@@ -716,15 +731,23 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
             check(f'{name}: {how} is refused, and the fix says relay and ask again',
                   refused(result, 'relay') and 'ask' in said(result).lower(), said(result))
 
+    add_item(w_sid, w_run, 'mem:perm')
+
     def seed_words(rec):
+        rec['programme']['remit']['repos'] = [{'path': str(allow_repo), 'github': None}]
+        rec['programme']['items']['mem:perm']['repo'] = str(allow_repo)
         rec['programme']['permission_proposals'] = [
-            {'id': 'perm-w', 'state': 'open', 'rules': ['Bash(ls:*)'], 'settings_file': str(work / 'settings.json'),
+            {'id': 'perm-w', 'state': 'open', 'operations': ['pr_checks'], 'rules': ['Bash(gh pr checks *)'],
+             'settings_file': str(allow_file), 'items': ['mem:perm'], 'answers': [],
+             'changed_at': '2026-01-01T00:00:00Z'},
+            {'id': 'perm-x', 'state': 'open', 'rules': ['Bash(ls:*)'], 'settings_file': str(work / 'settings.json'),
              'items': [], 'answers': [], 'changed_at': '2026-01-01T00:00:00Z'}]
     edit(w_run, seed_words)
     authority_refused('widening', offer(w_sid, w_run, 'widen', 'adopt-autonomy flip_terms_change_stage act --widening'),
                       ['adopt-autonomy', 'flip_terms_change_stage', 'act', '--widening'])
-    authority_refused('permission allow', offer(w_sid, w_run, 'allow', 'answer-permission perm-w applied'),
-                      ['answer-permission', 'perm-w', 'applied'])
+    authority_refused('permission allow', offer(w_sid, w_run, 'allow', 'answer-permission perm-w allow'),
+                      ['answer-permission', 'perm-w', 'allow'])
+    check('own words on allow wrote no settings file', not allow_file.exists(), allow_file)
     assert ok(verb(w_sid, w_run, 'propose-agreement', '--project-term', 'naming=use kebab case', '--source', 'brief'))
     accept = offer(w_sid, w_run, 'accept', 'accept-agreement')
     authority_refused('accept', accept, ['accept-agreement'])
@@ -905,6 +928,12 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     asked(printed)
     result = verb(w_sid, w_run, 'lift-pause', 'pause-w', '--prompt', said_to('go ahead'), *reads_as(printed))
     check('lift-pause binds on own words', ok(result), said(result))
+    printed = offer(w_sid, w_run, 'later', 'answer-permission perm-x not-now')
+    asked(printed)
+    result = verb(w_sid, w_run, 'answer-permission', 'perm-x', 'not-now', '--prompt', said_to('later please'),
+                  *reads_as(printed))
+    check('answer-permission not-now binds on own words, and the row keeps the reading',
+          ok(result) and json.loads(result.stdout).get('read_as') == command_label(printed), said(result))
 
     def seed_disposal(rec):
         rec['programme'].setdefault(load_lib_module('programme_recovery').OPS_KEY, {})['op-w'] = {'state': 'uncertain', 'verb': 'start-worker'}

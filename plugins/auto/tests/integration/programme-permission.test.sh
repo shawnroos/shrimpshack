@@ -157,6 +157,17 @@ notices() { grep -c '^herdr notification show' "$CALLS" || true; }
 pid_for() { field "[p['id'] for p in props.values() if p['destination'] == '$1'][0]" | tr -d '"'; }
 pf() { field "props['$1']$2"; }
 
+PICKS="${AUTO_ROOT}/tests/fixtures/permission_picks.py"
+OFFERS=0
+answer() {
+  OFFERS=$((OFFERS + 1))
+  pm offer "perm-q${OFFERS}" --command "answer-permission $1 $2"
+  [ "$CODE" -eq 0 ] || return 0
+  local picked
+  picked="$("$PY" "$PICKS" "$AUTO_ROOT" "$RUN" "$PM" "${TX}/${PM}.jsonl" command <<< "$OUT")"
+  pm answer-permission "$1" "$2" --prompt "$picked"
+}
+
 # ---- programme bootstrap through the real entry points ----
 session "$PM" w2:p10 "$NOREPO"
 session sess-pm2 w2:p19 "$NOREPO"
@@ -249,15 +260,15 @@ check "0 ${EV_BEFORE} 1" \
   "$CODE $(pf "$P1" '["evidence"]' | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))') $(notices)"
 
 # ---- F1: applied, retry once, settle from the transcript ----
-it "typed applied before the rule exists keeps the proposal open and reserves nothing"
-pm answer-permission "$P1" applied --prompt "$(typed_id "$PM" "applied ${P1}")"
+it "picking applied before the rule exists keeps the proposal open and reserves nothing"
+answer "$P1" applied
 check '0 "open" null' "$CODE $(pf "$P1" '["state"]') $(pf "$P1" '.get("reservation")')"
 
 "$PY" "$FX" settings "${REPO_A}/.claude/settings.local.json" '{"permissions": {"allow": ["Bash(gh pr checks *)"]}}'
 LOCAL_HASH="$(shasum "${REPO_A}/.claude/settings.local.json")"
 
-it "F1: typed applied with the allow rule present gives retrying and one reservation"
-pm answer-permission "$P1" applied --prompt "$(typed_id "$PM" "applied ${P1}")"
+it "F1: picking applied with the allow rule present gives retrying and one reservation"
+answer "$P1" applied
 check "0 \"retrying\" 1 \"linear:AI-1\"" "$CODE $(pf "$P1" '["state"]') $(pf "$P1" '["attempts"]') $(out_key retry_item)"
 RETRY_TEXT="$(out_key retry_text | "$PY" -c 'import json,sys; print(json.load(sys.stdin))')"
 it "F1: the retry text is the catalog's normalized command"
@@ -290,8 +301,8 @@ P2="$(pid_for "$REPO_B")"
 it "AE3: a new destination opens a second proposal and notifies once"
 check "\"open\" 2" "$(pf "$P2" '["state"]') $(notices)"
 
-it "AE3: typed 'not now' postpones it"
-pm answer-permission "$P2" not-now --prompt "$(typed_id "$PM" "not now ${P2}")"
+it "AE3: picking not now postpones it"
+answer "$P2" not-now
 check '0 "postponed"' "$CODE $(pf "$P2" '["state"]')"
 
 it "AE3: two more denials attach as evidence with zero new notifications and no new proposal"
@@ -311,7 +322,7 @@ P3="$(pid_for "$REPO_C")"
 "$PY" "$FX" settings "$CLAUDE_AUTO_TEST_USER_SETTINGS" '{"permissions": {"deny": ["Bash(gh pr view *)"]}}'
 
 it "AE5: a deny rule in user settings gives ineffective, naming the rule and file, with no reservation"
-pm answer-permission "$P3" applied --prompt "$(typed_id "$PM" "applied ${P3}")"
+answer "$P3" applied
 check '0 "ineffective" null' "$CODE $(pf "$P3" '["state"]') $(pf "$P3" '.get("reservation")')"
 has "Bash(gh pr view *)" "$(pf "$P3" '["explanation"]')"
 has "$CLAUDE_AUTO_TEST_USER_SETTINGS" "$(pf "$P3" '["explanation"]')"
@@ -324,8 +335,8 @@ check "\"ineffective\" null 0 ${N_BEFORE}" \
   "$(pf "$P3" '["state"]') $(pf "$P3" '.get("reservation")') $(pf "$P3" '.get("attempts", 0)') $(notices)"
 
 "$PY" "$FX" settings "$CLAUDE_AUTO_TEST_USER_SETTINGS" '{"permissions": {"allow": []}}'
-it "AE5: a typed applied after the deny rule is gone arms exactly one retry"
-pm answer-permission "$P3" applied --prompt "$(typed_id "$PM" "applied ${P3}")"
+it "AE5: picking applied after the deny rule is gone arms exactly one retry"
+answer "$P3" applied
 check '0 "retrying" 1' "$CODE $(pf "$P3" '["state"]') $(pf "$P3" '["attempts"]')"
 pm prompt-item linear:AI-5 "$(out_key retry_text | "$PY" -c 'import json,sys; print(json.load(sys.stdin))')"
 
@@ -349,6 +360,31 @@ check "0 0 0 \"done\" \"waiting\" \"${P2}\"" \
   "$CLAIM_CODE $MERGED_CODE $CODE $(field 'pred.effective_state(items["linear:AI-753"])') $(field 'items["linear:AI-4"]["state"]') $(field 'items["linear:AI-4"]["waiting_on"]["permission"]')"
 it "AE7: the denied read never ran through another path"
 lacks "gh run view" "$(grep '^gh ' "$CALLS")"
+
+# ---- allow, through the real entry points ----
+REPO_D="${WORK}/repos/d"
+mkdir -p "${REPO_D}/.git"
+OUT="$(printf '{"repos":[{"path":"%s","github":"shawnroos/shrimpshack"},{"path":"%s","github":null},{"path":"%s","github":null},{"path":"%s","github":null}]}' \
+  "$REPO_A" "$REPO_B" "$REPO_C" "$REPO_D" | CLAUDE_CODE_SESSION_ID="$PM" HERDR_WORKSPACE_ID=w2 bash "$PROG_SH" set-remit 2>&1)"
+session sess-w7 w2:p17 "${WORK}/wt/w7"
+"$PY" "$FX" snapshot "$SNAP" w2:p10=sess-pm=idle w2:p19=sess-pm2=working w2:p17=sess-w7=working
+pm add-item linear:AI-7 --title "w7 needs run list" --session sess-w7 --pane w2:p17 --repo "$REPO_D"
+deny sess-w7 tu-d1 "gh run list --limit 3"
+pm propose-permission --item linear:AI-7
+P4="$(pid_for "$REPO_D")"
+D_FILE="${REPO_D}/.claude/settings.local.json"
+
+it "allow: after the pick the temp settings file holds the rule, and the proposal is retrying"
+answer "$P4" allow
+check '0 "retrying" ["Bash(gh run list *)"]' \
+  "$CODE $(pf "$P4" '["state"]') $("$PY" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["permissions"]["allow"]))' "$D_FILE")"
+case "$D_FILE" in "${WORK}/"*) pass ;; *) fail "wrote outside the temp folder: $D_FILE" ;; esac
+
+it "allow: the worker's retry then settles the proposal as resolved and confirmed"
+pm prompt-item linear:AI-7 "$(out_key retry_text | "$PY" -c 'import json,sys; print(json.load(sys.stdin))')"
+ran sess-w7 tu-d2 "gh run list --limit 3"
+pm settle-permissions
+check '0 "resolved" true "open"' "$CODE $(pf "$P4" '["state"]') $(pf "$P4" '["confirmed"]') $(field 'items["linear:AI-7"]["state"]')"
 
 it "no verb call crashed with a traceback"
 check "" "$CRASHES"

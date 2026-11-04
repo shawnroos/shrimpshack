@@ -26,10 +26,11 @@ DECLINED_STATE = {"not-now": POSTPONED, "no": REJECTED}
 # Not states: VERIFY lets the settings check pick the next state; DEFER holds a decline until the retry settles.
 VERIFY, DEFER = "verify", "defer"
 
-# (state, event) → next state. Events are Shawn's typed choices and settlement outcomes; a missing pair is refused.
+# (state, event) → next state. Events are Shawn's answers and settlement outcomes; a missing pair is refused.
+# allow writes the rule first, applied only checks one he added by hand; both then verify.
 TRANSITIONS = {
-    **{(s, "applied"): VERIFY for s in (OPEN, POSTPONED, REJECTED, INEFFECTIVE, RETRY_UNOBSERVED)},
-    (RETRYING, "applied"): RETRYING,
+    **{(s, c): VERIFY for s in (OPEN, POSTPONED, REJECTED, INEFFECTIVE, RETRY_UNOBSERVED) for c in ("allow", "applied")},
+    **{(RETRYING, c): RETRYING for c in ("allow", "applied")},
     **{(s, c): DECLINED_STATE[c] for s in ASKING_STATES for c in DECLINED_STATE},
     **{(s, c): s for s in QUIET_STATES for c in DECLINED_STATE},
     **{(RETRYING, c): DEFER for c in DECLINED_STATE},

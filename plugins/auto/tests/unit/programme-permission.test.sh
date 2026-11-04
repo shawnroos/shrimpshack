@@ -175,6 +175,25 @@ prog() {
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 
+PICKS="${AUTO_ROOT}/tests/fixtures/permission_picks.py"
+OFFERS=0
+# offered <perm-id> <choice>: the picker Auto prints for this answer, left in OUT.
+offered() {
+  OFFERS=$((OFFERS + 1))
+  prog offer "perm-q${OFFERS}" --command "answer-permission $1 $2"
+}
+# shawn_picks [which]: Shawn answers the printed picker; see permission_picks.py for the choices.
+shawn_picks() {
+  "$PY" "$PICKS" "$AUTO_ROOT" "$RUN" sess-pm "${TEST_TRANSCRIPTS}/sess-pm.jsonl" "${1:-command}" <<< "$OUT"
+}
+ANSWER_PROMPT=""
+answer() {
+  offered "$1" "$2"
+  [ "$CODE" -eq 0 ] || return 0
+  ANSWER_PROMPT="$(shawn_picks)"
+  prog answer-permission "$1" "$2" --prompt "$ANSWER_PROMPT"
+}
+
 edit "rec['programme']['remit']['repos'] = [{'path': p, 'github': None} for p in ['${MAIN}', '${MAIN2}', '${MAIN3}', '${MAIN4}']]"
 
 it "describe lists the three permission verbs"
@@ -379,33 +398,38 @@ prog answer-permission perm-1 applied --prompt "$P_UNKNOWN"
 check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
 has "typed" "$OUT"
 
-it "AE6: a typed prompt that does not name perm-1 is refused"
-prog answer-permission perm-1 not-now --prompt "$(prompt typed 'not now please')"
+it "AE6: a typed answer that names the proposal and the choice, with no offer asked, is refused and the fix names offer"
+prog answer-permission perm-1 not-now --prompt "$(prompt typed 'not now perm-1')"
+check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
+has "offer" "$OUT"
+
+it "a pick of the old approval label, on a picker Auto did not print, is refused"
+HAND="$(run_py "$RUN" <<'EOF'
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
+import permission_picks
+label = "Approve answer-permission perm-1 no"
+questions = [{"question": "Reject it?", "header": "Reject", "multiSelect": False,
+              "options": [{"label": label, "description": "x"}, {"label": "Later", "description": "y"}]}]
+print(permission_picks.pick(args[0], "sess-pm", os.environ["TEST_TRANSCRIPTS"] + "/sess-pm.jsonl", questions, label))
+EOF
+)"
+prog answer-permission perm-1 no --prompt "$HAND"
 check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
 
-it "AE6: a typed prompt that negates perm-1 is refused"
-prog answer-permission perm-1 not-now --prompt "$(prompt typed 'later, but not perm-1')"
+it "a pick of this offer's decline runs nothing"
+offered perm-1 no
+DECLINE_PROMPT="$(shawn_picks decline)"
+prog answer-permission perm-1 no --prompt "$DECLINE_PROMPT"
 check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
 
-it "a typed prompt naming perm-1 with no choice word is refused"
-prog answer-permission perm-1 no --prompt "$(prompt typed 'perm-1')"
+it "a pick made for another answer of the same proposal is refused"
+offered perm-1 no
+OTHER_ANSWER="$(shawn_picks)"
+prog answer-permission perm-1 not-now --prompt "$OTHER_ANSWER"
 check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
 
-it "a typed 'applied perm-1' called with choice no is refused"
-prog answer-permission perm-1 no --prompt "$(prompt typed 'applied perm-1')"
-check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
-
-it "a typed prompt carrying two answers is refused"
-prog answer-permission perm-1 no --prompt "$(prompt typed 'reject perm-1, or later')"
-check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
-
-it "a typed prompt older than the proposal's last state change is refused"
-prog answer-permission perm-1 not-now --prompt "$(prompt typed 'later perm-1' -120)"
-check '1 "open"' "$CODE $(field 'props["perm-1"]["state"]')"
-has "older" "$OUT"
-
-it "an unknown proposal id is refused"
-prog answer-permission perm-9 no --prompt "$(prompt typed 'reject perm-9')"
+it "an unknown proposal id cannot be offered"
+offered perm-9 no
 check 1 "$CODE"
 
 it "no refused answer journaled permission_answered"
@@ -415,9 +439,9 @@ EOF
 )"
 
 # ---- AE3: not now stays not now ----
-it "AE3: typed 'later perm-1' postpones perm-1"
-P_LATER="$(prompt typed 'later perm-1')"
-prog answer-permission perm-1 not-now --prompt "$P_LATER"
+it "AE3: picking not now postpones perm-1"
+answer perm-1 not-now
+P_LATER="$ANSWER_PROMPT"
 check '0 "postponed"' "$CODE $(field 'props["perm-1"]["state"]')"
 it "the answer is recorded with its prompt id and journaled"
 check "[\"${P_LATER}\", \"not-now\"]" "$(field '[props["perm-1"]["answers"][-1]["prompt_id"], props["perm-1"]["answers"][-1]["choice"]]')"
@@ -430,9 +454,9 @@ prog propose-permission --item linear:AI-4
 check "\"postponed\" $((EV_BEFORE + 1)) ${N_BEFORE} [\"perm-1\", \"perm-2\"]" \
   "$(field 'props["perm-1"]["state"]') $(field 'len(props["perm-1"]["evidence"])') $(notices) $(field 'sorted(props)')"
 
-it "typed 'reject perm-1' on a postponed proposal records the answer and keeps it postponed"
-P_REJ="$(prompt typed 'reject perm-1')"
-prog answer-permission perm-1 no --prompt "$P_REJ"
+it "picking reject on a postponed proposal records the answer and keeps it postponed"
+answer perm-1 no
+P_REJ="$ANSWER_PROMPT"
 check '0 "postponed" 2' "$CODE $(field 'props["perm-1"]["state"]') $(field 'len(props["perm-1"]["answers"])')"
 
 it "re-citing a prompt an earlier answer used is refused"
@@ -445,8 +469,8 @@ prog status --run "$RUN"
 lacks "perm-1:" "$(printf '%s\n' "$OUT" | sed -n '/Decisions for Shawn/,/Just did/p')"
 
 # ---- AE4: broader access is a new decision ----
-it "typed 'reject perm-2' rejects perm-2"
-prog answer-permission perm-2 no --prompt "$(prompt typed 'reject perm-2')"
+it "picking reject rejects perm-2"
+answer perm-2 no
 check '0 "rejected"' "$CODE $(field 'props["perm-2"]["state"]')"
 
 it "AE3: after no, a same-key denial attaches with no notification and stays rejected"
@@ -470,8 +494,8 @@ prog propose-permission --item linear:AI-20
 check "[\"perm-1\", \"perm-2\", \"perm-3\"] [\"pr_view\"] \"rejected\" ${N_BEFORE}" \
   "$(field 'sorted(props)') $(field 'props["perm-3"]["operations"]') $(field 'props["perm-2"]["state"]') $(notices)"
 
-it "typed 'not now perm-3' postpones perm-3"
-prog answer-permission perm-3 not-now --prompt "$(prompt typed 'not now perm-3')"
+it "picking not now postpones perm-3"
+answer perm-3 not-now
 check '0 "postponed"' "$CODE $(field 'props["perm-3"]["state"]')"
 
 # ---- explanations instead of proposals ----
@@ -640,8 +664,8 @@ deny sess-r2 tu-101 "gh pr checks 12"
 prog propose-permission --item linear:AI-101
 P1="$(pid_for "$R5")"
 
-it "typed applied before the rule exists keeps the proposal open and reserves nothing"
-prog answer-permission "$P1" applied --prompt "$(prompt typed "applied $P1")"
+it "picking applied before the rule exists keeps the proposal open and reserves nothing"
+answer "$P1" applied
 check '0 "open" null' "$CODE $(pf "$P1" '["state"]') $(pf "$P1" '.get("reservation")')"
 it "the not-covered explanation names the three settings files read"
 EXPL="$(pf "$P1" '["explanation"]')"
@@ -661,8 +685,8 @@ settings "${R5}/.claude/settings.local.json" '{"permissions": {"allow": ["Bash(g
 LOCAL_HASH="$(shasum "${R5}/.claude/settings.local.json")"
 ruled sess-r1 tu-pre "gh pr checks 12" accept red
 
-it "typed applied with the allow present gives retrying and one reservation"
-prog answer-permission "$P1" applied --prompt "$(prompt typed "applied $P1")"
+it "picking applied with the allow present gives retrying and one reservation"
+answer "$P1" applied
 check '0 "retrying" ["linear:AI-100", "sess-r1", "pr_checks", "12", "gh pr checks 12 --required"] 1' \
   "$CODE $(pf "$P1" '["state"]') $(field '[props["'"$P1"'"]["reservation"][k] for k in ("item", "session_id", "operation", "target", "normalized")]') $(pf "$P1" '["attempts"]')"
 it "the result returns the retry item and the catalog rendering as retry text, not the raw denial"
@@ -672,9 +696,9 @@ check "Permission ${P1} is applied. Run this once, exactly as written: gh pr che
 it "Programme wrote no settings file"
 check "$LOCAL_HASH" "$(shasum "${R5}/.claude/settings.local.json")"
 
-it "a duplicate typed applied while retrying is a no-op"
+it "a duplicate applied while retrying is a no-op"
 RES_AT="$(pf "$P1" '["reservation"]["at"]')"
-prog answer-permission "$P1" applied --prompt "$(prompt typed "applied $P1")"
+answer "$P1" applied
 check "0 \"retrying\" ${RES_AT} 1 true" "$CODE $(pf "$P1" '["state"]') $(pf "$P1" '["reservation"]["at"]') $(pf "$P1" '["attempts"]') $(out_key noop)"
 
 it "settle-permissions from a non-driving session is refused"
@@ -738,24 +762,24 @@ settings "${R6}/.claude/settings.local.json" '{"permissions": {"allow": ["Bash(g
 it "AE5: a deny rule in user settings gives ineffective naming the rule and file, no reservation, no notification"
 settings "$USER_SETTINGS" '{"env": {"SECRET_ENV": "envsecret-123"}, "permissions": {"deny": ["Bash(gh run view *)"]}}'
 N_BEFORE="$(notices)"
-prog answer-permission "$P2" applied --prompt "$(prompt typed "applied $P2")"
+answer "$P2" applied
 check "0 \"ineffective\" null ${N_BEFORE}" "$CODE $(pf "$P2" '["state"]') $(pf "$P2" '.get("reservation")') $(notices)"
 has "Bash(gh run view *)" "$(pf "$P2" '["explanation"]')"
 has "$USER_SETTINGS" "$(pf "$P2" '["explanation"]')"
 
 it "AE5: autoMode.classifyAllShell in user settings gives ineffective"
 settings "$USER_SETTINGS" '{"autoMode": {"classifyAllShell": true}}'
-prog answer-permission "$P2" applied --prompt "$(prompt typed "applied $P2")"
+answer "$P2" applied
 check '0 "ineffective" null' "$CODE $(pf "$P2" '["state"]') $(pf "$P2" '.get("reservation")')"
 has "classifyAllShell" "$(pf "$P2" '["explanation"]')"
 settings "$USER_SETTINGS" "$PLAIN_USER"
 
-it "a typed applied after ineffective re-verifies and arms exactly one attempt"
-prog answer-permission "$P2" applied --prompt "$(prompt typed "applied $P2")"
+it "an applied after ineffective re-verifies and arms exactly one attempt"
+answer "$P2" applied
 check '0 "retrying" 1' "$CODE $(pf "$P2" '["state"]') $(pf "$P2" '["attempts"]')"
 
-it "a typed reject while retrying is recorded and deferred"
-prog answer-permission "$P2" no --prompt "$(prompt typed "reject $P2")"
+it "a reject while retrying is recorded and deferred"
+answer "$P2" no
 check '0 "retrying" "no"' "$CODE $(pf "$P2" '["state"]') $(pf "$P2" '["pending_answer"]["choice"]')"
 
 it "AE5: a denial row for the reserved session after the reservation gives ineffective with the layer"
@@ -773,7 +797,7 @@ deny sess-r20 tu-120 "gh pr view 9"
 prog propose-permission --item linear:AI-120
 P3="$(pid_for "$R7")"
 settings "${R7}/.claude/settings.local.json" '{"permissions": {"allow": ["Bash(gh pr view *)"]}}'
-prog answer-permission "$P3" applied --prompt "$(prompt typed "applied $P3")"
+answer "$P3" applied
 RETRY3="$(out_key retry_text | tr -d '"')"
 
 it "an idle owner with the retry not yet sent stays retrying"
@@ -783,8 +807,8 @@ it "an idle owner pane with no record after the retry was sent gives retry_unobs
 prog prompt-item linear:AI-120 "$RETRY3"
 prog settle-permissions
 check '"retry_unobserved"' "$(pf "$P3" '["state"]')"
-it "a later typed applied re-arms exactly one attempt"
-prog answer-permission "$P3" applied --prompt "$(prompt typed "applied $P3")"
+it "a later applied re-arms exactly one attempt"
+answer "$P3" applied
 check '0 "retrying" 2' "$CODE $(pf "$P3" '["state"]') $(pf "$P3" '["attempts"]')"
 
 it "a deny-rule refusal seen only in the transcript gives ineffective, diagnosed as a deny rule"
@@ -795,7 +819,7 @@ has "deny rule" "$(pf "$P3" '["explanation"]')"
 has "permission-rule" "$(pf "$P3" '["explanation"]')"
 
 it "a post-tool row whose transcript records a refusal settles as ineffective, not resolved"
-prog answer-permission "$P3" applied --prompt "$(prompt typed "applied $P3")"
+answer "$P3" applied
 ruled sess-r20 tu-122 "gh pr view 9" reject mode
 prog settle-permissions
 check '"ineffective" 3' "$(pf "$P3" '["state"]') $(pf "$P3" '["attempts"]')"
@@ -812,13 +836,13 @@ P4="$(pid_for "$R8")"
 settings "${R8}/.claude/settings.local.json" '{"permissions": {"allow": ["Bash(gh pr checks *)"]}}'
 
 it "a folded proposal where the rule covers only pr_checks stays open, names pr_view, reserves nothing"
-prog answer-permission "$P4" applied --prompt "$(prompt typed "applied $P4")"
+answer "$P4" applied
 check '0 "open" null' "$CODE $(pf "$P4" '["state"]') $(pf "$P4" '.get("reservation")')"
 has "pr_view" "$(pf "$P4" '["explanation"]')"
 
 it "an unreadable settings file is named as unknown"
 settings "$USER_SETTINGS" '{not json'
-prog answer-permission "$P4" applied --prompt "$(prompt typed "applied $P4")"
+answer "$P4" applied
 has "unknown" "$(pf "$P4" '["explanation"]')"
 has "$USER_SETTINGS" "$(pf "$P4" '["explanation"]')"
 settings "$USER_SETTINGS" "$PLAIN_USER"
@@ -850,9 +874,249 @@ prog propose-permission --item linear:AI-140
 P5="$(pid_for "$R9")"
 settings "${R9}/.claude/settings.local.json" '{"permissions": {"allow": ["Bash(gh run list *)"]}}'
 it "covered with no live owner pane gives retry_unobserved, no reservation, no retry text"
-prog answer-permission "$P5" applied --prompt "$(prompt typed "applied $P5")"
+answer "$P5" applied
 check '0 "retry_unobserved" null null' "$CODE $(pf "$P5" '["state"]') $(pf "$P5" '.get("reservation")') $(out_key retry_text)"
 has "no linked item" "$(pf "$P5" '["explanation"]')"
+
+# ---- allow: picking it makes Auto write the rule ----
+CASE=0
+sha_of() { "$PY" -c 'import hashlib,sys; print("sha256:" + hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+# new_case [command]: a fresh repo in this test's temp folder, with one refusal and one open proposal.
+new_case() {
+  CASE=$((CASE + 1))
+  C_REPO="${REPOS}/allow${CASE}"
+  C_FILE="${C_REPO}/.claude/settings.local.json"
+  C_ITEM="linear:AI-90${CASE}"
+  C_SID="sess-a${CASE}"
+  mkdir -p "${C_REPO}/.git"
+  edit "rec['programme']['remit']['repos'] += [{'path': '${C_REPO}', 'github': None}]"
+  register "$C_SID" "${WORK}/wt-a${CASE}"
+  prog add-item "$C_ITEM" --title "allow case ${CASE}" --session "$C_SID" --pane "pa${CASE}" --repo "$C_REPO"
+  deny "$C_SID" "tu-a${CASE}" "${1:-gh pr checks 12}"
+  prog propose-permission --item "$C_ITEM"
+  C_P="$(pid_for "$C_REPO")"
+}
+allow_list() { "$PY" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["permissions"]["allow"]))' "$1"; }
+USER_BEFORE="$(shasum "$USER_SETTINGS")"
+
+new_case
+it "allow: the option shows the rule, the file, all the reach and all the exclusions, in full"
+offered "$C_P" allow
+OPTION="$("$PY" -c '
+import json,sys
+printed = json.loads(sys.stdin.read().strip().splitlines()[-1])
+options = printed["input"]["questions"][0]["options"]
+print(json.dumps({"first": options[0]["label"] == printed["decline"], "label": options[1]["label"], "text": options[1]["description"]}))' <<< "$OUT")"
+has "Bash(gh pr checks *)" "$OPTION"
+has "$C_FILE" "$OPTION"
+for part in "$(pf "$C_P" '["reach"][0]' | tr -d '"')" "$(pf "$C_P" '["reach"][1]' | tr -d '"')" "$(pf "$C_P" '["exclusions"][0]' | tr -d '"')" "$(pf "$C_P" '["exclusions"][3]' | tr -d '"')"; do
+  has "$part" "$OPTION"
+done
+it "allow: the decline comes first and the label says it widens"
+has '"first": true' "$OPTION"
+has "iden" "$OPTION"
+
+it "allow, file absent: the file is created with the allow list, inside this test's temp folder"
+ALLOW_PROMPT="$(shawn_picks)"
+prog answer-permission "$C_P" allow --prompt "$ALLOW_PROMPT"
+check "0 [\"Bash(gh pr checks *)\"]" "$CODE $(allow_list "$C_FILE")"
+case "$C_FILE" in "${WORK}/"*) pass ;; *) fail "wrote outside the temp folder: $C_FILE" ;; esac
+it "allow: with no live owner the proposal moves on to retry_unobserved"
+check '"retry_unobserved" "allow"' "$(pf "$C_P" '["state"]') $(pf "$C_P" '["answers"][-1]["choice"]')"
+it "allow: the journal row holds the rules written, the file and both hashes"
+check "[[\"Bash(gh pr checks *)\"], \"${C_FILE}\", null, \"$(sha_of "$C_FILE")\"]" \
+  "$(journal_kind permission_verified | "$PY" -c 'import json,sys; w=json.load(sys.stdin)[-1]["payload"]["written"]; print(json.dumps([w["rules_written"], w["file"], w["before_hash"], w["after_hash"]]))')"
+it "allow: a new file is private to the user"
+check 600 "$("$PY" -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$C_FILE")"
+
+new_case
+panes "pa${CASE}=${C_SID}=working"
+it "allow with a live owner: the rule is written, one retry is reserved and the worker gets the retry text"
+answer "$C_P" allow
+check "0 \"retrying\" 1 \"${C_ITEM}\"" "$CODE $(pf "$C_P" '["state"]') $(pf "$C_P" '["attempts"]') $(out_key retry_item)"
+has "gh pr checks 12" "$(out_key retry_text)"
+it "allow: while retrying, a second allow changes nothing"
+KEPT="$(shasum "$C_FILE")"
+answer "$C_P" allow
+check "0 \"retrying\" 1 true ${KEPT}" "$CODE $(pf "$C_P" '["state"]') $(pf "$C_P" '["attempts"]') $(out_key noop) $(shasum "$C_FILE")"
+panes "p100=sess-r1=working"
+
+new_case "gh pr view 3"
+settings "$C_FILE" '{"zeta": 1, "permissions": {"deny": [], "allow": ["Bash(ls *)"], "ask": []}, "env": {"KEEP": "yes"}, "alpha": [1, 2]}'
+chmod 640 "$C_FILE"
+it "allow, file with other keys: they stay, in order, and only the new rule is appended"
+answer "$C_P" allow
+check '0 ["zeta", "permissions", "env", "alpha"] ["deny", "allow", "ask"] ["Bash(ls *)", "Bash(gh pr view *)"] yes' \
+  "$CODE $("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(list(d)), json.dumps(list(d["permissions"])), json.dumps(d["permissions"]["allow"]), d["env"]["KEEP"])' "$C_FILE")"
+it "allow: the file keeps its mode"
+check 640 "$("$PY" -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$C_FILE")"
+it "allow: the first hash is the file as it was"
+has '"before_hash": "sha256:' "$(journal_kind permission_verified | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)[-1]["payload"]["written"]))')"
+
+new_case
+OTHER_TARGET="${REPOS}/dotfiles-${CASE}/local.json"
+settings "$OTHER_TARGET" '{"keep": true}'
+mkdir -p "$(dirname "$C_FILE")"
+ln -s "$OTHER_TARGET" "$C_FILE"
+it "allow, symlinked file: the link stays a link and its target gets the rule"
+answer "$C_P" allow
+check "0 true [\"Bash(gh pr checks *)\"] true" \
+  "$CODE $("$PY" -c 'import json,os,sys; print(json.dumps(os.path.islink(sys.argv[1])), json.dumps(json.load(open(sys.argv[2]))["permissions"]["allow"]), json.dumps(json.load(open(sys.argv[2]))["keep"]))' "$C_FILE" "$OTHER_TARGET")"
+
+for BAD in '{not json' '[1, 2]' '{"permissions": ["Bash(ls *)"]}' '{"permissions": {"allow": "Bash(ls *)"}}'; do
+  new_case
+  settings "$C_FILE" "$BAD"
+  KEPT="$(shasum "$C_FILE")"
+  it "allow, file that cannot be merged ($BAD): refused with why, file unchanged, state unchanged"
+  answer "$C_P" allow
+  check "1 \"open\" ${KEPT}" "$CODE $(pf "$C_P" '["state"]') $(shasum "$C_FILE")"
+  has "$C_FILE" "$OUT"
+done
+
+new_case
+settings "$C_FILE" '{"permissions": {"allow": ["Bash(gh pr checks *)"]}}'
+KEPT="$(stat -f '%m %i' "$C_FILE") $(shasum "$C_FILE")"
+it "allow, already covered: no write, and the proposal moves on"
+answer "$C_P" allow
+check "0 \"retry_unobserved\" [] ${KEPT}" \
+  "$CODE $(pf "$C_P" '["state"]') $(out_key written | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["rules_written"]))') $(stat -f '%m %i' "$C_FILE") $(shasum "$C_FILE")"
+
+new_case
+settings "$USER_SETTINGS" '{"permissions": {"deny": ["Bash(gh pr checks *)"]}}'
+it "allow, a deny rule blocks it: ineffective and no file written"
+answer "$C_P" allow
+check '0 "ineffective" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+has "Bash(gh pr checks *)" "$(pf "$C_P" '["explanation"]')"
+settings "$USER_SETTINGS" "$PLAIN_USER"
+USER_BEFORE="$(shasum "$USER_SETTINGS")"
+
+new_case
+it "allow, own words: Other text is refused and the fix says relay and ask again"
+offered "$C_P" allow
+ALLOW_OFFER="$OUT"
+prog answer-permission "$C_P" allow --prompt "$(OUT="$ALLOW_OFFER" shawn_picks 'text:yes allow it')" \
+  --reads-as "$("$PY" -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["input"]["questions"][0]["options"][1]["label"])' <<< "$ALLOW_OFFER")"
+check '1 "open" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+has "relay" "$OUT"
+it "allow, own words: a pick with a note is refused"
+prog answer-permission "$C_P" allow --prompt "$(OUT="$ALLOW_OFFER" shawn_picks 'note:yes but check it')"
+check '1 "open" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+it "allow: a typed message that says allow and the id, with no offer in play, writes nothing"
+new_case
+prog answer-permission "$C_P" allow --prompt "$(prompt typed "allow $C_P")"
+check '1 "open" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+it "allow: a pick on a picker the PM wrote itself, with the old label, writes nothing"
+HAND="$(run_py "$RUN" "$C_P" <<'EOF'
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
+import permission_picks
+label = "Approve answer-permission " + args[1] + " allow"
+questions = [{"question": "Allow it?", "header": "Allow", "multiSelect": False,
+              "options": [{"label": label, "description": "x"}, {"label": "Later", "description": "y"}]}]
+print(permission_picks.pick(args[0], "sess-pm", os.environ["TEST_TRANSCRIPTS"] + "/sess-pm.jsonl", questions, label))
+EOF
+)"
+prog answer-permission "$C_P" allow --prompt "$HAND"
+check '1 "open" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+
+new_case
+it "allow, the proposal changed after the offer: refused, and nothing is written"
+offered "$C_P" allow
+ALLOW_OFFER="$OUT"
+deny "$C_SID" "tu-a${CASE}b" "gh run view 7"
+prog propose-permission --item "$C_ITEM"
+prog answer-permission "$C_P" allow --prompt "$(OUT="$ALLOW_OFFER" shawn_picks)"
+check '1 "open" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+has "changed" "$OUT"
+it "allow: the fresh offer shows both rules, and approving it writes both together"
+answer "$C_P" allow
+check '0 ["Bash(gh pr checks *)", "Bash(gh run view *)"]' "$CODE $(allow_list "$C_FILE")"
+
+new_case
+edit "next(p for p in rec['programme']['permission_proposals'] if p['id'] == '${C_P}')['rules'] = ['Bash(*)']"
+it "allow: rules come from the catalog, not from the stored text"
+answer "$C_P" allow
+check '0 ["Bash(gh pr checks *)"]' "$CODE $(allow_list "$C_FILE")"
+
+new_case
+edit "next(p for p in rec['programme']['permission_proposals'] if p['id'] == '${C_P}')['operations'] = ['pr_merge']"
+it "allow: an operation outside the catalog cannot be offered"
+offered "$C_P" allow
+check "1 absent" "$CODE $([ -e "$C_FILE" ] && echo present || echo absent)"
+
+new_case
+ELSEWHERE="${WORK}/elsewhere/.claude/settings.local.json"
+edit "next(p for p in rec['programme']['permission_proposals'] if p['id'] == '${C_P}')['settings_file'] = '${ELSEWHERE}'"
+it "allow: a stored file that is not the recomputed destination cannot be offered"
+offered "$C_P" allow
+check "1 absent" "$CODE $([ -e "$ELSEWHERE" ] && echo present || echo absent)"
+
+new_case
+it "allow: a repository removed from the remit after the offer is refused"
+offered "$C_P" allow
+ALLOW_OFFER="$OUT"
+edit "rec['programme']['remit']['repos'] = [r for r in rec['programme']['remit']['repos'] if r['path'] != '${C_REPO}']"
+prog answer-permission "$C_P" allow --prompt "$(OUT="$ALLOW_OFFER" shawn_picks)"
+check '1 "open" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+
+new_case
+rm -rf "${C_REPO}/.git"
+git -C "$C_REPO" init -q
+settings "$C_FILE" '{"permissions": {"allow": []}}'
+git -C "$C_REPO" add -f .claude/settings.local.json
+KEPT="$(shasum "$C_FILE")"
+it "allow, a tracked settings.local.json: refused with the file named, and no write"
+answer "$C_P" allow
+check "1 \"open\" ${KEPT}" "$CODE $(pf "$C_P" '["state"]') $(shasum "$C_FILE")"
+has "$C_FILE" "$OUT"
+has "tracked" "$OUT"
+
+new_case
+rm -rf "${C_REPO}/.git"
+git -C "$C_REPO" init -q
+it "allow in a real repository, file untracked: the rule is written"
+answer "$C_P" allow
+check '0 ["Bash(gh pr checks *)"]' "$CODE $(allow_list "$C_FILE")"
+
+new_case
+it "allow, the same answer again: replaying the same --op gives the same result and one rule"
+offered "$C_P" allow
+ALLOW_PROMPT="$(shawn_picks)"
+prog answer-permission "$C_P" allow --prompt "$ALLOW_PROMPT" --op "op-allow-${CASE}"
+FIRST_CODE="$CODE"
+KEPT="$(shasum "$C_FILE")"
+prog answer-permission "$C_P" allow --prompt "$ALLOW_PROMPT" --op "op-allow-${CASE}"
+check "0 0 true ${KEPT} 1" "$FIRST_CODE $CODE $(out_key replayed) $(shasum "$C_FILE") $(pf "$C_P" '["answers"]' | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+it "allow, the same pick cited again: refused and nothing changes"
+prog answer-permission "$C_P" allow --prompt "$ALLOW_PROMPT"
+check "1 ${KEPT} [\"Bash(gh pr checks *)\"]" "$CODE $(shasum "$C_FILE") $(allow_list "$C_FILE")"
+it "allow, after a fresh ask on a proposal whose rule is already written: no second copy"
+answer "$C_P" allow
+check "0 ${KEPT} [\"Bash(gh pr checks *)\"]" "$CODE $(shasum "$C_FILE") $(allow_list "$C_FILE")"
+
+new_case
+it "applied never writes: a rule that is not there stays not there"
+answer "$C_P" applied
+check '0 "open" absent' "$CODE $(pf "$C_P" '["state"]') $([ -e "$C_FILE" ] && echo present || echo absent)"
+
+new_case
+it "the notification asks for no typed word"
+NOTICE="$(grep "notification" "$CALLS" | tail -1)"
+lacks "Answer: applied" "$NOTICE"
+
+it "the settings guard refuses the PM a direct edit and says only this verb writes, after Shawn's pick"
+GUARD="$(run_py "$C_FILE" "$C_REPO" <<'EOF'
+guard = load_lib_module("programme_settings_guard")
+call = {"tool_name": "Write", "session_id": "sess-pm", "cwd": args[1], "tool_input": {"file_path": args[0]}}
+found = guard.decision(json.dumps(call))
+print(found[0]["hookSpecificOutput"]["permissionDecisionReason"])
+EOF
+)"
+has "answer-permission" "$GUARD"
+has "pick" "$GUARD"
+lacks "Only Shawn applies" "$GUARD"
+
+it "the allow tests never changed the user settings file"
+check "$USER_BEFORE" "$(shasum "$USER_SETTINGS")"
 
 it "no verb call crashed with a traceback"
 check "" "$CRASHES"
