@@ -523,6 +523,8 @@ def _write(host, opts, change, kind, *, need_ended=True, prompt_id=None):
         _caller_may_close(rec, sid, need_ended=need_ended)
         prompt = host._typed_prompt(run_id, rec, prompt_id) if prompt_id else None
         seen["payload"] = change(rec.setdefault("programme", {}), prompt, rec)
+        if prompt and prompt.get("reading"):
+            seen["payload"] = dict(seen["payload"] or {}, **prompt["reading"])
 
     def compose(_, rec):
         return programme_journal.entry(kind, sid, seen["payload"],

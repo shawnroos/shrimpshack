@@ -465,14 +465,14 @@ def pick_use(rows, source):
     return None
 
 
-def checked_pick(rows, row) -> dict:
+def checked_pick(rows, row, own_words=False) -> dict:
     source = row["payload"]["source"]
     if len(source["answers"]) != 1:
         raise ValueError(f"pick {row['prompt_id']!r} must hold exactly one question to approve a change")
     pick = programme_pick_source.read_pick(row)
     if pick is None:
         raise ValueError(f"pick {row['prompt_id']!r} does not verify against the transcript")
-    if pick["gap"]:
+    if pick["gap"] and not (own_words and pick["noted"]):
         raise ValueError(f"pick {row['prompt_id']!r} {pick['gap']}")
     used = pick_use(rows, source)
     if used is not None:
@@ -486,10 +486,12 @@ def pick_answer(rows, row) -> str:
 
 
 def named_text(prompt) -> str:
+    # An approval bound to an offer is bound to its command, so the command's own words stand in for what he said.
+    if prompt.get("named"):
+        return redact(prompt["named"])
     # A pick's question is PM-written, so only Shawn's answer can name what it approves.
     if prompt.get("origin") == "picked":
-        # An offered pick is bound to its command, so the command's own words stand in for the plain option text.
-        return redact(prompt.get("named") or prompt.get("answer") or "")
+        return redact(prompt.get("answer") or "")
     return redact(prompt["quote"])
 
 

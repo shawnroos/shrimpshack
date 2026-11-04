@@ -317,7 +317,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         seen["kind"] = kind(payload) if callable(kind) else kind
         prompt = seen["prompt"]
         if prompt:
-            payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
+            payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"], **prompt.get("reading", {}))
         seen["full"] = payload
         if not journal:
             return None
@@ -971,7 +971,7 @@ def _take_operation(argv) -> list:
 
 def _cli(argv) -> int:
     try:
-        argv = _take_operation(argv)
+        argv = programme_approval.take_reading(_take_operation(argv))
     except ValueError as exc:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2

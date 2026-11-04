@@ -1044,6 +1044,20 @@ must render the same now. Any miss refuses and names a new offer. A picker with 
 a decline, that nothing runs. It also journals `approval_declined` citing the pick, which spends it. The hint is not
 evidence; the check above reads the transcript.
 
+Shawn's own words can answer an offered question: a typed or queued message, Other text on the picker, or a pick with a
+note. The PM reads them and runs the offered command with `--prompt <id> --reads-as '<option text>'`. The reading must be
+the text of the option that holds this command, and `read_as`, `read_by: pm`, `offer_id`, the quote and `read_back` go on
+the verb's row and output. The PM shows `read_back` to Shawn. An approval bound this way skips the named-word checks. A
+message binds only when all of these hold: the offer is the newest before the message's row; its picker is the newest
+AskUserQuestion in the transcript at the message's enqueue position (the prompt row's `source.offset`), so words sent
+before Shawn saw the question never bind, wherever they are delivered; no pick answered that picker; the option's facts
+render the same; nothing newer from Shawn is uncited (`newer_words`); the message approved nothing else. An Other or
+noted pick binds through `asked_hash` and spends the pick, and a noted decline stays a decline. An authority option
+takes only a pick: own words refuse, and the fix says relay and ask again. An accepted suggestion never binds an offer. A
+message from before an offer of the same command refuses even with no `--reads-as`. A message with no open offer and no
+`--reads-as` stays on the older named-word checks until its verb moves. The hook's `offer` hint on an Other or noted pick
+is `own_words: true` and names no command to run.
+
 The action hook refuses a literal send into a driver's pane, and journals
 `blocked_driver_send`. A send is literal when a host's send command is written out
 at a command position with the pane as its target, directly or inside `bash -c`,

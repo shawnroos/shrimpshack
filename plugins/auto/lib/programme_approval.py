@@ -37,8 +37,23 @@ ACCEPT_FIX = (f"run `programme.sh approval-label {ACCEPT_VERB}`, offer its outpu
 _STDIN_VERBS = frozenset(("set-remit",))
 _NOT_APPROVED = ("--prompt", "--run")
 _RECOMMENDED = " (recommended)"
+_READING = {"label": None}
 CARRIED_KIND = "rulings_carried"
 APPROVAL_KINDS = ("rule_adopted", CARRIED_KIND)
+
+
+def take_reading(argv) -> list:
+    argv = list(argv)
+    _READING["label"] = None
+    if "--reads-as" in argv[1:]:
+        at = argv.index("--reads-as", 1)
+        if at + 1 >= len(argv):
+            raise ValueError("--reads-as needs the text of the option")
+        if "--prompt" not in argv:
+            raise ValueError("--reads-as goes with --prompt <id> of Shawn's own words")
+        _READING["label"] = argv[at + 1]
+        del argv[at:at + 2]
+    return argv
 
 
 def text_hash(text) -> str:
@@ -145,12 +160,16 @@ def _strip_recommended(answer) -> str:
 # offered labels are plain text, and a picker Auto did not print has no offer row.
 def _picked(rows, row, offer, record, verb_argv, prompt_id, error) -> dict:
     if offer is None:
+        if _READING["label"] is not None:
+            raise error(f"no open offer holds pick {prompt_id!r}, so --reads-as binds nothing",
+                        fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv))
         return {"answer": _picked_answer(rows, row, verb_argv, prompt_id, error)}
     try:
-        answer = programme_journal.pick_answer(rows, row)
+        pick = programme_journal.checked_pick(rows, row, own_words=True)
     except ValueError as exc:
         raise error(str(exc), fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv)) from None
-    return programme_offers.bind(offer, _strip_recommended(answer), verb_argv or [], record, _block(record), error)
+    return programme_offers.bind_pick(rows, row, offer, dict(pick, answer=_strip_recommended(pick["answer"])),
+                                      _READING["label"], verb_argv or [], record, _block(record), error)
 
 
 def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
@@ -211,6 +230,9 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
                 "text_hash": text_hash(payload.get("text")), "at": row.get("at"), "origin_verified": True}
     if origin == "picked":
         approval.update(_picked(rows, row, offer, record, verb_argv, prompt_id, error))
+    elif origin in ("typed", "suggested"):
+        approval.update(programme_offers.bind_words(rows, row, origin, _READING["label"], verb_argv or [], record,
+                                                    _block(record), error))
     # Naming checks only look at the word before a name, so "No, do not adopt r1" would name r1. This also
     # refuses "never" as a value; those changes need typed text.
     # Path tokens are skipped: "/T/" in a macOS temp path would read as the "t" of "don't".

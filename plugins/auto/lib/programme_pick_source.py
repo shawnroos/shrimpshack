@@ -222,6 +222,12 @@ def _has_note(result) -> bool:
             or any(not isinstance(entry, dict) or entry.get("notes") for entry in annotations.values()))
 
 
+def _notes(result) -> list:
+    annotations = result.get("annotations", {})
+    entries = annotations.values() if isinstance(annotations, dict) else ()
+    return [entry["notes"] for entry in entries if isinstance(entry, dict) and isinstance(entry.get("notes"), str)]
+
+
 def read_pick(row):
     """The raw answers from the transcript (the journal holds them redacted) and why they cannot approve an option,
     or None when the pick does not verify. A noted pick stays verified: the note is Shawn's own words."""
@@ -232,12 +238,41 @@ def read_pick(row):
     questions = block["input"].get("questions")
     asked = [q.get("question") for q in questions if isinstance(q, dict)] if isinstance(questions, list) else []
     unanswered = [question for question in asked if question not in result["answers"]]
-    gap = None
+    gap, noted = None, False
     if unanswered or not asked:
         gap = f"leaves {len(unanswered)} of {len(asked)} questions unanswered, so it approves nothing"
     elif _has_note(result):
+        noted = True
         gap = "carries a note, which counts as Shawn's own words, so it approves no option"
-    return {"answers": result["answers"], "gap": gap, "questions": questions}
+    return {"answers": result["answers"], "gap": gap, "questions": questions, "noted": noted, "notes": _notes(result)}
+
+
+def question_before(row):
+    """The newest picker in the transcript before this prompt's enqueue position, as (tool_use_id, questions), or None.
+    The hook fires at send time, so the row's offset holds that position wherever the words are delivered later."""
+    source = (row.get("payload") or {}).get("source")
+    sid = row.get("session_id")
+    if not isinstance(source, dict) or not isinstance(source.get("path"), str) or source.get("session_id") != sid:
+        return None
+    try:
+        checked = read_checked(source["path"], source)
+    except (OSError, TypeError, ValueError):
+        return None
+    if checked is None:
+        return None
+    for line in reversed(checked[0].splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(candidate, dict) or candidate.get("type") != "assistant" or not _plain(candidate, sid):
+            continue
+        for block in reversed(_content(candidate)):
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == TOOL:
+                tool_input = block.get("input")
+                if isinstance(tool_input, dict) and "answers" not in tool_input:
+                    return block.get("id"), tool_input.get("questions")
+    return None
 
 
 def approval_gap(row):

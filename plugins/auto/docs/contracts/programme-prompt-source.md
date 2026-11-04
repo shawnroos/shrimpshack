@@ -35,6 +35,7 @@ Words sent while a turn runs, observed in Claude Code 2.1.318:
 - The words land in one of two shapes. A message absorbed mid-turn is an `attachment` row with `attachment.type: queued_command`, `commandMode: prompt`, `humanTurn: true` and `origin.kind: human`, and it has no user row. A message that waits for the turn to end is a user row with `promptSource: queued`, its own `promptId`, `turnOrigin: human` and `origin.kind: human`.
 - Either shape resolves to `typed` when it comes after the captured offset, sits in the same session and holds the exact captured text. The text hash replaces the prompt-ID match. Peer messages, task notifications and auto-continuations use the attachment shape with another origin, so they stay `unknown`.
 - The running turn's own tool results carry the hook's `prompt_id`. They do not refuse queued words.
+- The hook fires at send time, so `source.offset` is the enqueue position: on Claude Code 2.1.318 the hook's offset equals the byte where the `queue-operation` enqueue row lands, and delivery comes later. Own-words binding reads the question from before that offset (`question_before`), so words sent before a picker never answer it.
 
 ## Picker answers
 

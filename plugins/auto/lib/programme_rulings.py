@@ -87,10 +87,14 @@ def _unanswered_words(rows, row, cited) -> bool:
 
 
 # A later reply ("no, keep it") voids an earlier approval, so the prompt must be Shawn's newest unanswered words.
-def check_newest(rows, prompt_id) -> None:
+def newer_words(rows, prompt_id):
     at = prompt_index(rows, prompt_id)
     cited = programme_journal._cited_ids(rows)
-    later = next((r.get("prompt_id") for r in rows[at + 1:] if _unanswered_words(rows, r, cited)), None)
+    return next((r.get("prompt_id") for r in rows[at + 1:] if _unanswered_words(rows, r, cited)), None)
+
+
+def check_newest(rows, prompt_id) -> None:
+    later = newer_words(rows, prompt_id)
     if later:
         raise RulingError(f"prompt {prompt_id!r} was typed before prompt {later!r}, which nothing has cited yet; "
                           f"a Ruling change binds only on Shawn's newest typed prompt")

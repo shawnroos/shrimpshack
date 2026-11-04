@@ -808,6 +808,41 @@ check "0" "$CODE"
 as sess-links status --json
 check "[]" "$(json_of '[r["kind"] for r in d["model"]["programme"]["actionable_reasons"] if r["target"] == "herdr:w13/p9"]')"
 
+it "AE3: Shawn's own words on an offered drop run through the real prompt hook and are read back"
+as sess-links add-item mem:own-words --title "Own words"
+as sess-links offer own-words --command "drop-item mem:own-words --reason gone"
+check "0" "$CODE"
+WORDS_DIR="$(mktemp -d)"
+WORDS_ID="$("$PY" - "$OUT" "${WORDS_DIR}/sess-links.jsonl" "$AUTO_ROOT" <<'PYEOF'
+import json, os, subprocess, sys
+printed, path, root = sys.argv[1:]
+questions = json.loads(printed)["input"]["questions"]
+def wrote(row):
+    with open(path, "a") as stream:
+        stream.write(json.dumps(row) + "\n")
+wrote({"type": "assistant", "uuid": "a-own", "sessionId": "sess-links", "isSidechain": False,
+       "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_own", "name": "AskUserQuestion",
+                                                     "input": {"questions": questions}}]}})
+text = "yes drop it"
+hook = subprocess.run(["bash", root + "/.claude/hooks/on-user-prompt.sh"], text=True, capture_output=True,
+                      input=json.dumps({"session_id": "sess-links", "prompt": text, "prompt_id": "turn-own",
+                                        "transcript_path": path, "hook_event_name": "UserPromptSubmit"}),
+                      env=dict(os.environ, CLAUDE_CODE_SESSION_ID="sess-links"))
+wrote({"type": "attachment", "sessionId": "sess-links", "isSidechain": False, "uuid": "att-own",
+       "attachment": {"type": "queued_command", "prompt": text, "commandMode": "prompt", "humanTurn": True,
+                      "origin": {"kind": "human"}}})
+context = json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]
+print(json.loads(context.split("\n")[-2])["prompt_id"])
+PYEOF
+)"
+as sess-links drop-item mem:own-words --reason gone --prompt "$WORDS_ID"
+check "1" "$CODE"
+has "--reads-as" "$OUT"
+as sess-links drop-item mem:own-words --reason gone --prompt "$WORDS_ID" --reads-as "Drop item mem:own-words"
+check "0" "$CODE"
+has "Read your message as: Drop item mem:own-words" "$OUT"
+rm -rf "$WORDS_DIR"
+
 echo
 echo "programme-flow.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -140,9 +140,10 @@ re-arming. Next sweep reads the changes.
    sweep, cite the prompt id from its `<auto-data>` tag with `--prompt <id>`.
    When a change needs Shawn's approval, ask in one AskUserQuestion picker with
    a single question. Run `P approval-label <verb> <args>` for the exact command
-   you will run (without `--prompt`) and use what it prints, word for word, as
-   the approve option; say what it does in that option's description. Every
-   other option approves nothing, so word declines however reads best. Then run
+   you will run (no `--prompt`) and use what it prints, word for word, as
+   the approve option; say what it does in its description. Every
+   other option approves nothing, so word them freely. Own words:
+   [references/own-words.md](references/own-words.md). Then run
    that same command with `--prompt <pick id>`. One pick approves one change,
    and only the command its label names. Picks work for rules,
    Authority levels, terms, items, moving and keeping behaviours, accepting a
