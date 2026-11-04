@@ -82,7 +82,7 @@ def _split(text):
     raise _Reject("bad_value", "frontmatter")
 
 
-def _frontmatter(lines) -> dict:
+def _frontmatter(lines, keys=KEYS, scalars=SCALARS, lists=LISTS) -> dict:
     fields, current = {}, None
     for line in lines:
         if not line.strip() or line.lstrip().startswith("#"):
@@ -95,18 +95,18 @@ def _frontmatter(lines) -> dict:
         if not key or line[0].isspace():
             raise _Reject("bad_value", "frontmatter")
         name, value = key.group(1), key.group(2).strip()
-        if name not in KEYS:
+        if name not in keys:
             raise _Reject("unknown_key", name)
         if name in fields:
             raise _Reject("bad_value", name)
-        if name in SCALARS:
+        if name in scalars:
             fields[name] = _unquote(value)
         elif value.startswith("["):
             fields[name] = _flow(value)
         else:
             fields[name] = [_unquote(value)] if value else []
         current = name
-        if name in LISTS and value:
+        if name in lists and value:
             current = None
     return fields
 
@@ -211,6 +211,8 @@ def _clean_only(entry) -> None:
 # File entries scan every rendered text field; the stored PROTECTED_FIELDS stay as they are.
 def _scan(entry) -> None:
     for _, line in _texts(entry):
+        if programme_behaviours.unknown_placeholder(line) is not None:
+            raise _Reject("bad_value", "placeholder")
         kind = programme_behaviours.line_kind(line)
         if kind:
             raise _Reject("protected_escalation", kind)

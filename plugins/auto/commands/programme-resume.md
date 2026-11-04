@@ -94,15 +94,17 @@ For each item to resume:
 ## 4. Brief each resumed session once
 
 When a resumed session is idle (`herdr pane list` shows `agent_status` idle), send
-one prompt with `P prompt-item <item> "<text>"`. If prompt-item refuses, do not
+one prompt with `P prompt-item <item> "<text>" --standing`. If prompt-item refuses, do not
 send it another way: list the item and the refusal for Shawn. The text:
 
 > PM: your session was resumed after a <crash | quit | login reset>. Re-read your
 > last state. Check your CI watchers and open PRs: their heads may have moved
 > since you stopped. Re-arm any background watchers you still need, then carry on
 > where you stopped. The same rules apply: technical calls to the PM, product
-> calls to Shawn by picker. Never prompt the PM's pane. Report with
-> `programme.sh claim`.
+> calls to Shawn by picker.
+
+`--standing` appends the worker clauses from the shipped behaviour files, so do
+not retype them.
 
 Then add the standing rules from the programme's rules block (`P rules`) that
 apply to workers, for example its commit, test and browser rules. Write no

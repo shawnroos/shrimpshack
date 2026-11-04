@@ -527,6 +527,199 @@ EOF
 )"
 check "True ['bad_value', 'bad_value', 'bad_value', 'bad_value', 'bad_value']" "$OUT"
 
+# --- synergies: the check helps behaviours fit together; it never blocks ---
+
+it "the live pair: recording the retire-a-worker behaviour offers an edit to the sweep behaviour, with no wording"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+syn = load_lib_module("programme_behaviour_synergy")
+new, others = worker_done(), [sweep()]
+rows = syn.classify(new, others, pbc.check(new, others))
+r = rows[0]
+print(len(rows), r["ref"], r["kind"], sorted(r["offer"]), r["offer"]["action"], r["offer"]["target"],
+      r["offer"]["field"], r["offer"]["route"], sorted(r["lines"]))
+EOF
+)"
+check "1 bc3f80d ending_rule ['action', 'ending_ref', 'field', 'route', 'target'] edit bc3f80d do programme_edit ['do', 'dont', 'stop']" "$OUT"
+
+it "the reverse order: recording the sweep behaviour against the retire behaviour offers an edit to the new draft"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+syn = load_lib_module("programme_behaviour_synergy")
+new, others = sweep(), [worker_done()]
+rows = syn.classify(new, others, pbc.check(new, others))
+r = rows[0]
+print(len(rows), r["ref"], r["kind"], r["offer"]["action"], r["offer"]["route"], r["offer"]["ending_ref"])
+EOF
+)"
+check "1 b51850c ending_rule adjust_new redraft b51850c" "$OUT"
+
+it "no ending_rule row when the other behaviour's do lines already speak of an ending"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+syn = load_lib_module("programme_behaviour_synergy")
+other = sweep()
+other["do"] = other["do"] + ["retire a session once its pull request is merged"]
+new = worker_done()
+print(len(syn.classify(new, [other], pbc.check(new, [other]))))
+EOF
+)"
+check "0" "$OUT"
+
+it "no ending_rule row when neither behaviour ends work"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+syn = load_lib_module("programme_behaviour_synergy")
+new = beh("n1", when={"text": "a customer bug report comes in", "checks": []}, do=["label it"])
+other = beh("n2", when={"text": "the customer sends a bug report", "checks": []}, do=["reproduce it first"])
+print(len([r for r in syn.classify(new, [other], pbc.check(new, [other])) if r["kind"] == "ending_rule"]))
+EOF
+)"
+check "0" "$OUT"
+
+it "the same explicit trigger is a shared_moment row and a shared tool is a shared_tool row, each offering a link"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+syn = load_lib_module("programme_behaviour_synergy")
+a = beh("n1", tools=["agent-browser"], when={"text": "alpha situation", "checks": [], "trigger": "merge"})
+b = beh("n2", tools=["agent-browser"], when={"text": "beta situation", "checks": [], "trigger": "merge"})
+rows = syn.classify(a, [b], pbc.check(a, [b]))
+print(sorted((r["kind"], r["offer"]["action"]) for r in rows))
+EOF
+)"
+check "[('shared_moment', 'link'), ('shared_tool', 'link')]" "$OUT"
+
+it "a pair the conflict check does not list gets no synergy, and neither does a pair in different repos"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+syn = load_lib_module("programme_behaviour_synergy")
+a = beh("n1", when={"text": "a bug report comes in", "checks": []}, do=["stop and label it"])
+b = beh("n2", when={"text": "the work is a bug", "checks": []}, do=["reproduce it first"])
+c = beh("r1", "repo", repo_key="acme/alpha", when={"text": "a customer bug report comes in", "checks": []}, do=["stop and label it"])
+d = beh("r2", "repo", repo_key="acme/beta", when={"text": "a customer bug report comes in", "checks": []}, do=["reproduce it first"])
+print(len(syn.classify(a, [b], pbc.check(a, [b]))), len(syn.classify(c, [d], pbc.check(c, [d]))))
+EOF
+)"
+check "0 0" "$OUT"
+
+it "the apply route follows the layer: a file or shipped default is copied first, a stored repo entry is overridden by a programme one"
+OUT="$(py <<'EOF'
+pbc = load_lib_module("programme_behaviour_check")
+syn = load_lib_module("programme_behaviour_synergy")
+new = worker_done()
+out = []
+for other in (sweep(layer="shipped"), sweep(source="file"), sweep(layer="repo"), sweep()):
+    out.append(syn.classify(new, [other], pbc.check(new, [other]))[0]["offer"]["route"])
+print(out)
+EOF
+)"
+check "['copy_default_then_settle', 'copy_default_then_settle', 'record_with_conflicts_with', 'programme_edit']" "$OUT"
+
+RUN2="$RUN"
+py "$RUN2" <<'EOF'
+def reset(rec):
+    rec["programme"]["behaviours"] = [sweep()]
+core._with_locked_run_record(ph.home_path(args[0]), args[0], reset)
+EOF
+PS="$(tprompt "$RUN2" "when a worker is finished, reflect, stop, and close it")"
+
+it "check-behaviour and record-behaviour print synergies for the live pair; recording still succeeds"
+prog check-behaviour --run "$RUN2" --when "$WORKER_DONE_WHEN" --trigger merge --do "then stop; the PM closes the pane once you have stopped" \
+  --dont "do not take new work outside your original remit"
+check 0 "$CODE"
+check "['ending_rule']" "$(jfield "$OUT" 'sorted(r["kind"] for r in d["synergies"] if r["ref"] == "bc3f80d")')"
+has '"lines"' "$OUT"
+prog record-behaviour --run "$RUN2" --prompt "$PS" --when "$WORKER_DONE_WHEN" --trigger merge --do "then stop; the PM closes the pane once you have stopped" \
+  --dont "do not take new work outside your original remit"
+check 0 "$CODE"
+check "['ending_rule']" "$(jfield "$OUT" 'sorted(r["kind"] for r in d["synergies"] if r["ref"] == "bc3f80d")')"
+check "False" "$(jfield "$OUT" 'any("lines" in r for r in d["synergies"])')"
+check "True" "$(jfield "$OUT" 'd["unanswered"] == sum(not r["answered"] for r in d["behaviours"] + d["contract"])')"
+NEW1="$(jfield "$OUT" 'd["behaviour"]')"
+
+it "answering the listed behaviour answers its synergy row and lowers the unanswered count"
+prog record-behaviour --run "$RUN2" --prompt "$PS" --when "$WORKER_DONE_WHEN again" --trigger merge --do "then stop; the PM closes the pane once you have stopped" \
+  --dont "do not take new work outside your original remit" --relates-to bc3f80d --relates-to "$NEW1"
+check 0 "$CODE"
+check "True" "$(jfield "$OUT" 'any(r["ref"] == "bc3f80d" for r in d["synergies"]) and all(r["answered"] for r in d["synergies"] if r["ref"] in ("bc3f80d", "'"$NEW1"'"))')"
+check "True" "$(jfield "$OUT" 'd["unanswered"] == sum(not r["answered"] for r in d["behaviours"] + d["contract"])')"
+
+it "propose-behaviour --edit-of saves a proposed edit and leaves the target as it was"
+prog propose-behaviour --run "$RUN2" --edit-of bc3f80d --do "read each session in the remit and unblock it, but retire a session whose pull request is merged instead of moving it forward"
+check 0 "$CODE"
+PE="$(jfield "$OUT" 'd["behaviour"]')"
+check "proposed" "$(jfield "$OUT" 'd["state"]')"
+check "bc3f80d" "$(jfield "$OUT" 'd["edit_of"]')"
+check "2" "$(state "$RUN2" "len([b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['do'])")"
+check "active" "$(state "$RUN2" "[b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['state']")"
+check "True" "$(state "$RUN2" "'when' in [b for b in prog['behaviours'] if b['id'] == '$PE'][0]")"
+
+it "applying an edit proposal needs a typed prompt that names the proposal"
+PX="$(tprompt "$RUN2" "yes please go ahead")"
+prog record-behaviour --run "$RUN2" --from-proposal "$PE" --prompt "$PX"
+has "$PE" "$OUT"
+check "2" "$(state "$RUN2" "len([b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['do'])")"
+
+it "an edit proposal applied on a typed prompt replaces the target's lines in place and records an edited event"
+PA="$(tprompt "$RUN2" "apply $PE")"
+prog record-behaviour --run "$RUN2" --from-proposal "$PE" --prompt "$PA"
+check 0 "$CODE"
+check "bc3f80d" "$(jfield "$OUT" 'd["behaviour"]')"
+check "1" "$(state "$RUN2" "len([b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['do'])")"
+check "edited" "$(state "$RUN2" "[b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['history'][-1]['event']")"
+check "active" "$(state "$RUN2" "[b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['state']")"
+check "False" "$(state "$RUN2" "'edit_of' in [b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]")"
+check "retired" "$(state "$RUN2" "[b for b in prog['behaviours'] if b['id'] == '$PE'][0]['state']")"
+
+it "after an edit the undo line points at the replaced wording and does not retire the behaviour, which keeps that wording"
+lacks "retire-behaviour" "$OUT"
+has "propose-behaviour --edit-of bc3f80d" "$OUT"
+check "2" "$(state "$RUN2" "len([b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['history'][-1]['previous']['do'])")"
+
+it "an edit proposal made before another edit landed is refused, so one edit never overwrites another"
+prog propose-behaviour --run "$RUN2" --edit-of bc3f80d --dont "do not wait for Shawn"
+PE1="$(jfield "$OUT" 'd["behaviour"]')"
+prog propose-behaviour --run "$RUN2" --edit-of bc3f80d --dont "do not wait for anyone"
+PE2="$(jfield "$OUT" 'd["behaviour"]')"
+prog check-behaviour --run "$RUN2" --from-proposal "$PE1"
+check 0 "$CODE"
+has "synergies" "$OUT"
+PL1="$(tprompt "$RUN2" "apply $PE1")"
+prog record-behaviour --run "$RUN2" --from-proposal "$PE1" --prompt "$PL1"
+check 0 "$CODE"
+PL2="$(tprompt "$RUN2" "apply $PE2")"
+prog record-behaviour --run "$RUN2" --from-proposal "$PE2" --prompt "$PL2"
+check 1 "$CODE"
+has "changed since this edit was proposed" "$OUT"
+check "['do not wait for Shawn']" "$(state "$RUN2" "[b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['dont']")"
+prog check-behaviour --run "$RUN2" --from-proposal "$PE2"
+check 1 "$CODE"
+has "changed since this edit was proposed" "$OUT"
+
+it "propose-behaviour --edit-of refuses an unknown target and an edit that changes nothing"
+prog propose-behaviour --run "$RUN2" --edit-of nosuch --do "x"
+check 1 "$CODE"
+has "no active programme behaviour" "$OUT"
+prog propose-behaviour --run "$RUN2" --edit-of bc3f80d
+check 1 "$CODE"
+
+it "an edit proposal whose target was retired meanwhile is refused"
+prog record-behaviour --run "$RUN2" --prompt "$PS" --when "a unique situation xyzzy plugh arises" --do "do the unique thing"
+TX="$(jfield "$OUT" 'd["behaviour"]')"
+prog propose-behaviour --run "$RUN2" --edit-of "$TX" --do "do the other unique thing"
+PT="$(jfield "$OUT" 'd["behaviour"]')"
+PR="$(tprompt "$RUN2" "retire $TX")"
+prog retire-behaviour "$TX" --as retired --prompt "$PR"
+PTA="$(tprompt "$RUN2" "apply $PT")"
+prog record-behaviour --run "$RUN2" --from-proposal "$PT" --prompt "$PTA"
+check 1 "$CODE"
+has "no active programme behaviour" "$OUT"
+
+it "an edit that names a protected escalation is still refused"
+prog propose-behaviour --run "$RUN2" --edit-of bc3f80d --do "deploy to production once the pull request is merged"
+check 1 "$CODE"
+has "protected_escalation" "$OUT"
+
 echo ""
 echo "programme-behaviour-check.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

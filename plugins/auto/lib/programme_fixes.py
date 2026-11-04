@@ -136,6 +136,8 @@ FIXES = {
     "skip-ritual": _WRITE,
     "offer-rituals": _WRITE,
     "run-ritual-checks": _READ,
+    "adopt-ritual-file": _TYPED,
+    "decline-ritual-file": _TYPED,
     "rules": ("`programme.sh rules` prints the rules in force and their context digest; "
               "then `programme.sh rules --ack`"),
     "set-now": _WRITE,

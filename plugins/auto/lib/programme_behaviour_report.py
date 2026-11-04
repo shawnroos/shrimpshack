@@ -12,6 +12,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 behaviour_check = load_lib_module("programme_behaviour_check")
+behaviour_synergy = load_lib_module("programme_behaviour_synergy")
 contract_check = load_lib_module("programme_contract_check")
 programme_sanitize = load_lib_module("programme_sanitize")
 
@@ -27,6 +28,10 @@ def answers(opts) -> tuple:
     return related, unrelated
 
 
+def _without_lines(rows) -> list:
+    return [{k: v for k, v in r.items() if k != "lines"} for r in rows]
+
+
 def report(host, rec, entry, others, *, lines, given=((), ())) -> dict:
     snapshot = contract_check.snapshot(host, rec)
     peers = behaviour_check.check(entry, others)
@@ -37,10 +42,12 @@ def report(host, rec, entry, others, *, lines, given=((), ())) -> dict:
         if ref not in known:
             raise behaviour_check.BehaviourError(f"no behaviour or contract part {ref!r} to answer for")
     answered = set(related) | {u["id"] for u in unrelated}
-    for r in peers + contract:
+    synergies = behaviour_synergy.classify(entry, others, peers)
+    for r in peers + contract + synergies:
         r["answered"] = r["ref"] in answered
     if not lines:
-        peers = [{k: v for k, v in r.items() if k != "lines"} for r in peers]
-    return {"behaviours": peers, "contract": contract,
+        peers, synergies = _without_lines(peers), _without_lines(synergies)
+    return {"behaviours": peers, "contract": contract, "synergies": synergies,
             "unanswered": sum(r["ref"] not in answered for r in peers + contract),
-            "checked": {"reasons": list(behaviour_check.REASONS), "not_detected": behaviour_check.NOT_DETECTED}}
+            "checked": {"reasons": list(behaviour_check.REASONS), "synergies": list(behaviour_synergy.KINDS),
+                        "not_detected": behaviour_check.NOT_DETECTED}}
