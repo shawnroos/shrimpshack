@@ -1025,13 +1025,15 @@ exact label `approval-label <verb> <args>` prints for the command being run
 (programme-prompt-source.md gives the list and the full rule). `approval-label`
 needs no prompt, writes nothing, and refuses a verb a pick cannot approve.
 
-The action hook guards each driver's pane. In a session that is not the driving
-session of a live, orphaned or expired lease, it denies any Bash command whose
-text names a driver's pane id or terminal id as a whole token, after `$'..'`
-segments are decoded as bash does (`\xHH`, octal, `\uHHHH`), a `$` before a double
-quote is dropped, and quote characters and backslashes are removed, however herdr is invoked, and journals
-`blocked_driver_send`. A herdr send call that the hook can parse is also denied
-when its target is a driver's pane, in every session, the driving one included.
+The action hook refuses a literal send into a driver's pane, and journals
+`blocked_driver_send`. A send is literal when a host's send command is written out
+at a command position with the pane as its target, directly or inside `bash -c`,
+an eval string, `$( )`, backticks or a shell heredoc. The refusal applies to that
+programme's own sessions: the driver, a session in a space its run leases, and a
+session on an unfinished item. A command that only names the pane, reads it, or
+computes its program or target is allowed, and so is any session outside the
+programme. If only an item could prove membership and the record cannot be read,
+the send is allowed. This is a guard rail, not a sandbox.
 
 The same hook guards the tracker against proof written by the PM. On a Linear
 MCP tool call (a tool whose server name contains "linear") from the driving

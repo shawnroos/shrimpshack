@@ -810,13 +810,10 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - `approval_refused {verb, target, refused_prompt_id, reason}` is journaled when an approval verb's
   cited prompt is refused after the session guard passed. The run record is unchanged. The prompt id
   sits under its own key so a refused prompt can still be pruned.
-- `blocked_driver_send` carries `{verb, target, pane_id, command, cause}`. `cause` says why an
-  unproven command was refused: `send` (a send to a pane auto cannot prove is another session's),
-  `variable` (a command word set by a variable with no known value) or `word` (a command word
-  built at run time); it is the empty string for every other refusal. `verb` is the
-  parsed herdr verb (for example `agent prompt`), or null when the command was denied
-  only because its text names the driver's pane; `target` is then the pane id or
-  terminal id it named. `command` is redacted and capped at 2000 characters.
+- `blocked_driver_send` carries `{verb, target, pane_id, command}`. `verb` is the parsed host
+  verb (for example `agent prompt`) and `target` is the pane id it named. `command` is redacted
+  and capped at 2000 characters. Rows from before 0.16.17 may also carry `cause`, and a null
+  `verb` where the text only named the pane.
 - `rule_adopted` is the approval record written by `adopt-rule`, `adopt-autonomy` and
   `adopt-check` (and, for the carry-over store, by `carry-rulings`, and for the behaviours store,
   by `move-behaviour`, `retire-behaviour` and `keep-behaviours`; see below):
