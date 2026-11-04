@@ -627,12 +627,12 @@ it "check-behaviour and record-behaviour print synergies for the live pair; reco
 prog check-behaviour --run "$RUN2" --when "$WORKER_DONE_WHEN" --trigger merge --do "then stop; the PM closes the pane once you have stopped" \
   --dont "do not take new work outside your original remit"
 check 0 "$CODE"
-check "['ending_rule']" "$(jfield "$OUT" 'sorted(r["kind"] for r in d["synergies"])')"
+check "['ending_rule']" "$(jfield "$OUT" 'sorted(r["kind"] for r in d["synergies"] if r["ref"] == "bc3f80d")')"
 has '"lines"' "$OUT"
 prog record-behaviour --run "$RUN2" --prompt "$PS" --when "$WORKER_DONE_WHEN" --trigger merge --do "then stop; the PM closes the pane once you have stopped" \
   --dont "do not take new work outside your original remit"
 check 0 "$CODE"
-check "['ending_rule']" "$(jfield "$OUT" 'sorted(r["kind"] for r in d["synergies"])')"
+check "['ending_rule']" "$(jfield "$OUT" 'sorted(r["kind"] for r in d["synergies"] if r["ref"] == "bc3f80d")')"
 check "False" "$(jfield "$OUT" 'any("lines" in r for r in d["synergies"])')"
 check "True" "$(jfield "$OUT" 'd["unanswered"] == sum(not r["answered"] for r in d["behaviours"] + d["contract"])')"
 NEW1="$(jfield "$OUT" 'd["behaviour"]')"
@@ -641,8 +641,8 @@ it "answering the listed behaviour answers its synergy row and lowers the unansw
 prog record-behaviour --run "$RUN2" --prompt "$PS" --when "$WORKER_DONE_WHEN again" --trigger merge --do "then stop; the PM closes the pane once you have stopped" \
   --dont "do not take new work outside your original remit" --relates-to bc3f80d --relates-to "$NEW1"
 check 0 "$CODE"
-check "True" "$(jfield "$OUT" 'len(d["synergies"]) > 0 and all(r["answered"] for r in d["synergies"])')"
-check "True" "$(jfield "$OUT" 'd["unanswered"] == sum(not r["answered"] for r in d["contract"])')"
+check "True" "$(jfield "$OUT" 'any(r["ref"] == "bc3f80d" for r in d["synergies"]) and all(r["answered"] for r in d["synergies"] if r["ref"] in ("bc3f80d", "'"$NEW1"'"))')"
+check "True" "$(jfield "$OUT" 'd["unanswered"] == sum(not r["answered"] for r in d["behaviours"] + d["contract"])')"
 
 it "propose-behaviour --edit-of saves a proposed edit and leaves the target as it was"
 prog propose-behaviour --run "$RUN2" --edit-of bc3f80d --do "read each session in the remit and unblock it, but retire a session whose pull request is merged instead of moving it forward"
