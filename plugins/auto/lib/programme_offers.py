@@ -141,7 +141,10 @@ def _item(programme, ident) -> tuple:
     record = load_lib_module("programme_record")
     key = record._resolve(programme, ident)
     item = programme["items"][key]
-    return key, item, {"title": item.get("title"), "state": item.get("state"), "handed": item.get("handed")}
+    handed = item.get("handed")
+    # The sweep marks an ask shown around the time it asks, and that mark is no fact Shawn answered on.
+    facts = {k: v for k, v in handed.items() if k != "shown"} if isinstance(handed, dict) else handed
+    return key, item, {"title": item.get("title"), "state": item.get("state"), "handed": facts}
 
 
 def _about(key, item) -> str:

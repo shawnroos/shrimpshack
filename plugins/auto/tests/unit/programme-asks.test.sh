@@ -288,6 +288,16 @@ prog answer-handed "$W" --choice decline --prompt "$(pick_second "answer-handed 
 check "0 dropped" "$CODE $(field "items['$W']['state']" | tr -d '"')"
 check '"decline"' "$(ask "$W" '["answered"]["choice"]')"
 
+it "marking the ask shown after the offer does not spoil the pick"
+S="linear:AI-917"
+prog add-item "$S" --title "Shown after offer" --kind fix_only
+prog hand-item "$S" --kind product_call --question "Show it?"
+P_SHOWN="$(pick_offered "answer-handed $S --choice ship")"
+prog ask-shown "$S" --fingerprint "$(fp "$S")"
+check 0 "$CODE"
+prog answer-handed "$S" --choice ship --prompt "$P_SHOWN"
+check "0 open" "$CODE $(field "items['$S']['state']" | tr -d '"')"
+
 it "answer-handed by a pick of its offer records the answer"
 prog answer-handed "$A" --choice ship --prompt "$(pick_offered "answer-handed $A --choice ship")"
 check "0 open" "$CODE $(field "items['$A']['state']" | tr -d '"')"
