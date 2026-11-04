@@ -185,7 +185,7 @@ test('a fixed-cadence proposal names its interval, and action labels carry no do
   expect(reread?.props?.label).toBe('ask the PM to re-read the rules')
 })
 
-test('a stop-time proposal names its time in the row and in the reply to type', async ($, on) => {
+test('a stop-time proposal names its time in the row and says the PM will ask', async ($, on) => {
   const terms = contractPart().terms.map(one => ({ ...one }))
   const at = terms.findIndex(one => one.key === 'stop_rule')
   const extras = { until: '2026-10-20T18:00:00Z' }
@@ -196,5 +196,6 @@ test('a stop-time proposal names its time in the row and in the reply to type', 
   await pane.press({ key: 'term:stop_rule' })
   await settle()
   const drawn = await lines(pane)
-  expect(drawn.some(line => line.includes('amend stop rule to until time until 2026-10-20T18:00:00Z'))).toBe(true)
+  expect(drawn.some(line => line.includes('The PM will ask you in the chat.'))).toBe(true)
+  expect(drawn.some(line => line.includes('Type this:'))).toBe(false)
 })

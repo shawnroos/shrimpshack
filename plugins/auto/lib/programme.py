@@ -307,8 +307,6 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         prompt = _typed_prompt(run_id, rec, prompt_id, verb) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
-        if names_change:
-            programme_asks.refresh_replies(rec["programme"])
         seen["prompt"] = prompt
         seen["record"] = rec
 

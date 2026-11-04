@@ -216,8 +216,6 @@ export const setupStep = (key: string, group: string, state: string, extra: Reco
   values: `${key} values`,
   recommendation: null,
   recommendation_source: null,
-  needs_typed: false,
-  reply: null,
   ...extra,
 })
 
@@ -228,13 +226,13 @@ export function setupPart() {
       setupStep('where', 'scope', 'done', { values: 'AI-Editor' }),
       setupStep('sources', 'scope', 'current', { recommendation: 'tracker, tasks, plans', recommendation_source: 'plugin default' }),
       setupStep('cadence', 'pacing', 'upcoming'),
-      setupStep('rulings', 'rulings', 'upcoming', { label: 'rulings', needs_typed: true, reply: 'approve the proposed rulings' }),
-      setupStep('shared', 'shared', 'upcoming', { label: 'shared settings', values: 'using existing', needs_typed: true }),
+      setupStep('rulings', 'rulings', 'upcoming', { label: 'rulings' }),
+      setupStep('shared', 'shared', 'upcoming', { label: 'shared settings', values: 'using existing' }),
       setupStep('items', 'items', 'upcoming', {
         label: 'items to adopt',
         items: [{ item: 'WEB-1', title: 'Owner history', pane: 'w2-p3', session: 's1', adopted: false }],
       }),
-      setupStep('accept', 'accept', 'upcoming', { values: 'not accepted', needs_typed: true, reply: 'accept the agreement' }),
+      setupStep('accept', 'accept', 'upcoming', { values: 'not accepted' }),
     ],
     scope: {
       in: { spaces: ['default.AI-Editor'], tabs: [], repos: ['shrimpshack', 'ai-chat-backend'], tracker: ['WEB'] },

@@ -44,7 +44,7 @@ import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
-from programme_prompts import append_prompt as fixture_prompt
+from programme_prompts import append_prompt as fixture_prompt, offered_pick
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -215,7 +215,10 @@ prog status
 has "Ask me (linear:AI-4) (ask $(printf '%s' "$ASK" | tr -d '"')): Ship it?" "$OUT"
 
 it "answer-handed writes a Shawn decision linked to the ask id"
-P_SHIP="$(prompt typed 'ship AI-4')"
+P_SHIP="$(run_py "$RUN" <<'EOF'
+print(offered_pick(args[0], "sess-pm", ["answer-handed linear:AI-4 --choice ship"]))
+EOF
+)"
 prog answer-handed linear:AI-4 --choice ship --prompt "$P_SHIP"
 check 0 "$CODE"
 check "[${ASK}, \"product_scope\", \"shawn\", \"ship\", \"${P_SHIP}\", \"linear:AI-4\"]" \
@@ -337,7 +340,10 @@ check 0 "$CODE"
 it "an old ask reads as kind unknown"
 has '"ask_kind": "unknown"' "$OUT"
 it "answering an old ask records a decision of kind unknown with no ask id"
-P_SHIP1="$(prompt typed 'ship AI-1')"
+P_SHIP1="$(run_py "$RUN" <<'EOF'
+print(offered_pick(args[0], "sess-pm", ["answer-handed linear:AI-1 --choice ship"]))
+EOF
+)"
 prog answer-handed linear:AI-1 --choice ship --prompt "$P_SHIP1"
 check '0 ["unknown", null]' "$CODE $(field '[prog["decisions"][-1]["kind"], prog["decisions"][-1]["ask"]]')"
 

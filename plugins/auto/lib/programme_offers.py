@@ -479,6 +479,10 @@ RENDERERS = {
 }
 RENDERERS.update(load_lib_module("programme_offers_stores").RENDERERS)
 _CONTENT_VERBS = ("set-remit",)
+# No named-word check stands behind these, so words that reach no offer must refuse here.
+OFFER_ONLY = frozenset(("answer-handed", "drop-item", "override-focus", "reopen-item", "swap-item"))
+OFFER_FIX = ("run `programme.sh offer <question-key> --command '<verb> <args>'`, ask with the input it prints, then "
+             "rerun citing his answer with --prompt <id>")
 
 
 def render(argv, programme, doc=None) -> dict:
@@ -721,6 +725,14 @@ def _spent(rows, prompt_id) -> bool:
                and prompt_id in {*(r.get("cites") or []), (r.get("payload") or {}).get("prompt_id")} for r in rows)
 
 
+def _no_offer(argv, prompt_id, error) -> dict:
+    verb = argv[0] if argv else None
+    if verb in OFFER_ONLY:
+        raise error(f"no open offer of this command asks the question prompt {prompt_id!r} would answer, so it "
+                    f"approves nothing", fix=OFFER_FIX)
+    return {}
+
+
 def bind_words(rows, row, origin, reading, argv, record, programme, error) -> dict:
     """What a typed, queued or suggested message adds to an approval; an empty dict leaves it on the older checks,
     which stay until the verbs move to offers."""
@@ -734,14 +746,14 @@ def bind_words(rows, row, origin, reading, argv, record, programme, error) -> di
         if offer is not None or reading is not None:
             raise error(f"prompt {prompt_id!r} is an accepted suggestion: the model wrote it, so it approves no offer",
                         fix="ask with the picker and wait for his pick or his own words")
-        return {}
+        return _no_offer(argv, prompt_id, error)
     if offer is None:
         if reading is not None:
             raise error(f"no open offer asks the question prompt {prompt_id!r} would answer, so it approves nothing",
                         fix="run `programme.sh offer`, ask with the input it prints, and wait for his answer")
-        return {}
+        return _no_offer(argv, prompt_id, error)
     if reading is None and _holding(offer["payload"], argv) is None:
-        return {}
+        return _no_offer(argv, prompt_id, error)
     if _spent(rows, prompt_id):
         raise error(f"prompt {prompt_id!r} already approved a change; one message approves one change",
                     fix="ask Shawn about this one")

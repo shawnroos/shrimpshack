@@ -935,6 +935,41 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     check('answer-permission not-now binds on own words, and the row keeps the reading',
           ok(result) and json.loads(result.stdout).get('read_as') == command_label(printed), said(result))
 
+    add_item(w_sid, w_run, 'mem:v3')
+    add_item(w_sid, w_run, 'mem:v4')
+    printed = offer(w_sid, w_run, 'swap', 'swap-item mem:v3 mem:v4')
+    asked(printed)
+    result = verb(w_sid, w_run, 'swap-item', 'mem:v3', 'mem:v4', '--prompt', said_to('yes swap them'), *reads_as(printed))
+    check('swap-item takes own words past the approval: only the worker count stops it here',
+          not ok(result) and 'swap refused' in said(result) and 'exact label' not in said(result), said(result))
+
+    def seed_hold(rec):
+        rec['programme']['items']['mem:v3']['held'] = {'at': '2026-11-04T00:00:00Z', 'reason': 'focus'}
+    edit(w_run, seed_hold)
+    printed = offer(w_sid, w_run, 'override', 'override-focus mem:v3')
+    asked(printed)
+    words = said_to('yes let it start')
+    result = verb(w_sid, w_run, 'override-focus', 'mem:v3', '--prompt', words, *reads_as(printed))
+    check('override-focus binds on own words',
+          ok(result) and record(w_run)['programme']['items']['mem:v3']['focus_override']['prompt_id'] == words, said(result))
+    asked(printed)
+    result = verb(w_sid, w_run, 'drop-item', 'mem:v4', '--reason', 'gone', '--prompt', said_to('drop item mem:v4'))
+    check('words naming the item, on another command\'s open offer, approve nothing',
+          refused(result, 'no open offer') and state(w_run, 'mem:v4') == 'open', said(result))
+    result = verb(w_sid, w_run, 'drop-item', 'mem:v4', '--reason', 'gone', '--prompt', said_to('drop item mem:v4', 'suggestion_accepted'))
+    check('an accepted suggestion naming the item, with no offer of it, approves nothing',
+          refused(result, 'offer') and state(w_run, 'mem:v4') == 'open', said(result))
+    assert ok(verb(w_sid, w_run, 'hand-item', 'mem:v4', '--question', 'Ship it?', '--kind', 'product_call'))
+    label_pick = pick(w_sid, w_run, [{'question': 'Ship?', 'header': 'Ship', 'multiSelect': False,
+                                      'options': [{'label': 'Approve answer-handed mem:v4 --choice ship', 'description': ''},
+                                                  {'label': 'No', 'description': ''}]}],
+                      'Approve answer-handed mem:v4 --choice ship')
+    result = verb(w_sid, w_run, 'answer-handed', 'mem:v4', '--choice', 'ship', '--prompt', label_pick)
+    check('answer-handed has no old-label alias: its label names no facts',
+          refused(result, 'no offer of answer-handed') and state(w_run, 'mem:v4') == 'handed', said(result))
+    result = verb(w_sid, w_run, 'approval-label', 'answer-handed', 'mem:v4', '--choice', 'ship')
+    check('approval-label prints no label for answer-handed', refused(result, 'programme.sh offer'), said(result))
+
     def seed_disposal(rec):
         rec['programme'].setdefault(load_lib_module('programme_recovery').OPS_KEY, {})['op-w'] = {'state': 'uncertain', 'verb': 'start-worker'}
     edit(w_run, seed_disposal)

@@ -20,7 +20,7 @@ root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
-from programme_prompts import append_prompt as typed_prompt
+from programme_prompts import append_prompt as typed_prompt, offered_pick
 
 FIXTURE = [json.loads(line) for line in (root / 'tests/fixtures/askuser_transcript.jsonl').read_text().splitlines()]
 ASK, ANSWER = FIXTURE[0], FIXTURE[1]
@@ -219,7 +219,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                                  ('rulings', 'x', 'the rulings step')):
         shared_pick = pick(a_sid, run, {f'{target}: which?': value})
         result = verb(a_sid, run, 'pick-term', target, value, '--pick', shared_pick)
-        check(f'AE2: pick-term refuses {label}', result.returncode != 0 and 'stays typed' in result.stderr,
+        check(f'AE2: pick-term refuses {label}', result.returncode != 0 and 'pick-term sets only' in result.stderr,
               result.stdout + result.stderr)
 
     tools_q = 'Tools of record: which sources stay on?'
@@ -539,7 +539,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     state = lambda: {s['key']: s['state'] for s in view(run)['setup']['steps']}
     check('the rulings step starts unfinished', state()['rulings'] != 'done', state())
     result = verb(c_sid, run, 'setup-keep', 'rulings')
-    check('setup-keep marks a typed-reply step done', result.returncode == 0 and state()['rulings'] == 'done',
+    check('setup-keep marks a Rulings step done', result.returncode == 0 and state()['rulings'] == 'done',
           (result.stdout + result.stderr, state()))
     result = verb(c_sid, run, 'setup-keep', 'accept')
     check('setup-keep accept refuses', refused(result, 'accept'), result.stdout + result.stderr)
@@ -590,7 +590,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           and approval_mod.terms_digest(changed) != digest, (first, approval_mod.terms_digest(changed)))
     accept_step = next(s for s in view(run)['setup']['steps'] if s['key'] == 'accept')
     check('the setup view offers the accept as a pick of its terms-bound label',
-          not accept_step['needs_typed'] and accept_step['label'] == first and accept_step['terms_digest'] == digest,
+          'needs_typed' not in accept_step and accept_step['label'] == first and accept_step['terms_digest'] == digest,
           accept_step)
 
     bare = pick(f_sid, run, {'Accept the agreement?': 'Approve accept-agreement'})
@@ -635,6 +635,23 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(g_sid, run, 'accept-agreement', '--prompt', typed_accept)
     check('a typed accept without --terms is accepted, as before',
           result.returncode == 0 and record(run)['programme']['agreement']['accepted'], result.stdout + result.stderr)
+
+    p_sid = 'setup-p'
+    run = programme(p_sid, 'setup-p')
+    states = lambda: {s['key']: s['state'] for s in view(run)['setup']['steps']}
+    rule = {'id': 'p1', 'applies_when': {'change_kinds': ['evals_or_docs']}, 'requires': ['merged'],
+            'evidence_bar': {'merged': 'merged at the gate'}, 'caveat': '', 'autonomy': 'act_and_tell',
+            'added_by': 'pm', 'added_at': '2026-10-26T10:00:00Z', 'why': 'docs need a merge'}
+    assert verb(p_sid, run, 'propose-rule', json.dumps(rule)).returncode == 0
+    check('a proposed shared rule leaves the shared step open with no text to type',
+          states()['shared'] != 'done' and not {'reply', 'needs_typed'} & set(
+              next(s for s in view(run)['setup']['steps'] if s['key'] == 'shared')), states())
+    result = verb(p_sid, run, 'adopt-rule', 'p1', '--prompt', offered_pick(run, p_sid, ['adopt-rule p1']))
+    check('a pick of the offer adopts the proposed rule', result.returncode == 0, result.stdout + result.stderr)
+    keep = {'shared': verb(p_sid, run, 'setup-keep', 'shared'), 'rulings': verb(p_sid, run, 'setup-keep', 'rulings')}
+    check('the shared and Rulings steps finish with no typed line',
+          states()['shared'] == 'done' and states()['rulings'] == 'done' and all(r.returncode == 0 for r in keep.values()),
+          (states(), {k: r.stderr for k, r in keep.items()}))
 
 print(f'programme-setup.test.sh: {passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)

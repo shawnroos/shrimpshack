@@ -62,16 +62,15 @@ def _picked(host, run_id, rec, pick_id) -> dict:
 def _before_acceptance(host, programme) -> None:
     if programme["agreement"].get("accepted"):
         raise host.ProgrammeError("the agreement is accepted; after acceptance a change goes through its "
-                                  "approval verb (`amend-term <key> <value> --prompt <id>` of a typed prompt or a pick)")
+                                  "approval verb: ask with `programme.sh offer`, then run `amend-term <key> <value> --prompt <id>`")
 
 
 def _pickable(host, programme, key) -> dict:
     terms = programme["agreement"]["terms"]
     if key not in terms or not isinstance(terms[key], dict):
         raise host.ProgrammeError(
-            f"{key!r} is not a per-programme agreement term, so it stays typed: a pick sets only "
-            f"{sorted(terms)}; Rulings and shared "
-            "settings need the reply Shawn types")
+            f"{key!r} is not a per-programme agreement term: pick-term sets only {sorted(terms)}; ask about "
+            "Rulings and shared settings with `programme.sh offer`, or setup-keep the step on a keep pick")
     return terms[key]
 
 
@@ -211,8 +210,8 @@ def _step_name(host, programme, name, *, keep=False) -> str:
     if name not in known:
         raise host.ProgrammeError(f"unknown setup step {name!r}; steps: {known}")
     if keep and name == programme_view_setup.ACCEPT:
-        raise host.ProgrammeError("the accept step is never kept: Shawn accepts by typing it or by "
-                                  "picking the label `programme.sh approval-label accept-agreement` prints")
+        raise host.ProgrammeError("the accept step is never kept: Shawn accepts with a pick of "
+                                  "`programme.sh offer accept --command accept-agreement`")
     return name
 
 
@@ -307,7 +306,7 @@ _SPECS = (
     ("pick-term", _h_pick_term,
      "<key> <value> --pick <id> [--seconds <n>] [--until <iso>] [--why <text>] [--run <id>]",
      "an accepted agreement; a key that is not a per-programme agreement term (Rulings and shared "
-     "settings stay typed); a value outside the term's options; a prompt that is not a "
+     "settings go through `offer`); a value outside the term's options; a prompt that is not a "
      "verified pick from the driving session; a pick already used; a pick whose question does not name "
      "the term alone, or whose answer does not name the value (for a list, exactly the value's options). "
      "A refusal journals approval_refused."),

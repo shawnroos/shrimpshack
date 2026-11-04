@@ -485,13 +485,12 @@ session.
   `--pr-title`, `--issue-url`, `--issue-title` and `--readiness <fingerprint>`
   (the `check-mergeable` fingerprint). Each field has its own cap, at most 500
   characters, and a value over its cap is refused, never cut. The ask stores a
-  16-hex fingerprint of its facts, `facts_at`, a shown mark, `superseded_answers` and
-  replies (`{ship, decline}`: the exact reply to type, by the item's shortest
-  unique title or session name, else its id; recomputed on every write, so a
-  name that became ambiguous falls back to the id). `update-ask` (args: item,
+  16-hex fingerprint of its facts, `facts_at`, a shown mark and `superseded_answers`.
+  `hand-item` and a changed `update-ask` print the `offer` command to run next, with ship and decline.
+  `update-ask` (args: item,
   the same fact flags) replaces the given facts and keeps the rest. Facts that
   hash to the current fingerprint change nothing and write no journal row; new facts move `facts_at`, so a
-  name reply typed before them no longer approves. On an answered ask that was
+  pick or message answering an offer made before them no longer approves. On an answered ask that was
   not relayed, new facts void the answer: it moves to `superseded_answers`, the
   decision gets `voided_at`, the item is handed again and the row is
   `ask_answer_voided` (else `ask_updated`). An ask already relayed is refused.

@@ -141,27 +141,23 @@ test('the Out row says nothing seen outside the remit after an empty probe', asy
   expect(outLine).toContain('nothing seen outside the remit')
 })
 
-test('a step that needs a typed reply shows "Type this:" and the reply, and no picker hint', async ($, on) => {
+test('the current Rulings step says the PM will ask, and shows no text to type', async ($, on) => {
   const setup = setupPart()
   setup.current = 'rulings'
   setup.steps = setup.steps.map(step =>
     step.key === 'sources' ? { ...step, state: 'done' } : step.key === 'rulings' ? { ...step, state: 'current' } : step,
   )
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ setup }) })
-  const pane = await openPane($, false, 60)
-  const all = await lines(pane)
-  const rulings = all.findIndex((line, index) => line.includes('Rulings') && all[index + 1]?.trim() === 'Type this:')
+  const sent = prompts(on)
+  const all = await lines(await openPane($, false, 60))
+  const rulings = all.findIndex(line => line.includes('Rulings') && line.includes('current'))
   expect(rulings).toBeGreaterThan(-1)
-  expect(all[rulings + 1]?.trim()).toBe('Type this:')
-  expect(all[rulings + 2]?.trim()).toBe('approve the proposed rulings')
-  const accept = all.findIndex(line => line.includes('Accept') && line.includes('not accepted'))
-  expect(accept).toBeGreaterThan(rulings)
-  expect(all[accept + 1]?.trim()).toBe('Type this:')
-  expect(all[accept + 2]?.trim()).toBe('accept the agreement')
-  expect(all.join('\n')).not.toContain('Answer in the chat')
+  expect(all[rulings + 1]?.trim()).toBe('The PM will ask you in the chat.')
+  expect(all.join('\n').toLowerCase()).not.toContain('type this')
+  expect(sent).toEqual([])
 })
 
-test('pending decisions show with the reply to type when the data carries one', async ($, on) => {
+test('pending decisions show with no text to type, even if old data carries a reply', async ($, on) => {
   const model = {
     decisions_for_shawn: [
       { kind: 'handed', item: 'WEB-1', question: 'merge the owner history PR?', reply: 'merge WEB-1' },
@@ -170,27 +166,24 @@ test('pending decisions show with the reply to type when the data carries one', 
     ],
   }
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ setup: setupPart(), model }) })
-  const pane = await openPane($, false, 80)
-  const all = await lines(pane)
-  const text = all.join('\n')
+  const text = (await lines(await openPane($, false, 80))).join('\n')
   expect(text).toContain('merge the owner history PR?')
   expect(text).toContain('adopt rule r1?')
   expect(text).not.toContain('accept the agreement?')
-  const merge = all.findIndex(line => line.includes('merge the owner history PR?'))
-  expect(all[merge + 1]?.trim()).toBe('Type this:')
-  expect(all[merge + 2]?.trim()).toBe('merge WEB-1')
+  expect(text).toContain('The PM will ask you in the chat.')
+  expect(text).not.toContain('merge WEB-1')
+  expect(text.toLowerCase()).not.toContain('type this')
 })
 
-test('the work view shows pending decisions with their reply to type', async ($, on) => {
+test('the work view shows pending decisions with no text to type', async ($, on) => {
   const model = { decisions_for_shawn: [{ kind: 'handed', item: 'WEB-1', question: 'ship the owner history PR?', reply: 'ship WEB-1' }] }
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ work: [workEntry('WEB-1', 'Owner history')], model }) })
-  const pane = await openPane($, false, 80)
-  const all = await lines(pane)
+  const all = await lines(await openPane($, false, 80))
   expect(all.join('\n')).not.toContain('Programme setup')
   const ship = all.findIndex(line => line.includes('ship the owner history PR?'))
   expect(ship).toBeGreaterThan(all.findIndex(line => line.includes('Owner history')))
-  expect(all[ship + 1]?.trim()).toBe('Type this:')
-  expect(all[ship + 2]?.trim()).toBe('ship WEB-1')
+  expect(all.join('\n')).not.toContain('ship WEB-1')
+  expect(all.join('\n').toLowerCase()).not.toContain('type this')
 })
 
 test('Covers AE6: /auto:programme-status with no args and a lease focuses the pane and answers in one line', async ($, on) => {

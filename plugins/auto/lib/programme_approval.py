@@ -43,6 +43,8 @@ _STDIN_VERBS = frozenset(("set-remit",))
 # These never had a label to alias: a pick binds through an offer only, and an accepted suggestion never binds.
 _OFFER_ONLY = frozenset(("close-ruling", "define-requirement", "edit-project-term", "record-ruling"))
 _NOT_APPROVED = ("--prompt", "--run")
+# The old label names no facts, and the named check that tied a pick to the ask's current facts is gone.
+_NO_LABEL_ALIAS = frozenset(("answer-handed",))
 _RECOMMENDED = " (recommended)"
 _READING = {"label": None}
 CARRIED_KIND = "rulings_carried"
@@ -151,6 +153,8 @@ def check_terms(block, digest, error) -> None:
 def approval_fix(verb, verb_argv) -> str:
     if verb == ACCEPT_VERB:
         return ACCEPT_FIX
+    if verb in programme_offers.OFFER_ONLY:
+        return programme_offers.OFFER_FIX
     if verb in _OFFER_ONLY or verb in _STDIN_VERBS:
         return (f"run `programme.sh offer <key> --command '{verb} <args>'`, ask Shawn with the input it prints, then "
                 "rerun citing his answer with --prompt <id>")
@@ -173,6 +177,9 @@ def _picked(rows, row, offer, record, verb_argv, prompt_id, error) -> dict:
         if _READING["label"] is not None:
             raise error(f"no open offer holds pick {prompt_id!r}, so --reads-as binds nothing",
                         fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv))
+        if verb_argv and verb_argv[0] in _NO_LABEL_ALIAS:
+            raise error(f"no offer of {verb_argv[0]} holds pick {prompt_id!r}, so it approves nothing",
+                        fix=programme_offers.OFFER_FIX)
         return {"answer": _picked_answer(rows, row, verb_argv, prompt_id, error)}
     try:
         pick = programme_journal.checked_pick(rows, row, own_words=True)
@@ -267,6 +274,9 @@ def _h_approval_label(host, argv):
         raise ValueError("usage: approval-label <verb> <args...>")
     if argv[1] == "takeover":
         return _takeover_label_cli(argv)
+    if argv[1] in _NO_LABEL_ALIAS:
+        raise host.ProgrammeError(f"{argv[1]} has no label; ask with `programme.sh offer`",
+                                  fix=programme_offers.OFFER_FIX)
     if argv[1] in _OFFER_ONLY or argv[1] in _STDIN_VERBS:
         raise host.ProgrammeError(f"{argv[1]} has no fixed label; Auto writes its picker from the command",
                                   fix=approval_fix(argv[1], argv[1:]))

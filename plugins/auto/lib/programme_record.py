@@ -337,15 +337,6 @@ def _open_deliverables(item) -> list:
                   if (d or {}).get("result") != "confirmed")
 
 
-def _require_item_named(prompt, programme, key, choice, ask=None) -> None:
-    if prompt is None:
-        return
-    why = programme_naming.item_refusal(programme_journal.named_text(prompt), programme["items"], key,
-                                        choice, prompt_at=prompt.get("at"), ask=ask)
-    if why:
-        raise RecordError(f"prompt {prompt['prompt_id']!r} does not approve {key!r}: {why}")
-
-
 def _h_drop_item(host, argv):
     positional, opts = host._parse(argv, values=("run", "reason", "prompt"))
     if len(positional) != 1:
@@ -359,11 +350,11 @@ def _h_drop_item(host, argv):
         if item["state"] not in WAITABLE_STATES:
             raise RecordError(f"item {key!r} is {item['state']}; only an open or waiting item drops")
         still_open = _open_deliverables(item)
-        _require_item_named(prompt, programme, key, "drop")
         if _issue_backed(key) and still_open and not prompt:
             raise RecordError(
                 f"item {key!r} is issue-backed with open deliverables {still_open}; "
-                "dropping it needs --prompt <id> of a typed prompt")
+                "dropping it needs Shawn's answer: run `programme.sh offer`, ask with the input it prints, then "
+                "rerun with --prompt <id>")
         item.update(state="dropped", dropped_reason=reason, waiting_on=None)
         programme_focus.drop_approval(item)
         _history(item, "dropped", reason=reason, prompt_id=prompt and prompt["prompt_id"])
@@ -383,7 +374,6 @@ def _h_reopen_item(host, argv):
         item = programme["items"][key]
         if item["state"] != "dropped":
             raise RecordError(f"item {key!r} is {item['state']}, not dropped")
-        _require_item_named(prompt, programme, key, "reopen")
         item.update(state="open", dropped_reason=None)
         _history(item, "reopened", prompt_id=prompt["prompt_id"])
         return {"item": key}
@@ -591,10 +581,9 @@ def _h_hand_item(host, argv):
                                   "wait for that answer instead of asking again")
         ask = programme_asks.new_ask(kind, facts, op)
         item.update(state="handed", waiting_on=None, handed=ask)
-        programme_asks.refresh_replies(programme)
         _history(item, "handed", question=question, ask=ask["id"])
         out = {"item": key, "question": question, "ask": ask["id"], "ask_kind": kind, "title": item.get("title"),
-               "fingerprint": ask["fingerprint"], "replies": ask["replies"]}
+               "fingerprint": ask["fingerprint"], "next": programme_asks.how_to_ask(key, ask["id"])}
         if op is not None:
             out["op"] = op
         return out
@@ -618,7 +607,6 @@ def _h_answer_handed(host, argv):
         item = programme["items"][key]
         if item["state"] != "handed":
             raise RecordError(f"item {key!r} is {item['state']}, not handed")
-        _require_item_named(prompt, programme, key, opts["choice"], item.get("handed") or {})
         decision = programme_decisions.shawn_decision(
             programme, kind=programme_decisions.ask_kind(item), item=key, prompt=prompt,
             ask=programme_decisions.ask_id(item), choice=opts["choice"])
@@ -898,10 +886,11 @@ _SPECS = (
     ("merge-item", _h_merge_item, "<from-id> <into-id> [--run <id>]",
      "an unknown id; an item merged into itself."),
     ("drop-item", _h_drop_item, "<id> --reason <text> [--prompt <id>] [--run <id>]",
-     "no --reason; a finished item; an issue-backed item with open deliverables without a typed prompt; "
-     "a prompt whose text does not name the item id or key."),
+     "no --reason; a finished item; an issue-backed item with open deliverables without Shawn's answer; "
+     "a prompt that is not a pick of this command's `offer` or his own words read as that option."),
     ("reopen-item", _h_reopen_item, "<id> --prompt <id> [--run <id>]",
-     "no typed prompt, or one whose text does not name the item id or key; an item that is not dropped."),
+     "no prompt, or one that is not a pick of this command's `offer` or Shawn's own words read as that "
+     "option; an item that is not dropped."),
     ("set-waiting", _h_set_waiting,
      "<id> --who <name> [--reporter <name>] [--watcher <id> [--process-id <n>] [--task-id <id> "
      "[--kind cron|monitor]]] "
@@ -928,7 +917,8 @@ _SPECS = (
      "open ask on any item."),
     ("answer-handed", _h_answer_handed,
      "<id> --choice ship|decline --prompt <id> [--kind <change-kind>]... [--repo <path>] [--run <id>]",
-     "no typed prompt, or one whose text does not name the item id or key; an item that is not handed; "
+     "no prompt, or one that is not a pick of this command's `offer` or Shawn's own words read as that "
+     "option; facts changed since the offer; an item that is not handed; "
      "ship with no change kind. Here --kind is a change kind; the decision it records takes the "
      "ask's decision kind (unknown for an ask handed before kinds existed)."),
     ("claim", _h_claim, "--run <id> --item <id> --deliverable <name> --ref <reference>",

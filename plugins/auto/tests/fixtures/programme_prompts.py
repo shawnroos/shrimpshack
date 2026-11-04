@@ -75,6 +75,36 @@ def append_prompt(run, sid, text, origin='typed', now=None, prompt_source='typed
     return result
 
 
+def offered_pick(run, sid, commands, key='ask', choose=0):
+    """Run `offer` and journal a verified pick of its choose-th command, on the exact picker it printed."""
+    from _bootstrap import load_lib_module
+    ps = load_lib_module('programme_pick_source')
+    pj = load_lib_module('programme_journal')
+    programme = pathlib.Path(load_lib_module('programme_home').__file__).with_name('programme.py')
+    argv = [sys.executable, str(programme), 'offer', key, '--run', run]
+    for command in commands:
+        argv += ['--command', command]
+    made = subprocess.run(argv, capture_output=True, text=True, env=dict(os.environ, CLAUDE_CODE_SESSION_ID=sid))
+    if made.returncode != 0:
+        raise SystemExit(made.stdout + made.stderr)
+    printed = json.loads(made.stdout)
+    questions = printed['input']['questions']
+    labels = [o['label'] for o in questions[0]['options'] if o['label'] != printed['decline']]
+    answers = {questions[0]['question']: labels[choose]}
+    tool_use_id = 'toolu_' + uuid.uuid4().hex[:10]
+    folder = pathlib.Path(os.environ['CLAUDE_AUTO_DATA_DIR']).parent / 'offered-picks'
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (sid + '.jsonl')
+    ask, answer = pick_rows(sid, tool_use_id, {}, answers)
+    ask['message']['content'][0]['input'] = {'questions': questions}
+    answer['toolUseResult']['questions'] = questions
+    with path.open('a') as stream:
+        stream.write(json.dumps(ask) + '\n' + json.dumps(answer) + '\n')
+    source = ps.capture({'transcript_path': str(path), 'session_id': sid, 'tool_use_id': tool_use_id,
+                         'tool_response': {'answers': answers}})
+    return pj.append_prompt(run, sid, ps.summary(answers), 'unknown', source=source)['prompt_id']
+
+
 if __name__ == '__main__':
     root, sid, text = sys.argv[1:]
     sys.path.insert(0, str(pathlib.Path(root) / 'lib'))

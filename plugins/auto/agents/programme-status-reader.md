@@ -28,7 +28,7 @@ Where the fields live in `status --json`:
 | `model.programme` | run, may_stop, stop_rule, reasons, `actionable_reasons` (kind, target, name), counts |
 | `model.items` | every item with its state and title |
 | `model.decisions_for_shawn` | open decisions, each with its text detail rows |
-| `asks` | every open or answered-but-unrelayed ask: fingerprint, `shown_current`, `replies`, `answered` |
+| `asks` | every open or answered-but-unrelayed ask: fingerprint, `shown_current`, `answered` |
 | `run` | the run id |
 
 ## What you run

@@ -66,12 +66,11 @@ check("a term left at the plugin default recommends it with that source",
       step(p, "cadence")["recommendation"] == "on_change" and step(p, "cadence")["recommendation_source"] == "plugin default",
       step(p, "cadence"))
 check("each term step carries its group", all(step(p, k)["group"] == k for k in terms), [s["group"] for s in p["steps"]])
-check("per-programme term steps need no typed reply", all(not step(p, k)["needs_typed"] and step(p, k)["reply"] is None
-      for k in terms))
+check("no step carries a reply or a typed flag", all("needs_typed" not in s and "reply" not in s for s in p["steps"]),
+      p["steps"])
 check("the walkthrough has no autonomy step", "autonomy" not in keys(p), keys(p))
 check("the accept is offered as a pick of its terms-bound label",
-      not step(p, "accept")["needs_typed"] and step(p, "accept")["reply"] is None
-      and step(p, "accept")["label"] == "Approve accept-agreement --terms " + step(p, "accept")["terms_digest"]
+      step(p, "accept")["label"] == "Approve accept-agreement --terms " + step(p, "accept")["terms_digest"]
       and len(step(p, "accept")["terms_digest"]) == 8, step(p, "accept"))
 
 b = fresh()
@@ -109,8 +108,7 @@ check("a pending proposed new source is offered as an option, as pick-term accep
       step(p, "tools_of_record")["options"] == ["tracker", "tasks", "plans", "wiki"], step(p, "tools_of_record"))
 
 p = setup.build(fresh())
-check("shared settings with no personal file are not done", step(p, "shared")["state"] != "done"
-      and step(p, "shared")["needs_typed"], step(p, "shared"))
+check("shared settings with no personal file are not done", step(p, "shared")["state"] != "done", step(p, "shared"))
 with open(personal, "w") as fh:
     json.dump({"protocol_format": 1, "rules": [], "autonomy": {}}, fh)
 p = setup.build(fresh())
@@ -125,15 +123,15 @@ b = fresh()
 b["agreement"]["project_terms"] = [{"id": "t1", "area": "deploys", "value": "ask first", "set_by": "proposal",
                                     "reserved": True}]
 p = setup.build(b)
-check("a proposed ruling needs a typed reply", step(p, "rulings")["needs_typed"]
-      and isinstance(step(p, "rulings")["reply"], str) and step(p, "rulings")["state"] != "done", step(p, "rulings"))
+check("a proposed ruling leaves the step open, with no text to type",
+      "reply" not in step(p, "rulings") and step(p, "rulings")["state"] != "done", step(p, "rulings"))
 check("the rulings step names no reserved area: an old reserved flag reads as a legacy Ruling, not a step value",
       step(p, "rulings")["label"] == "rulings" and "reserved" not in step(p, "rulings")["values"], step(p, "rulings"))
 b["setup"] = {"kept": ["rulings", "shared"]}
 p = setup.build(b)
-check("a typed-reply step listed in kept is done with no reply",
-      step(p, "rulings")["state"] == "done" and step(p, "rulings")["reply"] is None
-      and step(p, "shared")["state"] == "done" and step(p, "shared")["reply"] is None, [step(p, "rulings"), step(p, "shared")])
+check("a step listed in kept is done",
+      step(p, "rulings")["state"] == "done" and step(p, "shared")["state"] == "done",
+      [step(p, "rulings"), step(p, "shared")])
 
 b = fresh()
 b["setup"] = {"step": "cadence"}

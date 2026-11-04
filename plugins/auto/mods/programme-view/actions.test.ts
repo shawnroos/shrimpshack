@@ -180,14 +180,15 @@ test('f on a Ruling closes it as fulfilled through close-ruling with the why typ
   expect(await has(pane, 'Ruling closed as fulfilled')).toBe(true)
 })
 
-test('a decided or restrict Ruling offers no close as fulfilled: closing it needs the typed reply', async ($, on) => {
+test('a decided or restrict Ruling offers no close as fulfilled: the PM asks about closing it', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const calls = verbs(on)
   const pane = await contractPane($)
   await personFocus($, 'ruling:i1')
   await settle()
   expect(await pane.find({ key: 'act:fulfil' })).toBeUndefined()
-  expect(await lineAfter(pane, 'Type this:')).toBe('Withdraw ruling i1 "ask before closing"')
+  expect(await has(pane, 'To withdraw this Ruling, tell the PM in the chat.')).toBe(true)
+  expect(await has(pane, 'Withdraw ruling i1')).toBe(false)
   expect(calls).toEqual([])
 })
 
@@ -244,7 +245,7 @@ test('remit takes any space by name, including one outside the remit, and propos
   expect(calls.map(call => call.argv.slice(1))).toEqual([['propose-term', 'remit', '--add', 'default.w9', '--origin', 'ui']])
 })
 
-test('stop rule takes a UTC stop time, proposes until_time --until, and shows the reply that names it', async ($, on) => {
+test('stop rule takes a UTC stop time, proposes until_time --until, and says the PM will ask', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const calls = verbs(on)
   const pane = await contractPane($)
@@ -254,7 +255,7 @@ test('stop rule takes a UTC stop time, proposes until_time --until, and shows th
   await type(pane, 'custom:stop_rule:until', '2026-02-30T18:00:00Z')
   expect(await has(pane, '"2026-02-30T18:00:00Z" is not a UTC time')).toBe(true)
   await type(pane, 'custom:stop_rule:until', '2026-10-20T18:00:00Z')
-  expect(await lineAfter(pane, 'Type this:')).toBe('amend stop rule to until time until 2026-10-20T18:00:00Z')
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(true)
   await press(pane, 'act:propose')
   expect(calls.map(call => call.argv.slice(1))).toEqual([
     ['propose-term', 'stop_rule', 'until_time', '--until', '2026-10-20T18:00:00Z', '--origin', 'ui'],
@@ -283,20 +284,20 @@ test('the action keys are drawn only while the pane is focused, with their hotke
   expect(keys.filter(key => key.startsWith('act:'))).toEqual([])
 })
 
-test('covers AE4: accept on a pending proposal shows the exact reply and sends nothing', async ($, on) => {
+test('covers AE4: a pending proposal says the PM will ask and sends nothing', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const calls = verbs(on)
   const sent = prompts(on)
   const pane = await contractPane($)
   await press(pane, 'term:cadence')
-  expect(await lineAfter(pane, 'Type this:')).toBe('amend cadence to on change')
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(true)
   const keys = await buttonKeys(pane)
   expect(keys.some(key => /accept|amend|widen/.test(key))).toBe(false)
   expect(calls).toEqual([])
   expect(sent).toEqual([])
 })
 
-test('the accept reply names the interval of a fixed cadence', async ($, on) => {
+test('a pending fixed cadence says the PM will ask', async ($, on) => {
   const terms = defaultTerms()
   terms[2] = term('cadence', {
     value: 'on_change',
@@ -305,10 +306,10 @@ test('the accept reply names the interval of a fixed cadence', async ($, on) => 
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
   const pane = await contractPane($)
   await press(pane, 'term:cadence')
-  expect(await lineAfter(pane, 'Type this:')).toBe('amend cadence to fixed every 15 min')
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(true)
 })
 
-test('a refused proposal still shows the reply so it can be typed again', async ($, on) => {
+test('a refused proposal still says the PM will ask', async ($, on) => {
   const terms = defaultTerms()
   terms[1] = term('stop_rule', {
     proposal: { value: 'b', at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'refused', reason: 'not typed' },
@@ -316,10 +317,10 @@ test('a refused proposal still shows the reply so it can be typed again', async 
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
   const pane = await contractPane($)
   await press(pane, 'term:stop_rule')
-  expect(await lineAfter(pane, 'Type this:')).toBe('amend stop rule to b')
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(true)
 })
 
-test('widening the tools of record names every tool that changes, the dropped ones too', async ($, on) => {
+test('widening the tools of record says the PM will ask', async ($, on) => {
   const terms = defaultTerms()
   terms[3] = term('tools_of_record', {
     value: ['tracker', 'tasks'],
@@ -335,10 +336,10 @@ test('widening the tools of record names every tool that changes, the dropped on
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
   const pane = await contractPane($)
   await press(pane, 'term:tools_of_record')
-  expect(await lineAfter(pane, 'Type this:')).toBe('widen tools of record to tracker, plans, sentry and drop tasks')
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(true)
 })
 
-test('widening the remit names the space to add', async ($, on) => {
+test('widening the remit says the PM will ask', async ($, on) => {
   const terms = defaultTerms()
   terms[0] = term('remit', {
     proposal: { value: 'space', extras: { add: 'default.w3' }, at: '2026-10-19T09:00:00Z', origin: 'ui', state: 'pending' },
@@ -346,44 +347,45 @@ test('widening the remit names the space to add', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ contract: contractPart(terms) }) })
   const pane = await contractPane($)
   await press(pane, 'term:remit')
-  expect(await lineAfter(pane, 'Type this:')).toBe('widen remit to add space default.w3')
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(true)
 })
 
-test('picking another option on a term with no proposal shows the amend reply', async ($, on) => {
+test('picking another option on a term with no proposal says the PM will ask', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const sent = prompts(on)
   const pane = await contractPane($)
   await press(pane, 'term:stop_rule')
-  expect(await has(pane, 'Type this:')).toBe(false)
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(false)
   await press(pane, 'option:stop_rule:b')
-  expect(await lineAfter(pane, 'Type this:')).toBe('amend stop rule to b')
+  expect(await has(pane, 'The PM will ask you in the chat.')).toBe(true)
+  expect(await has(pane, 'Type this:')).toBe(false)
   expect(sent).toEqual([])
 })
 
-test('the new-Ruling template names the selected task', async ($, on) => {
+test('the new-Ruling hint names the selected task and asks for no exact text', async ($, on) => {
   const work = [workEntry('linear:ENG-1', 'Owner history')]
   world(on, { [LEASE]: lease(), [VIEW]: viewText({ work }) })
   const pane = await openPane($)
   await personFocus($, 'item:linear:ENG-1')
   await settle()
   await press(pane, 'view:contract')
-  expect(await lineAfter(pane, 'To add a Ruling, type this:')).toBe('Ruling for Owner history:')
-  const drawn = await lines(pane)
-  expect(drawn.some(line => line.endsWith('Ruling for Owner history: '))).toBe(true)
+  expect(await has(pane, 'To add a Ruling for Owner history, tell the PM in the chat.')).toBe(true)
+  expect(await has(pane, 'type this')).toBe(false)
 })
 
-test('with no task selected the template is for the whole programme', async ($, on) => {
+test('with no task selected the hint is for the whole programme', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const pane = await contractPane($)
-  expect(await lineAfter(pane, 'To add a Ruling, type this:')).toBe('Ruling for the whole programme:')
+  expect(await has(pane, 'To add a Ruling for the whole programme, tell the PM in the chat.')).toBe(true)
 })
 
-test('a focused Ruling shows the withdraw reply naming its id', async ($, on) => {
+test('a focused Ruling says to tell the PM, with no text to type', async ($, on) => {
   world(on, { [LEASE]: lease(), [VIEW]: viewText() })
   const sent = prompts(on)
   const pane = await contractPane($)
   await personFocus($, 'ruling:i1')
   await settle()
-  expect(await lineAfter(pane, 'Type this:')).toBe('Withdraw ruling i1 "ask before closing"')
+  expect(await has(pane, 'To withdraw this Ruling, tell the PM in the chat.')).toBe(true)
+  expect(await has(pane, 'Withdraw ruling i1')).toBe(false)
   expect(sent).toEqual([])
 })
