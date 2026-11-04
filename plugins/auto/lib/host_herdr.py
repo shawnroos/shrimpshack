@@ -26,7 +26,6 @@ SERVER_PROBE_TIMEOUT = 1.0
 GUARD_SNAPSHOT_TIMEOUT = 1.0
 NOTIFY_TIMEOUT = 5
 POLL_SECONDS = 1.0
-BIN_TOKENS = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
 SEND_VERBS = frozenset({
     ("agent", "prompt"), ("agent", "send"), ("agent", "send-keys"),
     ("pane", "send-text"), ("pane", "send-keys"), ("pane", "run"), ("pane", "close"),
@@ -41,6 +40,7 @@ native, refuse = terminal_host.native, terminal_host.refuse
 class HerdrHost(terminal_host.TerminalHost):
     name = "herdr"
     binaries = ("herdr",)
+    bin_tokens = frozenset({"$HERDR_BIN_PATH", "${HERDR_BIN_PATH}"})
 
     def installed(self) -> bool:
         return shutil.which("herdr") is not None
@@ -229,8 +229,7 @@ class HerdrHost(terminal_host.TerminalHost):
         return native(done.returncode)
 
     def is_host_command(self, argv, pane_ids=()):
-        # Casefolded: a case-insensitive filesystem finds `HERDR` on PATH, so it is the same literal program.
-        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]).casefold() == "herdr"):
+        if not self._runs_binary(argv):
             return None
         rest, i = list(argv[1:]), 0
         while i < len(rest) and rest[i].startswith("-"):

@@ -886,6 +886,11 @@ rm -f "${WORK}/python-ran"
 ( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${TASKREPO}/a.txt\"}}" )
 if [ ! -e "${WORK}/python-ran" ]; then pass; else fail "python ran"; fi
 
+it "a Write of an ordinary file in an auto repository starts no Python"
+rm -f "${WORK}/python-ran"
+( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${TASKREPO}/a.txt\"}}" )
+if [ ! -e "${WORK}/python-ran" ]; then pass; else fail "python ran"; fi
+
 it "an Edit of settings.local.json in an auto repository reaches Python"
 rm -f "${WORK}/python-ran"
 ( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${TASKREPO}/.claude/settings.local.json\"}}" )

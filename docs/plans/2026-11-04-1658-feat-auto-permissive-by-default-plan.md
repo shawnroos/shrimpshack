@@ -797,7 +797,7 @@ Paths in the table and below sit under `plugins/auto/` unless they start with `d
 - Test: `tests/integration/programme-hooks.test.sh`, `tests/integration/advisor-gate.test.sh`, `tests/integration/tree-ownership.test.sh`, `tests/integration/tracker-guard.test.sh`
 
 **Approach:**
-1. Replace the dormant gate with the limit check (KTD17), keep the pattern list and rm path-scoping, and delete the pause path if nothing else needs it.
+1. Replace the dormant gate with the limit check (KTD17), keep the pattern list and rm path-scoping, and delete the pause path if nothing else needs it. The shim in `.claude/hooks/on-pretooluse-action.sh` also gates on any lease and on a text prefilter, so check that a limited worker's command reaches Python through the shell hook.
 2. `no-settings-writes` checks a limited worker with the settings guard's any-file mode (`destinations=None`) plus the behaviours targets, whatever the proposals list holds.
 3. `tracker_write_denial` gates only `_remit_write`, never `_proof_write`.
 4. `on-stop` filters programme runs by setting, and adds `bound_waits` and `cache_reads`. Standalone runs are untouched (R2).

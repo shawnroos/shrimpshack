@@ -10,7 +10,6 @@ import codecs
 import json
 import os
 import re
-import shlex
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,44 +17,32 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-_SHELL_BREAKS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"})
 _SHELL_BINS = frozenset({"bash", "sh", "zsh", "dash"})
 # Every shell that could read a heredoc body as a script. Wider than _SHELL_BINS, which also drives the `-c`
 # script extraction that each shell's own option grammar has to match.
-_SHELL_NAMES = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "pdksh", "ash", "busybox",
-                          "fish", "tcsh", "csh", "yash", "posh", "rc", "osh", "xonsh"})
+_SHELL_NAMES = _SHELL_BINS | {"ksh", "ksh93", "mksh", "pdksh", "ash", "busybox", "fish", "tcsh", "csh", "yash", "posh",
+                              "rc", "osh", "xonsh"}
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_STDIN_SCRIPT = _SHELL_NAMES | {"eval", "source", "."}
 MAX_DEPTH = 4
 # Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
 SEEN_CAP = 8
-SEGMENT_CAP = 256
-_ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
-_LOCALE_DOLLAR = re.compile(r"\$(?=\")")
-_HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
-_HIDING_CHARS = re.compile(r"\\\n|[\"'\\]")
-# Each substitution span becomes this one character before the text is lexed, so the shell's own word boundaries
-# survive: `RUN=$(a)-$(b)` stays one assignment instead of lexing into a `-$` word that reads as a program.
-# A private-use character cannot appear in a real command and is not whitespace, a quote or a shlex punctuation char,
-# so it stays glued to its neighbours exactly as the substitution was.
-_MARK = "\ue000"
-_QUOTED, _CODE, _COMMENT = 0, 1, 2
+# A substitution stays in its word as this one character, so the word cannot read as a literal program or target.
+# A private-use character cannot appear in a real command.
+_MARK = ""
+_ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
+_HIDING_CHARS = re.compile(r"\\\n|\$(?=\")|[\"'\\]")
+_BACKTICK_ESCAPE = re.compile(r"\\([\\`$])")
+_OPERATOR = re.compile(r";;&?|;&|&&|\|\||\|&|&>>?|<<<|<<-?|<&|<>|>>|>&|>\||[;&|()<>]")
+_REDIRECTS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
+_BLOCK_WORDS = frozenset({"{", "}", "]]"})
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
 # A command word holding any of these may become a different program at run time (a leading `=` is zsh's path lookup).
-# A token made only of shell operators is punctuation the lexer split out (the `)` and `>` of quoted JavaScript).
-_RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=|" + _MARK)
-_OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
-_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
-# After these an `a=b` word is the program they run, not an assignment.
-_RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "xargs", "builtin"})
-# A quoted `">"` lexes the same as the operator, so stripping it could drop a real target.
-_QUOTED_REDIRECT = re.compile(r"([\"'])\s*\d*(?:[<>]+&?|&>+)\d*\s*\1")
-_REDIRECT_OPS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
-_COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
-                             "elif", "if", "while", "until", "{", "!", "noglob", "nocorrect", "doas", "stdbuf",
-                             "caffeinate", "nice", "timeout", "gtimeout"})
-# `if [[ a ]] then` and `if { a; } then` have no separator before the keyword, and these words end the condition.
-_ENDS_CONDITION = frozenset({"]]", "}"})
-# Options of a precommand that take the next word as their value; any other option keeps the command position.
-_PREFIX_VALUE_OPTS = {
+_COMPUTED = re.compile(r"[$`*?\[~{]|^=|" + _MARK)
+# Words that keep the command position, each with its options that take the next word as a value.
+_PRECOMMANDS = {
+    **dict.fromkeys(("if", "then", "do", "else", "elif", "while", "until", "!", "command", "nohup", "builtin",
+                     "noglob", "nocorrect", "caffeinate"), frozenset()),
     "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-r", "-t", "-U", "-D", "-R", "-T"}),
     "doas": frozenset({"-u", "-C"}),
     "env": frozenset({"-u", "-C", "-S", "-P"}),
@@ -69,19 +56,231 @@ _PREFIX_VALUE_OPTS = {
 }
 
 
-def _shell_script(tokens: list, i: int):
-    takes_script = False
-    while i < len(tokens) and tokens[i] not in _SHELL_BREAKS:
-        tok = tokens[i]
-        if tok in _SHELL_VALUE_OPTS:
-            i += 2
-            continue
-        if tok[:1] in ("-", "+"):
-            takes_script = takes_script or (tok[:2] != "--" and "c" in tok[1:])
-            i += 1
-            continue
-        return tok if takes_script else None
-    return None
+class _Reader:
+    """One pass over shell text that leaves final words, so no later reader sees quoting or redirections.
+
+    After read(): `commands` holds (words, here-strings) per simple command, `scripts` the text of every substitution,
+    and `bodies` (text, whether a shell reads it, whether its delimiter was quoted) per heredoc. An unbalanced quote is
+    an ordinary character, because it must not hide a send on a later line.
+    """
+
+    def __init__(self, text):
+        self.text, self.i = text, 0
+        self.commands, self.scripts, self.bodies = [], [], []
+        self.words, self.heres = [], []
+        self.word, self.in_word, self.quoted = [], False, False
+        # What the next word is when it is not an argument: a redirect target, a here-string or a heredoc delimiter.
+        self.expect = None
+        self.pending, self.line_start = [], 0
+        self.array, self.arithmetic = False, False
+
+    def read(self):
+        while self.i < len(self.text):
+            ch = self.text[self.i]
+            step = _STEPS.get(ch)
+            if step:
+                step(self)
+            else:
+                self._take(ch)
+        self._end_word()
+        self._end_command()
+        return self
+
+    def _take(self, ch):
+        self.word.append(ch)
+        self.in_word = True
+        self.i += 1
+
+    def _end_word(self):
+        if not self.in_word:
+            return
+        value, was_quoted, role = "".join(self.word), self.quoted, self.expect
+        self.word = []
+        self.in_word, self.quoted, self.expect = False, False, None
+        if role == "here":
+            self.heres.append(value)
+        elif role in ("<<", "<<-"):
+            self.pending.append((value, role == "<<-", was_quoted))
+        elif role is None:
+            if self._is_block_word(value, was_quoted):
+                self._end_command()
+            else:
+                self.words.append(value)
+
+    def _is_block_word(self, value, was_quoted):
+        if value not in _BLOCK_WORDS or was_quoted:
+            return False
+        # As an argument it is a plain word: `echo } herdr pane run` runs echo.
+        program = _program(self.words)
+        return program is None or self.words[program] in ("[[", "function")
+
+    def _end_command(self):
+        if self.words or self.heres:
+            self.commands.append((self.words, self.heres))
+            self.words, self.heres = [], []
+
+    def _backslash(self):
+        if self.text[self.i + 1:self.i + 2] != "\n":
+            self.word.append(self.text[self.i + 1:self.i + 2])
+            self.in_word = self.quoted = True
+        self.i += 2
+
+    def _single_quote(self):
+        end = self.text.find("'", self.i + 1)
+        if end == -1:
+            self._take("'")
+            return
+        self.word.append(self.text[self.i + 1:end])
+        self.in_word = self.quoted = True
+        self.i = end + 1
+
+    def _double_quote(self):
+        start, kept, taken = self.i, len(self.word), len(self.scripts)
+        self.i += 1
+        if self.expansions('"'):
+            self.quoted = True
+        else:
+            del self.word[kept:], self.scripts[taken:]
+            self.word.append('"')
+            self.i = start + 1
+        self.in_word = True
+
+    def expansions(self, stop):
+        """Reads double-quote rules up to `stop` (None: the end), and says whether it got there."""
+        while self.i < len(self.text):
+            ch = self.text[self.i]
+            if ch == stop:
+                self.i += 1
+                return True
+            if ch == "\\":
+                following = self.text[self.i + 1:self.i + 2]
+                if following != "\n":
+                    self.word.append(following if following in ('"', "\\", "$", "`") else ch + following)
+                self.i += 2
+            elif self.text.startswith("$(", self.i):
+                self._paren_span()
+            elif ch == "`":
+                self._backtick_span()
+            else:
+                self.word.append(ch)
+                self.i += 1
+        return stop is None
+
+    def _paren_span(self):
+        end = _closing_paren(self.text, self.i + 2)
+        self._substitution(self.text[self.i + 2:end], end + 1)
+
+    def _backtick_span(self):
+        end = _closing_backtick(self.text, self.i + 1)
+        self._substitution(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.i + 1:end]), end + 1)
+
+    def _substitution(self, script, resume):
+        self.scripts.append(script)
+        self.word.append(_MARK)
+        self.in_word = True
+        self.i = resume
+
+    def _dollar(self):
+        if self.text.startswith("$(", self.i):
+            self._paren_span()
+        elif self.text.startswith("$[", self.i):
+            end = self.text.find("]", self.i)
+            end = len(self.text) if end == -1 else end
+            self._substitution(self.text[self.i + 2:end], end + 1)
+        elif self.text.startswith('$"', self.i):
+            self.i += 1
+        else:
+            found = _ANSI_C.match(self.text, self.i)
+            if found is None:
+                self._take("$")
+                return
+            self.word.append(_ansi_c(found))
+            self.in_word = self.quoted = True
+            self.i = found.end()
+
+    def _angle(self):
+        if self.text.startswith(("<(", ">("), self.i):
+            self._paren_span()
+        else:
+            self._operator()
+
+    def _open_paren(self):
+        if self.word and self.word[-1].endswith("=") and not self.quoted:
+            self.array = True
+            self._take(" ")
+        else:
+            self.arithmetic = self.arithmetic or self.text.startswith("((", self.i)
+            self._operator()
+
+    def _close_paren(self):
+        if self.array:
+            self.array = False
+            self.i += 1
+        else:
+            self.arithmetic = self.arithmetic and not self.text.startswith("))", self.i)
+            self._operator()
+
+    def _comment(self):
+        if self.in_word and not (self.array and self.word[-1] in (" ", "\t", "\n")):
+            self._take("#")
+        else:
+            end = self.text.find("\n", self.i)
+            self.i = len(self.text) if end == -1 else end
+
+    def _blank(self):
+        if self.array:
+            self._take(self.text[self.i])
+        else:
+            self._end_word()
+            self.i += 1
+
+    def _newline(self):
+        if self.array:
+            self._take("\n")
+            return
+        self._end_word()
+        self._end_command()
+        self.i += 1
+        for delimiter, strip_tabs, was_quoted in self.pending:
+            body = self._heredoc_body(delimiter, strip_tabs)
+            self.bodies.append((body, _shell_reads(self.commands[self.line_start:]), was_quoted))
+        self.pending = []
+        self.line_start = len(self.commands)
+
+    def _heredoc_body(self, delimiter, strip_tabs):
+        lines = []
+        while self.i < len(self.text):
+            end = self.text.find("\n", self.i)
+            end = len(self.text) if end == -1 else end
+            line, self.i = self.text[self.i:end], end + 1
+            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                break
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _operator(self):
+        op = _OPERATOR.match(self.text, self.i).group()
+        if op[0] in "<>" and self.in_word and not self.quoted and "".join(self.word).isdigit():
+            self.word, self.in_word = [], False
+        self._end_word()
+        self.i += len(op)
+        # `((x << 2))` is a shift, and a heredoc read there would swallow the commands on the next lines.
+        if op in ("<<", "<<-") and not self.arithmetic:
+            self.expect = op
+        elif op == "<<<":
+            self.expect = "here"
+        elif op in _REDIRECTS:
+            self.expect = "target"
+        else:
+            self._end_command()
+
+
+_STEPS = {
+    "\\": _Reader._backslash, "'": _Reader._single_quote, '"': _Reader._double_quote, "$": _Reader._dollar,
+    "`": _Reader._backtick_span, "#": _Reader._comment, " ": _Reader._blank, "\t": _Reader._blank, "\n": _Reader._newline,
+    "(": _Reader._open_paren, ")": _Reader._close_paren, "<": _Reader._angle, ">": _Reader._angle,
+    ";": _Reader._operator, "&": _Reader._operator, "|": _Reader._operator,
+}
 
 
 def _ansi_c(match) -> str:
@@ -91,335 +290,114 @@ def _ansi_c(match) -> str:
         return match.group(1)
 
 
-def _unquote_dollar(command: str) -> str:
-    return _LOCALE_DOLLAR.sub("", _ANSI_C.sub(lambda m: shlex.quote(_ansi_c(m)), command))
-
-
-def _char_kinds(text: str) -> bytearray:
-    kinds, quote, escaped, comment, tick = bytearray(len(text)), None, False, False, False
-    for i, ch in enumerate(text):
-        if comment:
-            # A comment inside backticks ends at the closing backtick: the shell reads the span on its own.
-            ends_span = tick and ch == "`"
-            comment, tick = ch != "\n" and not ends_span, tick and not ends_span
-        elif escaped:
-            escaped = False
-        elif ch == "\\" and quote != "'":
-            escaped = True
-        elif quote:
+def _closing_paren(text, i):
+    """Index of the `)` closing a span whose contents start at i, or len(text) when it never closes."""
+    depth, quote = 1, None
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
             quote = None if ch == quote else quote
         elif ch in "'\"":
             quote = ch
-        elif ch == "`":
-            tick = not tick
-        # `)` is left out on purpose: `$(date)#x` is one word to the shell, and reading a real `(a)#x` comment as code
-        # only scans more text.
-        elif ch == "#" and (i == 0 or text[i - 1] in " \t\n;&|("):
-            comment = True
-        kinds[i] = _COMMENT if comment else _QUOTED if quote else _CODE
-    return kinds
-
-
-def _strip_comments(text: str) -> str:
-    return "".join(ch for ch, kind in zip(text, _char_kinds(text)) if kind != _COMMENT)
-
-
-def _heredoc_reader_is_shell(text: str, start: int, line_end: int) -> bool:
-    """Could a shell run this heredoc's body?
-
-    Only a plain line whose own command is a named non-shell program proves it could not. A pipe, a list operator,
-    a variable or a substitution on that line can all hand the body to a shell (`cat <<'EOF' | ksh`, `| $S`), and
-    a shell that runs the body reads it as a script however the delimiter was quoted. So anything else is shell:
-    this is the direction that fails closed.
-    """
-    line = text[text.rfind("\n", 0, start) + 1:line_end]
-    words = _lex(_strip_comments(line))
-    if not words:
-        return True
-    runs, assigns = _command_positions(words)[:2]
-    programs = [w for k, w in enumerate(words)
-                if runs[k] and not assigns[k] and not _OPERATOR_ONLY.match(w) and w not in _COMMAND_PREFIX]
-    if not programs:
-        return True
-    # Every program on the line, not only the first: the body goes to the pipeline, so `cat <<'EOF' | ksh` hands
-    # it to a shell. A program built at run time could be any of them.
-    return any(os.path.basename(w).casefold() in _SHELL_NAMES or w in ("eval", "source", ".")
-               or _RUNTIME_WORD.search(w) for w in programs)
-
-
-def _split_heredocs(text: str):
-    """(text without heredoc bodies, [(body, a shell runs it)])."""
-    kept, bodies, pos, kinds = [], [], 0, _char_kinds(text)
-    while True:
-        found = _HEREDOC.search(text, pos)
-        while found is not None and kinds[found.start()] != _CODE:
-            # `# <<'EOF'` and `'<<\"EOF\"'` are not heredocs to any shell, and reading one as a heredoc would take
-            # the real commands after it out of the scanned text.
-            found = _HEREDOC.search(text, found.end())
-        line_end = text.find("\n", found.end()) if found else -1
-        if line_end == -1:
-            kept.append(text[pos:])
-            return "".join(kept), bodies
-        kept.append(text[pos:line_end + 1])
-        shell = _heredoc_reader_is_shell(text, found.start(), line_end)
-        lines, cursor = [], line_end + 1
-        while cursor < len(text):
-            end = text.find("\n", cursor)
-            end = len(text) if end == -1 else end
-            line, cursor = text[cursor:end], end + 1
-            if line.strip() == found.group(2):
-                break
-            lines.append(line)
-        bodies.append(("\n".join(lines), shell))
-        pos = cursor
-        if pos >= len(text):
-            return "".join(kept), bodies
-
-
-def _mark_substitutions(text: str):
-    """(text with each outermost $( ), <( ), >( ) and backtick span replaced by one marker, [(contents, arithmetic)]).
-
-    Only outermost spans are returned; nested ones are found when the contents are scanned. An unterminated span
-    swallows the rest of the text, which keeps a half-written send inside it from escaping the scan.
-    """
-    out, spans, i, quote, escaped = [], [], 0, None, False
-    while i < len(text):
-        ch = text[i]
-        # Quoting decides what the shell expands: single quotes expand nothing, double quotes expand `$( )` and
-        # backticks but not a process substitution, and a backslash outside single quotes escapes the next char.
-        if escaped or (ch == "\\" and quote != "'"):
-            escaped = not escaped
-            out.append(ch)
-            i += 1
-            continue
-        if quote == "'":
-            # Single quotes expand nothing, so no span can open until they close.
-            quote = None if ch == "'" else quote
-            out.append(ch)
-            i += 1
-            continue
-        if ch == "'" and quote is None:
-            quote = "'"
-            out.append(ch)
-            i += 1
-            continue
-        if ch == '"':
-            quote = None if quote == '"' else '"'
-            out.append(ch)
-            i += 1
-            continue
-        if text[i:i + 2] == "$(" or (text[i:i + 2] in ("<(", ">(") and quote is None):
-            arithmetic = text[i:i + 3] == "$(("
-            depth, j = 1, i + 2
-            while j < len(text) and depth:
-                depth += (text[j] == "(") - (text[j] == ")")
-                j += 1
-            spans.append((text[i + 2:j - 1] if depth == 0 else text[i + 2:], arithmetic))
-            out.append(_MARK)
-            i = j if depth == 0 else len(text)
-        elif ch == "`":
-            j = text.find("`", i + 1)
-            spans.append((text[i + 1:] if j == -1 else text[i + 1:j], False))
-            out.append(_MARK)
-            i = len(text) if j == -1 else j + 1
         else:
-            out.append(ch)
+            depth += (ch == "(") - (ch == ")")
+            if not depth:
+                return i
+        i += 1
+    return len(text)
+
+
+def _closing_backtick(text, i):
+    while i < len(text) and text[i] != "`":
+        i += 2 if text[i] == "\\" else 1
+    return min(i, len(text))
+
+
+def _program(words):
+    """Index of the word the shell runs as the program, or None."""
+    i, prefix = 0, None
+    while i < len(words):
+        word = words[i]
+        if word in _PRECOMMANDS:
+            prefix = word
             i += 1
-    return "".join(out), spans
+        elif _ASSIGNMENT.match(word):
+            i += 1
+        elif prefix and word.startswith("-"):
+            if prefix == "command" and word in ("-v", "-V"):
+                return None
+            i += 2 if word in _PRECOMMANDS[prefix] else 1
+        elif prefix in ("timeout", "gtimeout"):
+            # Its first plain word is the duration; the command comes next.
+            prefix = None
+            i += 1
+        else:
+            return i
+    return None
 
 
-def _substitution_scripts(spans: list, depth: int = 0) -> list:
-    """The spans that hold commands. Arithmetic holds none, so only its own nested substitutions are returned.
+def _shell_reads(commands) -> bool:
+    """Only a line whose every program is a named non-shell proves a shell cannot read the heredoc: this fails closed."""
+    programs = [words[k] for words, _heres in commands for k in [_program(words)] if k is not None]
+    return not programs or any(os.path.basename(p).casefold() in _STDIN_SCRIPT or _COMPUTED.search(p) for p in programs)
 
-    Bounded like `_scan`: nested arithmetic is attacker-controlled, and an unbounded walk here raises
-    RecursionError, which the hook swallows into an allow.
-    """
+
+def _shell_script(args):
+    takes_script, i = False, 0
+    while i < len(args):
+        tok = args[i]
+        if tok in _SHELL_VALUE_OPTS:
+            i += 2
+        elif tok[:1] in ("-", "+"):
+            takes_script = takes_script or (tok[:2] != "--" and "c" in tok[1:])
+            i += 1
+        else:
+            return tok if takes_script else None
+    return None
+
+
+def _heredoc_scripts(bodies) -> list:
     scripts = []
-    for contents, arithmetic in spans:
-        if not arithmetic:
-            scripts.append(contents)
-        elif depth < MAX_DEPTH:
-            scripts.extend(_substitution_scripts(_mark_substitutions(contents)[1], depth + 1))
-        else:
-            # Past the bound the arithmetic is scanned as a script rather than dropped: it fails closed.
-            scripts.append(contents)
+    for body, shell, was_quoted in bodies:
+        if shell:
+            scripts.append(body)
+        elif not was_quoted:
+            # An unquoted heredoc expands `$( )` and backticks for any reader.
+            reader = _Reader(body)
+            reader.expansions(None)
+            scripts.extend(reader.scripts)
     return scripts
 
 
-def _newlines_as_breaks(text: str) -> str:
-    """The shell ends a command at a newline, but the lexer reads one as a space. A quoted newline stays, and a
-    backslash-newline goes, because the shell deletes it before it reads words and the lexer would keep the newline."""
-    out, quote, escaped = [], None, False
-    for ch in text:
-        if escaped:
-            escaped = False
-            if ch == "\n":
-                out.pop()
-                continue
-        elif ch == "\\" and quote != "'":
-            escaped = True
-        elif quote:
-            quote = None if ch == quote else quote
-        elif ch in "'\"":
-            quote = ch
-        elif ch == "\n":
-            ch = " ;\n"
-        out.append(ch)
-    return "".join(out)
-
-
-def _lex(text: str) -> list:
-    try:
-        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        # shlex would start a comment at a `#` inside a word, where the shell does not; _strip_comments has removed
-        # the real ones by now.
-        lexer.commenters = ""
-        return list(lexer)
-    except ValueError:
-        # An unbalanced quote must not hide a send on a later line, so the line ends stay command breaks.
-        return [tok for line in text.splitlines() for tok in line.split() + [";"]]
-
-
-def _segment(tokens: list, start: int) -> list:
-    end = start
-    while end < len(tokens) and end - start < SEGMENT_CAP and (end == start or tokens[end] not in _SHELL_BREAKS):
-        end += 1
-    return tokens[start:end]
-
-
-def _strip_redirects(words: list) -> list:
-    """The words with every redirection removed; the lexer splits `2>&1` into `2`, `>&`, `1`, so the fd digit goes too."""
-    if _REDIRECT_OPS.isdisjoint(words):
-        return words
-    out, i = [], 0
-    while i < len(words):
-        if words[i] in _REDIRECT_OPS:
-            # A file descriptor is one or two digits; a longer number is an argument (a Rex id tail) and stays.
-            if len(out) > 1 and out[-1].isdigit() and len(out[-1]) <= 2:
-                out.pop()
-            i += 2
+def _scan(text, depth, hosts, pane_ids, found) -> None:
+    reader = _Reader(text).read()
+    nested = reader.scripts + _heredoc_scripts(reader.bodies)
+    piped = "\n".join([" ".join(part) for command in reader.commands for part in command]
+                      + [body for body, _shell, _quoted in reader.bodies])
+    for words, heres in reader.commands:
+        k = _program(words)
+        if k is None:
             continue
-        out.append(words[i])
-        i += 1
-    return out
-
-
-def _command_positions(tokens: list) -> tuple:
-    """(runs, assigns, progs): per token, whether it sits where the shell runs a program, whether it is a `NAME=value`
-    assignment there, and the index of the program its command runs. One left-to-right pass, because a hook that times
-    out or raises lets the command through. Redirections keep the position; a precommand's flags and assignments keep it too."""
-    runs, assigns, stack = [False] * len(tokens), [False] * len(tokens), []
-    progs, cur_prog = [-1] * len(tokens), -1
-    at_cmd, prefix, skip = True, None, 0
-    in_case, patterns = False, False
-    for k, tok in enumerate(tokens):
-        progs[k] = cur_prog
-        if skip:
-            skip -= 1
-            continue
-        if tok == "esac":
-            # Tested before the pattern branch below: `;;` arms the next branch's pattern, so `esac` arrives while
-            # that is armed and would be eaten as a pattern, latching every later word out of command position.
-            in_case, patterns, at_cmd, prefix = False, False, False, None
-            continue
-        if patterns and not _OPERATOR_ONLY.match(tok):
-            # A `case` pattern names no program: `*queued*)` is a glob the shell matches, not a command to run.
-            runs[k] = False
-            continue
-        nxt = tokens[k + 1] if k + 1 < len(tokens) else None
-        if tok in _REDIRECT_OPS:
-            skip = 1
-            continue
-        if tok.isdigit() and len(tok) <= 2 and nxt in _REDIRECT_OPS:
-            continue
-        runs[k] = at_cmd
-        if _OPERATOR_ONLY.match(tok):
-            # The lexer joins neighbouring operators (`);`, `;>`, `<(`), so read them one character at a time.
-            prev = tokens[k - 1] if k else ""
-            for idx, ch in enumerate(tok):
-                before = tok[idx - 1] if idx else prev[-1:]
-                if ch == "(":
-                    kind = "sub" if before in ("$", "<", ">") else "array" if before == "=" else "group"
-                    stack.append((kind, at_cmd))
-                    at_cmd, prefix = kind != "array", None
-                elif ch == ")":
-                    if patterns:
-                        patterns = False
-                        at_cmd, prefix = True, None
-                        continue
-                    kind, saved = stack.pop() if stack else ("group", True)
-                    at_cmd, prefix = (True if kind == "group" else saved), None
-                elif ch in ";|&":
-                    at_cmd, prefix, cur_prog = True, None, -1
-            if in_case and ";;" in tok:
-                # One branch ended, so the next word is the following branch's pattern.
-                patterns = True
-            if tok[-1] in "<>":
-                skip = 1
-            continue
-        if tok == "case" and at_cmd:
-            in_case, patterns, at_cmd, prefix = True, False, False, None
-            continue
-        if in_case and not patterns and tok == "in":
-            patterns = True
-            continue
-        # `function f { ...` reaches `{` with no command position, and `echo do herdr` must not gain one.
-        if tok in _COMMAND_PREFIX and (at_cmd or tok == "{" or (k and tokens[k - 1] in _ENDS_CONDITION)):
-            at_cmd, prefix = True, tok
-        elif at_cmd and _ASSIGNMENT.match(tok) and not (k and tokens[k - 1] in _RUNS_NEXT_WORD):
-            assigns[k] = True
-        elif at_cmd and prefix and tok.startswith("-"):
-            if prefix == "command" and tok in ("-v", "-V"):
-                at_cmd, prefix = False, None
-            elif tok in _PREFIX_VALUE_OPTS.get(prefix, ()):
-                skip = 1
-        elif at_cmd and prefix in ("timeout", "gtimeout"):
-            # Its first plain word is the duration; the command comes next.
-            prefix = None
-        else:
-            if at_cmd:
-                cur_prog = k
-                progs[k] = k
-            at_cmd, prefix = False, None
-    return runs, assigns, progs
-
-
-def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list) -> None:
-    main, bodies = _split_heredocs(_unquote_dollar(text))
-    # Before the substitution and newline passes, which have no comment state: an apostrophe in a comment would read
-    # as an open quote there.
-    main = _strip_comments(main)
-    marked, spans = _mark_substitutions(main)
-    tokens = _lex(_newlines_as_breaks(marked))
-    piped = "\n".join([main] + [body for body, _shell in bodies])
-    strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
-    runs, assigns, progs = _command_positions(tokens)
-    if depth < MAX_DEPTH:
-        for script in _substitution_scripts(spans):
-            _scan(script, depth + 1, hosts, pane_ids, found)
-        for body, shell in bodies:
-            if shell:
-                _scan(body, depth + 1, hosts, pane_ids, found)
-    for start, token in enumerate(tokens):
+        name = os.path.basename(words[k]).casefold()
+        if name in _STDIN_SCRIPT:
+            nested.extend(heres)
         script = None
-        if token == "<<<":
-            # A here-string is a script only when a shell reads it; for any other program it is stdin data.
-            owner = os.path.basename(tokens[progs[start]]) if progs[start] >= 0 else ""
-            if owner in _SHELL_BINS or owner in ("eval", "source", "."):
-                script = next(iter(tokens[start + 1:start + 2]), None)
-        elif runs[start] and not assigns[start] and token not in _COMMAND_PREFIX and not _OPERATOR_ONLY.match(token):
-            if os.path.basename(token).casefold() in _SHELL_BINS:
-                script = _shell_script(tokens, start + 1)
-            elif token == "eval":
-                script = " ".join(_segment(tokens, start + 1)) or None
-            if script is None:
-                segment = strip(_segment(tokens, start))
-                for host in hosts:
-                    hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
-                    if hit:
-                        found.append((host.name, hit[0], hit[1]))
-        if script is not None and depth < MAX_DEPTH:
+        if name in _SHELL_BINS:
+            script = _shell_script(words[k + 1:])
+        elif words[k] == "eval":
+            script = " ".join(words[k + 1:]) or None
+        if script is not None:
+            nested.append(script)
+            continue
+        for host in hosts:
+            hit = host.is_host_command(words[k:], pane_ids=pane_ids) or host.is_piped_script(words[k:], piped, pane_ids=pane_ids)
+            if hit:
+                found.append((host.name, hit[0], hit[1]))
+    if depth < MAX_DEPTH:
+        for script in nested:
             _scan(script, depth + 1, hosts, pane_ids, found)
 
 
@@ -527,7 +505,7 @@ def _with_live_ids(drivers: list) -> None:
 
 
 def _mentions_host(command: str) -> bool:
-    text = _HIDING_CHARS.sub("", _unquote_dollar(command)).casefold()
+    text = _HIDING_CHARS.sub("", _ANSI_C.sub(_ansi_c, command)).casefold()
     return any(binary in text for host in _hosts() for binary in host.binaries)
 
 

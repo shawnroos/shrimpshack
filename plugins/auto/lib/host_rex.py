@@ -43,7 +43,6 @@ SAFETY_NET_SECONDS = 300.0
 # Only these leave or join the remit. Every CLI call, the watcher's own included, also raises client events.
 JOIN_LEAVE_EVENTS = frozenset({"block_created", "block_closed", "session_created", "session_destroyed"})
 SESSION_PREFIX = "session:"
-BIN_TOKENS = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", "--color"})
 # Options that pick where a verb acts; each takes the next word, which must not be read as the verb.
 PLACE_OPTS = frozenset({"-s", "--session", "-w", "--window", "-b", "--block"})
@@ -61,6 +60,7 @@ native, degraded, refuse = terminal_host.native, terminal_host.degraded, termina
 class RexHost(terminal_host.TerminalHost):
     name = "rex"
     binaries = ("rex",)
+    bin_tokens = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 
     def installed(self) -> bool:
         return shutil.which("rex") is not None
@@ -153,8 +153,7 @@ class RexHost(terminal_host.TerminalHost):
                         value="journal")
 
     def is_host_command(self, argv, pane_ids=()):
-        # Casefolded: a case-insensitive filesystem finds `REX` on PATH, so it is the same literal program.
-        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]).casefold() == "rex"):
+        if not self._runs_binary(argv):
             return None
         rest = list(argv[1:])
         verb = _verb_words(rest)

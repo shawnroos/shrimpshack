@@ -10,7 +10,7 @@
 
 set -uo pipefail
 
-# Passes repo_root to Python for the dormant destructive check; never gates.
+# Finds repo_root for Python's dormant destructive check. It gates nothing here.
 __cd_find_repo() {
   local dir="${PWD}"
   while [ -n "$dir" ] && [ "$dir" != "/" ]; do
@@ -50,8 +50,8 @@ if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
 fi
 
-# Outside a repo the checks are the send check on Bash, the tracker guard on
-# Linear MCP calls and the settings guard, so no finer text prefilter here.
+# Python's live checks are the send check on Bash, the tracker guard on Linear
+# MCP calls and the settings and behaviours guards. Any other call starts no Python.
 __cd_settings=0
 # Case-insensitive: the macOS file system treats Settings.local.json as the same file.
 shopt -s nocasematch
@@ -62,10 +62,8 @@ if [[ $__cd_stdin_json == *behaviours* ]]; then
   __cd_settings=1
 fi
 shopt -u nocasematch
-if [ -z "$__cd_repo" ]; then
-  [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
-    || [ "$__cd_settings" = 1 ] || exit 0
-fi
+[[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
+  || [ "$__cd_settings" = 1 ] || exit 0
 # Edit and MultiEdit are matched only for the settings guard.
 __cd_edit='"tool_name"[[:space:]]*:[[:space:]]*"(Multi)?Edit"'
 if [ "$__cd_settings" = 0 ] && [[ $__cd_stdin_json =~ $__cd_edit ]]; then

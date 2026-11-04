@@ -44,8 +44,6 @@ SESSION_FILE_CAP = 65536
 # System Events types into whatever app is frontmost, Ghostty included.
 SEND_VERBS = ("input text", "send key", "perform action", "send mouse", "inputtext", "sendkey", "performaction", "sendmouse",
               "keystroke", "key code")
-OSASCRIPT_TOKENS = frozenset({"$OSASCRIPT", "${OSASCRIPT}"})
-_REDIRECTS = frozenset({"<", "<<", "<<-", "<<<"})
 _VALUE_OPTS = frozenset({"-e", "-l", "-s"})
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _NO_TTY = ("", "??", "?", "-")
@@ -115,6 +113,7 @@ _UNSET = object()
 class GhosttyHost(terminal_host.TerminalHost):
     name = "ghostty"
     binaries = ("osascript",)
+    bin_tokens = frozenset({"$OSASCRIPT", "${OSASCRIPT}"})
     needs_tty = True
 
     def installed(self) -> bool:
@@ -205,19 +204,14 @@ class GhosttyHost(terminal_host.TerminalHost):
                         value="journal")
 
     def is_host_command(self, argv, pane_ids=()):
-        if not _is_osascript(argv):
+        if not self._runs_binary(argv):
             return None
         return _classify(" ".join(argv[1:]), pane_ids)
 
     def is_piped_script(self, argv, text, pane_ids=()):
-        if not _is_osascript(argv) or not _reads_stdin(argv[1:]):
+        if not self._runs_binary(argv) or not _reads_stdin(argv[1:]):
             return None
         return _classify(text, pane_ids)
-
-
-def _is_osascript(argv) -> bool:
-    # Casefolded: a case-insensitive filesystem finds `OSASCRIPT` on PATH, so it is the same literal program.
-    return bool(argv) and (argv[0] in OSASCRIPT_TOKENS or os.path.basename(argv[0]).casefold() == "osascript")
 
 
 def _reads_stdin(args) -> bool:
@@ -225,7 +219,7 @@ def _reads_stdin(args) -> bool:
     i, has_script = 0, False
     while i < len(args):
         tok = args[i]
-        if tok in _REDIRECTS or tok in _VALUE_OPTS:
+        if tok in _VALUE_OPTS:
             has_script = has_script or tok == "-e"
             i += 2
             continue

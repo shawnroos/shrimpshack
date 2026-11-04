@@ -385,6 +385,51 @@ denied "if (true) then herdr pane send-text $PM hi; fi"
 denied "sudo env nohup herdr pane send-text $PM hi"
 denied "! herdr pane send-text $PM hi"
 
+SEND="herdr pane run $PM ls"
+echo "send-guard-literal: real bash runs the send, so the guard must refuse"
+denied "echo \">\"; $SEND"
+denied "echo \">\"; herdr pane run >/dev/null $PM ls"
+denied "cat <<E\"O\"F
+body
+EOF
+$SEND"
+denied "cat <<EOF
+\$($SEND)
+EOF"
+denied "cat <<EOF
+\`$SEND\`
+EOF"
+denied "echo \"\$(echo ')'; $SEND)\""
+denied "echo \"\$(echo \")\"; $SEND)\""
+denied "h\$\"\"erdr pane run $PM ls"
+denied "((x << 2))
+$SEND"
+denied "echo \$[1<<2]
+$SEND"
+denied "echo \`echo \\\`$SEND\\\`\`"
+denied "a=(x # don't
+ y); $SEND 'z'"
+denied "a[0]=1 $SEND"
+denied "cat <<EOF | {bash,}
+$SEND
+EOF"
+
+echo "send-guard-literal: real bash treats it as data, so the guard must allow"
+allowed "cat <<'E O F'
+$SEND
+E O F"
+allowed "cat <<A <<B
+x
+A
+$SEND
+B"
+allowed "cat <<EOF
+  EOF
+$SEND
+EOF"
+allowed "echo } $SEND"
+allowed "echo { $SEND"
+
 echo "send-guard-literal: an unreadable record proves no membership"
 row herdr default w7 pm-unread w7:p1 term_w7p1
 RUN_UNREAD="$(programme herdr default w7 pm-unread)"
