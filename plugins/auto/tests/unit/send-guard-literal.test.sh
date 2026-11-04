@@ -359,6 +359,19 @@ echo "send-guard-literal: Rex's block noun"
 as_rex deny 'rex block send -b rex-blk-D1 hi'
 as_rex deny 'rex block send-key -b rex-blk-D1 enter'
 as_rex deny 'rex block call -b rex-blk-D1 foo'
+as_rex deny 'rex block call -b rex-blk-D1 write '\''{"data":"ls\n"}'\'''
+as_rex deny 'rex block call write -b rex-blk-D1'
+as_rex deny 'rex -S srv block call --block=rex-blk-D1 write -'
+as_rex deny 'rex block call -b rex-blk-D1 clear'
+as_rex deny 'rex block call -b rex-blk-D1 reset'
+as_rex deny 'rex block call -b rex-blk-D1 resize'
+as_rex deny 'rex block call -b rex-blk-D1 set_theme'
+as_rex allow 'rex block call -b rex-blk-D1 process'
+as_rex allow 'rex block call -b rex-blk-D1 modes'
+as_rex allow 'rex block call process -b rex-blk-D1'
+as_rex allow 'rex block call -brex-blk-D1 format @request.json'
+as_rex allow 'rex -S srv block call --block=rex-blk-D1 program_status'
+as_rex allow 'rex block call -b rex-blk-O1 write -'
 as_rex deny 'rex -S srv block send --block=rex-blk-D1 hi'
 as_rex allow 'rex block send -b rex-blk-O1 hi'
 as_rex allow 'rex block send-key -b rex-blk-O1 enter'
@@ -558,6 +571,61 @@ it "a long single-quoted payload is judged well inside the limit"
 fast allow "python3 -c 'herdr $(printf 'a%.0s' $(seq 80000))'"
 it "deeply nested arithmetic is judged, not met with a recursion error"
 check deny "$(verdict "$(hook sess-worker "echo $(printf '$((%.0s' $(seq 1500))1$(printf '))%.0s' $(seq 1500)); herdr pane run $PM ls")")"
+
+NL=$'\n'
+LIT="herdr pane run $PM ls"
+
+echo "send-guard-literal: a case arm or a comment holding ) does not close a substitution early"
+denied "echo \$(case x in x) $LIT;; esac)"
+denied "echo \"\$(case \"\$x\" in *) $LIT;; esac)\""
+denied "echo \$(case x in a|b) echo y;; (c) $LIT;; esac)"
+denied "echo \$(case x in x) case y in y) echo z;; esac;; w) $LIT;; esac)"
+denied "out=\"\$(${NL}# 1) send${NL}$LIT${NL})\""
+denied "out=\$(${NL}# 1) send${NL}$LIT${NL})"
+denied "out=\"\$(${NL}# (1) send${NL}$LIT${NL})\""
+denied "out=\"\$(# don't${NL}$LIT${NL})\""
+allowed "echo \$(echo case) $LIT"
+allowed "echo \$(echo esac) $LIT"
+allowed "echo \$(case x in x) echo y;; esac) $LIT"
+allowed "echo \$(echo \${#x}) $LIT"
+allowed "echo \$(echo a#b) $LIT"
+
+echo "send-guard-literal: a heredoc that reaches a shell on a later line is a script"
+denied "{ cat <<'EOF'${NL}$LIT${NL}EOF${NL}} | bash"
+denied "(cat <<'EOF'${NL}$LIT${NL}EOF${NL}) | bash"
+denied "cat <<'EOF' |${NL}$LIT${NL}EOF${NL}bash"
+denied "for i in 1; do${NL}bash${NL}done <<'EOF'${NL}$LIT${NL}EOF"
+denied "if true; then${NL}bash${NL}fi <<'EOF'${NL}$LIT${NL}EOF"
+denied "cat <<'EOF' > s.sh${NL}$LIT${NL}EOF${NL}bash s.sh"
+allowed "if true; then cat <<'EOF'${NL}$LIT${NL}EOF${NL}fi"
+allowed "for i in 1; do cat <<'EOF' > x${NL}$LIT${NL}EOF${NL}done"
+allowed "cat <<'EOF' > notes.md${NL}$LIT${NL}EOF${NL}git status"
+
+echo "send-guard-literal: for, select and coproc open a body at do or {"
+denied "set -- a b; for f do $LIT; done"
+denied "for f; do $LIT; done"
+denied "for f in a b; do $LIT; done"
+denied "select f do $LIT; done"
+denied "coproc N { $LIT; }"
+denied "for i { $LIT; }"
+allowed "echo do $LIT"
+allowed "echo for f do $LIT"
+allowed "echo coproc N { $LIT"
+allowed "for f in do; do echo $LIT; done"
+
+echo "send-guard-literal: an empty quote before # does not read as a comment or stop the check"
+denied "[[ x =~ a=(b|\"\"#c) ]]; $LIT"
+denied "a=(\"\"#x); $LIT"
+denied "a=(\"b \"#x); $LIT"
+denied "a=(\$' '#x); $LIT"
+denied "a=(x # don't${NL} y); $LIT 'z'"
+allowed "a=(x #); $LIT${NL}); echo ok"
+
+echo "send-guard-literal: a stray quote does not hide a send"
+denied "echo \"it; $LIT"
+denied "echo \"a${NL}$LIT"
+denied "echo 'it; $LIT"
+denied "echo 'a${NL}$LIT"
 
 echo "send-guard-literal: a pane herdr cannot confirm stays guarded and says so"
 cat > "$FAKE_HERDR_SNAPSHOT" <<'EOF'

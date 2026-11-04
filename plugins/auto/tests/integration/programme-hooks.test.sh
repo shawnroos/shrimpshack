@@ -896,6 +896,14 @@ rm -f "${WORK}/python-ran"
 ( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${TASKREPO}/.claude/settings.local.json\"}}" )
 if [ -e "${WORK}/python-ran" ]; then pass; else fail "python did not run"; fi
 
+for CASE in 'behaviour lock|Write|{"file_path":"/x/programmes/.behaviour-files.lock"}|ran' 'Linear tool|mcp__linear__save_issue|{}|ran' 'other MCP tool|mcp__github__get_pr|{}|none'; do
+  IFS='|' read -r LABEL TOOL INPUT WANT <<< "$CASE"
+  it "the narrowed shim on a ${LABEL} in an auto repository: python ${WANT}"
+  rm -f "${WORK}/python-ran"
+  ( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"${TOOL}\",\"tool_input\":${INPUT}}" )
+  check "$WANT" "$([ -e "${WORK}/python-ran" ] && echo ran || echo none)"
+done
+
 it "the data dir is a file: every hook exits 0 with no output"
 export CLAUDE_AUTO_DATA_DIR="${WORK}/datafile"
 : > "$CLAUDE_AUTO_DATA_DIR"

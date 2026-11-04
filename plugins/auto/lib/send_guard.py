@@ -36,6 +36,10 @@ _BACKTICK_ESCAPE = re.compile(r"\\([\\`$])")
 _OPERATOR = re.compile(r";;&?|;&|&&|\|\||\|&|&>>?|<<<|<<-?|<&|<>|>>|>&|>\||[;&|()<>]")
 _REDIRECTS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
 _BLOCK_WORDS = frozenset({"{", "}", "]]"})
+_BODY_HEADS = frozenset({"for", "select", "coproc"})
+_BLOCK_CLOSERS = frozenset({"done", "fi", "esac"})
+_BARE_WORD = re.compile(r"[A-Za-z!{]+(?=[\s;&|()]|$)")
+_KEEPS_COMMAND_START = frozenset({"if", "then", "elif", "else", "do", "while", "until", "in", "time", "!", "{"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
 # A command word holding any of these may become a different program at run time (a leading `=` is zsh's path lookup).
 _COMPUTED = re.compile(r"[$`*?\[~{]|^=|" + _MARK)
@@ -84,6 +88,9 @@ class _Reader:
                 self._take(ch)
         self._end_word()
         self._end_command()
+        # A shell can sit on any line after the heredoc, so this waits for the whole text.
+        self.bodies = [(body, _shell_reads(self.commands[start:end], self.commands[start:]), was_quoted)
+                       for body, start, end, was_quoted in self.bodies]
         return self
 
     def _take(self, ch):
@@ -108,11 +115,14 @@ class _Reader:
                 self.words.append(value)
 
     def _is_block_word(self, value, was_quoted):
-        if value not in _BLOCK_WORDS or was_quoted:
+        if was_quoted or (value not in _BLOCK_WORDS and value != "do"):
             return False
         # As an argument it is a plain word: `echo } herdr pane run` runs echo.
         program = _program(self.words)
-        return program is None or self.words[program] in ("[[", "function")
+        if program is None:
+            return value in _BLOCK_WORDS
+        head = self.words[program]
+        return head in _BODY_HEADS and value in ("do", "{") or value in _BLOCK_WORDS and head in ("[[", "function")
 
     def _end_command(self):
         if self.words or self.heres:
@@ -221,7 +231,8 @@ class _Reader:
             self._operator()
 
     def _comment(self):
-        if self.in_word and not (self.array and self.word[-1] in (" ", "\t", "\n")):
+        # In an array the word stays open across gaps, so only the source character shows a word start.
+        if self.in_word and not (self.array and self.text[self.i - 1] in " \t\n(" and self.text[self.i - 2] != "\\"):
             self._take("#")
         else:
             end = self.text.find("\n", self.i)
@@ -243,7 +254,7 @@ class _Reader:
         self.i += 1
         for delimiter, strip_tabs, was_quoted in self.pending:
             body = self._heredoc_body(delimiter, strip_tabs)
-            self.bodies.append((body, _shell_reads(self.commands[self.line_start:]), was_quoted))
+            self.bodies.append((body, self.line_start, len(self.commands), was_quoted))
         self.pending = []
         self.line_start = len(self.commands)
 
@@ -291,21 +302,47 @@ def _ansi_c(match) -> str:
 
 
 def _closing_paren(text, i):
-    """Index of the `)` closing a span whose contents start at i, or len(text) when it never closes."""
-    depth, quote = 1, None
+    """Index of the `)` closing a span whose contents start at i, or len(text) when it never closes.
+
+    A `)` inside a case block or a comment closes nothing. An unmatched `case` runs to the end of the text, which is
+    then read as a script, so a misread here refuses rather than hides a send.
+    """
+    depth, quote, cases, word_start, command_start = 1, None, 0, True, True
     while i < len(text):
         ch = text[i]
         if ch == "\\" and quote != "'":
             i += 2
+            word_start = command_start = False
             continue
         if quote:
             quote = None if ch == quote else quote
         elif ch in "'\"":
             quote = ch
+            word_start = command_start = False
+        elif word_start and ch == "#":
+            end = text.find("\n", i)
+            i = len(text) if end == -1 else end
+            continue
+        elif ch in " \t":
+            word_start = True
+        elif ch in "\n;&|()":
+            if not cases:
+                depth += (ch == "(") - (ch == ")")
+                if not depth:
+                    return i
+            word_start = command_start = True
+        elif word_start and (found := _BARE_WORD.match(text, i)):
+            word = found.group()
+            if command_start and word == "case":
+                cases += 1
+            elif command_start and word == "esac":
+                cases = max(cases - 1, 0)
+            command_start = command_start and word in _KEEPS_COMMAND_START
+            word_start = False
+            i = found.end()
+            continue
         else:
-            depth += (ch == "(") - (ch == ")")
-            if not depth:
-                return i
+            word_start = command_start = False
         i += 1
     return len(text)
 
@@ -339,10 +376,16 @@ def _program(words):
     return None
 
 
-def _shell_reads(commands) -> bool:
-    """Only a line whose every program is a named non-shell proves a shell cannot read the heredoc: this fails closed."""
-    programs = [words[k] for words, _heres in commands for k in [_program(words)] if k is not None]
-    return not programs or any(os.path.basename(p).casefold() in _STDIN_SCRIPT or _COMPUTED.search(p) for p in programs)
+def _programs(commands) -> list:
+    return [words[k] for words, _heres in commands for k in [_program(words)] if k is not None]
+
+
+def _shell_reads(line, rest) -> bool:
+    """A heredoc's `line` naming no program of its own may feed a block opened above it. Otherwise only `rest`, all the
+    commands from that line on, can prove no shell reads it, by holding only named non-shells. This fails closed."""
+    if not set(_programs(line)) - _BLOCK_CLOSERS:
+        return True
+    return any(os.path.basename(p).casefold() in _STDIN_SCRIPT or _COMPUTED.search(p) for p in _programs(rest))
 
 
 def _shell_script(args):

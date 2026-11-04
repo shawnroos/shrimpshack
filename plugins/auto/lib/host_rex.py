@@ -48,6 +48,9 @@ GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", 
 PLACE_OPTS = frozenset({"-s", "--session", "-w", "--window", "-b", "--block"})
 TYPING_VERBS = frozenset({"send", "send-key", "run", "split", "do"})
 NOUN_TYPING_VERBS = frozenset({"api call", "block send", "block send-key", "block call"})
+# The read methods `rex block inspect` lists. A method not named here counts as a write, so a new one is refused.
+BLOCK_READ_METHODS = frozenset({"blob_read", "clipboard_read", "format", "input_mode", "list_dir", "modes", "process",
+                                "program_status", "pwd", "size", "title"})
 # Rex accepts the end of an id as a target; 4 characters is the shortest tail worth treating as naming a block.
 MIN_ID_TAIL = 4
 _FRAGMENT_SPLIT = re.compile(r"[\s=,;:\"'{}\[\]]+")
@@ -394,7 +397,7 @@ def _verb_words(rest) -> list:
             i += 2 if tok in GLOBAL_VALUE_OPTS or tok in PLACE_OPTS else 1
             continue
         words.append(tok)
-        if len(words) == 2:
+        if len(words) == 3:
             break
         i += 1
     return words
@@ -402,6 +405,8 @@ def _verb_words(rest) -> list:
 
 def _typing_verb(verb):
     pair = " ".join(verb[:2])
+    if pair == "block call" and verb[2:3] and verb[2] in BLOCK_READ_METHODS:
+        return None
     if pair in NOUN_TYPING_VERBS:
         return pair
     return verb[0] if verb and verb[0] in TYPING_VERBS else None

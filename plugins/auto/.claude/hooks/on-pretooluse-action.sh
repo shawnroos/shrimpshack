@@ -58,7 +58,7 @@ shopt -s nocasematch
 if [[ $__cd_stdin_json == *settings.local.json* ]]; then
   __cd_settings=1
 fi
-if [[ $__cd_stdin_json == *behaviours* ]]; then
+if [[ $__cd_stdin_json == *behaviours* || $__cd_stdin_json == *behaviour-files* ]]; then
   __cd_settings=1
 fi
 shopt -u nocasematch
