@@ -88,6 +88,35 @@ with tempfile.TemporaryDirectory(prefix='auto-sweep-inputs-') as work:
     check('the saved file holds the full inputs, not the summary', 'journal_since' in json.load(open(saved['inputs'])), True)
     check('reading and saving the inputs journals nothing', journal_lines(), before)
 
+    # A passing ritual check must keep a quiet sweep quiet: the pass row is bookkeeping and the ritual is not still due.
+    repo = os.path.join(work, 'repo')
+    os.makedirs(repo + '/plugins/foo/.claude-plugin')
+    os.makedirs(repo + '/.claude-plugin')
+    open(repo + '/plugins/foo/.claude-plugin/plugin.json', 'w').write('{"name": "foo", "version": "1.0.0"}')
+    open(repo + '/.claude-plugin/marketplace.json', 'w').write('{"plugins": [{"name": "foo", "version": "1.0.0"}]}')
+    for git_args in (['init', '-q', '-b', 'main'], ['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'x']):
+        subprocess.run(['git', '-C', repo, *git_args], capture_output=True, text=True, env=env, check=True)
+    subprocess.run(['/usr/bin/python3', '-c',
+                    'import sys, datetime, json; sys.path.insert(0, sys.argv[1]); from _bootstrap import load_lib_module; '
+                    'core = load_lib_module("run_record_core"); ph = load_lib_module("programme_home"); run, repo = sys.argv[2], sys.argv[3]\n'
+                    'def mutate(rec):\n'
+                    '    p = rec["programme"]\n'
+                    '    p["remit"]["repos"] = [{"path": repo, "github": "acme/gamma"}]\n'
+                    '    p["rituals"] = [{"id": "rchk", "layer": "programme", "state": "active", "at": "2026-11-01T00:00:00Z",\n'
+                    '        "when": {"text": "daily", "trigger": "calendar", "schedule": {"every": "day", "at": "09:00"}},\n'
+                    '        "steps": ["report"], "check": {"name": "versions-bumped", "repo_key": "acme/gamma", "base": "main"}}]\n'
+                    '    due = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)\n'
+                    '    p["ritual_clock"] = {"rchk": {"next_due_at": due.strftime("%Y-%m-%dT%H:%M:%SZ")}}\n'
+                    'core._with_locked_run_record(ph.home_path(run), run, mutate)', lib, run, repo],
+                   capture_output=True, text=True, env=env, check=True)
+    code, with_due = inputs()
+    check('a due ritual with a check reads as a change before the check has run', 'rituals_due' in with_due['why'], True)
+    code, ran = verb('run-ritual-checks')
+    check('the check passes against a bumped repo', (code, json.loads(ran.strip().splitlines()[-1])['passed']), (0, 1))
+    code, after_check = inputs()
+    check('after a passing check the sweep reads unchanged: the ritual is answered and the pass row is quiet',
+          (after_check['verdict'], after_check['why']), ('unchanged', []))
+
     code, reasons = inputs('--reasons')
     check('--reasons prints only the actionable reasons', sorted(reasons), ['actionable_reasons', 'ok', 'run'])
 
