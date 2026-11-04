@@ -146,6 +146,37 @@ it "the start brief for a worker with a handoff carries the shipped record-befor
 COPY="$(start_brief AI-701)"
 has "$SENTENCE" "$COPY"
 
+it "the start brief carries the never-prompt and blocked-command clauses with the claim command filled in"
+has "Never prompt the PM's pane." "$COPY"
+has "Report with bash ${AUTO_ROOT}/lib/programme.sh claim --run ${RUN} --item linear:AI-701 --deliverable <name> --ref <ref>." "$COPY"
+has "Do not run a blocked command again, and do not try another tool, wrapper or worker for it." "$COPY"
+lacks "{claim_command}" "$COPY"
+
+it "prompt-item --standing sends the same clauses to a running worker, and without the flag it sends none"
+start_brief AI-710 >/dev/null
+: > "$CALLS"
+prog prompt-item linear:AI-710 "PM: carry on."
+PLAIN_CODE="$CODE"
+PLAIN_CALLS="$(calls)"
+: > "$CALLS"
+prog prompt-item linear:AI-710 "PM: carry on, second note." --standing
+check "0 0" "$PLAIN_CODE $CODE"
+lacks "Never prompt the PM's pane." "$PLAIN_CALLS"
+has "Never prompt the PM's pane." "$(calls)"
+has "Report with bash ${AUTO_ROOT}/lib/programme.sh claim --run ${RUN} --item linear:AI-710 --deliverable <name> --ref <ref>." "$(calls)"
+has "$SENTENCE" "$(calls)"
+
+it "a behaviour file with a placeholder the loader does not fill is refused"
+BADPH="${WORK}/files/badph"
+mkdir -p "$BADPH"
+printf -- '---\nwhen: a worker reports\ntrigger: start\napplies_to: workers\n---\nDo:\n- Report with {claim_comand}.\n' > "${BADPH}/typo.md"
+check "typo:bad_value" "$(run_py "$BADPH" <<'EOF'
+pf = load_lib_module("programme_behaviour_files")
+r = pf.load_files(shipped_dir=args[0], personal_dir=os.environ["CLAUDE_AUTO_BEHAVIOURS_DIR"])
+print(",".join("%s:%s" % (x["id"], x["reason"]) for x in r["rejected"]))
+EOF
+)"
+
 it "the shipped file loads with zero rejections"
 LOADED="$(run_py "$REAL_SHIPPED" <<'EOF'
 pf = load_lib_module("programme_behaviour_files")
@@ -167,8 +198,9 @@ print(json.dumps([k for k in ("skills", "tools", "agents") if e.get(k)]))
 EOF
 )"
 
-it "the SKILL.md worker clause list still carries the sentence for prompts to a running worker"
-check 1 "$(grep -cF -- "- \"${SENTENCE}\"" "$SKILL")"
+it "the three worker clauses live only in the shipped files: the sweep skill and the resume command no longer type them"
+RESUME="${AUTO_ROOT}/commands/programme-resume.md"
+check "0 0 0" "$(for s in "$SENTENCE" "Never prompt the PM's pane" "do not run it again"; do cat "$SKILL" "$RESUME" | grep -cF -- "$s"; done | tr '\n' ' ' | sed 's/ $//')"
 
 it "mutation check: with an empty shipped folder the same start brief lacks the sentence"
 export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="$EMPTY_SHIPPED"

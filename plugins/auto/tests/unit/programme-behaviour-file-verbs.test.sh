@@ -310,6 +310,78 @@ prog settle-default-update d1 --as merge --file "${WORK}/drafts/m2.md" --prompt 
 check "1 same" "$CODE $(cmp -s "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d1.md" "${PERS}/d1.md" && echo same || echo different)"
 rm -f "$SEEN"
 
+# The seen file is absent and its folder is read-only: the personal-file write succeeds, then recording
+# seen fails. A verb that fails must leave the personal folder as it found it.
+draft_shipped d5 "write a changelog"
+draft_shipped d6 "write a summary"
+draft_shipped d7 "write a diagram"
+cp "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d6.md" "${PERS}/d6.md"
+cp "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d7.md" "${PERS}/d7.md"
+draft d7 "write a diagram, then caption it"
+HM7="$(dhash "${WORK}/drafts/d7.md" d7)"
+chmod 555 "$(dirname "$SEEN")"
+
+it "a failed seen write: copy-default fails and leaves no personal file"
+P="$(tprompt "$RUN" "copy d5 into my folder")"
+prog copy-default d5 --prompt "$P" --run "$RUN"
+check "1 absent" "$CODE $([ -e "${PERS}/d5.md" ] && echo present || echo absent)"
+
+it "a failed seen write: take fails and the personal copy is still there"
+P="$(tprompt "$RUN" "take d6 theirs")"
+prog settle-default-update d6 --as take --prompt "$P" --run "$RUN"
+check "1 present" "$CODE $([ -e "${PERS}/d6.md" ] && echo present || echo absent)"
+
+it "a failed seen write: merge fails and the personal copy keeps its old content"
+P="$(tprompt "$RUN" "merge d7 with ${HM7}")"
+prog settle-default-update d7 --as merge --file "${WORK}/drafts/d7.md" --prompt "$P" --run "$RUN"
+check "1 same" "$CODE $(cmp -s "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d7.md" "${PERS}/d7.md" && echo same || echo different)"
+chmod 755 "$(dirname "$SEEN")"
+
+# One approval applies once: the prompt, verb, id and content it approved are spent after the write.
+draft_shipped d8 "write a retro"
+draft_shipped d9 "write a plan note"
+draft p9 "reproduce the bug first"
+HP9="$(dhash "${WORK}/drafts/p9.md" p9)"
+
+it "approval replay: adopt-behaviour-file with a spent approval is refused after the file is removed"
+P="$(tprompt "$RUN" "adopt p9 with ${HP9}")"
+prog adopt-behaviour-file p9 --file "${WORK}/drafts/p9.md" --prompt "$P" --run "$RUN"
+FIRST="$CODE"
+rm -f "${PERS}/p9.md"
+prog adopt-behaviour-file p9 --file "${WORK}/drafts/p9.md" --prompt "$P" --run "$RUN"
+check "0 1 absent" "$FIRST $CODE $([ -e "${PERS}/p9.md" ] && echo present || echo absent)"
+
+it "approval replay: copy-default with a spent approval is refused after the copy is removed"
+P="$(tprompt "$RUN" "copy d8 into my folder")"
+prog copy-default d8 --prompt "$P" --run "$RUN"
+FIRST="$CODE"
+rm -f "${PERS}/d8.md"
+prog copy-default d8 --prompt "$P" --run "$RUN"
+check "0 1 absent" "$FIRST $CODE $([ -e "${PERS}/d8.md" ] && echo present || echo absent)"
+
+it "approval replay: take with a spent approval is refused on a second copy"
+P="$(tprompt "$RUN" "take d8 theirs again")"
+cp "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d8.md" "${PERS}/d8.md"
+prog settle-default-update d8 --as take --prompt "$P" --run "$RUN"
+FIRST="$CODE"
+cp "${CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR}/d8.md" "${PERS}/d8.md"
+prog settle-default-update d8 --as take --prompt "$P" --run "$RUN"
+check "0 1 present" "$FIRST $CODE $([ -e "${PERS}/d8.md" ] && echo present || echo absent)"
+
+it "approval replay: a new prompt for the same copy is accepted"
+P="$(tprompt "$RUN" "take d8 theirs, second time")"
+prog settle-default-update d8 --as take --prompt "$P" --run "$RUN"
+check "0 absent" "$CODE $([ -e "${PERS}/d8.md" ] && echo present || echo absent)"
+
+it "approval replay: a failed write does not spend the approval"
+chmod 555 "$(dirname "$SEEN")"
+P="$(tprompt "$RUN" "copy d9 into my folder")"
+prog copy-default d9 --prompt "$P" --run "$RUN"
+FIRST="$CODE"
+chmod 755 "$(dirname "$SEEN")"
+prog copy-default d9 --prompt "$P" --run "$RUN"
+check "1 0 present" "$FIRST $CODE $([ -e "${PERS}/d9.md" ] && echo present || echo absent)"
+
 echo
 echo "passed: $PASS failed: $FAIL"
 [ "$FAIL" -eq 0 ]

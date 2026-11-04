@@ -211,6 +211,8 @@ def _clean_only(entry) -> None:
 # File entries scan every rendered text field; the stored PROTECTED_FIELDS stay as they are.
 def _scan(entry) -> None:
     for _, line in _texts(entry):
+        if programme_behaviours.unknown_placeholder(line) is not None:
+            raise _Reject("bad_value", "placeholder")
         kind = programme_behaviours.line_kind(line)
         if kind:
             raise _Reject("protected_escalation", kind)
