@@ -420,8 +420,8 @@ def _blocks_of(rest) -> list:
             blocks.append(tok.split("=", 1)[1])
         elif tok.startswith("-b") and not tok.startswith("--") and len(tok) > 2:
             blocks.append(tok[2:])
-        elif _json_block(tok):
-            blocks.append(_json_block(tok))
+        elif block := _json_block(tok):
+            blocks.append(block)
     return blocks
 
 
