@@ -58,7 +58,7 @@ ITEM_FIELDS = (
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "decisions", "items",
     "working_model", "watchers", "inbox_offset", "ended", "permission_proposals", "behaviours",
-    "pm_worktree", "rituals", "ritual_clock",
+    "pm_worktree", "rituals", "ritual_clock", "ritual_adoptions",
 )
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -403,7 +403,7 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         "inbox_offset": 0,
         "ended": None,
         "permission_proposals": [],
-        "behaviours": [], "rituals": [], "ritual_clock": {},
+        "behaviours": [], "rituals": [], "ritual_clock": {}, "ritual_adoptions": {},
         "pm_worktree": None,
     }
 

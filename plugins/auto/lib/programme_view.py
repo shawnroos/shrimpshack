@@ -555,7 +555,8 @@ def rituals_view(record, journal_entries) -> list:
     try:
         loaded = programme_rituals.load_store()
         got = programme_rituals_due.due(record, record.get("run_id"), rows=journal_entries, store=loaded)
-        in_force = programme_rituals.resolve(record, store=loaded)["in_force"]
+        resolved = programme_rituals.resolve(record, store=loaded)
+        in_force = resolved["in_force"]
     except Exception as exc:  # noqa: BLE001 — a bad rituals store degrades the view, never blocks it
         return [{"id": "rituals", "state": "unreadable", "detail": f"{type(exc).__name__}: {exc}"}]
     pending = {r["ritual"]: r for bucket in ("due", "missed", "in_flight") for r in got[bucket]}
@@ -567,8 +568,16 @@ def rituals_view(record, journal_entries) -> list:
              "when": _dict(e.get("when")).get("text"), "steps": list(e.get("steps") or []), "state": e["state"],
              "offers": list(e.get("offers") or [])}
             for e in parked]
-    rows += [{"id": r.get("id"), "layer": r.get("layer"), "state": "rejected", "when": r.get("reason")}
-             for r in programme_rituals.resolve(record, store=loaded)["rejected"]]
+    rows += [{"id": r.get("id"), "layer": r.get("layer"), "state": "rejected",
+              "when": r.get("reason") + (f" ({r['detail']})" if r.get("source") == "file" and r.get("detail") else "")}
+             for r in resolved["rejected"]]
+    files = resolved.get("file_rituals") or {}
+    file_of = {a["id"]: a for a in files.get("adopted") or []}
+    rows += [{"id": p["id"], "layer": "repo", "state": p["state"], "trigger": p["entry"]["when"]["trigger"],
+              "when": p["entry"]["when"]["text"], "steps": list(p["entry"]["steps"]),
+              "offers": list(p["entry"].get("offers") or []), "file": dict(p["file"], hash_short=p["hash_short"],
+                                                                         repo_key=p["repo_key"])}
+             for p in (files.get("proposals") or []) + (files.get("declined") or [])]
     for e in in_force:
         hit = pending.get(e["id"])
         rows.append({"id": e["id"], "layer": e["layer"], "trigger": e["when"]["trigger"], "when": e["when"]["text"],
@@ -577,13 +586,23 @@ def rituals_view(record, journal_entries) -> list:
                      "next_due_at": _dict(clock.get(e["id"])).get("next_due_at"),
                      "next_due_local": _local_due(_dict(clock.get(e["id"])).get("next_due_at")),
                      "offers": list(e.get("offers") or []),
-                     "check": programme_rituals_due.last_check(e, journal_entries) if e.get("check") else None})
+                     "check": programme_rituals_due.last_check(e, journal_entries) if e.get("check") else None,
+                     **({"file": dict(file_of[e["id"]]["file"], hash_short=file_of[e["id"]]["hash_short"],
+                                      repo_key=file_of[e["id"]]["repo_key"]), "adoption": file_of[e["id"]]["state"]}
+                        if e["id"] in file_of else {})})
     return rows
 
 
 def _local_due(stamp):
     parsed = run_record_core.parse_iso(stamp) if stamp else None
     return programme_rituals.local_text(parsed) if parsed else None
+
+
+def _age_text(seconds) -> str:
+    if seconds is None:
+        return "clone never fetched"
+    age = f"{seconds // 86400}d" if seconds >= 86400 else f"{seconds // 3600}h" if seconds >= 3600 else f"{seconds // 60}m"
+    return f"clone last fetched {age} ago"
 
 
 def _ritual_text(r) -> str:
@@ -596,8 +615,19 @@ def _ritual_text(r) -> str:
         age = f", clone last fetched {got['ref_age_seconds'] // 3600}h ago" if got.get("ref_age_seconds") is not None else ""
         failed = f", failed: {', '.join(f['plugin'] for f in got.get('failed') or [])}" if got.get("failed") else ""
         offers += f"; check {got['name']}: {got['result']}" + (f" ({got['reason']})" if got.get("reason") else "") + failed + age
-    flag = {"missed": " [MISSED, ask Shawn]", "in_flight": " [IN FLIGHT, finish or offer]", "due": " [due]"}.get(r.get("state"), "")
-    return f"ritual {r.get('id')} ({r.get('layer')}, {r.get('state')}{due}){flag}: {when}{offers}"
+    flag = {"missed": " [MISSED, ask Shawn]", "in_flight": " [IN FLIGHT, finish or offer]", "due": " [due]",
+            "proposed": " [PROPOSED FILE, needs Shawn's typed adoption]",
+            "changed": " [FILE CHANGED, needs Shawn's typed adoption]"}.get(r.get("state"), "")
+    layer = r.get("layer")
+    file = r.get("file")
+    if file:
+        layer = f"repo (file) {file.get('repo_key')} {file.get('path')}"
+        commit = f"commit {str(file['commit'])[:7]}" if file.get("commit") else "commit unread"
+        layer += (f" {file.get('ref') or 'unread branch'} {commit} hash {file.get('hash_short')}, "
+                  f"{_age_text(file.get('ref_age_seconds'))}")
+        if r.get("adoption"):
+            layer += f", {r['adoption']}"
+    return f"ritual {r.get('id')} ({layer}, {r.get('state')}{due}){flag}: {when}{offers}"
 
 
 def _behaviour_text(b) -> str:

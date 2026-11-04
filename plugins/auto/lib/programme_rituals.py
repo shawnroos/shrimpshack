@@ -332,11 +332,21 @@ def resolve(record, *, lookup=None, store=None) -> dict:
     keys = programme_carryover.repo_keys(programme)
     narrow = [e for e in _programme_entries(programme, rejected) if not _held(loaded, e, keys)]
     repo = [e for key in keys for e in loaded["repos"].get(key) or []]
+    # A repo file is the new, unreviewed party: it never replaces an established ritual with its id.
+    files = load_lib_module("programme_ritual_files").file_layer(
+        programme, {e["id"] for e in loaded["personal"] + repo + narrow})
+    rejected += files["rejected"]
     chosen = {}
-    for entry in loaded["personal"] + repo + narrow:
+    for entry in loaded["personal"] + repo + files["in_force"] + narrow:
         chosen[entry["id"]] = entry
     in_force = [e for e in chosen.values() if e.get("state", ACTIVE) == ACTIVE]
-    return {"in_force": in_force, "rejected": rejected, "notices": list(loaded["notices"])}
+    notices = list(loaded["notices"]) + files["notices"] + [_file_notice(r) for r in files["rejected"]]
+    return {"in_force": in_force, "rejected": rejected, "notices": notices, "file_rituals": files}
+
+
+def _file_notice(row) -> str:
+    detail = f" ({row['detail']})" if row.get("detail") else ""
+    return programme_sanitize.clean(f"ritual file {row['key']}/{row['id']}.md rejected: {row['reason']}{detail}", cap=0)
 
 
 def in_force(record, *, lookup=None, store=None) -> list:

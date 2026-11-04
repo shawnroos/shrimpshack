@@ -233,7 +233,11 @@ def due(record, run_id, *, now=None, lookup=None, store=None, rows=None, cap=CAP
         row = _row(entry, "missed", pending, index)
         row["offered"] = index.was_offered(rid, row["pending_at"])
         out["missed"].append(row)
-    total = sum(len(v) for v in out.values())
+    proposals = programme_rituals.resolve(scoped, store=loaded)["file_rituals"]["proposals"]
+    if proposals:
+        out["file_proposals"] = [{"ritual": p["id"], "repo_key": p["repo_key"], "state": p["state"],
+                                  "hash_short": p["hash_short"]} for p in proposals[:cap]]
+    total = sum(len(out[k]) for k in ("due", "missed", "in_flight"))
     for bucket in out:
         out[bucket] = out[bucket][:cap]
     out.update(total=total, error="; ".join(loaded["notices"]) or None)
