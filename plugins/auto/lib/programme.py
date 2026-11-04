@@ -142,7 +142,7 @@ def active_rulings(programme, now=None) -> list:
         targets = [t for t in targets if t == pc.PROGRAMME_SCOPE or _item_open(programme, t)]
         if targets:
             out.append(dict({k: r[k] for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
-                                               "until", "at", "limits", "baseline")},
+                                               "until", "at", "limits", "baseline", "wording")},
                             id=r["id"], applies_to=targets, prompt_id=r["prompt_id"]))
     return out
 
@@ -241,7 +241,7 @@ def _typed_prompt(run_id, record, prompt_id, verb=None) -> dict:
 
 
 def require_named(prompt, *needs) -> None:
-    missing = programme_naming.missing(programme_journal.named_text(prompt), needs) if prompt else []
+    missing = programme_naming.missing(programme_journal.named_text(prompt), needs) if prompt and not prompt.get("reading") else []
     if missing:
         raise ProgrammeError(
             f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "

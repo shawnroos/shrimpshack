@@ -248,7 +248,8 @@ def contract(block, journal_entries, entries, rulings, behaviours=None) -> dict:
         applies_to = list(entry.get("applies_to") or ["programme"])
         reliant = counts.get(f"ruling:{rid}", 0) + counts.get(f"instruction:{rid}", 0)
         out_rulings.append({
-            "id": rid, "quote": entry.get("quote") or entry.get("scope"), "applies_to": applies_to,
+            "id": rid, "quote": entry.get("quote") or entry.get("scope"), "wording": entry.get("wording") or "shawn",
+            "applies_to": applies_to,
             "scope": "inherited" if applies_to == ["programme"] else "own", "until": entry.get("until"),
             "effect": entry.get("effect") or "decided", "kind": entry.get("kind"), "legacy": entry.get("legacy"),
             "at": entry.get("at"), "reliant_steps": reliant})

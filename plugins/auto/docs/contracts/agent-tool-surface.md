@@ -1044,6 +1044,12 @@ must render the same now. Any miss refuses and names a new offer. A picker with 
 a decline, that nothing runs. It also journals `approval_declined` citing the pick, which spends it. The hint is not
 evidence; the check above reads the transcript.
 
+A draft option (`record-ruling`, `close-ruling`, `edit-project-term`) holds the PM's text. A pick binds that text with
+`wording: pm_draft`. His own words with `--reads-as` replace it with `wording: shawn`, with no second picker, and text over
+500 characters is refused, never cut. `accept-context` on a Ruling and `define-requirement` take the same offer and keep
+their text. A new or wider grant, a restrict that loosens and closing a restrict are authority options, and a pick binds a
+widening at once instead of leaving it pending.
+
 Shawn's own words can answer an offered question: a typed or queued message, Other text on the picker, or a pick with a
 note. The PM reads them and runs the offered command with `--prompt <id> --reads-as '<option text>'`. The reading must be
 the text of the option that holds this command, and `read_as`, `read_by: pm`, `offer_id`, the quote and `read_back` go on

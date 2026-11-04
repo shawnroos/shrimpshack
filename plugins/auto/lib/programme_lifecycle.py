@@ -911,7 +911,7 @@ def _h_set_remit(host, argv):
         changes = remit_changes(before, after)
         accepted = programme["agreement"].get("accepted")
         if accepted and prompt is None:
-            raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of a typed prompt")
+            raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of his answer to `programme.sh offer`")
         gone = programme_remit_owned.stale_paths(before["repos"])
         if accepted:
             host.require_named(prompt, *[_names(part, entry)
@@ -922,7 +922,7 @@ def _h_set_remit(host, argv):
         term.update(set_by="shawn" if prompt else "proposal", set_at=_stamp())
         host.programme_proposals.settle_remit(term, changes)
         if prompt:
-            term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
+            term.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"], wording=programme_journal.wording_of(prompt))
         out = {"remit": after,
                "changes": [{"part": part, "change": how, "entry": entry} for part, how, entry in changes]}
         dropped = programme_remit_owned.dropped_stale(gone, after["repos"])

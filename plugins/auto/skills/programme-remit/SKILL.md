@@ -55,10 +55,13 @@ removing one releases it. A space another programme holds is refused.
 
 - **At start**, before the agreement is accepted, `set-remit` needs no prompt.
   Accepting the agreement is Shawn's approval of the remit.
-- **After acceptance**, it needs `--prompt <id>` of Shawn's typed message, and
-  that message must name each space, repo, team, project or initiative added or
-  removed. If it does not, the verb lists the missing names. Ask Shawn to
-  confirm in words that name them, then cite that reply.
+- **After acceptance**, ask him with one picker. Run
+  `P offer remit --command 'set-remit' < remit.json`, ask with the `input` it
+  prints, and run `P set-remit --prompt <his answer's id> < remit.json` with the
+  same JSON. The picker shows only what changes, so he names nothing. Adding
+  anything widens the remit and takes a pick: if he answers in his own words,
+  relay them and ask again. A change that only removes also takes his own words:
+  add `--reads-as '<the option's text>'` and show him the `read_back` line.
 - **Workers you start yourself need no typed line.** `P start-worker` records
   the worker's repo in the remit's `worker_repos`, apart from the typed
   `repos`, and `P close-gone-pane` removes it when it closes the worker's

@@ -366,8 +366,8 @@ def _binding(ctx, programme) -> dict:
     for r in programme_context.rulings(programme, None):
         if not r["is_ruling"] or r["state"] != "active":
             continue
-        entry = _capped({k: r[k] for k in ("kind", "effect", "legacy", "scope", "quote", "applies_to", "until",
-                                           "rev")}, ("scope", "quote"), f"ruling:{r['id']}")
+        entry = _capped({k: r[k] for k in ("kind", "effect", "legacy", "scope", "quote", "wording", "applies_to",
+                                           "until", "rev")}, ("scope", "quote"), f"ruling:{r['id']}")
         entry.update(binding=True, authorizes=False)
         rulings.append(entry)
     return {"pauses": pauses, "denials": denials, "rulings": rulings}

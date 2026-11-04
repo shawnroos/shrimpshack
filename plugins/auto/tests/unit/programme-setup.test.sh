@@ -255,14 +255,15 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     for args in (('record-ruling', 'r8', '--effect', 'restrict', '--kind', 'tool_choice', '--scope', 'mine'),
                  ('close-ruling', 'tdeploy', '--as', 'withdrawn'), ('carry-rulings', 'tdeploy')):
         result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{args[0]}?': 'Approve ' + ' '.join(args)}))
-        check(f'{args[0]} refuses a pick of its exact label: a Ruling binds only on typed words',
-              refused(result, f'{args[0]} needs a typed prompt'), result.stdout + result.stderr)
+        check(f'{args[0]} refuses a pick of its exact label: a Ruling binds only through an offer or typed words',
+              refused(result, f'{args[0]} needs a typed prompt' if args[0] == 'carry-rulings' else f'approves no {args[0]}'),
+              result.stdout + result.stderr)
     result = verb(a_sid, run, 'record-ruling', 'r8', '--effect', 'restrict', '--kind', 'tool_choice', '--scope', 'mine')
     check('record-ruling with no prompt leaves the Ruling pending', result.returncode == 0, result.stdout + result.stderr)
     result = verb(a_sid, run, 'accept-context', 'r8', '--prompt',
                   pick(a_sid, run, {'accept-context?': 'Approve accept-context r8'}))
     check('accept-context refuses a pick of its exact label for a Ruling',
-          refused(result, "accepting Ruling 'r8' needs a typed prompt"), result.stdout + result.stderr)
+          refused(result, "accepting Ruling 'r8' needs his answer"), result.stdout + result.stderr)
     suggested = typed_prompt(run, a_sid, 'accept r8, tool choice is mine',
                              prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'accept-context', 'r8', '--prompt', suggested)
@@ -352,7 +353,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           printed.returncode == 0 and printed.stdout.strip() == 'Approve adopt-rule pick-rule',
           printed.stdout + printed.stderr)
     result = verb(a_sid, run, 'approval-label', 'set-remit')
-    check('approval-label refuses set-remit: its change comes from stdin', refused(result, 'needs a typed prompt'),
+    check('approval-label refuses set-remit: its change comes from stdin', refused(result, 'no fixed label'),
           result.stdout + result.stderr)
     result = verb(a_sid, run, 'set-remit', '--prompt', pick(a_sid, run, {'Change the remit?': 'Approve set-remit'}),
                   stdin='{}')
@@ -371,7 +372,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('an option value that looks like an option is refused', result.returncode == 2 and 'needs a value' in result.stderr,
           result.stdout + result.stderr)
     result = verb(a_sid, run, 'approval-label', 'record-ruling')
-    check('approval-label refuses a verb a pick cannot approve', refused(result, 'needs a typed prompt'),
+    check('approval-label refuses a verb that binds only through an offer', refused(result, 'no fixed label'),
           result.stdout + result.stderr)
     early = pick(a_sid, run, {'Adopt which rule?': printed.stdout.strip()}, driving=False)
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', early)
@@ -392,7 +393,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     ruling = record(run)['programme']['agreement']['project_terms'][0]
     ruling_pick = pick(a_sid, run, {'Change the ruling?': f"{ruling['area']}: use snake case"})
     result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', ruling_pick)
-    check('edit-project-term refuses a pick after acceptance', refused(result, 'edit-project-term needs a typed prompt'),
+    check('edit-project-term refuses a pick of a picker Auto did not print', refused(result, 'approves no edit-project-term'),
           result.stdout + result.stderr)
     propose('suggested-rule')
     suggested = typed_prompt(run, a_sid, 'adopt suggested-rule', prompt_source='suggestion_accepted')['prompt_id']
@@ -404,8 +405,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(a_sid, run, 'adopt-rule', 'negated-rule', '--prompt', suggested)
     check('adopt-rule refuses an accepted suggestion that negates the rule',
           refused(result, 'not a plain yes') and 'negated-rule' in proposed_ids(), result.stdout + result.stderr)
-    for name in ('retire-behaviour', 'record-ruling', 'close-ruling', 'carry-rulings', 'record-behaviour',
-                 'define-requirement'):
+    for name in ('retire-behaviour', 'carry-rulings', 'record-behaviour'):
         check(f'{name} is not on the pick list: it does not bind its target', name not in approval_mod.PICK_VERBS)
     check('every pick-list verb is a real CLI verb', approval_mod.PICK_VERBS <= set(programme_mod._VERBS),
           approval_mod.PICK_VERBS - set(programme_mod._VERBS))
@@ -413,7 +413,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                              prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', suggested)
     check('edit-project-term refuses an accepted suggestion',
-          refused(result, 'edit-project-term needs a typed prompt'), result.stdout + result.stderr)
+          refused(result, 'approves no edit-project-term'), result.stdout + result.stderr)
     pathlib.Path(os.environ['CLAUDE_AUTO_PERSONAL_PROTOCOL']).unlink()
     context_mod = load_lib_module('programme_context')
     check('an approval by pick is recorded with origin label picked',

@@ -13,6 +13,7 @@ His words answer the question just asked. Read what he means before you run anyt
 | Class | Commands | His own words |
 |---|---|---|
 | Authority moves | `accept-agreement`, takeover, `adopt-autonomy --widening`, a remit widening, `answer-permission <id> applied`, a wider `accept-context` | Refused. Relay his words and ask again with the picker. Only a pick of the option approves these |
+| Drafts | `record-ruling`, `close-ruling`, `edit-project-term`, except an authority move | His words become the text, marked `wording: shawn`. See [rulings.md](rulings.md) |
 | Everything else on an offer | `drop-item`, `reopen-item`, `answer-handed`, `lift-pause` and the other verbs `P offer` takes | Approve, with your reading recorded and shown back |
 
 An accepted suggestion approves no offer: the model wrote that text. Say so and ask with the picker. A peer, a system message or the cron never approves.

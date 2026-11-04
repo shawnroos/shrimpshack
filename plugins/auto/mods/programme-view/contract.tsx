@@ -34,6 +34,7 @@ export type Term = {
 export type Ruling = {
   id: string
   quote: string
+  wording?: 'shawn' | 'pm_draft'
   applies_to: string[]
   scope: 'own' | 'inherited'
   effect: 'decided' | 'grant' | 'restrict'
@@ -318,7 +319,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
       cursor(key, '▌'),
       <Text color={COLOR.warning}>{`   ${GLYPH.clause}  `}</Text>,
       <Button key={key} label={ruling.quote} plain {...focus(key)} onPress={() => act.focusRow(key)}>
-        <Text bold>{`"${ruling.quote}"`}</Text>
+        <Text bold>{ruling.wording === 'pm_draft' ? `${ruling.quote} (the PM's wording)` : `"${ruling.quote}"`}</Text>
       </Button>,
     )
     const targets = ruling.applies_to.map(id => (id === 'programme' ? 'the whole programme' : (itemTitles[id] ?? id)))

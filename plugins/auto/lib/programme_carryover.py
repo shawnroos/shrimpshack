@@ -132,7 +132,7 @@ def offer_lines(entries) -> list:
 
 def entry_for(rid, ruling, key, rec) -> dict:
     return dict({k: ruling.get(k) for k in CARRIED_KEYS}, id="k" + secrets.token_hex(3), key=key, ruling=rid,
-                quote=ruling.get("quote"), run_id=rec["run_id"], at=run_record_core.now_iso())
+                quote=ruling.get("quote"), wording=ruling.get("wording"), run_id=rec["run_id"], at=run_record_core.now_iso())
 
 
 def adopt(entry, prompt, rec) -> dict:
@@ -196,7 +196,8 @@ def _arrive(ctx, entry, key):
     revision = pc._append(ctx["decisions"].setdefault(rid, []), content, None, accept=False, delta=None)
     revision.update(quote=None, baseline=None,
                     carried={"from": key, "entry": entry.get("id"), "run_id": entry.get("run_id"),
-                             "quote": programme_sanitize.clean(entry.get("quote"), cap=0)})
+                             "quote": programme_sanitize.clean(entry.get("quote"), cap=0),
+                             "wording": entry.get("wording")})
     return {"ruling": rid, "kind": kind, "effect": entry["effect"], "origin": key}, None
 
 

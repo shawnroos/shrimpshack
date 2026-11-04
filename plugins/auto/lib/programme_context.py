@@ -372,7 +372,7 @@ def ruling_kind_label(ruling, default="record") -> str:
 
 
 ROW_KEYS = ("rev", "kind", "effect", "legacy", "scope", "reason", "quote", "until", "at", "limits", "baseline",
-            "area", "applies_to")
+            "area", "applies_to", "wording")
 
 
 # One row per decision id in every state, from its in-force revision or else its pending one. applies_to is

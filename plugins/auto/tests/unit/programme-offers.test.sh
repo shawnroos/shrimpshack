@@ -348,7 +348,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     check('two options with one label are refused', result.returncode != 0 and 'same text' in said(result), said(result))
 
     # ---- default-deny and the label rules ----
-    for command, needle in (('record-ruling r1', 'a pick cannot approve'),
+    for command, needle in (('carry-rulings r1', 'a pick cannot approve'),
                             ('focus-note --agents 3', 'a pick cannot approve'),
                             ('takeover --replace x', 'become-pm'),
                             ('drop-item <item> --reason x', 'placeholder'),
@@ -431,6 +431,8 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
         ('adopt-autonomy', ['adopt-autonomy', 'flip_terms_change_stage', 'propose']),
         ('adopt-check', ['adopt-check', 'owner/repo', 'verified.lookup', '["git", "status"]']),
         ('amend-term', ['amend-term', 'cadence', 'on_change', '--why', 'quieter']),
+        ('record-ruling', ['record-ruling', 'flow-ruling', '--effect', 'decided', '--kind', 'work_sequencing', '--scope', 'a draft']),
+        ('close-ruling', ['close-ruling', 'flow-ruling', '--as', 'withdrawn']),
         ('drop-item', ['drop-item', 'mem:comma', '--reason', 'one, two']),
         ('reopen-item', ['reopen-item', 'mem:reopen']),
         ('answer-handed', ['answer-handed', 'mem:handed', '--choice', 'ship', '--kind', 'evals_or_docs']),

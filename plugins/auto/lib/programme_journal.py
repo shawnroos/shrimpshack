@@ -34,6 +34,8 @@ REDACTED = "[redacted]"
 STORED_PROMPT_ORIGINS = ("typed", "cron", "unknown")
 # "picked" and "suggested" are only ever resolved from a transcript check, never stored as a label.
 PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked", "suggested")
+SHAWN = "shawn"
+PM_DRAFT = "pm_draft"
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
@@ -493,6 +495,22 @@ def named_text(prompt) -> str:
     if prompt.get("origin") == "picked":
         return redact(prompt.get("answer") or "")
     return redact(prompt["quote"])
+
+
+def wording_of(prompt) -> str:
+    return (prompt.get("reading") or {}).get("wording") or SHAWN
+
+
+# His words on an offered draft replace it. A typed approval with no offer carries no reading and leaves the draft.
+def his_text(prompt):
+    return prompt["quote"] if prompt and (prompt.get("reading") or {}).get("wording") == SHAWN else None
+
+
+def mark_wording(entry, prompt) -> None:
+    reading = prompt.get("reading") or {}
+    entry.update(wording=wording_of(prompt),
+                 approved={"prompt_id": prompt.get("prompt_id"), "origin": prompt.get("origin"),
+                           "offer_id": reading.get("offer_id"), "read_by": reading.get("read_by")})
 
 
 def find_prompt(run_id: str, prompt_id: str, rows=None):

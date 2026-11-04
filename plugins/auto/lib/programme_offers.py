@@ -32,14 +32,16 @@ MAX_COMMANDS = 3
 HEADER_CAP = 12
 LABEL_CAP = 80
 TEXT_CAP = 300
+# Room for a whole draft at the verbs' cap plus the facts around it: Shawn approves what he can read.
+DRAFT_TEXT_CAP = 900
 _KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 _FLAGS = ("widening",)
 _NOT_BOUND = ("--prompt", "--run", "--op", "--reads-as")
 STDIN_CAP = 256 * 1024
 _CONTENT = {"doc": None}
 _OWN_WORDS_NOTE = ("This answer is Shawn's own words. If they decline or ask something, run nothing. If they approve, "
-                   "run the command with --reads-as <the option's text>. An authority move takes only a pick: relay "
-                   "his words and ask again.")
+                   "run the command with --reads-as <the option's text>. On a draft his words become the text. An "
+                   "authority move takes only a pick: relay his words and ask again.")
 
 
 class OfferError(Exception):
@@ -128,9 +130,9 @@ def _label(text) -> str:
     return _shown(str(text).replace(", ", " and "), LABEL_CAP)
 
 
-def _rendered(label, description="", facts=None, authority=False, named=None) -> dict:
-    return {"label": _label(label), "description": _shown(description), "facts": facts, "authority": authority,
-            "named": named}
+def _rendered(label, description="", facts=None, authority=False, named=None, content=None, whole=False) -> dict:
+    return {"label": _label(label), "description": _shown(description, DRAFT_TEXT_CAP if whole else TEXT_CAP),
+            "facts": facts, "authority": authority, "named": named, "content": content}
 
 
 def _item(programme, ident) -> tuple:
@@ -254,7 +256,7 @@ def _accept_context(cmd, programme) -> dict:
     ident = cmd.first("<id>")
     block = context.block(programme)
     if ident in block["decisions"]:
-        raise OfferError(f"accepting Ruling {ident!r} needs a typed prompt; a pick cannot approve it")
+        return _accept_ruling(context, ident, block["decisions"][ident])
     revision = context.pending(block["requirements"].get(ident))
     if revision is None:
         raise OfferError(f"no pending revision of {ident!r} to accept")
@@ -262,6 +264,112 @@ def _accept_context(cmd, programme) -> dict:
     wider = bool(delta.get("wider"))
     return _rendered(f"{'Widen by accepting' if wider else 'Accept'} requirement {ident}",
                      revision.get("text") or "", revision, authority=wider)
+
+
+def _draft(text) -> str:
+    cleaned = programme_sanitize.clean(text, cap=0)
+    if len(cleaned) > programme_sanitize.DEFAULT_CAP:
+        raise OfferError(f"the draft is {len(cleaned)} characters and the record holds {programme_sanitize.DEFAULT_CAP}; "
+                         "shorten it, since Shawn approves all of what is recorded")
+    return programme_journal.redact(cleaned)
+
+
+# What the named-word checks once forced into view: Shawn sees each thing a widening adds, drops or extends.
+def _ruling_words(content, delta) -> str:
+    targets = " and ".join(content.get("applies_to") or []) or "no items yet"
+    words = [f"{content.get('effect')} {content.get('kind')} on {targets}."]
+    if content.get("limits"):
+        words.append(f"Limits: {'; '.join(content['limits'])}.")
+    if content.get("until"):
+        words.append(f"Ends {content['until'][:10]}.")
+    if delta:
+        if delta.get("added"):
+            words.append(f"Adds {' and '.join(delta['added'])}.")
+        if delta.get("removed"):
+            words.append(f"Removes {' and '.join(delta['removed'])}.")
+        if delta.get("removed_limits"):
+            words.append(f"Drops limits: {'; '.join(delta['removed_limits'])}.")
+        if delta.get("until"):
+            words.append(f"The end date is {delta['until']}.")
+    return " ".join(words)
+
+
+# A first grant has no delta, yet it widens the PM from nothing, so it takes a pick as a wider revision does.
+def _widens(effect, current, delta) -> bool:
+    return bool(delta and delta.get("wider")) or (current is None and effect == "grant")
+
+
+def _accept_ruling(context, ident, revisions) -> dict:
+    revision = context.pending(revisions)
+    if revision is None:
+        raise OfferError(f"no pending revision of {ident!r} to accept")
+    delta = revision.get("delta") if isinstance(revision.get("delta"), dict) else None
+    wider = _widens(revision.get("effect"), context.in_force(revisions), delta)
+    verb = "Widen by accepting" if wider else "Accept"
+    return _rendered(f"{verb} Ruling {ident}", f"{revision.get('scope')} ({_ruling_words(revision, delta)})",
+                     revision, authority=wider, whole=True)
+
+
+def _record_ruling(cmd, programme) -> dict:
+    context = load_lib_module("programme_context")
+    rulings = load_lib_module("programme_rulings")
+    ident = cmd.first("<id> --effect decided|grant|restrict --scope <text>")
+    effect = cmd.one_of("effect", context.EFFECTS)
+    revisions = context.block(programme)["decisions"].get(ident) or []
+    if cmd.opt("replies-to"):
+        anchor = rulings.anchor(programme, cmd.opt("replies-to"))
+        kind, targets = anchor["kind"], [anchor["item"] or context.PROGRAMME_SCOPE]
+    else:
+        kind = cmd.opt("kind")
+        if not kind:
+            raise OfferError("record-ruling needs --kind <decision-kind> or --replies-to <ask-or-decision-id>")
+        targets = context._scope(load_lib_module("programme_record"), programme, cmd.opts.get("applies-to"))
+    rulings._check_protected(kind, effect)
+    scope = _draft(cmd.opt("scope"))
+    content = {"kind": kind, "effect": effect, "applies_to": targets, "until": cmd.opt("until") or None,
+               "limits": sorted({programme_sanitize.clean(v) for v in cmd.opts.get("limit") or []})}
+    current = context.in_force(revisions)
+    delta = context.ruling_delta(current, content)
+    wider = _widens(effect, current, delta)
+    label = f"Widen with a {kind} grant in Ruling {ident}" if wider and effect == "grant" else (
+        f"Widen by loosening restrict Ruling {ident}" if wider else f"Record {effect} Ruling {ident} on {kind}")
+    why = f" Why: {cmd.opt('reason')}." if cmd.opt("reason") else ""
+    return _rendered(label, f"{scope} ({_ruling_words(content, delta)}){why}", {"revisions": revisions, "draft": scope},
+                     authority=wider, content=scope, whole=True)
+
+
+def _close_ruling(cmd, programme) -> dict:
+    context = load_lib_module("programme_context")
+    ident = cmd.first("<id> --as fulfilled|withdrawn")
+    ending = cmd.one_of("as", load_lib_module("programme_rulings").ENDINGS)
+    revisions = context.block(programme)["decisions"].get(ident) or []
+    current = context.in_force(revisions) or context.pending(revisions)
+    if current is None or not context.is_ruling(revisions):
+        raise OfferError(f"no Ruling {ident!r} in force or pending to close")
+    restrict = current.get("effect") == "restrict"
+    label = f"{'Widen by closing' if restrict else 'Withdraw' if ending == 'withdrawn' else 'Close'} Ruling {ident}"
+    why = _draft(cmd.opt("why"))
+    back = f" This hands {current.get('kind')} back to the PM." if restrict else ""
+    return _rendered(label, f"{current.get('scope')} ({current.get('effect')} {current.get('kind')}).{back} "
+                            f"Closed as {ending}. Why: {why or 'none given'}.",
+                     {"revisions": revisions, "draft": why}, authority=restrict, content=why, whole=True)
+
+
+def _define_requirement(cmd, programme) -> dict:
+    ident = cmd.first("<id> --text <text> --check <item-id>=<deliverable>...")
+    existing = load_lib_module("programme_context").block(programme)["requirements"].get(ident)
+    text = _draft(cmd.opt("text"))
+    return _rendered(f"Set requirement {ident}", f"{text} Checks: {cmd.opt('check')}.", {"revisions": existing, "draft": text},
+                     whole=True)
+
+
+def _edit_term(cmd, programme) -> dict:
+    if len(cmd.pos) != 2:
+        raise OfferError("usage: edit-project-term <term-id> <text>")
+    entry = load_lib_module("programme_terms")._find(programme, cmd.pos[0])
+    text = _draft(cmd.pos[1])
+    return _rendered(f"Change preferred tool {entry.get('area')}", f"New: {text} Now: {entry.get('value')}",
+                     {"value": entry.get("value"), "draft": text}, content=text, whole=True)
 
 
 def _lift_pause(cmd, programme) -> dict:
@@ -329,14 +437,18 @@ RENDERERS = {
     "amend-term": _amend_term,
     "answer-handed": _handed,
     "answer-permission": _permission,
+    "close-ruling": _close_ruling,
+    "define-requirement": _define_requirement,
     "dispose-action": _dispose,
     "drop-item": _drop,
+    "edit-project-term": _edit_term,
     "keep-behaviours": _keeper("behaviour", "programme_behaviours"),
     "keep-rituals": _keeper("ritual", "programme_rituals"),
     "lift-pause": _lift_pause,
     "move-behaviour": _mover("behaviour", "programme_behaviours"),
     "move-ritual": _mover("ritual", "programme_rituals"),
     "override-focus": _override,
+    "record-ruling": _record_ruling,
     "reopen-item": _reopen,
     "retire-ritual": _ritual_step({"retired": "Retire", "undone": "Undo"}),
     "run-ritual": _ritual_step("Run"),
@@ -393,6 +505,8 @@ def _options(host, parsed, programme, doc) -> list:
         option = {"label": rendered["label"], "description": rendered["description"], "argv_hash": argv_hash(argv),
                   "subject": subject(rendered), "authority": rendered["authority"],
                   "command": programme_journal.redact(f"programme.sh {shlex.join(argv)} {_PICK_PLACE}{tail}")}
+        if rendered["content"] is not None:
+            option["content"] = rendered["content"]
         if argv[0] in _CONTENT_VERBS:
             option["content_hash"] = content_hash(doc)
         options.append(option)
@@ -506,7 +620,9 @@ def bind(offer, answer, argv, record, programme, error) -> dict:
         raise _picked_decline(error)
     if option["argv_hash"] != argv_hash(argv):
         raise error(f"this pick approved a different command: {option.get('command')}", fix=redo)
-    return {"answer": shown, "named": _rendered_now(option, argv, programme, error, redo)["named"]}
+    return {"answer": shown, "named": _rendered_now(option, argv, programme, error, redo)["named"],
+            "quote": option.get("content") or option["label"],
+            "reading": {"wording": programme_journal.PM_DRAFT, "offer_id": payload.get("offer_id")}}
 
 
 def _holding(payload, argv):
@@ -536,9 +652,16 @@ def _own_words(rows, row, offer, why, words, reading, argv, record, programme, e
         raise error(f"prompt {row['prompt_id']!r} is older than {newer!r}, which nothing has cited yet; own words bind "
                     "only on Shawn's newest message", fix="read his newest message, then ask again if it is unclear")
     shown = programme_journal.redact(words)
+    is_draft = "content" in option
+    if is_draft and len(programme_sanitize.clean(shown, cap=0)) > programme_sanitize.DEFAULT_CAP:
+        raise error(f"his words are {len(programme_sanitize.clean(shown, cap=0))} characters and the record holds "
+                    f"{programme_sanitize.DEFAULT_CAP}, and they are never cut",
+                    fix="relay this to Shawn and ask him for a shorter text, or split it into two Rulings")
+    read_back = (f"Recorded your words as the text of: {label}. Say so if that is wrong." if is_draft
+                 else f"Read your message as: {label}. Say so if that is wrong.")
     return {"quote": shown, "named": rendered["named"],
             "reading": {"read_as": label, "read_by": "pm", "offer_id": payload.get("offer_id"),
-                        "read_back": f"Read your message as: {label}. Say so if that is wrong."}}
+                        "wording": programme_journal.SHAWN, "read_back": read_back}}
 
 
 def bind_pick(rows, row, offer, pick, reading, argv, record, programme, error) -> dict:
@@ -653,7 +776,7 @@ _SPECS = (
      "a session that does not drive the programme; a verb a pick cannot approve; takeover, whose picker `become-pm` "
      "prints; a placeholder argument; more than 3 commands; two options with one text. Journals approval_offered and "
      "prints the exact AskUserQuestion input. The PM asks with that input unchanged. Set-remit takes the same JSON "
-     "on stdin that the verb will read."),
+     "on stdin that the verb will read. On a draft, Other or his message becomes the text."),
 )
 
 

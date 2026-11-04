@@ -21,6 +21,8 @@ _READ = "`programme.sh status` names the programme run ids; rerun `programme.sh 
 _PICKED = ("run `programme.sh approval-label {verb} <args>`, offer its output as one AskUserQuestion option, "
            "then rerun citing the pick with --prompt <pick id>")
 _TYPED = "ask Shawn to type the approval for {verb} in this session, then rerun with --prompt <its id>"
+_OFFERED = ("run `programme.sh offer <key> --command '{verb} <args>'`, ask Shawn with the input it prints, then rerun "
+            "citing his answer with --prompt <id>")
 _PICK_ID = "ask Shawn with an AskUserQuestion picker, then rerun citing the pick with --pick <pick id>"
 _START = ("`programme.sh become-pm` if a programme already holds this space; else the refusal names what "
           "start needs, such as a herdr pane or --space <server.workspace>")
@@ -74,16 +76,16 @@ FIXES = {
     "check-behaviour": _READ,
     "clear-blocker": _ITEM,
     "clear-proposal": _WRITE,
-    "close-ruling": _TYPED,
+    "close-ruling": _OFFERED,
     "collect-result": _ITEM,
     "context": _READ,
     "create-successor": _ENDED,
-    "define-requirement": _TYPED,
+    "define-requirement": _OFFERED,
     "describe": "rerun `programme.sh describe` with no arguments",
     "dispose-action": _PICKED,
     "dispose-item": _ENDED,
     "drop-item": _PICKED,
-    "edit-project-term": _TYPED,
+    "edit-project-term": _OFFERED,
     "end": "ask Shawn to type /auto:programme-end in this session, then rerun `programme.sh end`",
     "expire": _ENDED,
     "focus-note": _WRITE,
@@ -118,7 +120,7 @@ FIXES = {
     "record-behaviour": _TYPED,
     "record-denial": _WRITE,
     "record-hook-patch": _WRITE,
-    "record-ruling": _TYPED,
+    "record-ruling": _OFFERED,
     "record-issues": _WRITE,
     "record-tested-build": _WRITE,
     "record-trajectories": _WRITE,
@@ -146,7 +148,7 @@ FIXES = {
     "set-now": _WRITE,
     "settle-default-update": _TYPED,
     "skip-behaviour": _ITEM,
-    "set-remit": _TYPED,
+    "set-remit": _OFFERED,
     "set-source": _WRITE,
     "set-waiting": _ITEM,
     "settle-permissions": _WRITE,

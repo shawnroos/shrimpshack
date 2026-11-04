@@ -18,11 +18,10 @@ programme_naming = load_lib_module("programme_naming")
 programme_home = load_lib_module("programme_home")
 programme_offers = load_lib_module("programme_offers")
 
-# Default-deny: a pick or an accepted suggestion approves only these verbs, each of which checks that the
-# approval names its target. Verbs that record the prompt's words as content stay typed-only, and so do
-# Rulings: record-ruling, close-ruling and carry-rulings are absent, and accept-context refuses a pick for one.
+# Default-deny: a pick or an accepted suggestion approves only these verbs. carry-rulings stays typed-only.
 PICK_VERBS = frozenset((
-    "adopt-rule", "adopt-autonomy", "adopt-check", "set-remit", "amend-term", "move-behaviour",
+    "adopt-rule", "adopt-autonomy", "adopt-check", "close-ruling", "define-requirement", "edit-project-term",
+    "record-ruling", "set-remit", "amend-term", "move-behaviour",
     "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context", "lift-pause",
     "answer-permission", "dispose-action", "accept-agreement", "swap-item", "override-focus",
     "move-ritual", "keep-rituals", "retire-ritual", "start-ritual", "run-ritual", "skip-ritual"))
@@ -32,9 +31,10 @@ ACCEPT_VERB = "accept-agreement"
 _NO_SUGGESTION_VERBS = frozenset((ACCEPT_VERB,))
 ACCEPT_FIX = (f"run `programme.sh approval-label {ACCEPT_VERB}`, offer its output as one AskUserQuestion option, "
               "then rerun citing the pick with --prompt <pick id> --terms <the digest that label names>")
-# set-remit reads its change from stdin, which no label can show, so only typed text or a suggestion
-# approves it.
+# set-remit reads its change from stdin, which no label can show, so a pick binds it only through an offer.
 _STDIN_VERBS = frozenset(("set-remit",))
+# These never had a label to alias: a pick binds through an offer only, and an accepted suggestion never binds.
+_OFFER_ONLY = frozenset(("close-ruling", "define-requirement", "edit-project-term", "record-ruling"))
 _NOT_APPROVED = ("--prompt", "--run")
 _RECOMMENDED = " (recommended)"
 _READING = {"label": None}
@@ -144,7 +144,10 @@ def check_terms(block, digest, error) -> None:
 def approval_fix(verb, verb_argv) -> str:
     if verb == ACCEPT_VERB:
         return ACCEPT_FIX
-    if verb in PICK_VERBS and verb not in _STDIN_VERBS:
+    if verb in _OFFER_ONLY or verb in _STDIN_VERBS:
+        return (f"run `programme.sh offer <key> --command '{verb} <args>'`, ask Shawn with the input it prints, then "
+                "rerun citing his answer with --prompt <id>")
+    if verb in PICK_VERBS:
         command = label(verb_argv)[len("Approve "):] if verb_argv else f"{verb} <args>"
         return (f"run `programme.sh approval-label {command}`, offer its output as one AskUserQuestion "
                 "option, then rerun citing the pick with --prompt <pick id>")
@@ -180,6 +183,9 @@ def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
     if verb_argv and verb_argv[0] in _STDIN_VERBS:
         raise error(f"{verb_argv[0]} reads its change from stdin, which a pick label cannot show; "
                     "it needs typed text", fix=approval_fix(verb_argv[0], verb_argv))
+    if verb_argv and verb_argv[0] in _OFFER_ONLY:
+        raise error(f"pick {prompt_id!r} answers a picker Auto did not print, so it approves no {verb_argv[0]}",
+                    fix=approval_fix(verb_argv[0], verb_argv))
     # Reading a decline's intent from free text leaked three review rounds running ("No", "Skip r1",
     # "Keep item-x" for drop-item); only the exact label the tool printed approves.
     answer = _strip_recommended(answer)
@@ -213,6 +219,9 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
     if origin in ("picked", "suggested") and verb not in PICK_VERBS:
         raise error(f"{verb or 'this verb'} needs a typed prompt; prompt {prompt_id!r} is "
                     f"{'a pick' if origin == 'picked' else 'an accepted suggestion'}",
+                    fix=approval_fix(verb, verb_argv))
+    if origin == "suggested" and verb in _OFFER_ONLY:
+        raise error(f"prompt {prompt_id!r} is an accepted suggestion: the model wrote it, so it approves no {verb}",
                     fix=approval_fix(verb, verb_argv))
     if origin == "suggested" and verb in _NO_SUGGESTION_VERBS:
         raise error(f"{verb} needs a typed prompt or a pick of its terms-bound label; prompt {prompt_id!r} "
@@ -248,7 +257,10 @@ def _h_approval_label(host, argv):
         raise ValueError("usage: approval-label <verb> <args...>")
     if argv[1] == "takeover":
         return _takeover_label_cli(argv)
-    if argv[1] not in PICK_VERBS or argv[1] in _STDIN_VERBS:
+    if argv[1] in _OFFER_ONLY or argv[1] in _STDIN_VERBS:
+        raise host.ProgrammeError(f"{argv[1]} has no fixed label; Auto writes its picker from the command",
+                                  fix=approval_fix(argv[1], argv[1:]))
+    if argv[1] not in PICK_VERBS:
         raise host.ProgrammeError(f"{argv[1]} needs a typed prompt; a pick cannot approve it",
                                   fix=approval_fix(argv[1], argv[1:]))
     if argv[1] == ACCEPT_VERB and "--terms" not in argv:
