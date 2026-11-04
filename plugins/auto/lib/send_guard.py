@@ -1,8 +1,8 @@
-"""The send-guard: no session types into a programme driver's pane, on any terminal host.
+"""The send-guard: a programme's own sessions do not literally type into its driver's pane, on any terminal host.
 
-Host commands are recognised by each host's is_host_command, never by a list here (KTD8).
-The driver's pane comes from registry rows. A host variable in the session environment never
-proves a pane or a host (KTD3).
+Only a send the shell runs as written counts. A command that names the pane, reads it, or computes its program or
+target passes, and so does any session outside the programme. Host commands are recognised by each host's
+is_host_command. The driver's pane comes from registry rows, and a host variable never proves a pane or a host.
 """
 from __future__ import annotations
 
@@ -32,41 +32,25 @@ SEGMENT_CAP = 256
 _ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
 _LOCALE_DOLLAR = re.compile(r"\$(?=\")")
 _HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
-_ID_EDGE = "A-Za-z0-9_"
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
 # Each substitution span becomes this one character before the text is lexed, so the shell's own word boundaries
 # survive: `RUN=$(a)-$(b)` stays one assignment instead of lexing into a `-$` word that reads as a program.
 # A private-use character cannot appear in a real command and is not whitespace, a quote or a shlex punctuation char,
 # so it stays glued to its neighbours exactly as the substitution was.
 _MARK = "\ue000"
-_RUNTIME = re.compile(r"[$`(){}*?\[~@\\<>|;&]|" + _MARK)
-# A command word holding any of these may become a different program at run time (a leading `=` is zsh's path
-# lookup) and is denied whatever follows it: three review rounds broke every rule that tried to tell from the rest of
-# the command whether it types into a pane. A token made only of shell operators is punctuation the lexer split out
-# (the `)` and `>` of quoted JavaScript), never a program.
+# A command word holding any of these may become a different program at run time (a leading `=` is zsh's path lookup).
+# A token made only of shell operators is punctuation the lexer split out (the `)` and `>` of quoted JavaScript).
 _RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=|" + _MARK)
 _OPERATOR_ONLY = re.compile(r"^[()<>|;&]+$")
-# A command word that is exactly one variable, so a plain-literal assignment in the same text can name the program.
-# `${PY:-x}`, `${PY}/bin` and `$PY.sh` deliberately do not match: the shell can still build another name from them.
-_VAR_WORD = re.compile(r"^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$")
-_LOOKUPS = frozenset({"which", "whereis", "type"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 # After these an `a=b` word is the program they run, not an assignment.
 _RUNS_NEXT_WORD = frozenset({"exec", "command", "nohup", "xargs", "builtin"})
 # A quoted `">"` lexes the same as the operator, so stripping it could drop a real target.
 _QUOTED_REDIRECT = re.compile(r"([\"'])\s*\d*(?:[<>]+&?|&>+)\d*\s*\1")
-_TEST_WORDS = frozenset({"[", "[[", "{", "}"})
 _REDIRECT_OPS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
-_TTY_PATH = re.compile(r"/dev/(?:tty|pts/)[\w$`({/]")
-_TTY_WRITE = re.compile(r">|\btee\b|\bof=|\b(?:cp|mv|ln)\b")
-# A word after one of these (or after an assignment) is the command being run.
-_LIST_BREAKS = _SHELL_BREAKS - {"(", ")"}
-_INTERPRETERS = re.compile(r"^(?:python[\d.]*|ruby|perl|node|php|osascript|lua|deno|bun)$")
-_STRING_LITERAL = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
-_UNPROVEN_VERBS = ("send to a pane auto cannot prove is not the driver's", "runtime-built command", "tty write")
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
                              "elif", "if", "while", "until", "{", "!", "noglob", "nocorrect", "doas", "stdbuf",
-                             "caffeinate", "nice"})
+                             "caffeinate", "nice", "timeout", "gtimeout"})
 # Options of a precommand that take the next word as their value; any other option keeps the command position.
 _PREFIX_VALUE_OPTS = {
     "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-r", "-t", "-U", "-D", "-R", "-T"}),
@@ -77,13 +61,15 @@ _PREFIX_VALUE_OPTS = {
     "stdbuf": frozenset({"-i", "-o", "-e"}),
     "exec": frozenset({"-a"}),
     "time": frozenset({"-o", "-f"}),
+    "timeout": frozenset({"-k", "-s"}),
+    "gtimeout": frozenset({"-k", "-s"}),
 }
 
 
-def _shell_script(rest: list):
-    i, takes_script = 0, False
-    while i < len(rest) and rest[i] not in _SHELL_BREAKS:
-        tok = rest[i]
+def _shell_script(tokens: list, i: int):
+    takes_script = False
+    while i < len(tokens) and tokens[i] not in _SHELL_BREAKS:
+        tok = tokens[i]
         if tok in _SHELL_VALUE_OPTS:
             i += 2
             continue
@@ -150,11 +136,7 @@ def _heredoc_reader_is_shell(text: str, start: int, line_end: int) -> bool:
 
 
 def _split_heredocs(text: str):
-    """(text without heredoc bodies, [(body, a shell runs it, the delimiter was quoted)]).
-
-    A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) is the one case where the shell expands nothing in the
-    body, so such a body cannot become a command through `$VAR` either.
-    """
+    """(text without heredoc bodies, [(body, a shell runs it)])."""
     kept, bodies, pos, code = [], [], 0, _code_mask(text)
     while True:
         found = _HEREDOC.search(text, pos)
@@ -167,7 +149,6 @@ def _split_heredocs(text: str):
             kept.append(text[pos:])
             return "".join(kept), bodies
         kept.append(text[pos:line_end + 1])
-        quoted = bool(found.group(1)) or text[max(0, found.start(2) - 1):found.start(2)] == "\\"
         shell = _heredoc_reader_is_shell(text, found.start(), line_end)
         lines, cursor = [], line_end + 1
         while cursor < len(text):
@@ -177,7 +158,7 @@ def _split_heredocs(text: str):
             if line.strip() == found.group(2):
                 break
             lines.append(line)
-        bodies.append(("\n".join(lines), shell, quoted))
+        bodies.append(("\n".join(lines), shell))
         pos = cursor
         if pos >= len(text):
             return "".join(kept), bodies
@@ -277,8 +258,8 @@ def _lex(text: str) -> list:
         lexer.whitespace_split = True
         return list(lexer)
     except ValueError:
-        # An unbalanced quote must not hide a send behind it.
-        return text.split()
+        # An unbalanced quote must not hide a send on a later line, so the line ends stay command breaks.
+        return [tok for line in text.splitlines() for tok in line.split() + [";"]]
 
 
 def _segment(tokens: list, start: int) -> list:
@@ -305,208 +286,13 @@ def _strip_redirects(words: list) -> list:
     return out
 
 
-def _lookup_names(tokens: list, runs: list) -> set:
-    """Indices of words that only name a program for `which`, `type`, `whereis` or `command -v` to look up, so
-    `which rex herdr` is not read as a `rex` call with the verb `herdr`. The words end at the next shell break."""
-    names = set()
-    for k, tok in enumerate(tokens):
-        lookup = os.path.basename(tok) in _LOOKUPS or (tok == "command" and tokens[k + 1:k + 2] in (["-v"], ["-V"]))
-        if not (lookup and runs[k]):
-            continue
-        j = k + 1
-        while j < len(tokens) and tokens[j] not in _SHELL_BREAKS and not _OPERATOR_ONLY.match(tokens[j]):
-            names.add(j)
-            j += 1
-    return names
-
-
-def _literal_vars(tokens: list, assigns: list, spans: list):
-    """([(index, name, values)], names with an assignment the guard cannot read, substitution bodies read as values).
-
-    A value is a plain word, a copy of an earlier variable, or a substitution that only echoes literal words
-    (`PY="$(for c in python3 python; do ...; echo "$c"; done)"`), so a name can hold several values. Any other value
-    the shell could rebuild — a glob, a tilde, any other substitution — leaves the name unresolvable even when
-    another assignment to it is readable. `export X=y` and `local X=y` put the word in argument position, where
-    `assigns` is false, so they never reach here.
-    """
-    values_of = load_lib_module("send_guard_values")
-    out, unreadable, bodies_ok, marks = [], set(), set(), 0
-    for k, tok in enumerate(tokens):
-        first_mark, marks = marks, marks + tok.count(_MARK)
-        if not assigns[k]:
-            continue
-        name, _, value = tok.partition("=")
-        copy = values_of.ref_name(value)
-        if not value or name.endswith("+"):
-            found = None
-        elif value == _MARK and first_mark < len(spans) and not spans[first_mark][1]:
-            found = values_of.body_values(spans[first_mark][0], lambda t: _lex(_newlines_as_breaks(t)))
-            if found:
-                bodies_ok.add(spans[first_mark][0])
-        elif copy:
-            found = next((vals for _k, n, vals in reversed(out) if n == copy), None)
-        else:
-            found = None if _RUNTIME_WORD.search(value) else [value]
-        # A precommand runs the next word, and position analysis reads the raw token, so resolving `$W` to `nice`
-        # would leave `$W $H agent prompt $P go` with `$H` in no command position at all.
-        if found and not any(os.path.basename(v) in _COMMAND_PREFIX for v in found):
-            out.append((k, name, tuple(found)))
-        else:
-            unreadable.add(name.rstrip("+"))
-    return out, unreadable, bodies_ok
-
-
-def _loop_vars(tokens: list) -> dict:
-    """{name: [(values, first, last)]} for each `for NAME in <literal words>; do … done`: inside the loop body, from
-    the `do` to the `done`, the variable holds one of the listed words."""
-    out = {}
-    for k, tok in enumerate(tokens):
-        if tok != "for" or tokens[k + 2:k + 3] != ["in"]:
-            continue
-        words, j = [], k + 3
-        while j < len(tokens) and tokens[j] not in (";", "do"):
-            words.append(tokens[j])
-            j += 1
-        while tokens[j:j + 1] == [";"]:
-            j += 1
-        if (tokens[j:j + 1] != ["do"] or not words
-                or any(_RUNTIME_WORD.search(w) or os.path.basename(w) in _COMMAND_PREFIX for w in words)):
-            continue
-        depth, end = 1, j + 1
-        while end < len(tokens) and depth:
-            depth += tokens[end] in ("for", "while", "until")
-            depth -= tokens[end] == "done"
-            end += 1
-        out.setdefault(tokens[k + 1], []).append((tuple(words), j, end))
-    return out
-
-
-def _harmless(value: str, hosts: list) -> bool:
-    """Is this program name certainly neither a terminal host, a shell, nor a word that runs another program."""
-    base = os.path.basename(value).casefold()
-    return (base not in _SHELL_NAMES and base not in _SHELL_BINS and base not in _COMMAND_PREFIX
-            and base not in ("eval", "source", ".") and all(h.send_class([base], "") is None for h in hosts))
-
-
-# A word that means the shell may not reach what follows it in the order it was written. An assignment cannot be
-# read as naming a program once one of these stands between the start of the text and the use: `H=herdr; false &&
-# H=cat; $H …` runs `herdr` while the last assignment written says `cat`.
-_CONTROL_WORDS = frozenset({"&&", "||", "|", "if", "then", "else", "elif", "fi", "while", "until", "do", "done",
-                            "for", "case", "esac", "select", "!", "&"})
-
-
-def _resolver(tokens: list, assigns: list, spans: list, main: str, hosts: list, loops_ok: bool = False):
-    """Callable: the program a `$NAME` command word was certainly set to earlier in this same text, or None.
-
-    Resolution holds only in a straight-line command list. Any control word, group or pipeline before the use
-    means the shell's own order is not the written order, so the name stays unknown. A name with several values
-    resolves only when none of them is a host, a shell or a word that runs another program.
-    """
-    pairs, unreadable, bodies_ok = _literal_vars(tokens, assigns, spans)
-    branch = next((k for k, tok in enumerate(tokens)
-                   if tok in _CONTROL_WORDS or (_OPERATOR_ONLY.match(tok) and set(tok) & set("()|&"))), len(tokens))
-    # A name assigned anywhere the shell might skip, or might reach in another order, is unknown however many
-    # other assignments it has: both `H=cat; true && H=herdr; $H` and `H=herdr; false && H=cat; $H` run the
-    # assignment the written order does not end on.
-    unknown = {name for k, name, _values in pairs if k >= branch} | unreadable
-    values_of = load_lib_module("send_guard_values")
-    loops, written = (_loop_vars(tokens) if loops_ok else {}), []
-
-    def resolve(index: int, word: str):
-        match = _VAR_WORD.match(word)
-        if match is None or match.group(1) in unknown:
-            return None
-        name = match.group(1)
-        seen = [values for k, name_, values in pairs if k < min(index, branch) and name_ == name]
-        if name in loops and not any(name_ == name for _k, name_, _v in pairs):
-            seen = [values for values, first, last in loops[name] if first < index < last]
-        if not seen or (len(seen[-1]) > 1 and not all(_harmless(v, hosts) for v in seen[-1])):
-            return None
-        if not written:
-            # Writes the text does not spell out (`eval "X=…"`, `printf -v`, `source`, `+=`) are read once, on the
-            # first variable the text sets and uses: most texts never do, and the read is linear in the text.
-            written.append(None if values_of.DROP_ALL.search(main) else values_of.tainted_names(main))
-        if written[0] is None or name in written[0]:
-            return None
-        return seen[-1][0]
-
-    resolve.value_bodies = bodies_ok
-    return resolve
-
-
-def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, proven=None,
-          shell: bool = True, expands: bool = True, loops_ok: bool = False) -> None:
-    main, bodies = _split_heredocs(_unquote_dollar(text))
-    marked, spans = _mark_substitutions(main)
-    tokens = _lex(_newlines_as_breaks(marked))
-    piped = main + "\n" + "\n".join(body for body, _, _ in bodies)
-    strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
-    positions = _command_positions(tokens)
-    runs, assigns, _globbed, progs = positions
-    resolve = _resolver(tokens, assigns, spans, main, hosts, loops_ok)
-    looked_up = _lookup_names(tokens, runs)
-
-    def program(index: int) -> str:
-        return resolve(index, tokens[index]) or tokens[index] if 0 <= index < len(tokens) else ""
-
-    if depth < MAX_DEPTH:
-        for script in _substitution_scripts(spans):
-            # A loop variable resolves only inside a body whose output sets a variable: that body is read as a value.
-            _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=shell, expands=expands,
-                  loops_ok=script in resolve.value_bodies)
-        for body, body_shell, quoted in bodies:
-            for script in [body] + body.splitlines():
-                _scan(script, depth + 1, hosts, pane_ids, found, proven,
-                      shell=shell and body_shell, expands=expands and not quoted)
-    for start, token in enumerate(tokens):
-        rest = tokens[start + 1:]
-        prog = resolve(start, token) or token
-        base = os.path.basename(prog)
-        script, script_shell = None, shell
-        if base in _SHELL_BINS:
-            script = _shell_script(rest)
-        elif prog == "eval":
-            script = " ".join(_segment(tokens, start + 1)) or None
-            # `agent-browser eval '<js>'` is not the shell builtin, so its argument is not a script a shell runs.
-            script_shell = shell and runs[start]
-        elif token == "<<<" and rest:
-            # A here-string is a script only when a shell reads it; for any other program it is stdin data.
-            owner = os.path.basename(program(progs[start]))
-            script = rest[0] if owner in _SHELL_BINS or owner in ("eval", "source", ".") else None
-        if _INTERPRETERS.match(base) and depth < MAX_DEPTH and runs[start]:
-            # Inline code of another language can call the host command through a string; scan every string in it.
-            for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
-                _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
-        if script is None and base in _SHELL_BINS and depth < MAX_DEPTH and runs[start]:
-            # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be
-            # that script. Lex the unmarked text for this: `bash <(echo '<send>')` holds the script inside a
-            # substitution span, which the marked token list no longer carries.
-            for quoted in {t for t in tokens + _lex(_newlines_as_breaks(main)) if " " in t}:
-                _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True)
-        if script is not None:
-            if depth < MAX_DEPTH:
-                _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=script_shell, expands=expands)
-            continue
-        if start in looked_up:
-            continue
-        segment = strip(_segment(tokens, start))
-        for host in hosts:
-            if proven is not None:
-                hit = _unproven(host, tokens, start, segment, piped, proven, positions, shell, expands, resolve)
-            else:
-                hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
-            if hit:
-                found.append((host.name, hit[0], hit[1], hit[2] if len(hit) > 2 else ""))
-
-
 def _command_positions(tokens: list) -> tuple:
-    """(runs, assigns): per token, whether it sits where the shell runs a program, and whether it is a `NAME=value`
-    assignment there. One left-to-right pass, because the hook runs on every command under a 10 s limit and a hook
-    that times out or raises lets the command through. Redirections keep the position; a precommand's flags and
-    assignments keep it too."""
-    runs, assigns, globbed, stack = [False] * len(tokens), [False] * len(tokens), set(), []
+    """(runs, assigns, progs): per token, whether it sits where the shell runs a program, whether it is a `NAME=value`
+    assignment there, and the index of the program its command runs. One left-to-right pass, because a hook that times
+    out or raises lets the command through. Redirections keep the position; a precommand's flags and assignments keep it too."""
+    runs, assigns, stack = [False] * len(tokens), [False] * len(tokens), []
     progs, cur_prog = [-1] * len(tokens), -1
-    at_cmd, prefix, skip, glob_next = True, None, 0, False
+    at_cmd, prefix, skip = True, None, 0
     in_case, patterns = False, False
     for k, tok in enumerate(tokens):
         progs[k] = cur_prog
@@ -523,7 +309,6 @@ def _command_positions(tokens: list) -> tuple:
             runs[k] = False
             continue
         nxt = tokens[k + 1] if k + 1 < len(tokens) else None
-        glued, glob_next = glob_next, False
         if tok in _REDIRECT_OPS:
             skip = 1
             continue
@@ -537,30 +322,23 @@ def _command_positions(tokens: list) -> tuple:
                 before = tok[idx - 1] if idx else prev[-1:]
                 if ch == "(":
                     kind = "sub" if before in ("$", "<", ">") else "array" if before == "=" else "group"
-                    # [kind, position the enclosing word left, saw an alternation `|` inside]
-                    stack.append([kind, at_cmd, False])
+                    stack.append((kind, at_cmd))
                     at_cmd, prefix = kind != "array", None
                 elif ch == ")":
                     if patterns:
                         patterns = False
-                        at_cmd, prefix, glob_next = True, None, False
+                        at_cmd, prefix = True, None
                         continue
-                    kind, saved, alternation = stack.pop() if stack else ["group", True, False]
+                    kind, saved = stack.pop() if stack else ("group", True)
                     at_cmd, prefix = (True if kind == "group" else saved), None
-                    glob_next = kind == "group" and alternation
                 elif ch in ";|&":
-                    if ch == "|" and stack:
-                        stack[-1][2] = True
-                    at_cmd, prefix, glob_next, cur_prog = True, None, False, -1
+                    at_cmd, prefix, cur_prog = True, None, -1
             if in_case and ";;" in tok:
                 # One branch ended, so the next word is the following branch's pattern.
                 patterns = True
             if tok[-1] in "<>":
                 skip = 1
             continue
-        if glued and at_cmd:
-            # A word glued to a closing `)` is a zsh glob such as `(re|zz)x`, built when the shell runs it.
-            globbed.add(k)
         if tok == "case" and at_cmd:
             in_case, patterns, at_cmd, prefix = True, False, False, None
             continue
@@ -576,53 +354,61 @@ def _command_positions(tokens: list) -> tuple:
                 at_cmd, prefix = False, None
             elif tok in _PREFIX_VALUE_OPTS.get(prefix, ()):
                 skip = 1
+        elif at_cmd and prefix in ("timeout", "gtimeout"):
+            # Its first plain word is the duration; the command comes next.
+            prefix = None
         else:
             if at_cmd:
                 cur_prog = k
                 progs[k] = k
             at_cmd, prefix = False, None
-    return runs, assigns, globbed, progs
+    return runs, assigns, progs
 
 
-def _unproven(host, tokens: list, start: int, segment: list, piped: str, proven, positions,
-              shell: bool, expands: bool, resolve):
-    """The one policy for a session that is not the PM. Hosts only say what a send is (send_class) and which targets
-    a call names; a send, or a call that cannot be told from one, passes only when every target is a literal id that
-    the registry proves is another session's pane. A command word built at run time is a hit unless a plain-literal
-    assignment in the same text names it, and that name is no host program."""
-    shape = host.send_class(segment, piped)
-    if shape is None:
-        word = tokens[start]
-        runs, assigns, globbed, _progs = positions
-        if word in _TEST_WORDS or _OPERATOR_ONLY.match(word) or assigns[start] or not runs[start]:
-            return None
-        if not shell and (not expands or word[:1] not in ("$", "`", _MARK)):
-            # Text no shell runs holds no command words. The one exception is a word the shell expands before
-            # another program reads the text, which it does for $VAR and $( ) in an unquoted heredoc.
-            return None
-        literal = resolve(start, word)
-        # Casefolded: this filesystem finds `heRdr` on PATH, so a mixed-case literal names the host program too.
-        if literal is not None and host.send_class(
-                [os.path.basename(literal).casefold()] + list(segment[1:]), piped) is None:
-            return None
-        built = _RUNTIME_WORD.search(word) or start in globbed
-        return ("runtime-built command", "", "variable" if _VAR_WORD.match(word) else "word") if built else None
-    kind, targets = shape
-    if kind == "read":
-        return None
-    if targets and not any(_RUNTIME.search(t) or not proven(t) for t in targets):
-        return None
-    return "send to a pane auto cannot prove is not the driver's", "", "send"
+def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list) -> None:
+    main, bodies = _split_heredocs(_unquote_dollar(text))
+    marked, spans = _mark_substitutions(main)
+    tokens = _lex(_newlines_as_breaks(marked))
+    piped = "\n".join([main] + [body for body, _shell in bodies])
+    strip = _strip_redirects if not _QUOTED_REDIRECT.search(main) else list
+    runs, assigns, progs = _command_positions(tokens)
+    if depth < MAX_DEPTH:
+        for script in _substitution_scripts(spans):
+            _scan(script, depth + 1, hosts, pane_ids, found)
+        for body, shell in bodies:
+            if shell:
+                _scan(body, depth + 1, hosts, pane_ids, found)
+    for start, token in enumerate(tokens):
+        script = None
+        if token == "<<<":
+            # A here-string is a script only when a shell reads it; for any other program it is stdin data.
+            owner = os.path.basename(tokens[progs[start]]) if progs[start] >= 0 else ""
+            if owner in _SHELL_BINS or owner in ("eval", "source", "."):
+                script = next(iter(tokens[start + 1:start + 2]), None)
+        elif runs[start] and not assigns[start] and token not in _COMMAND_PREFIX and not _OPERATOR_ONLY.match(token):
+            if os.path.basename(token).casefold() in _SHELL_BINS:
+                script = _shell_script(tokens, start + 1)
+            elif token == "eval":
+                script = " ".join(_segment(tokens, start + 1)) or None
+            if script is None:
+                segment = strip(_segment(tokens, start))
+                for host in hosts:
+                    hit = host.is_host_command(segment, pane_ids=pane_ids) or host.is_piped_script(segment, piped, pane_ids=pane_ids)
+                    if hit:
+                        found.append((host.name, hit[0], hit[1]))
+        if script is not None and depth < MAX_DEPTH:
+            _scan(script, depth + 1, hosts, pane_ids, found)
 
 
-def host_sends(command: str, pane_ids: list, proven=None) -> list:
-    """(host, verb, target) for every host command in ``command`` that types into a pane.
-
-    proven (a callable, for a session that is not the driver) switches to the allow-list policy in _unproven."""
+def _hosts() -> list:
     terminal_host = load_lib_module("terminal_host")
-    hosts = [terminal_host.host_named(name) for name in terminal_host.key_hosts()]
+    return [terminal_host.host_named(name) for name in terminal_host.key_hosts()]
+
+
+def host_sends(command: str, pane_ids: list) -> list:
+    """(host, verb, target) for every host command in ``command`` that types into a pane."""
     found = []
-    _scan(command, 0, hosts, [i for i in pane_ids if i], found, proven)
+    _scan(command, 0, _hosts(), [i for i in pane_ids if i], found)
     return found
 
 
@@ -643,62 +429,6 @@ def _targets_pane(target: str, driver: dict, workspace) -> bool:
         if ":" not in target and ident.endswith(":" + target) and (workspace is None or ident.split(":", 1)[0] == workspace):
             return True
     return False
-
-
-def _names_pane(command: str, driver: dict):
-    text = _HIDING_CHARS.sub("", _unquote_dollar(command)).casefold()
-    for ident in _ids(driver):
-        if ident and re.search(r"(?<![%s])%s(?![%s])" % (_ID_EDGE, re.escape(ident.casefold()), _ID_EDGE), text):
-            return ident
-    return None
-
-
-def _proven_other(sender: dict, session_id, drivers: list):
-    """Callable: is this literal id a pane some session ran in that is not any live driver's? Built once per command."""
-    if "proven" not in sender:
-        if "workspace" not in sender:
-            sender["workspace"] = _sender_workspace(session_id)
-        driver_ids = {str(v).casefold() for d in drivers for v in _ids(d) + [d.get("tty")] if v}
-        sender["proven"] = load_lib_module("session_registry").known_panes() - driver_ids
-    workspace = sender["workspace"]
-
-    def proven(target: str) -> bool:
-        low = target.casefold()
-        return low in sender["proven"] or (":" not in low and workspace is not None and f"{workspace}:{low}".casefold() in sender["proven"])
-
-    return proven
-
-
-def _tty_write(command: str) -> bool:
-    text = _HIDING_CHARS.sub("", _unquote_dollar(command))
-    return _TTY_PATH.search(text) is not None and _TTY_WRITE.search(text) is not None
-
-
-def _driver_hit(command: str, session_id, driver: dict, sender: dict):
-    sends = host_sends(command, _ids(driver))
-    if sends:
-        # One session sends, so every driver shares one workspace lookup, made only when a send was found.
-        if "workspace" not in sender:
-            sender["workspace"] = _sender_workspace(session_id)
-        for host, verb, target, _cause in sends:
-            if _targets_pane(target, driver, sender["workspace"]):
-                return host, verb, target
-    if session_id == driver.get("session_id"):
-        return None
-    named = _names_pane(command, driver)
-    return (None, None, named) if named else None
-
-
-def _strict_hit(command: str, session_id, drivers: list, sender: dict):
-    """Allow-list for a session that drives no programme: its command may type into a pane only by proving the
-    target is another session's pane, and may not write to a tty device."""
-    if any(d.get("session_id") == session_id for d in drivers):
-        return None
-    ids = [i for d in drivers for i in _ids(d)]
-    unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers))
-    if unproven:
-        return unproven[0][0], unproven[0][1], drivers[0]["pane_id"], unproven[0][3]
-    return (None, "tty write", drivers[0]["pane_id"]) if _tty_write(command) else None
 
 
 def _seen_path(driver: dict) -> str:
@@ -773,55 +503,51 @@ def _with_live_ids(drivers: list) -> None:
             driver["pane_id"] = live[0]
 
 
-_FIXES = {
-    "variable": "this command runs a program named by a variable whose value auto cannot read. Write the program name "
-                "as a literal word, or set the variable earlier in the same command from literal words "
-                "(`PY=python3`, or `PY=\"$(for c in python3 python; do ...; echo \"$c\"; done)\"`) before any `&&`, "
-                "`||`, `if` or loop, and use it only as a whole word, `$PY`.",
-    "word": "this command runs a program whose name is built at run time (a `$(...)`, glob, brace or `~` joined into "
-            "the word). Write the program name as one literal word.",
-    "send": "send only to a literal pane id that another session's registry row shows, with no variable, "
-            "substitution or file in the command word or the target; run osascript only with -e and a script "
-            "that does not mention Ghostty, a terminal, key presses or string joins; never write to a tty device.",
-}
+def _mentions_host(command: str) -> bool:
+    text = _HIDING_CHARS.sub("", _unquote_dollar(command)).casefold()
+    return any(binary in text for host in _hosts() for binary in host.binaries)
+
+
+def _refusal(session_id, command, driver: dict, host: str, verb: str, target: str) -> tuple:
+    whose = (f"the last pane auto saw programme {driver['run']!r}'s driver in. herdr reports that pane "
+             "closed and does not say which pane the driver is in now, so the id is still guarded"
+             if driver.get("unconfirmed") else
+             f"the driver's pane of programme {driver['run']!r}")
+    reason = (
+        f"auto: blocked `{host} {verb}` into pane {driver['pane_id']}, {whose}. "
+        "Only the person types into the programme driver's pane; report through the "
+        "programme's inbox instead. This attempt is journaled."
+    )
+    row = (driver["run"], "blocked_driver_send", session_id, {
+        "verb": verb, "target": target, "pane_id": driver["pane_id"], "command": command})
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}, row
 
 
 def denial(session_id, command):
-    drivers = load_lib_module("session_registry").driver_panes()
-    try:
-        _with_live_ids(drivers)
-    except Exception:
-        # A hook error fails open, so a broken live lookup must leave the registry ids guarding, not raise.
-        pass
-    sender = {}
+    # Cheapest first: this runs on every Bash call of every session while a programme runs. The record read and the
+    # herdr snapshot wait until a command is close to a real send.
+    if not _mentions_host(command):
+        return None
+    session_registry = load_lib_module("session_registry")
+    drivers = session_registry.driver_panes()
+    if not drivers:
+        return None
+    sends = host_sends(command, [i for driver in drivers for i in _ids(driver)])
+    if not sends:
+        return None
+    if any(host == "herdr" for host, _verb, _target in sends):
+        try:
+            _with_live_ids(drivers)
+        except Exception:
+            # A hook error fails open, so a broken live lookup must leave the registry ids guarding, not raise.
+            pass
+    workspace = _sender_workspace(session_id)
     for driver in drivers:
-        hit = _driver_hit(command, session_id, driver, sender)
-        if hit is None and driver is drivers[-1]:
-            hit = _strict_hit(command, session_id, drivers, sender)
-            driver = drivers[0]
-        if hit is None:
-            continue
-        host, verb, target, *extra = hit
-        cause = extra[0] if extra else ""
-        row = (driver["run"], "blocked_driver_send", session_id, {
-            "verb": verb, "target": target, "pane_id": driver["pane_id"], "command": command, "cause": cause})
-        unproven = verb in _UNPROVEN_VERBS
-        what = (f"a command ({verb}) that auto cannot prove is not aimed at pane" if unproven else
-                f"`{host} {verb}` into pane" if verb else "a command naming pane")
-        whose = (f"the last pane auto saw programme {driver['run']!r}'s driver in. herdr reports that pane "
-                 "closed and does not say which pane the driver is in now, so the id is still guarded"
-                 if driver.get("unconfirmed") else
-                 f"the driver's pane of programme {driver['run']!r}")
-        reason = (
-            f"auto: blocked {what} {driver['pane_id']}, {whose}. "
-            "Only the person types into the programme driver's pane, "
-            "and other sessions may not name it in any command; report through the "
-            "programme's inbox instead. This attempt is journaled."
-            + (f" Fix: {_FIXES.get(cause, _FIXES['send'])}" if unproven else "")
-        )
-        return {"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }}, row
+        for host, verb, target in sends:
+            if _targets_pane(target, driver, workspace) and session_registry.in_programme(driver, session_id):
+                return _refusal(session_id, command, driver, host, verb, target)
     return None

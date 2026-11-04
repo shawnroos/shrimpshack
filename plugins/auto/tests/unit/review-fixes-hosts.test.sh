@@ -82,93 +82,6 @@ hook() {
   ( cd "$NOREPO" && env "${@:3}" bash "${HOOKS}/on-pretooluse-action.sh" <<< "$payload" )
 }
 verdict() { case "$1" in *'"deny"'*) echo deny ;; *) echo allow ;; esac; }
-NL=$'\n'
-JXA="osascript -l JavaScript -e 'const G=Application(\"Ghostty\"); G.inputText(\"hi\",{to:G.windows[0].tabs[0].terminals[0]})'"
-SPACED="osascript -e 'tell application \"Ghostty\" to input   text \"x\" to current terminal'"
-SYSEV="osascript -e 'tell application \"System Events\" to keystroke \"x\"'"
-SENDKEY="osascript -e 'tell application \"Ghostty\" to send key \"enter\" to (terminal of tab 1 of window 1)'"
-UNLISTED="osascript -e 'tell application \"Ghostty\" to input text \"x\" to current terminal'"
-HEREDOC="osascript <<'EOF'${NL}tell application \"Ghostty\" to input text \"x\" to focused terminal of selected tab of front window${NL}EOF"
-PIPE="echo 'tell application \"Ghostty\" to input text \"x\" to terminal 1' | osascript"
-JXA_PIPE="echo 'Application(\"Ghostty\").inputText(\"x\")' | osascript -l JavaScript"
-
-echo "review-fixes: Ghostty sends that name no id are denied (finding 1)"
-for name in JXA SPACED SYSEV SENDKEY UNLISTED; do
-  it "$name is denied for another session"
-  check deny "$(verdict "$(hook sess-worker "${!name}")")"
-done
-it "the JXA form is denied inside a heredoc to bash as well"
-check deny "$(verdict "$(hook sess-worker "bash <<EOF${NL}$JXA${NL}EOF")")"
-
-echo "review-fixes: Ghostty scripts on stdin are denied (finding 6)"
-it "heredoc into osascript"
-check deny "$(verdict "$(hook sess-worker "$HEREDOC")")"
-it "heredoc into osascript inside bash -c"
-check deny "$(verdict "$(hook sess-worker "bash <<EOF${NL}$HEREDOC${NL}EOF")")"
-it "echo piped into osascript"
-check deny "$(verdict "$(hook sess-worker "$PIPE")")"
-it "echo piped into osascript -l JavaScript"
-check deny "$(verdict "$(hook sess-worker "$JXA_PIPE")")"
-
-echo "review-fixes: harmless osascript stays allowed"
-it "a notification through -e"
-check allow "$(verdict "$(hook sess-worker "osascript -e 'display notification \"hi\"'")")"
-it "a notification piped in is denied: the script source is stdin"
-check deny "$(verdict "$(hook sess-worker "echo 'display notification \"hi\"' | osascript")")"
-it "a heredoc notification is denied for the same reason"
-check deny "$(verdict "$(hook sess-worker "osascript <<'EOF'${NL}display notification \"hi\"${NL}EOF")")"
-it "a send to one other literal terminal id"
-check allow "$(verdict "$(hook sess-worker "osascript -e 'tell application \"Ghostty\" to input text \"x\" to terminal id \"OTHER-ID\"'")")"
-it "auto's own list script, which the PM may run"
-LISTCMD="$("$PY" -c 'import sys,os; sys.path.insert(0, os.path.join(sys.argv[1], "lib")); from _bootstrap import load_lib_module; print("osascript -e " + __import__("shlex").quote(load_lib_module("host_ghostty").LIST_SCRIPT))' "$AUTO_ROOT")"
-check allow "$(verdict "$(hook pm-ghostty "$LISTCMD")")"
-it "the list script with a send appended is denied"
-check deny "$(verdict "$(hook sess-worker "$LISTCMD -e 'tell application \"Ghostty\" to input text \"x\" to current terminal'")")"
-
-
-echo "review-fixes: round 2, every unlisted osascript is denied for a session that is not the PM"
-PMID_A="${T1%-*}-"; PMID_B="${T1##*-}"
-CONCAT="osascript -e 'tell application \"Ghostty\" to input text \"x\" to terminal id \"${PMID_A}\" & \"${PMID_B}\"'"
-VARIABLE="osascript -e 'set v to \"${PMID_A}\" & \"${PMID_B}\"${NL}tell application \"Ghostty\" to input text \"x\" to terminal id v'"
-VAR_PIPE="echo 'tell application \"Ghostty\" to input text \"x\" to terminal id v' | osascript"
-PREFIX="osascript -e 'tell application \"Ghostty\" to input text \"x\" to terminal id \"${T1%%-*}\"'"
-SMODE="echo 'tell application \"Ghostty\" to input text \"x\" to terminal id \"${T1}\"' | osascript -s o"
-SMODE_H="echo 'tell application \"Ghostty\" to input text \"x\" to terminal id \"v\"' | osascript -s h"
-JXA_CAT="osascript -l JavaScript -e 'Application(\"Gho\"+\"stty\").focusedTerminal().inputText(\"x\")'"
-NAMESPLIT="osascript -e 'tell application (\"Gho\" & \"stty\") to input text \"x\" to selected terminal'"
-SELECTED="osascript -e 'tell application \"Ghostty\" to input text \"x\" to selected terminal'"
-CONT="osascript -e 'tell application \"Ghostty\" to input ¬${NL}text \"x\" to terminal id \"${PMID_A}\" & \"${PMID_B}\"'"
-FILEARG="osascript /tmp/auto-review-fixes-missing.scpt"
-REDIR="osascript < /tmp/auto-review-fixes-missing.scpt"
-FILE_E="osascript -e 'display notification \"hi\"' /tmp/auto-review-fixes-missing.scpt"
-NEWLINE_TAIL="osascript -e 'tell application \"Ghostty\" to input text \"x\" to terminal id \"OTHER\" -- c${NL}tell application \"Ghostty\" to input text \"y\" to terminal id v'"
-for name in CONCAT VARIABLE VAR_PIPE PREFIX SMODE SMODE_H JXA_CAT NAMESPLIT SELECTED CONT FILEARG REDIR FILE_E NEWLINE_TAIL; do
-  it "$name is denied"
-  check deny "$(verdict "$(hook sess-worker "${!name}")")"
-done
-it "the concatenated id is also denied inside a heredoc to bash"
-check deny "$(verdict "$(hook sess-worker "bash <<EOF${NL}$CONCAT${NL}EOF")")"
-it "the denial names the reason and the fix"
-OUT="$(hook sess-worker "$FILEARG")"
-has "cannot prove is not aimed at pane" "$OUT"
-has "Fix: send only to a literal pane id" "$OUT"
-has "run osascript only with -e" "$OUT"
-it "the denial is journaled"
-has "blocked_driver_send" "$(py "$RUN_GHOSTTY" <<PYEOF
-$HEAD_PY
-print(" ".join(r["kind"] for r in pj.read(args[0])))
-PYEOF
-)"
-it "auto's own list script through -e is allowed for a worker"
-check allow "$(verdict "$(hook sess-worker "$LISTCMD")")"
-it "a notification through -e that never says Ghostty is allowed"
-check allow "$(verdict "$(hook sess-worker "osascript -e 'display notification \"hi\" with title \"auto\"'")")"
-it "a read-only Ghostty script is denied for a worker (accepted: it cannot be proven a read)"
-check deny "$(verdict "$(hook sess-worker "osascript -e 'tell application \"Ghostty\" to count windows'")")"
-it "the PM may run an osascript that mentions Ghostty without naming its own pane"
-check allow "$(verdict "$(hook pm-ghostty "osascript -e 'tell application \"Ghostty\" to count windows'")")"
-it "a send to one other literal terminal id stays allowed for a worker"
-check allow "$(verdict "$(hook sess-worker "osascript -e 'tell application \"Ghostty\" to input text \"x\" to terminal id \"OTHER-ID\"'")")"
 
 # ---------------------------------------------------------------- one own_pane shape on every host (round 3)
 echo "review-fixes: the herdr session row is built from herdr's own_pane answer"
@@ -355,12 +268,11 @@ check "$LEASES_BEFORE" "$(ls "${CLAUDE_AUTO_DATA_DIR}/programmes/leases" | grep 
 echo "review-fixes: HERDR variables stand in for no registry row (B)"
 row herdr default w2 pm-herdr-b w2:p31 term_p31
 programme herdr default w2 pm-herdr-b >/dev/null
-it "a bare pane suffix from a sender with no row is denied whatever HERDR_WORKSPACE_ID says"
-check deny "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w3)")"
-check deny "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
+it "a sender with no row and no item is outside the programme whatever HERDR_WORKSPACE_ID says"
+check allow "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w3)")"
+check allow "$(verdict "$(hook sess-no-row 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
 it "a sender whose row puts it in another workspace is still allowed"
 row herdr default w3 sess-far-b w3:p60 term_far
-row herdr default w3 sess-far-peer-b w3:p31 term_far_peer
 check allow "$(verdict "$(hook sess-far-b 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
 it "space_of_session ignores the environment and answers from the registry only"
 OUT="$(env HERDR_PANE_ID=w2:p31 HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" <<PYEOF
@@ -369,113 +281,6 @@ print(sr.space_of_session("sess-no-row"), sr.space_of_session("sess-far-b"))
 PYEOF
 )"
 check "None ('default', 'w3')" "$OUT"
-
-# ---------------------------------------------------------------- one default-deny policy for every host (round 4, D)
-echo "review-fixes: a session that drives no programme may only send to a literal pane the registry proves is another session's"
-row herdr default w2 sess-peer77-d w2:p77 term_p77
-row rex srv s-rx pm-rex-d rex-blk-D1 rex-term-D1
-programme rex srv s-rx pm-rex-d >/dev/null
-row rex srv s-rx sess-rex-o rex-blk-O1 rex-term-O1
-row stub srv win-d pm-stub-d stub-pm-d stub-pm-d-term
-programme stub srv win-d pm-stub-d >/dev/null
-row stub srv win-d sess-stub-o stub-o-d stub-o-d-term
-denied() { # denied <family> <command>: a worker's command is denied and the PM's own session is not asked
-  it "$1"
-  check deny "$(verdict "$(hook sess-worker "$2" AUTO_TEST_HOST=stub)")"
-}
-allowed() {
-  it "$1"
-  check allow "$(verdict "$(hook sess-worker "$2" AUTO_TEST_HOST=stub)")"
-}
-echo "review-fixes: herdr"
-allowed "a literal pane another session ran in is allowed" 'herdr agent prompt w2:p77 go'
-allowed "pane send-text and pane run to that pane are allowed" 'herdr pane send-text w2:p77 hi'
-denied "a literal pane no session ran in is denied" 'herdr agent prompt w2:p88 go'
-denied "target from a variable" 'herdr agent prompt $P go'
-denied "target from a variable set on the same line" 'P=w2:p77; herdr agent prompt $P go'
-denied "target from a command substitution" 'herdr agent prompt $(echo w2:p77) go'
-denied "target from backticks" 'herdr agent prompt `echo w2:p77` go'
-denied "target read from a file" 'herdr agent prompt @/tmp/target go'
-denied "a glob in the target" 'herdr agent prompt w2:p7* go'
-denied "no target at all" 'herdr agent prompt'
-denied "an unknown verb on the herdr command" 'herdr agent frobnicate w2:p77'
-denied "agent start with no literal pane" 'herdr agent start'
-denied "a remote machine option" 'herdr --machine other agent prompt w2:p77 go'
-denied "the command word is a variable" '$H agent prompt w2:p77 go'
-denied "the command word is a variable behind env" 'env H=herdr $H agent prompt w2:p77 go'
-denied "the command word is a substitution" '$(command -v herdr) agent prompt w2:p77 go'
-denied "the command word is a variable inside bash -c" "bash -c '\$H agent prompt w2:p77 go'"
-allowed "pane list is a read" 'herdr pane list'
-allowed "agent list and status are reads" 'herdr agent list; herdr status server'
-echo "review-fixes: scripts handed to a shell on stdin and inline code of another language"
-denied "a send piped into sh" "printf 'herdr agent prompt w2:p88 go' | sh"
-denied "a send piped into bash" "echo 'herdr agent prompt w2:p88 go' | bash"
-denied "a send inside process substitution run by bash" "bash <(echo 'herdr agent prompt w2:p88 go')"
-denied "a send inside python inline code" "python3 -c 'import os; os.system(\"herdr agent prompt w2:p88 go\")'"
-denied "a send inside ruby inline code" "ruby -e 'system(\"herdr agent prompt w2:p88 go\")'"
-allowed "a proven peer pane piped into sh is still allowed" "echo 'herdr agent prompt w2:p77 go' | sh"
-allowed "harmless python inline code" "python3 -c 'print(\"hello world\")'"
-echo "review-fixes: tty devices"
-denied "a redirect into a tty device" 'echo hi > /dev/ttys016'
-denied "an append into a tty device" 'echo hi >> /dev/ttys016'
-denied "tee into a tty device" 'echo hi | tee /dev/ttys016'
-denied "a tty device built at run time" 'echo hi > /dev/tty$N'
-denied "a tty device behind bash -c" "bash -c 'echo hi > /dev/ttys016'"
-allowed "the worker's own controlling terminal" 'echo hi > /dev/tty'
-allowed "naming a tty device that is no driver's" 'ls /dev/ttys099'
-echo "review-fixes: Rex"
-allowed "a literal block another session ran in is allowed" 'rex send -b rex-blk-O1 go'
-allowed "split on that block is allowed" 'rex split -b rex-blk-O1'
-allowed "reads stay allowed" 'rex session ls --json'
-denied "a block no session ran in" 'rex send -b rex-blk-X9 go'
-denied "send-key to an unknown block" 'rex send-key -b rex-blk-X9 enter'
-denied "block from a variable" 'rex send -b $B go'
-denied "block from a substitution" 'rex send -b "$(echo rex-blk-O1)" go'
-denied "block with the equals form from a variable" 'rex send --block=$B go'
-denied "no block option" 'rex send go'
-denied "an unknown verb on the rex command, no block" 'rex frobnicate'
-denied "an unknown verb aimed at an unproven block" 'rex frobnicate -b rex-blk-X9'
-denied "api call" 'rex api call -s s-rx session.view'
-denied "run with no block" 'rex run ls'
-denied "the command word is a variable" '$R send -b rex-blk-O1 go'
-echo "review-fixes: stub host and the generic unknown verb"
-allowed "a stub send to a pane another session ran in" 'stubhost send stub-o-d go'
-denied "a stub send to an unproven pane" 'stubhost send stub-nobody go'
-denied "an unknown verb on a host command" 'stubhost frobnicate stub-o-d'
-denied "a host command with no verb" 'stubhost'
-allowed "a host list is a read" 'stubhost list'
-denied "the stub command word is a variable" '$S send stub-o-d go'
-echo "review-fixes: the PM keeps today's behaviour"
-it "the PM may send to a worker pane"
-check allow "$(verdict "$(hook pm-herdr-b 'herdr agent prompt w2:p77 go')")"
-it "the PM may send with a runtime-built target (no regression)"
-check allow "$(verdict "$(hook pm-herdr-b 'herdr agent prompt $P go')")"
-it "the PM may not type into its own pane"
-check deny "$(verdict "$(hook pm-herdr-b 'herdr agent prompt w2:p31 go')")"
-it "the PM of another programme is not held to the allow-list"
-check allow "$(verdict "$(hook pm-rex-d 'herdr agent prompt $P go')")"
-
-echo "review-fixes: the allow-list never raises, because a hook error fails open"
-it "odd and hostile command text goes through every host's classifier without an exception"
-OUT="$(AUTO_TEST_HOST=stub "$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
-import os, sys
-sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
-from _bootstrap import load_lib_module
-sg = load_lib_module("send_guard")
-cmds = ["", " ", "herdr", "herdr agent", "herdr --session", "herdr --machine", "$", "$(", "`", "'", '"', ">", "< <", "<<", "rex -b", "rex send -b", "rex --block=",
-        "osascript", "osascript -e", "osascript -l", "osascript -", "$H", "$H agent", "$H $H $H", "env", "env X=1", "exec", "x=1", "( herdr agent prompt",
-        "herdr agent prompt )", "stubhost", "stubhost send", "bash -c", "eval", "a;b;c", "herdr agent prompt p1 p2 p3 " * 80, "$(" * 50]
-bad = []
-for c in cmds:
-    try:
-        sg.host_sends(c, ["pane-x", "term-x"], proven=lambda t: False)
-        sg.host_sends(c, ["pane-x", "term-x"])
-    except Exception as exc:
-        bad.append((c[:20], type(exc).__name__))
-print(bad)
-PYEOF
-)"
-check "[]" "$OUT"
 
 # ---------------------------------------------------------------- RefusedHost in the source paths (finding 4)
 echo "review-fixes: a refused host does not crash the sweep, launch or send paths (finding 4)"

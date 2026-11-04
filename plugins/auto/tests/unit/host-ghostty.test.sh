@@ -449,7 +449,7 @@ PYEOF
 it "no Ghostty notification exists, so the answer is degraded and says where the ask lives"
 check "degraded journal" "$OUT"
 
-echo "host-ghostty: is_host_command treats any osascript naming the terminal as a send"
+echo "host-ghostty: is_host_command reads a typing verb naming the terminal as a send"
 cmd_hit() { # cmd_hit <argv words...>: prints the verb and target, or none
   "$PY" - "$AUTO_ROOT" "$@" <<PYEOF
 $HEAD_PY
@@ -467,18 +467,21 @@ it "the tty written without /dev/"
 check "send key|$TTY1" "$(cmd_hit osascript -e 'tell application "Ghostty" to send key "enter" to (first terminal whose tty contains "ttys016")')"
 it "perform action"
 check "perform action|$T1" "$(cmd_hit osascript -e "tell application \"Ghostty\" to perform action \"close_surface\" on terminal id \"$T1\"")"
-it "a script file that takes the terminal id as an argument"
-check "script|$T1" "$(cmd_hit osascript /tmp/x.scpt "$T1")"
-it "any Ghostty script that only reads the PM's terminal is still a hit (default deny)"
-check "script|$T1" "$(cmd_hit osascript -e "tell application \"Ghostty\" to get name of terminal id \"$T1\"")"
+it "a script file that takes the terminal id as an argument is not a hit"
+check "none" "$(cmd_hit osascript /tmp/x.scpt "$T1")"
+it "a Ghostty script that only reads the PM's terminal is not a hit"
+check "none" "$(cmd_hit osascript -e "tell application \"Ghostty\" to get name of terminal id \"$T1\"")"
+it "returning the id is not a hit"
+check "none" "$(cmd_hit osascript -e "return \"$T1\"")"
 it "the binary named through a variable or an absolute path"
 check "input text|$T1" "$(cmd_hit '$OSASCRIPT' -e "input text to terminal id \"$T1\"")"
 check "input text|$T1" "$(cmd_hit /usr/bin/osascript -e "input text to terminal id \"$T1\"")"
-it "a send that picks every terminal reaches the PM's, so it is a hit"
-check "input text|$T1" "$(cmd_hit osascript -e 'tell application "Ghostty" to repeat with t in terminals
+it "a send that names no pane is not a hit"
+check "none" "$(cmd_hit osascript -e 'tell application "Ghostty" to repeat with t in terminals
 input text "x" to t
 end repeat')"
-check "send key|$T1" "$(cmd_hit osascript -e 'tell application "Ghostty" to send key "enter" to focused terminal of front window')"
+check "none" "$(cmd_hit osascript -e 'tell application "Ghostty" to send key "enter" to focused terminal of front window')"
+check "none" "$(cmd_hit osascript -e 'tell application "System Events" to keystroke "x"')"
 it "a send to another terminal id is not a hit"
 check "none" "$(cmd_hit osascript -e "tell application \"Ghostty\" to input text \"x\" to terminal id \"$T2\"")"
 it "an unrelated osascript call is not a hit"
@@ -509,16 +512,17 @@ every_form() {
   done
   check "" "$bad"
 }
-SEND_PM="osascript -e 'tell application \"Ghostty\" to input text \"go\" to terminal id \"$T1\"'"
+# Escaped spaces, not quotes, so the same text nests inside every wrapper's own quoting as one script word.
+SEND_PM="osascript -e tell\\ application\\ Ghostty\\ to\\ input\\ text\\ go\\ to\\ terminal\\ id\\ $T1"
 it "another session's input text into the PM's terminal id, every wrapper form"
 every_form sess-worker "$SEND_PM" deny
 it "send key by the PM's tty, every wrapper form"
-every_form sess-worker "osascript -e 'tell application \"Ghostty\" to send key \"enter\" to (first terminal whose tty is \"$TTY1\")'" deny
+every_form sess-worker "osascript -e send\\ key\\ enter\\ to\\ first\\ terminal\\ whose\\ tty\\ is\\ $TTY1" deny
 it "the PM typing into its own terminal, every wrapper form"
-every_form pm-gh "osascript /tmp/send.scpt $T1 go" deny
-every_form pm-gh "osascript /tmp/send.scpt $TTY1 go" deny
-it "a script file that gets the PM's id as an argument"
-every_form sess-worker "osascript /tmp/send.scpt $T1 go" deny
+every_form pm-gh "$SEND_PM" deny
+it "a script file that gets the PM's id as an argument is not a literal send"
+every_form sess-worker "osascript /tmp/send.scpt $T1 go" allow
+every_form pm-gh "osascript /tmp/send.scpt $TTY1 go" allow
 it "the attempt is journaled with the verb and the PM's terminal"
 ROW="$(env PATH="$GPATH" "$PY" - "$AUTO_ROOT" "$RUN_PM" <<PYEOF
 $HEAD_PY
@@ -528,12 +532,12 @@ PYEOF
 )"
 check "blocked_driver_send sess-worker input text $T1" "$ROW"
 it "input text into the worker's own terminal stays allowed, every wrapper form"
-every_form sess-worker "osascript -e 'tell application \"Ghostty\" to input text \"go\" to terminal id \"$T2\"'" allow
+every_form sess-worker "osascript -e input\\ text\\ go\\ to\\ terminal\\ id\\ $T2" allow
 it "KTD3: GHOSTTY variables that claim the worker is the PM do not weaken the guard"
 FAKES=(GHOSTTY_SURFACE_ID=$T1 TERM_PROGRAM=ghostty GHOSTTY_RESOURCES_DIR=/x HERDR_PANE_ID=w9:p9)
 every_form sess-worker "$SEND_PM" deny "${FAKES[@]}"
 it "KTD3: GHOSTTY variables naming the PM do not make a send to another terminal look like the PM's"
-every_form sess-worker "osascript -e 'tell application \"Ghostty\" to input text \"go\" to terminal id \"$T2\"'" allow "${FAKES[@]}"
+every_form sess-worker "osascript -e input\\ text\\ go\\ to\\ terminal\\ id\\ $T2" allow "${FAKES[@]}"
 
 echo "host-ghostty: typed takeover moves the lease only on Ghostty evidence (R13, AE3)"
 N=0

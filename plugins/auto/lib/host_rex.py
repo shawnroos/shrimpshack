@@ -45,12 +45,8 @@ JOIN_LEAVE_EVENTS = frozenset({"block_created", "block_closed", "session_created
 SESSION_PREFIX = "session:"
 BIN_TOKENS = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", "--color"})
-# Everything else that names the PM's block is a send: an unknown or future verb must not slip through.
-READ_VERBS = frozenset({"capture", "ls", "list", "whoami", "version", "wait", "events", "actions", "keymap",
-                        "help", "completion", "terminfo"})
-READ_NOUNS = frozenset({"session", "window", "block", "client", "server", "hosts", "config", "skill", "home", "api"})
-# rename only changes a label and cannot type into a block, so it sits with the reads on purpose.
-READ_SUBVERBS = frozenset({"ls", "list", "inspect", "status", "logs", "describe", "show", "rename"})
+# Options that pick where a verb acts; each takes the next word, which must not be read as the verb.
+PLACE_OPTS = frozenset({"-s", "--session", "-w", "--window", "-b", "--block"})
 TYPING_VERBS = frozenset({"send", "send-key", "run", "split", "do"})
 # Rex accepts the end of an id as a target; 4 characters is the shortest tail worth treating as naming a block.
 MIN_ID_TAIL = 4
@@ -155,26 +151,18 @@ class RexHost(terminal_host.TerminalHost):
         return degraded("Rex has no notification command, so the ask stays in the journal and the tracker",
                         value="journal")
 
-    def send_class(self, argv, text=""):
-        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
-            return None
-        rest = list(argv[1:])
-        verb = _verb_words(rest)
-        if not verb or _reads_only(verb):
-            return "read", []
-        return ("send" if _types(verb) else "unknown"), _blocks_of(rest) or None
-
     def is_host_command(self, argv, pane_ids=()):
-        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
+        # Casefolded: a case-insensitive filesystem finds `REX` on PATH, so it is the same literal program.
+        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]).casefold() == "rex"):
             return None
         rest = list(argv[1:])
         verb = _verb_words(rest)
-        if verb and _reads_only(verb):
+        if not verb or not _types(verb):
             return None
-        for token in rest:
+        for block in _blocks_of(rest):
             for ident in pane_ids:
-                if ident and _names_block(token, ident):
-                    return " ".join(verb[:2] if verb[:1] == ["api"] else verb[:1]) or "rex", ident
+                if ident and _names_block(block, ident):
+                    return " ".join(verb[:2] if verb[:1] == ["api"] else verb[:1]), ident
         return None
 
 
@@ -402,7 +390,7 @@ def _verb_words(rest) -> list:
     while i < len(rest):
         tok = rest[i]
         if tok.startswith("-"):
-            i += 2 if tok in GLOBAL_VALUE_OPTS else 1
+            i += 2 if tok in GLOBAL_VALUE_OPTS or tok in PLACE_OPTS else 1
             continue
         words.append(tok)
         if len(words) == 2:
@@ -415,17 +403,30 @@ def _types(verb) -> bool:
     return verb[0] in TYPING_VERBS or list(verb[:2]) == ["api", "call"]
 
 
+def _json_block(token):
+    try:
+        data = json.loads(token) if token.startswith("{") else None
+    except ValueError:
+        return None
+    block = data.get("block_id") if isinstance(data, dict) else None
+    return block if isinstance(block, str) else None
+
+
 def _blocks_of(rest) -> list:
+    """The blocks a call targets: -b <id>, --block <id>, --block=<id>, -b<id>, and block_id in a JSON argument."""
     blocks = [rest[i + 1] for i, tok in enumerate(rest[:-1]) if tok in ("-b", "--block")]
-    return blocks + [tok.split("=", 1)[1] for tok in rest if tok.startswith("--block=")]
-
-
-def _reads_only(verb) -> bool:
-    return verb[0] in READ_VERBS or (verb[0] in READ_NOUNS and len(verb) > 1 and verb[1] in READ_SUBVERBS)
+    for tok in rest:
+        if tok.startswith("--block="):
+            blocks.append(tok.split("=", 1)[1])
+        elif tok.startswith("-b") and not tok.startswith("--") and len(tok) > 2:
+            blocks.append(tok[2:])
+        elif _json_block(tok):
+            blocks.append(_json_block(tok))
+    return blocks
 
 
 def _names_block(token, ident) -> bool:
-    """True when `token` holds the block id or a tail of it, in any quoting, `--block=` or JSON form."""
+    """True when `token` holds the block id or a tail of it."""
     text, low = token.casefold(), ident.casefold()
     if low in text:
         return True

@@ -207,11 +207,6 @@ def lookup(session_id, server=None, workspace=None, *, include_headless=False, h
     return max(found, key=lambda r: r.get("at") or "")
 
 
-def known_panes() -> set:
-    """Casefolded pane ids, terminal ids and ttys any registered session ever ran in."""
-    return {str(v).casefold() for row in _all_rows() for v in (row.get("pane_id"), row.get("terminal_id"), row.get("tty")) if v}
-
-
 def latest_rows(*, include_headless=False) -> dict:
     latest = {}
     for row in _all_rows():
@@ -246,6 +241,29 @@ def space_of_session(session_id):
         host = host_of_row(row)
         return (row["server"], row["workspace"]) + ((host,) if host != programme_home.DEFAULT_HOST else ())
     return None
+
+
+def in_programme(driver: dict, session_id) -> bool:
+    """Is this session the driver, in a space its run leases, or on one of its unfinished items?"""
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    if session_id == driver.get("session_id"):
+        return True
+    space = space_of_session(session_id)
+    if space:
+        try:
+            lease = programme_home.read_lease(programme_home.lease_path(*space))
+        except programme_home.ProgrammeHomeError:
+            lease = None
+        if isinstance(lease, dict) and lease.get("run") == driver.get("run"):
+            return True
+    # A record that cannot be read proves nothing, and a session not shown to be in the programme is free.
+    record, _hold = programme_home.read_programme(driver["run"])
+    programme = record.get("programme") if isinstance(record, dict) else None
+    items = programme.get("items") if isinstance(programme, dict) else None
+    return isinstance(items, dict) and any(
+        isinstance(item, dict) and item.get("state") not in programme_home.FINISHED_ITEM_STATES
+        and session_id in programme_home.session_ids(item) for item in items.values())
 
 
 def driver_panes(now=None) -> list:

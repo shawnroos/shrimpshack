@@ -75,12 +75,11 @@ for bad in "-x" "" "a b" "w1:p1;rm" '$(x)' $'w9:p1\n' "w９:p1" "." ".."; do
   check "False|" "$(PANE_ARG="$bad" run_py "r = host.close_pane(os.environ['PANE_ARG']); print(r.ok, end='')")|$(calls)"
 done
 
-it "send_class gives 'pane close <pane>' no target, so a worker session is denied; is_host_command still names the pane"
-check "('send', None) ('pane close', 'w9:p4')" "$(run_py "
-print(host.send_class(['herdr','pane','close','w9:p4']), host.is_host_command(['herdr','pane','close','w9:p4']))")"
+it "is_host_command names the pane of a pane close"
+check "('pane close', 'w9:p4')" "$(run_py "print(host.is_host_command(['herdr','pane','close','w9:p4']), end='')")"
 
-it "pane close --help is not read as a target"
-check "('send', None)" "$(run_py "print(host.send_class(['herdr','pane','close','--help']), end='')")"
+it "pane close with no pane is not a send: --help is no target"
+check "None None" "$(run_py "print(host.is_host_command(['herdr','pane','close','--help']), host.is_host_command(['herdr','pane','close']), end='')")"
 
 it "an eligible pane is closed through the herdr host"
 : > "$FAKE_HERDR_LOG"

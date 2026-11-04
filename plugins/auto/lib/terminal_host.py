@@ -156,8 +156,8 @@ class TerminalHost:
     def is_host_command(self, argv, pane_ids=()):
         """(verb, target) when ``argv`` (one simple command) types into a pane, else None.
 
-        The default denies: any call to one of this host's binaries that names a pane id is a send.
-        A host with a real verb list overrides this and still falls back to it.
+        The default reads any call to one of this host's binaries that names a pane id as a send. Each real host
+        overrides it with its typing verbs; only the test stub falls back to it.
         """
         if not argv or os.path.basename(argv[0]) not in self.binaries:
             return None
@@ -171,17 +171,6 @@ class TerminalHost:
     def is_piped_script(self, argv, text, pane_ids=()):
         """Like is_host_command for a command whose script arrives on stdin: ``text`` is everything the shell sees."""
         return None
-
-    def send_class(self, argv, text=""):
-        """None when ``argv`` is not a call to this host's command, else (kind, targets).
-
-        kind is "read" (cannot type into a pane), "send" (can) or "unknown" (not told apart, so treated as a send).
-        targets are the literal pane ids the call names, or None when any target is runtime-built, missing or hidden
-        in a script on stdin or in a file. The send-guard's one policy decides what to do with the answer.
-        """
-        if not argv or os.path.basename(argv[0]) not in self.binaries:
-            return None
-        return "unknown", None
 
     def installed(self) -> bool:
         return any(shutil.which(b) for b in self.binaries)

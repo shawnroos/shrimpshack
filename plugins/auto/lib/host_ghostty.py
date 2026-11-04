@@ -44,19 +44,9 @@ SESSION_FILE_CAP = 65536
 # System Events types into whatever app is frontmost, Ghostty included.
 SEND_VERBS = ("input text", "send key", "perform action", "send mouse", "inputtext", "sendkey", "performaction", "sendmouse",
               "keystroke", "key code")
-# A send that picks its terminal without naming an id still reaches the PM's terminal.
-BROADCAST = re.compile(r"\b(every terminal|terminals|focused terminal|front window|selected tab|(first|last|some) terminal"
-                       r"|terminal \d+)\b")
 OSASCRIPT_TOKENS = frozenset({"$OSASCRIPT", "${OSASCRIPT}"})
 _REDIRECTS = frozenset({"<", "<<", "<<-", "<<<"})
-_FILE_LIKE = re.compile(r"^-[ls]|^[./~]|\.(?:scpt|scptd|applescript|js|jxa)$")
 _VALUE_OPTS = frozenset({"-e", "-l", "-s"})
-# Anything a worker's osascript may not contain: it could name Ghostty or a terminal, build a name from pieces, or run
-# code that was not written on the command line.
-_FORBIDDEN = ("ghostty", "terminal", "&", "+", "run script", "do shell script", "system events", "evaluate", "objc")
-# The one send a non-PM session may make: a single line, one literal id (the shell may have stripped its quotes).
-_OTHER_SEND = re.compile(r"""^-e tell application [\\"']*ghostty[\\"']* to (?:input text|send key) """
-                         r"""(?:"[^"&()\\]*"|[^"&()'\\]*?) to terminal id [\\"']*(?P<id>[a-z0-9._-]+)[\\"']*(?: --.*)?$""")
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _NO_TTY = ("", "??", "?", "-")
 _OWN_PANE = {}
@@ -224,12 +214,10 @@ class GhosttyHost(terminal_host.TerminalHost):
             return None
         return _classify(text, pane_ids)
 
-    def send_class(self, argv, text=""):
-        return _shape(argv[1:]) if _is_osascript(argv) else None
-
 
 def _is_osascript(argv) -> bool:
-    return bool(argv) and (argv[0] in OSASCRIPT_TOKENS or os.path.basename(argv[0]) == "osascript")
+    # Casefolded: a case-insensitive filesystem finds `OSASCRIPT` on PATH, so it is the same literal program.
+    return bool(argv) and (argv[0] in OSASCRIPT_TOKENS or os.path.basename(argv[0]).casefold() == "osascript")
 
 
 def _reads_stdin(args) -> bool:
@@ -246,40 +234,21 @@ def _reads_stdin(args) -> bool:
     return not has_script
 
 
-def _fold(text, keep_lines=False) -> str:
-    """Casefolded text with AppleScript line continuations joined; whitespace collapsed unless lines are kept."""
-    out = re.sub(r"\u00ac[ \t]*\r?\n[ \t]*", " ", text.casefold())
-    return out if keep_lines else re.sub(r"\s+", " ", out)
+def _fold(text) -> str:
+    """Casefolded text with AppleScript line continuations joined and whitespace collapsed."""
+    return re.sub(r"\s+", " ", re.sub(r"\u00ac[ \t]*\r?\n[ \t]*", " ", text.casefold()))
 
 
 def _classify(text, pane_ids):
-    """(verb, target) when ``text`` is an osascript script that may type into a driver's terminal."""
+    """(verb, target) when ``text`` is an osascript script with a typing verb that names a driver's terminal."""
     folded = _READ_ONLY.sub("", _fold(text))
     verb = next((v for v in SEND_VERBS if v in folded), None)
+    if verb is None:
+        return None
     for ident in pane_ids:
         if ident and _names(folded, ident):
-            return verb or "script", ident
-    first = next((i for i in pane_ids if i), None)
-    if not first:
-        return None
-    if verb in ("keystroke", "key code") or (verb and BROADCAST.search(folded)):
-        return verb, first
+            return verb, ident
     return None
-
-
-def _shape(args):
-    """Allow-list: only a literal -e script that is auto's list script, one send to a literal terminal id, or text that
-    cannot reach a terminal is understood; stdin, files, -l, -s and anything else are "unknown"."""
-    if _reads_stdin(args) or args[0] != "-e" or any(t in _REDIRECTS or _FILE_LIKE.search(t) for t in args):
-        return "unknown", None
-    raw = _fold(" ".join(args), keep_lines=True)
-    folded = _fold(" ".join(args))
-    if folded in ("-e " + _fold(LIST_SCRIPT), "-e " + _fold(LIST_SCRIPT) + " --"):
-        return "read", []
-    match = None if "\n" in raw or "\r" in raw else _OTHER_SEND.match(folded)
-    if match:
-        return "send", [match.group("id")]
-    return ("unknown", None) if any(w in folded[3:] for w in _FORBIDDEN + SEND_VERBS) else ("read", [])
 
 
 def _ps(pid, fields):

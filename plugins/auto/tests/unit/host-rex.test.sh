@@ -500,7 +500,7 @@ PYEOF
 it "no Rex notification exists, so the answer is degraded and says where the ask lives"
 check "degraded journal" "$OUT"
 
-echo "host-rex: is_host_command treats any rex call naming the block as a send"
+echo "host-rex: is_host_command reads a typing verb aimed at the block as a send"
 cmd_hit() { # cmd_hit <argv words...>: prints the verb and target, or none
   "$PY" - "$AUTO_ROOT" "$@" <<PYEOF
 $HEAD_PY
@@ -528,8 +528,14 @@ it "an absolute path to the binary"
 check "send|$BID" "$(cmd_hit "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex" send -b "$BID" hi)"
 it "the binary named through a variable"
 check "send|$BID" "$(cmd_hit '$REX' send -b "$BID" hi)"
-it "a verb auto has never heard of that names the block is still a send"
-check "frobnicate|$BID" "$(cmd_hit rex frobnicate "--block=$BID")"
+it "a verb auto has never heard of that names the block is not a send"
+check "none" "$(cmd_hit rex frobnicate "--block=$BID")"
+it "the block named only in the typed text is not a send"
+check "none" "$(cmd_hit rex send hi "$BID")"
+it "another block's JSON that holds the id in a value is not a send"
+check "none" "$(cmd_hit rex api call -s "$SID" m "{\"block_id\":\"$NOB\",\"data\":\"$BID\"}")"
+it "a session option before the verb does not hide it"
+check "send|$BID" "$(cmd_hit rex -s "$SID" send -b "$BID" hi)"
 it "a send to another block is not a hit"
 check "none" "$(cmd_hit rex send -b "$NOB" hi)"
 it "reading the block with capture is not a hit"
