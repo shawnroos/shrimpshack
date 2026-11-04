@@ -40,7 +40,7 @@ mkdir -p "$FAKEBIN"
 cat > "${FAKEBIN}/herdr" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FAKE_HERDR_LOG:-/dev/null}"
-exit 0
+exit "${FAKE_HERDR_EXIT:-0}"
 EOF
 chmod +x "${FAKEBIN}/herdr"
 export PATH="${FAKEBIN}:${PATH}"
@@ -183,6 +183,23 @@ prog record-hook-patch "lib/programme_approval.py" --why "blocks work" --pr 999
 has "Auto writing the picker's text" "$OUT"
 has "approvals that need a pick" "$OUT"
 
+for file in programme_journal programme_setup programme_prompt_source; do
+  it "patching ${file}.py names the pick rule"
+  prog record-hook-patch "lib/${file}.py" --why "blocks work" --pr 999
+  has "approvals that need a pick" "$OUT"
+done
+
+it "every key in PROTECTED is a real file, so a rename fails here"
+check "[]" "$(run_py <<'EOF'
+checks = load_lib_module("programme_checks")
+root = sys.argv[1]
+def exists(key):
+    return os.path.isfile(os.path.join(root, ".claude", "hooks", "hooks.json") if key == "hooks"
+                          else os.path.join(root, "lib", key + ".py"))
+print([key for key in checks.PROTECTED if not exists(key)])
+EOF
+)"
+
 it "patching the pre-filled answer hook names that rule"
 prog record-hook-patch "lib/on-pretooluse-askuser.py" --why "blocks work" --pr 999
 has "pre-filled answer refusal" "$OUT"
@@ -208,6 +225,17 @@ HERDR_LOG="$(cat "$FAKE_HERDR_LOG")"
 has "notification show" "$HERDR_LOG"
 has "on-pretooluse-askuser.py" "$HERDR_LOG"
 has "pre-filled answer refusal" "$HERDR_LOG"
+
+it "a delivered notice reports notified true"
+OUT="$(HERDR_PANE_ID=w2:p1 "$PY" "$PROG" record-hook-patch "lib/x.py" --why "blocks work" --pr 999 --run "$RUN" 2>&1)"
+has '"notified": true' "$OUT"
+
+it "a failed host notification reports notified false, and the row is kept"
+BEFORE="$(rows)"
+OUT="$(HERDR_PANE_ID=w2:p1 FAKE_HERDR_EXIT=1 "$PY" "$PROG" record-hook-patch "lib/x.py" --why "blocks work" --pr 999 --run "$RUN" 2>&1)"
+CODE=$?
+has '"notified": false' "$OUT"
+check "0 $((BEFORE + 1))" "$CODE $(rows)"
 
 it "the PM's sub-agent running the verb is refused by the sub-agent guard"
 OUT="$(subagent "bash ${AUTO_ROOT}/lib/programme.sh record-hook-patch lib/x.py --why w --pr 1 --run ${RUN}")"

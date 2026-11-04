@@ -48,6 +48,7 @@ GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", 
 # Options that pick where a verb acts; each takes the next word, which must not be read as the verb.
 PLACE_OPTS = frozenset({"-s", "--session", "-w", "--window", "-b", "--block"})
 TYPING_VERBS = frozenset({"send", "send-key", "run", "split", "do"})
+NOUN_TYPING_VERBS = frozenset({"api call", "block send", "block send-key", "block call"})
 # Rex accepts the end of an id as a target; 4 characters is the shortest tail worth treating as naming a block.
 MIN_ID_TAIL = 4
 _FRAGMENT_SPLIT = re.compile(r"[\s=,;:\"'{}\[\]]+")
@@ -157,12 +158,13 @@ class RexHost(terminal_host.TerminalHost):
             return None
         rest = list(argv[1:])
         verb = _verb_words(rest)
-        if not verb or not _types(verb):
+        label = _typing_verb(verb)
+        if not label:
             return None
         for block in _blocks_of(rest):
             for ident in pane_ids:
                 if ident and _names_block(block, ident):
-                    return " ".join(verb[:2] if verb[:1] == ["api"] else verb[:1]), ident
+                    return label, ident
         return None
 
 
@@ -399,8 +401,11 @@ def _verb_words(rest) -> list:
     return words
 
 
-def _types(verb) -> bool:
-    return verb[0] in TYPING_VERBS or list(verb[:2]) == ["api", "call"]
+def _typing_verb(verb):
+    pair = " ".join(verb[:2])
+    if pair in NOUN_TYPING_VERBS:
+        return pair
+    return verb[0] if verb and verb[0] in TYPING_VERBS else None
 
 
 def _json_block(token):

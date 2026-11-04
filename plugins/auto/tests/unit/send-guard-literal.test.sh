@@ -300,6 +300,112 @@ as_gh allow 'osascript -e '\''display notification "hi"'\'''
 as_gh allow 'echo '\''display notification "hi"'\'' | osascript'
 as_gh allow 'echo osascript -e '\''input text "x" to terminal id "ghost-term-9"'\'''
 
+BSNL=$'\\\n'
+echo "send-guard-literal: a comment does not hide a literal send"
+denied "cd /tmp  # go there
+herdr pane run $PM ls"
+denied "echo a # note
+herdr pane run $PM ls"
+denied "# don't run this twice
+echo a
+herdr pane send-text $PM hi"
+denied "echo a # don't
+herdr pane send-text $PM hi"
+denied "echo a#b; herdr pane send-text $PM hi"
+denied "gh pr view org/repo#12 && herdr pane send-text $PM hi"
+denied "curl https://x.y/z#frag; herdr pane send-text $PM hi"
+denied "echo \${#a}; herdr pane send-text $PM hi"
+denied "echo \$(date)#x; herdr pane send-text $PM hi"
+denied "bash -c 'cd /tmp # x
+herdr pane send-text $PM hi'"
+denied "cat <<EOF | bash
+cd /tmp # x
+herdr pane send-text $PM hi
+EOF"
+denied "cat <<EOF | bash # don't
+herdr pane send-text $PM hi
+EOF"
+denied "echo 'a # b'; herdr pane send-text $PM hi"
+denied "echo hi # cat <<EOF
+herdr pane send-text $PM hi"
+denied "# a comment ends at its newline ${BSNL}herdr pane send-text $PM hi"
+denied "echo \`a # b\` ; herdr pane send-text $PM hi"
+denied "echo \`a # b\`; herdr pane send-text $PM hi"
+allowed "echo hi # see \`herdr pane send-text $PM hi\`"
+allowed "# herdr pane send-text $PM hi"
+allowed "echo hi # herdr pane send-text $PM hi"
+allowed "echo hi # don't; herdr pane send-text $PM hi"
+allowed "echo 'a # b' herdr pane send-text $PM hi"
+allowed "cat <<'EOF' # it's notes
+herdr pane send-text $PM hi
+EOF"
+
+echo "send-guard-literal: a backslash-newline does not hide a literal send"
+denied "herdr pane send-text ${BSNL}  $PM hi"
+denied "herdr ${BSNL}  pane send-text $PM hi"
+denied "cd /tmp && ${BSNL}  herdr pane send-text $PM hi"
+denied "her${BSNL}dr pane send-text $PM hi"
+denied "bash -c 'herdr ${BSNL} pane send-text $PM hi'"
+denied "bash -c \"herdr ${BSNL} pane send-text $PM hi\""
+denied "herdr pane send-text \"w2:${BSNL}p9T\" hi"
+allowed "echo 'a${BSNL}b' herdr pane send-text $PM hi"
+allowed "echo a ${BSNL}  herdr pane send-text $PM hi"
+allowed "herdr pane send-text ${BSNL}  w2:p77 hi"
+as_rex deny "rex ${BSNL}  send -b rex-blk-D1 hi"
+as_rex deny "cd /tmp && ${BSNL}  rex send -b rex-blk-D1 hi"
+as_gh deny "cd /tmp && ${BSNL}  osascript -e 'input text \"x\" to terminal id \"ghost-term-9\"'"
+
+echo "send-guard-literal: Rex's block noun"
+as_rex deny 'rex block send -b rex-blk-D1 hi'
+as_rex deny 'rex block send-key -b rex-blk-D1 enter'
+as_rex deny 'rex block call -b rex-blk-D1 foo'
+as_rex deny 'rex -S srv block send --block=rex-blk-D1 hi'
+as_rex allow 'rex block send -b rex-blk-O1 hi'
+as_rex allow 'rex block send-key -b rex-blk-O1 enter'
+as_rex allow 'rex block capture -b rex-blk-D1'
+as_rex allow 'rex block inspect -b rex-blk-D1'
+as_rex allow 'rex block close -b rex-blk-D1'
+as_rex allow 'echo rex block send -b rex-blk-D1 hi'
+it "the refusal names the block noun's verb"
+has "rex block send" "$(hook sess-rex-o 'rex block send -b rex-blk-D1 hi')"
+
+echo "send-guard-literal: an ordinary word after a command is not a command position"
+allowed "echo do herdr pane send-text $PM hi"
+allowed "echo if herdr pane send-text $PM hi"
+allowed "echo exec herdr pane send-text $PM hi"
+allowed "grep time herdr pane send-text $PM"
+allowed "echo then herdr pane send-text $PM hi"
+denied "function f { herdr pane send-text $PM hi; }"
+denied "f() { herdr pane send-text $PM hi; }"
+denied "if [[ a ]] then herdr pane send-text $PM hi; fi"
+denied "if { true; } then herdr pane send-text $PM hi; fi"
+denied "while [[ -z x ]] do herdr pane send-text $PM hi; done"
+denied "if (( 1 )) then herdr pane send-text $PM hi; fi"
+denied "if (true) then herdr pane send-text $PM hi; fi"
+denied "sudo env nohup herdr pane send-text $PM hi"
+denied "! herdr pane send-text $PM hi"
+
+echo "send-guard-literal: an unreadable record proves no membership"
+row herdr default w7 pm-unread w7:p1 term_w7p1
+RUN_UNREAD="$(programme herdr default w7 pm-unread)"
+py "$RUN_UNREAD" <<PYEOF >/dev/null
+$HEAD_PY
+def mutate(rec):
+    rec["programme"]["items"] = {"linear:U-1": {"id": "linear:U-1", "title": "owned", "state": "open",
+                                                "owner": {"session_id": "sess-no-row-unread"}}}
+rc._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+PYEOF
+UNREAD_DB="${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN_UNREAD}/programme.db"
+it "with the record readable, the item proves a session with no registry row is in the programme"
+check deny "$(verdict "$(hook sess-no-row-unread 'herdr pane run w7:p1 ls')")"
+mv "$UNREAD_DB" "${UNREAD_DB}.saved"
+printf 'not a database' > "$UNREAD_DB"
+it "with the record unreadable, the same session is allowed"
+check allow "$(verdict "$(hook sess-no-row-unread 'herdr pane run w7:p1 ls')")"
+it "with the record unreadable, the driver's own session is still refused"
+check deny "$(verdict "$(hook pm-unread 'herdr pane run w7:p1 ls')")"
+mv "${UNREAD_DB}.saved" "$UNREAD_DB"
+
 echo "send-guard-literal: who counts as one of the programme's own sessions"
 SEND="herdr pane run $PM ls"
 as() { it "$1: $3 from [$2]"; check "$1" "$(verdict "$(hook "$2" "$3")")"; }

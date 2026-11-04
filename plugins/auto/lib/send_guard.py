@@ -32,12 +32,13 @@ SEGMENT_CAP = 256
 _ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'")
 _LOCALE_DOLLAR = re.compile(r"\$(?=\")")
 _HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*(['\"]?)\\?([A-Za-z_][\w.-]*)\1")
-_HIDING_CHARS = re.compile(r"[\"'\\\\]")
+_HIDING_CHARS = re.compile(r"\\\n|[\"'\\]")
 # Each substitution span becomes this one character before the text is lexed, so the shell's own word boundaries
 # survive: `RUN=$(a)-$(b)` stays one assignment instead of lexing into a `-$` word that reads as a program.
 # A private-use character cannot appear in a real command and is not whitespace, a quote or a shlex punctuation char,
 # so it stays glued to its neighbours exactly as the substitution was.
 _MARK = "\ue000"
+_QUOTED, _CODE, _COMMENT = 0, 1, 2
 # A command word holding any of these may become a different program at run time (a leading `=` is zsh's path lookup).
 # A token made only of shell operators is punctuation the lexer split out (the `)` and `>` of quoted JavaScript).
 _RUNTIME_WORD = re.compile(r"[$`(){}*?\[~@\\<>|;&]|^=|" + _MARK)
@@ -51,6 +52,8 @@ _REDIRECT_OPS = frozenset({"<", ">", ">>", ">&", "<&", "<>", "&>", "&>>", ">|"})
 _COMMAND_PREFIX = frozenset({"exec", "env", "command", "nohup", "time", "sudo", "xargs", "builtin", "then", "do", "else",
                              "elif", "if", "while", "until", "{", "!", "noglob", "nocorrect", "doas", "stdbuf",
                              "caffeinate", "nice", "timeout", "gtimeout"})
+# `if [[ a ]] then` and `if { a; } then` have no separator before the keyword, and these words end the condition.
+_ENDS_CONDITION = frozenset({"]]", "}"})
 # Options of a precommand that take the next word as their value; any other option keeps the command position.
 _PREFIX_VALUE_OPTS = {
     "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-r", "-t", "-U", "-D", "-R", "-T"}),
@@ -92,12 +95,13 @@ def _unquote_dollar(command: str) -> str:
     return _LOCALE_DOLLAR.sub("", _ANSI_C.sub(lambda m: shlex.quote(_ansi_c(m)), command))
 
 
-def _code_mask(text: str) -> bytearray:
-    """1 for each character the shell reads as code: outside quotes, and outside a `#` comment."""
-    mask, quote, escaped, comment = bytearray(len(text)), None, False, False
+def _char_kinds(text: str) -> bytearray:
+    kinds, quote, escaped, comment, tick = bytearray(len(text)), None, False, False, False
     for i, ch in enumerate(text):
         if comment:
-            comment = ch != "\n"
+            # A comment inside backticks ends at the closing backtick: the shell reads the span on its own.
+            ends_span = tick and ch == "`"
+            comment, tick = ch != "\n" and not ends_span, tick and not ends_span
         elif escaped:
             escaped = False
         elif ch == "\\" and quote != "'":
@@ -106,10 +110,18 @@ def _code_mask(text: str) -> bytearray:
             quote = None if ch == quote else quote
         elif ch in "'\"":
             quote = ch
-        elif ch == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+        elif ch == "`":
+            tick = not tick
+        # `)` is left out on purpose: `$(date)#x` is one word to the shell, and reading a real `(a)#x` comment as code
+        # only scans more text.
+        elif ch == "#" and (i == 0 or text[i - 1] in " \t\n;&|("):
             comment = True
-        mask[i] = 0 if (comment or quote) else 1
-    return mask
+        kinds[i] = _COMMENT if comment else _QUOTED if quote else _CODE
+    return kinds
+
+
+def _strip_comments(text: str) -> str:
+    return "".join(ch for ch, kind in zip(text, _char_kinds(text)) if kind != _COMMENT)
 
 
 def _heredoc_reader_is_shell(text: str, start: int, line_end: int) -> bool:
@@ -121,7 +133,7 @@ def _heredoc_reader_is_shell(text: str, start: int, line_end: int) -> bool:
     this is the direction that fails closed.
     """
     line = text[text.rfind("\n", 0, start) + 1:line_end]
-    words = _lex(line)
+    words = _lex(_strip_comments(line))
     if not words:
         return True
     runs, assigns = _command_positions(words)[:2]
@@ -137,10 +149,10 @@ def _heredoc_reader_is_shell(text: str, start: int, line_end: int) -> bool:
 
 def _split_heredocs(text: str):
     """(text without heredoc bodies, [(body, a shell runs it)])."""
-    kept, bodies, pos, code = [], [], 0, _code_mask(text)
+    kept, bodies, pos, kinds = [], [], 0, _char_kinds(text)
     while True:
         found = _HEREDOC.search(text, pos)
-        while found is not None and not code[found.start()]:
+        while found is not None and kinds[found.start()] != _CODE:
             # `# <<'EOF'` and `'<<\"EOF\"'` are not heredocs to any shell, and reading one as a heredoc would take
             # the real commands after it out of the scanned text.
             found = _HEREDOC.search(text, found.end())
@@ -235,11 +247,15 @@ def _substitution_scripts(spans: list, depth: int = 0) -> list:
 
 
 def _newlines_as_breaks(text: str) -> str:
-    """The shell ends a command at a newline, but the lexer reads one as a space; a quoted or escaped newline stays."""
+    """The shell ends a command at a newline, but the lexer reads one as a space. A quoted newline stays, and a
+    backslash-newline goes, because the shell deletes it before it reads words and the lexer would keep the newline."""
     out, quote, escaped = [], None, False
     for ch in text:
         if escaped:
             escaped = False
+            if ch == "\n":
+                out.pop()
+                continue
         elif ch == "\\" and quote != "'":
             escaped = True
         elif quote:
@@ -256,6 +272,9 @@ def _lex(text: str) -> list:
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
+        # shlex would start a comment at a `#` inside a word, where the shell does not; _strip_comments has removed
+        # the real ones by now.
+        lexer.commenters = ""
         return list(lexer)
     except ValueError:
         # An unbalanced quote must not hide a send on a later line, so the line ends stay command breaks.
@@ -345,7 +364,8 @@ def _command_positions(tokens: list) -> tuple:
         if in_case and not patterns and tok == "in":
             patterns = True
             continue
-        if tok in _COMMAND_PREFIX:
+        # `function f { ...` reaches `{` with no command position, and `echo do herdr` must not gain one.
+        if tok in _COMMAND_PREFIX and (at_cmd or tok == "{" or (k and tokens[k - 1] in _ENDS_CONDITION)):
             at_cmd, prefix = True, tok
         elif at_cmd and _ASSIGNMENT.match(tok) and not (k and tokens[k - 1] in _RUNS_NEXT_WORD):
             assigns[k] = True
@@ -367,6 +387,9 @@ def _command_positions(tokens: list) -> tuple:
 
 def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list) -> None:
     main, bodies = _split_heredocs(_unquote_dollar(text))
+    # Before the substitution and newline passes, which have no comment state: an apostrophe in a comment would read
+    # as an open quote there.
+    main = _strip_comments(main)
     marked, spans = _mark_substitutions(main)
     tokens = _lex(_newlines_as_breaks(marked))
     piped = "\n".join([main] + [body for body, _shell in bodies])

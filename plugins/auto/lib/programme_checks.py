@@ -30,6 +30,9 @@ _LINEAR = "the Linear done, cancelled and root-cause rule"
 PROTECTED = {
     "programme_approval": (_PICKER, _PICK),
     "programme_pick_source": (_PICKER, _PICK),
+    "programme_journal": (_PICK,),
+    "programme_setup": (_PICK,),
+    "programme_prompt_source": (_PICK,),
     "on-posttooluse-askuser": (_PICKER, _PICK),
     "on-pretooluse-askuser": (_PREFILL,),
     "on-pretooluse-action": (_LINEAR,),
@@ -61,7 +64,8 @@ def _h_record(host, argv):
                 "text": _notice(path, why, pr, protects)}
 
     def notify(payload):
-        return {"notified": programme_record.notify_host("auto: hook code patched", payload["text"])}
+        # A host's notify value is an exit code or a reason word, so 0 is the only delivered value.
+        return {"notified": programme_record.notify_host("auto: hook code patched", payload["text"]) == 0}
 
     return host._write(opts, change, PATCHED, verb="record-hook-patch", target=path, after=notify)
 
