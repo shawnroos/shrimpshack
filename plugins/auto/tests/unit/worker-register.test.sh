@@ -175,6 +175,7 @@ prog add-item linear:AI-703 --title "Other item"
 prog add-item linear:AI-704 --title "Second mode fails"
 prog add-item linear:AI-705 --title "Hand started"
 prog add-item linear:AI-706 --title "Bad contract"
+prog add-item linear:AI-707 --title "Seed edited while registering"
 
 mkrun() {
   run_py "$1" "$2" "$3" "${4:-}" <<'EOF'
@@ -376,6 +377,38 @@ it "the second run copied nothing, so there is no duplicate"
 check 'false' "$(jq_py 'd["contract_copied"]')"
 it "the contract in the run record is unchanged"
 check "$COPY_BEFORE" "$(run_field "$REPO_A" run-w3 'rec["contract"]')"
+
+echo "── a seed edit that lands between the run-record copy and the bind ──"
+
+prog start-worker linear:AI-707 --contract "$CONTRACT" --plan docs/plans/r.md -- --name race --handoff "$HANDOFF" --target tab
+SID7="$(last_start_sid)"
+mkrun "$REPO_A" run-w7 "$SID7"
+run_py "$RUN" "$SID7" <<'EOF'
+os.environ["CLAUDE_CODE_SESSION_ID"] = args[1]
+prog = load_lib_module("programme")
+wr = load_lib_module("worker_register")
+pa = load_lib_module("programme_authority")
+real = wr._bind
+def edited_then_bind(run_id, home, key, *rest):
+    def bump(rec):
+        rec["programme"]["items"][key]["auto_run"]["contract"]["version"] += 1
+    pa.write(home, run_id, bump)
+    return real(run_id, home, key, *rest)
+wr._bind = edited_then_bind
+try:
+    prog._cli(["register-run", "--run", args[0], "--item", "linear:AI-707", "--auto-run", "run-w7", "--repo", os.environ["REPO_A"]])
+except BaseException as exc:
+    print("exited", type(exc).__name__)
+EOF
+it "the bind is refused with state_changed and the item stays launched"
+check '["launched", null]' "$(auto_run '[a["state"], a["run_id"]]' linear:AI-707)"
+it "the run record holds the older copy"
+check '1' "$(run_field "$REPO_A" run-w7 'rec["contract"]["version"]')"
+as "$SID7" register-run --run "$RUN" --item linear:AI-707 --auto-run run-w7 --repo "$REPO_A"
+it "registering again binds and copies the edited seed"
+check '[0, "bound", 2]' "[$CODE, $(auto_run '[a["state"], a["contract"]["version"]]' linear:AI-707 | sed -E 's/^\[|\]$//g')]"
+it "the run record now holds the edited version, so the edit is not lost"
+check '2' "$(run_field "$REPO_A" run-w7 'rec["contract"]["version"]')"
 
 echo "── a hand-started run binds with no contract ──"
 

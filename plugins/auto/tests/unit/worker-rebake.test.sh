@@ -183,6 +183,32 @@ has '"state": "current"' "$RECOVERED"
 it "the pulse's skipped steps carry the reason"
 has '"reasons": {"U1": "workflow replaced v2", "U2": "workflow replaced v2", "U3": "workflow replaced v2"}' "$RECOVERED"
 
+echo "── a re-queued step that holds an open gating finding ──"
+
+OUT="$(run_py <<'EOF'
+new_run("held")
+def hold(r):
+    for s in r["steps"]:
+        if s["id"] == "U2":
+            s["findings"] = [{"severity": "blocker", "note": "open gating finding"}]
+core._with_locked_run_record(REPO, "held", hold)
+cr.request_change(REPO, "held", "step", workflow="rb-beta")
+pulse.dispatch_pulse(REPO, "held")
+dispatcher.dispatch_batch(REPO, "held", [], 1, launch_fn=launcher([]))
+r = rec("held")
+by = {s["id"]: s for s in r["steps"]}
+print(json.dumps({"states": states("held"), "u2_findings": len(by["U2"]["findings"]), "baked": r["workflow"]["name"]}, sort_keys=True))
+EOF
+)"
+it "a pending step with an open blocker is kept in place, not skipped, so the blocker can still be closed"
+has '"U2": "pending"' "$OUT"
+it "the pending steps with no open gating finding are skipped as before"
+has '"U1": "terminal-skip"' "$OUT"
+has '"U3": "terminal-skip"' "$OUT"
+it "the kept step still carries its finding and the new workflow is baked"
+has '"u2_findings": 1' "$OUT"
+has '"baked": "rb-beta"' "$OUT"
+
 echo "── coalescing and no-ops ──"
 
 OUT="$(run_py <<'EOF'

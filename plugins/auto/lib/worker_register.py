@@ -246,11 +246,17 @@ def _copy_seed(repo, auto_run, seed) -> bool:
     return run_record_core._with_locked_run_record(repo, auto_run, mutate)
 
 
-def _bind(run_id, home, key, caller, auto_run, repo) -> dict:
+def _bind(run_id, home, key, caller, auto_run, repo, copied_version=None) -> dict:
     def change(rec):
         programme = rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         _programme_refusals(programme, key, caller, auto_run, repo)
         item = programme["items"][key]
+        # set-contract edits the seed until the item is bound, so a seed newer than the copy means the run record
+        # holds a stale contract; refusing lets the repeat call copy the new seed.
+        live = ((item.get(ITEM_KEY) or {}).get("contract") or {}).get("version")
+        if copied_version is not None and live != copied_version:
+            raise RegisterError(f"the seed contract of item {key!r} changed from version {copied_version} to {live} "
+                                "while the run registered; run register-run again", "state_changed")
         now = run_record_core.now_iso()
         item[ITEM_KEY] = dict(item.get(ITEM_KEY) or {"contract": None}, state=BOUND, run_id=auto_run, path=repo,
                               bound_at=now, session_id=caller)
@@ -278,7 +284,7 @@ def _register(host, argv):
     run = _record_refusals(programme, key, repo, auto_run)
     seed = (programme["items"][key].get(ITEM_KEY) or {}).get("contract")
     copied = _copy_seed(repo, auto_run, seed) if seed else False
-    out = _bind(run_id, home, key, caller, auto_run, repo)
+    out = _bind(run_id, home, key, caller, auto_run, repo, (seed or {}).get("version") if seed else None)
     host.refresh_view(run_id, home)
     host._emit(dict(out, ok=True, run=run_id, kind="run_registered", contract_copied=copied,
                     contract_version=(seed or {}).get("version"), run_session=run.get("driving_session_id")))

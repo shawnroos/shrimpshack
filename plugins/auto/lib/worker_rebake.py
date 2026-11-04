@@ -21,6 +21,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 worker_contract = load_lib_module("worker_contract")
 workflows = load_lib_module("workflows")
+run_record_predicate = load_lib_module("run_record_predicate")
 phase_grammar = load_lib_module("phase-grammar")
 
 NO_CONTRACT = worker_contract.NO_CONTRACT
@@ -155,17 +156,24 @@ def _bake(rec, repo_root) -> dict:
     unknown = sorted({d for s in added for d in s["depends_on"]} - taken - {s["id"] for s in added})
     if unknown:
         raise RebakeError(f"workflow {name!r} depends on steps the run does not have: {unknown}")
-    skipped = []
+    gating = run_record_predicate.gating_severities(rec.get("backend_scale", "three-tier"))
+    skipped, kept = [], []
     for step in steps:
-        if step.get("state") == "pending":
-            step["state"] = "terminal-skip"
-            step["skip_reason"] = f"workflow replaced v{version}"
-            skipped.append(step["id"])
+        if step.get("state") != "pending":
+            continue
+        # A skipped step's findings still count toward the exit predicate, so a re-queued step that holds an open
+        # gating finding stays pending: only working it can close the finding.
+        if any(f.get("severity") in gating for f in step.get("findings") or []):
+            kept.append(step["id"])
+            continue
+        step["state"] = "terminal-skip"
+        step["skip_reason"] = f"workflow replaced v{version}"
+        skipped.append(step["id"])
     steps.extend(added)
     previous = (rec.get("workflow") or {}).get("name")
     rec["workflow"] = {"name": workflow["name"], "source_tier": tier, BAKED_KEY: version}
     return {"rebaked": True, "version": version, "from": previous, "to": workflow["name"],
-            "skipped": skipped, "added": [s["id"] for s in added]}
+            "skipped": skipped, "kept": kept, "added": [s["id"] for s in added]}
 
 
 def complete(repo_root, run_id, record=None) -> dict:
