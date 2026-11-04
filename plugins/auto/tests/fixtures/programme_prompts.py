@@ -22,6 +22,48 @@ def fixture(text, sid, prompt_source='typed'):
     return payload, source, path, row
 
 
+def pick_rows(sid, tool_use_id, questions, answers, annotations=None, result_extra=None):
+    # Field for field what Claude Code 2.1.318 wrote for a live picker; only the values change.
+    shown = [{'question': question, 'header': question[:12], 'multiSelect': False,
+              'options': [{'label': label, 'description': 'Choose ' + label} for label in labels]}
+             for question, labels in questions.items()]
+    asking = 'a-' + tool_use_id
+    ask = {'parentUuid': None, 'isSidechain': False, 'type': 'assistant', 'uuid': asking, 'sessionId': sid,
+           'session_id': sid, 'version': '2.1.318', 'entrypoint': 'cli',
+           'message': {'role': 'assistant', 'content': [
+               {'type': 'tool_use', 'id': tool_use_id, 'name': 'AskUserQuestion', 'input': {'questions': shown}}]}}
+    result = {'questions': shown, 'answers': answers, 'annotations': annotations or {}}
+    if annotations is False:
+        del result['annotations']
+    result.update(result_extra or {})
+    said = ', '.join(f'"{q}"="{a}"' for q, a in answers.items())
+    answer = {'parentUuid': asking, 'isSidechain': False, 'type': 'user', 'uuid': 'u-' + tool_use_id, 'sessionId': sid,
+              'session_id': sid, 'version': '2.1.318', 'entrypoint': 'cli', 'sourceToolAssistantUUID': asking,
+              'permissionDecision': {'decision': 'accept', 'source': 'user_temporary', 'grantScope': 'once',
+                                     'reasonCode': 'unknown'},
+              'toolUseResult': result,
+              'message': {'role': 'user', 'content': [
+                  {'type': 'tool_result', 'tool_use_id': tool_use_id,
+                   'content': f'Your questions have been answered: {said}.'}]}}
+    return ask, answer
+
+
+def queued_user_row(sid, text, prompt_id='later-turn', prompt_source='queued'):
+    # The row's promptId is its own; the hook that journaled the words carried the id of the turn then running.
+    return {'type': 'user', 'sessionId': sid, 'promptId': prompt_id, 'promptSource': prompt_source,
+            'turnOrigin': 'human', 'origin': {'kind': 'human'}, 'entrypoint': 'cli', 'isSidechain': False,
+            'message': {'role': 'user', 'content': text}}
+
+
+def queued_attachment_row(sid, text, kind='human', human_turn=True, command_mode='prompt'):
+    attachment = {'type': 'queued_command', 'prompt': text, 'source_uuid': 'src-1', 'delivery_id': 'del-1',
+                  'commandMode': command_mode, 'origin': {'kind': kind}, 'timestamp': '2026-11-04T20:13:58.873Z'}
+    if human_turn is not None:
+        attachment['humanTurn'] = human_turn
+    return {'type': 'attachment', 'sessionId': sid, 'session_id': sid, 'isSidechain': False, 'uuid': 'att-1',
+            'attachment': attachment}
+
+
 def append_prompt(run, sid, text, origin='typed', now=None, prompt_source='typed'):
     from _bootstrap import load_lib_module
     pj = load_lib_module('programme_journal')

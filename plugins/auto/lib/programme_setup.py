@@ -19,6 +19,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
+programme_pick_source = load_lib_module("programme_pick_source")
 programme_authority = load_lib_module("programme_authority")
 programme_naming = load_lib_module("programme_naming")
 programme_proposals = load_lib_module("programme_proposals")
@@ -46,6 +47,9 @@ def _picked(host, run_id, rec, pick_id) -> dict:
     if row["payload"].get("driving") is False:
         raise host.ProgrammeError(f"pick {pick_id!r} was answered before this session drove the programme; "
                                   "it can serve only a takeover")
+    gap = programme_pick_source.approval_gap(row)
+    if gap:
+        raise host.ProgrammeError(f"pick {pick_id!r} {gap}")
     source = row["payload"]["source"]
     used = programme_journal.pick_use(rows, source)
     if used is not None:

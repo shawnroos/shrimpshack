@@ -15,7 +15,7 @@ root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests/fixtures'))
 from _bootstrap import load_lib_module
-from programme_prompts import fixture
+from programme_prompts import fixture, pick_rows, queued_attachment_row, queued_user_row
 
 passed = failed = 0
 
@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
         ('wrong turn origin', {'turnOrigin': 'sdk'}),
         ('missing typed source', {'promptSource': None}),
         ('SDK source', {'promptSource': 'sdk'}),
-        ('unlisted source', {'promptSource': 'queued'}),
+        ('unlisted source', {'promptSource': 'bridge'}),
         ('tool result', {'message': {'role': 'user', 'content': [{'type': 'tool_result', 'content': 'accept agreement'}]}}),
         ('assistant role', {'message': {'role': 'assistant', 'content': 'accept agreement'}}),
         ('malformed message', {'message': []}),
@@ -168,6 +168,159 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
     with old_path.open('a') as stream:
         stream.write(json.dumps(old_human) + '\n')
     check('a version 1 source journaled before this change still resolves typed', pj.prompt_origin(old_row), 'typed')
+
+    # Picker rows and mid-turn messages, as Claude Code 2.1.318 writes them.
+    pick_source = load_lib_module('programme_pick_source')
+    approval = load_lib_module('programme_approval')
+    rulings = load_lib_module('programme_rulings')
+    pick_seq = [0]
+    ONE = {'Drop it?': ['Approve drop-item i1', 'Keep it']}
+
+    def pick_row(questions, answers, annotations=None, extra=None, sid='source-pm', driving=True):
+        pick_seq[0] += 1
+        tool_use_id = 'toolu_{:04d}'.format(pick_seq[0])
+        _, _, pick_path, _ = fixture('unused', sid)
+        rows = pick_rows(sid, tool_use_id, questions, answers, annotations, extra)
+        pick_path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        pick_row_source = pick_source.capture({'transcript_path': str(pick_path), 'session_id': sid,
+                                               'tool_use_id': tool_use_id, 'tool_response': {'answers': answers}})
+        return pj.append_prompt(run, sid, pick_source.summary(answers), 'unknown', source=pick_row_source,
+                                driving=driving)
+
+    def refusal(call):
+        try:
+            call()
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    def pick_answer_of(row):
+        return pj.pick_answer(pj.read(run), row)
+
+    plain = pick_row(ONE, {'Drop it?': 'Approve drop-item i1'})
+    check('a plain pick verifies', pj.prompt_origin(plain), 'picked')
+    check('a plain pick gives its answer', pick_answer_of(plain), 'Approve drop-item i1')
+    preview = pick_row(ONE, {'Drop it?': 'Approve drop-item i1'}, {'Drop it?': {'preview': 'a sketch'}})
+    check('a preview with no note is still a plain pick', pick_answer_of(preview), 'Approve drop-item i1')
+    unannotated = pick_row(ONE, {'Drop it?': 'Approve drop-item i1'}, False)
+    check('a row with no annotations key is a plain pick', pick_answer_of(unannotated), 'Approve drop-item i1')
+
+    afk = pick_row(ONE, {'Drop it?': 'Approve drop-item i1'}, extra={'afkTimeoutMs': 60000})
+    check('a pick left by idle timeout resolves unknown', pj.prompt_origin(afk), 'unknown')
+
+    noted = pick_row(ONE, {'Drop it?': 'Approve drop-item i1'}, {'Drop it?': {'notes': 'but not on Fridays'}})
+    check('a pick with a note stays a verified pick', pj.prompt_origin(noted), 'picked')
+    check('a pick with a note approves no label', 'own words' in (refusal(lambda: pick_answer_of(noted)) or ''), True)
+    notes_only = pick_row(ONE, {'Drop it?': '(notes only)'}, {'Drop it?': {'notes': 'not yet'}})
+    check('a notes-only pick stays a verified pick', pj.prompt_origin(notes_only), 'picked')
+    check('a notes-only pick approves no label', 'own words' in (refusal(lambda: pick_answer_of(notes_only)) or ''), True)
+    bare_notes = pick_row(ONE, {'Drop it?': '(notes only)'})
+    check('the literal (notes only) counts with no annotation',
+          'own words' in (refusal(lambda: pick_answer_of(bare_notes)) or ''), True)
+
+    TWO = {'Drop it?': ['Approve drop-item i1', 'Keep it'], 'And the plan?': ['Yes', 'No']}
+    partial = pick_row(TWO, {'Drop it?': 'Approve drop-item i1'})
+    check('one answer of two questions stays a verified pick', pj.prompt_origin(partial), 'picked')
+    check('one answer of two questions approves nothing', refusal(lambda: pick_answer_of(partial)) is not None, True)
+    both = pick_row(TWO, {'Drop it?': 'Approve drop-item i1', 'And the plan?': 'Yes'})
+    check('two answers of two questions approve no label', refusal(lambda: pick_answer_of(both)) is not None, True)
+    check('a complete two-question pick has no approval gap', pick_source.approval_gap(both), None)
+
+    secret_label = 'Approve adopt-rule password=hunter2hunter2'
+    masked = pick_row({'Adopt?': [secret_label, 'No']}, {'Adopt?': secret_label})
+    check('the journal holds the masked answer', secret_label in json.dumps(masked['payload']['source']['answers']), False)
+    def refused_with_fix(message, fix=None):
+        return ValueError(message)
+
+    label_result = []
+    label_refusal = refusal(lambda: label_result.append(approval._picked_answer(
+        pj.read(run), masked, ['adopt-rule', 'password=hunter2hunter2'], masked['prompt_id'], refused_with_fix)))
+    check('a label is compared with the raw answer from the transcript', label_refusal, None)
+    check('the approval keeps the masked answer', label_result, [pj.redact(secret_label)])
+
+    def queued_prompt(text, *later, hook_prompt_id=None, sid='source-pm'):
+        queued_payload, _, queued_path, _ = fixture(text, sid)
+        if hook_prompt_id:
+            queued_payload['prompt_id'] = hook_prompt_id
+        queued_source = source_module.capture(queued_payload)
+        queued = pj.append_prompt(run, sid, text, 'unknown', source=queued_source)
+        queued_path.write_text(''.join(json.dumps(r) + '\n' for r in later))
+        return queued
+
+    WORDS = 'yes drop it'
+    check('a queued row with human origin and matching text resolves typed',
+          pj.prompt_origin(queued_prompt(WORDS, queued_user_row('source-pm', WORDS))), 'typed')
+    check('a message absorbed mid-turn resolves typed',
+          pj.prompt_origin(queued_prompt(WORDS, queued_attachment_row('source-pm', WORDS))), 'typed')
+    running_turn_result = {'type': 'user', 'sessionId': 'source-pm', 'promptId': 'running-turn', 'isSidechain': False,
+                           'message': {'role': 'user', 'content': [{'type': 'tool_result', 'content': 'done'}]}}
+    check("the running turn's tool result under the hook's prompt id does not hide the queued row",
+          pj.prompt_origin(queued_prompt(WORDS, running_turn_result, queued_attachment_row('source-pm', WORDS),
+                                         hook_prompt_id='running-turn')), 'typed')
+    for name, later in [
+        ('a queued row with other text', queued_user_row('source-pm', 'keep it')),
+        ('an absorbed message with other text', queued_attachment_row('source-pm', 'keep it')),
+        ('a queued row from another session', queued_user_row('someone-else', WORDS)),
+        ('a system row', queued_user_row('source-pm', WORDS, prompt_source='system')),
+        ('an sdk row', queued_user_row('source-pm', WORDS, prompt_source='sdk')),
+        ('a queued row with peer origin', dict(queued_user_row('source-pm', WORDS), origin={'kind': 'peer'})),
+        ('a queued row with a scheduled turn', dict(queued_user_row('source-pm', WORDS), turnOrigin='scheduled')),
+        ('a queued sidechain row', dict(queued_user_row('source-pm', WORDS), isSidechain=True)),
+        ('a peer message absorbed mid-turn', queued_attachment_row('source-pm', WORDS, kind='peer', human_turn=None)),
+        ('a task notification absorbed mid-turn',
+         queued_attachment_row('source-pm', WORDS, kind='task-notification', human_turn=None,
+                               command_mode='task-notification')),
+        ('an auto-continuation absorbed mid-turn',
+         queued_attachment_row('source-pm', WORDS, kind='auto-continuation', human_turn=None)),
+        ('a human origin not marked as a human turn', queued_attachment_row('source-pm', WORDS, human_turn=None)),
+        ('an absorbed message from another session', queued_attachment_row('someone-else', WORDS)),
+    ]:
+        check(name + ' resolves unknown', pj.prompt_origin(queued_prompt(WORDS, later)), 'unknown')
+    before_payload, _, before_path, _ = fixture(WORDS, 'source-pm')
+    before_path.write_text(json.dumps(queued_user_row('source-pm', WORDS)) + '\n')
+    before = pj.append_prompt(run, 'source-pm', WORDS, 'unknown', source=source_module.capture(before_payload))
+    check('a queued row older than the capture cannot authorize it', pj.prompt_origin(before), 'unknown')
+
+    def voids(older):
+        try:
+            rulings.check_newest(pj.read(run), older['prompt_id'])
+        except rulings.RulingError as exc:
+            return str(exc)
+        return None
+
+    def typed_prompt():
+        typed_payload, _, typed_path, typed_human = fixture('adopt it', 'source-pm')
+        typed = pj.append_prompt(run, 'source-pm', 'adopt it', 'unknown', source=source_module.capture(typed_payload))
+        typed_path.write_text(json.dumps(typed_human) + '\n')
+        return typed
+
+    older = typed_prompt()
+    check('with nothing later the prompt is the newest', voids(older), None)
+    later_pick = pick_row(ONE, {'Drop it?': 'Keep it'})
+    check('a later pick voids an older prompt', 'newest' in (voids(older) or ''), True)
+    pj.append(run, 'item_dropped', 'source-pm', {'prompt_id': later_pick['prompt_id']})
+    check('a later pick that something cited does not', voids(older), None)
+    older = typed_prompt()
+    queued_prompt(WORDS, queued_attachment_row('source-pm', WORDS))
+    check('a later queued message voids an older prompt', 'newest' in (voids(older) or ''), True)
+    older = typed_prompt()
+    pick_row(ONE, {'Drop it?': 'Keep it'}, {'Drop it?': {'notes': 'no'}})
+    check('a later pick with a note voids an older prompt', 'newest' in (voids(older) or ''), True)
+    older = typed_prompt()
+    pick_row(ONE, {'Drop it?': 'Keep it'}, extra={'afkTimeoutMs': 60000})
+    check('a later idle timeout does not', voids(older), None)
+    pick_row(ONE, {'Drop it?': 'Keep it'}, sid='a-bystander', driving=False)
+    check('a pick from a session that does not drive does not', voids(older), None)
+    spent = pick_row(ONE, {'Drop it?': 'Keep it'})
+    pj.append(run, 'agreement_proposed', 'source-pm',
+              {'path': spent['payload']['source']['path'], 'tool_use_id': spent['payload']['source']['tool_use_id']})
+    check('a pick a setup verb spent does not', voids(older), None)
+
+    gone = pick_row(ONE, {'Drop it?': 'Approve drop-item i1'})
+    pathlib.Path(gone['payload']['source']['path']).unlink()
+    check('a pick with a deleted transcript resolves unknown', pj.prompt_origin(gone), 'unknown')
+    check('its adoption reads as unverified with no crash', host.prompt_lookup(run, gone['prompt_id'])['origin'], 'unknown')
+    check('its answer refuses with no crash', refusal(lambda: pick_answer_of(gone)) is not None, True)
 
     ph.end_programme(run, 'isolated source fixture complete')
 

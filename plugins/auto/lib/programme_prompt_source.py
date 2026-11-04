@@ -16,6 +16,7 @@ _hash = programme_pick_source._hash
 # Accepting Claude Code's suggested prompt is Shawn pressing Enter on model-written text: it resolves to
 # "suggested", which approves what a pick may approve but never a typed-only verb. Other sources stay unverified.
 _HUMAN_SOURCES = ('typed', 'suggestion_accepted')
+_NOT_INPUT = ('isMeta', 'isSidechain', 'isCompactSummary')
 _COMMAND = re.compile(
     r'<command-message>([^<>\n]+)</command-message>\n'
     r'<command-name>(/[^<>\n]+)</command-name>'
@@ -39,14 +40,35 @@ def capture(data):
     return dict(source, prompt_id=prompt_id, text_hash=_hash(text.encode('utf-8')))
 
 
-def _human_text(row):
+def _human_input(row):
     if (row.get('origin') or {}).get('kind') != 'human' or row.get('turnOrigin') != 'human':
         return None
-    if any(row.get(key) for key in ('isMeta', 'isSidechain', 'isCompactSummary')):
+    if any(row.get(key) for key in _NOT_INPUT):
         return None
     message = row.get('message') or {}
     text = message.get('content')
     if message.get('role') != 'user' or not isinstance(text, str):
+        return None
+    return text
+
+
+def _queued_text(row):
+    if any(row.get(key) for key in _NOT_INPUT):
+        return None
+    if row.get('type') == 'user':
+        return _human_input(row) if row.get('promptSource') == 'queued' else None
+    attachment = row.get('attachment') if row.get('type') == 'attachment' else None
+    if (not isinstance(attachment, dict) or attachment.get('type') != 'queued_command'
+            or attachment.get('commandMode') != 'prompt' or attachment.get('humanTurn') is not True
+            or (attachment.get('origin') or {}).get('kind') != 'human'):
+        return None
+    text = attachment.get('prompt')
+    return text if isinstance(text, str) else None
+
+
+def _human_text(row):
+    text = _human_input(row)
+    if text is None:
         return None
     if row.get('promptSource') in _HUMAN_SOURCES:
         return text
@@ -78,19 +100,26 @@ def origin(row):
         checked = programme_pick_source.read_checked(path, source)
         if checked is None:
             return 'unknown'
+        refused = False
         for line in checked[1].splitlines(keepends=True):
             if not line.endswith(b'\n'):
                 break
             candidate = json.loads(line)
             if not isinstance(candidate, dict):
                 continue
-            if (candidate.get('type') != 'user' or candidate.get('sessionId') != sid
-                    or candidate.get('promptId') != source.get('prompt_id')):
+            if candidate.get('sessionId') != sid:
+                continue
+            # Words sent mid-turn: the hook carried the running turn's prompt id, so only the text can tie them to
+            # their row, and that turn's own tool results must not refuse them first.
+            text = _queued_text(candidate)
+            if text is not None and _hash(text.encode('utf-8')) == source.get('text_hash'):
+                return 'typed'
+            if refused or candidate.get('type') != 'user' or candidate.get('promptId') != source.get('prompt_id'):
                 continue
             text = _human_text(candidate)
             if text is not None and _hash(text.encode('utf-8')) == source.get('text_hash'):
                 return 'suggested' if candidate.get('promptSource') == 'suggestion_accepted' else 'typed'
-            return 'unknown'
+            refused = True
     except (OSError, ValueError, TypeError, AttributeError):
         return 'unknown'
     return 'unknown'

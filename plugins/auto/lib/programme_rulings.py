@@ -76,12 +76,21 @@ def _touches(row, cid) -> bool:
         isinstance(e, dict) and e.get("ruling") == cid for e in payload.get("carried_over") or [])
 
 
+def _unanswered_words(rows, row, cited) -> bool:
+    payload = row.get("payload") or {}
+    if row.get("kind") != "prompt" or row.get("prompt_id") in cited or payload.get("driving") is False:
+        return False
+    source = payload.get("source")
+    if isinstance(source, dict) and source.get("kind") == "pick" and programme_journal.pick_use(rows, source):
+        return False
+    return programme_journal.prompt_origin(row) in ("typed", "picked")
+
+
 # A later reply ("no, keep it") voids an earlier approval, so the prompt must be Shawn's newest unanswered words.
 def check_newest(rows, prompt_id) -> None:
     at = prompt_index(rows, prompt_id)
     cited = programme_journal._cited_ids(rows)
-    later = next((r.get("prompt_id") for r in rows[at + 1:] if r.get("kind") == "prompt"
-                  and programme_journal.prompt_origin(r) == "typed" and r.get("prompt_id") not in cited), None)
+    later = next((r.get("prompt_id") for r in rows[at + 1:] if _unanswered_words(rows, r, cited)), None)
     if later:
         raise RulingError(f"prompt {prompt_id!r} was typed before prompt {later!r}, which nothing has cited yet; "
                           f"a Ruling change binds only on Shawn's newest typed prompt")

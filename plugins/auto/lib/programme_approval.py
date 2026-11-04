@@ -141,7 +141,10 @@ def _strip_recommended(answer) -> str:
 
 
 def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
-    answer = programme_journal.pick_answer(rows, row)
+    try:
+        answer = programme_journal.pick_answer(rows, row)
+    except ValueError as exc:
+        raise error(str(exc), fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv)) from None
     if verb_argv and verb_argv[0] in _STDIN_VERBS:
         raise error(f"{verb_argv[0]} reads its change from stdin, which a pick label cannot show; "
                     "it needs typed text", fix=approval_fix(verb_argv[0], verb_argv))
@@ -149,11 +152,12 @@ def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
     # "Keep item-x" for drop-item); only the exact label the tool printed approves.
     answer = _strip_recommended(answer)
     want = label(verb_argv) if verb_argv else None
+    shown = programme_journal.redact(answer)
     if answer != want:
-        raise error(f"pick {prompt_id!r} answer {answer!r} is not the approval label for this command; "
+        raise error(f"pick {prompt_id!r} answer {shown!r} is not the approval label for this command; "
                     f"the answer must be exactly {want!r} (`programme.sh approval-label ...` prints it)",
                     fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv))
-    return answer
+    return shown
 
 
 def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) -> dict:
@@ -262,10 +266,11 @@ def _takeover_answer(rows, row, prompt_id, driver, error) -> str:
         raise error(str(exc)) from None
     answer = _strip_recommended(answer)
     want = takeover_label(driver)
+    shown = programme_journal.redact(answer)
     if answer != want:
-        raise error(f"pick {prompt_id!r} answer {answer!r} does not approve this takeover; "
+        raise error(f"pick {prompt_id!r} answer {shown!r} does not approve this takeover; "
                     f"the answer must be exactly {want!r}")
-    return answer
+    return shown
 
 
 def takeover_pick(rows, row, prompt_id, sid, driver, error, stopped=False) -> dict:

@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
             refresh_failures.append((args, result.stderr))
         return result
 
-    def pick(sid, run, answers, tool_use_id=None, answered=True, driving=True):
+    def pick(sid, run, answers, tool_use_id=None, answered=True, driving=True, annotations=None, unanswered=()):
         if tool_use_id is None:
             counter[0] += 1
             tool_use_id = f'toolu_{counter[0]}'
@@ -94,12 +94,12 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
         ask.update(uuid='a-' + tool_use_id, sessionId=sid)
         ask['message']['content'][0].update(id=tool_use_id, input={'questions': [
             {'question': q, 'header': 'Setup', 'multiSelect': False,
-             'options': [{'label': answers[q], 'description': ''}, {'label': 'other', 'description': ''}]}
-            for q in answers]})
+             'options': [{'label': answers.get(q, 'yes'), 'description': ''}, {'label': 'other', 'description': ''}]}
+            for q in [*answers, *unanswered]]})
         result = copy.deepcopy(ANSWER)
         result.update(uuid='u-' + tool_use_id, sessionId=sid, sourceToolAssistantUUID='a-' + tool_use_id,
-                      toolUseResult={'questions': [{'question': q} for q in answers], 'answers': answers,
-                                     'annotations': {}})
+                      toolUseResult={'questions': [{'question': q} for q in [*answers, *unanswered]],
+                                     'answers': answers, 'annotations': annotations or {}})
         result['message']['content'][0].update(tool_use_id=tool_use_id)
         rows = [ask, result] if answered else [ask]
         if not (path.exists() and f'"id": "{tool_use_id}"' in path.read_text()):
@@ -157,6 +157,12 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           refused(result, 'before this session drove the programme') and terms(run)['cadence']['set_by'] == 'default',
           result.stdout + result.stderr)
 
+    noted = pick(a_sid, run, {cadence_q: 'fixed every 15 min'}, annotations={cadence_q: {'notes': 'only at night'}})
+    result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', noted)
+    check('pick-term refuses a pick with a note', refused(result, 'own words'), result.stderr)
+    partial = pick(a_sid, run, {cadence_q: 'fixed every 15 min'}, unanswered=['And the budget?'])
+    result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', partial)
+    check('pick-term refuses a picker with a question left unanswered', refused(result, 'unanswered'), result.stderr)
     result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', cadence_pick)
     cadence = terms(run)['cadence']
     check('AE1: pick-term sets the term with set_by shawn and origin picked',

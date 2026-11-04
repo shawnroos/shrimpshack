@@ -23,6 +23,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_prompt_source = load_lib_module("programme_prompt_source")
+programme_pick_source = load_lib_module("programme_pick_source")
 
 JOURNAL_NAME = "journal.jsonl"
 CLAIMS_NAME = "claims.jsonl"
@@ -466,11 +467,16 @@ def pick_answer(rows, row) -> str:
     source = row["payload"]["source"]
     if len(source["answers"]) != 1:
         raise ValueError(f"pick {row['prompt_id']!r} must hold exactly one question to approve a change")
+    pick = programme_pick_source.read_pick(row)
+    if pick is None:
+        raise ValueError(f"pick {row['prompt_id']!r} does not verify against the transcript")
+    if pick["gap"]:
+        raise ValueError(f"pick {row['prompt_id']!r} {pick['gap']}")
     used = pick_use(rows, source)
     if used is not None:
         raise ValueError(f"pick {row['prompt_id']!r} was already used ({used.get('kind')}); "
                          "one picker answer approves one change")
-    return next(iter(source["answers"].values()))
+    return next(iter(pick["answers"].values()))
 
 
 def named_text(prompt) -> str:

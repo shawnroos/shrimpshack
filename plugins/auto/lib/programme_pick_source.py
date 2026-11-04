@@ -18,6 +18,7 @@ _WINDOW_BYTES = 1024 * 1024
 _LOOKBACK_BYTES = 32 * 1024 * 1024
 _MAX_OFFSET = 1 << 50
 TOOL = "AskUserQuestion"
+NOTES_ONLY = "(notes only)"
 _TOOL_USE_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -158,6 +159,7 @@ def _human_result(row, source) -> bool:
     result = row.get("toolUseResult")
     answers = result.get("answers") if isinstance(result, dict) else None
     return (isinstance(by, str) and by.startswith("user") and _valid_answers(answers)
+            and "afkTimeoutMs" not in result
             and answers_hash(answers) == source.get("answers_hash")
             and redacted(answers) == source.get("answers"))
 
@@ -179,30 +181,65 @@ def _rows(path, source, tool_use_id):
     return rows
 
 
-def verify(row) -> str:
+def _verified(row):
+    """The asking block and result the transcript holds for this pick, or None unless it shows a human answer."""
     source = (row.get("payload") or {}).get("source")
     sid = row.get("session_id")
     if not isinstance(source, dict) or type(source.get("version")) is not int or source.get("version") not in (1, 2):
-        return "unknown"
+        return None
     path = source.get("path")
     tool_use_id = source.get("tool_use_id")
     if (source.get("kind") != "pick" or source.get("session_id") != sid or not isinstance(sid, str)
             or not isinstance(tool_use_id, str) or not tool_use_id
             or not isinstance(path, str) or not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl"):
-        return "unknown"
+        return None
     try:
         rows = _rows(path, source, tool_use_id)
         if rows is None:
-            return "unknown"
+            return None
         asked = [r for r in rows if r.get("type") == "assistant" and _asks(r, tool_use_id)]
         if len(asked) != 1 or not _plain(asked[0], sid) or not _unprefilled(asked[0], tool_use_id):
-            return "unknown"
+            return None
         uuid = asked[0].get("uuid")
         results = [r for r in rows if r.get("type") == "user" and _answers_row(r, tool_use_id)]
         if (not isinstance(uuid, str) or not uuid or len(results) != 1
                 or results[0].get("sourceToolAssistantUUID") != uuid
                 or not _plain(results[0], sid) or not _human_result(results[0], source)):
-            return "unknown"
-        return "picked"
+            return None
+        return _tool_use(asked[0], tool_use_id), results[0]["toolUseResult"]
     except (OSError, ValueError, TypeError, AttributeError):
-        return "unknown"
+        return None
+
+
+def verify(row) -> str:
+    return "picked" if _verified(row) is not None else "unknown"
+
+
+def _has_note(result) -> bool:
+    annotations = result.get("annotations", {})
+    return (NOTES_ONLY in result["answers"].values()
+            or not isinstance(annotations, dict)
+            or any(not isinstance(entry, dict) or entry.get("notes") for entry in annotations.values()))
+
+
+def read_pick(row):
+    """The raw answers from the transcript (the journal holds them redacted) and why they cannot approve an option,
+    or None when the pick does not verify. A noted pick stays verified: the note is Shawn's own words."""
+    found = _verified(row)
+    if found is None:
+        return None
+    block, result = found
+    questions = block["input"].get("questions")
+    asked = [q.get("question") for q in questions if isinstance(q, dict)] if isinstance(questions, list) else []
+    unanswered = [question for question in asked if question not in result["answers"]]
+    gap = None
+    if unanswered or not asked:
+        gap = f"leaves {len(unanswered)} of {len(asked)} questions unanswered, so it approves nothing"
+    elif _has_note(result):
+        gap = "carries a note, which counts as Shawn's own words, so it approves no option"
+    return {"answers": result["answers"], "gap": gap}
+
+
+def approval_gap(row):
+    pick = read_pick(row)
+    return "does not verify against the transcript" if pick is None else pick["gap"]

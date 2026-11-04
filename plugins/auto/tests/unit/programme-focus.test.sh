@@ -356,7 +356,8 @@ ask["message"]["content"][0].update(id=tid, input={"questions": [
      "options": [{"label": answer, "description": ""}, {"label": "other", "description": ""}]}]})
 res = copy.deepcopy(ANSWER)
 res.update(uuid="u-" + tid, sessionId=sid, sourceToolAssistantUUID="a-" + tid,
-           toolUseResult={"questions": [{"question": q}], "answers": answers, "annotations": {}})
+           toolUseResult={"questions": [{"question": q}], "answers": answers,
+                          "annotations": {q: {"notes": os.environ["PICK_NOTE"]}} if os.environ.get("PICK_NOTE") else {}})
 res["message"]["content"][0].update(tool_use_id=tid)
 with path.open("a") as stream:
     stream.write(json.dumps(ask) + "\n" + json.dumps(res) + "\n")
@@ -544,6 +545,12 @@ check 1 "$CODE"
 check "null" "$(gitem 54 focus_override)"
 start 54 --despite focus
 check 1 "$CODE"
+
+it "an exact-label pick with a note approves nothing, because the note is Shawn's own words"
+prog override-focus "${NS}54" --prompt "$(PICK_NOTE='but not this week' pickit "$(override_label 54)")" --run "$RUN"
+check 1 "$CODE"
+has "own words" "$OUT"
+check "null" "$(gitem 54 focus_override)"
 
 it "an exact-label pick records the approval and journals it"
 POV="$(pickit "$(override_label 54)")"
