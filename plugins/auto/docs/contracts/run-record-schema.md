@@ -753,7 +753,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `behaviour_proposed`, `behaviour_moved`, `behaviour_retired`, `behaviour_reminded`, `behaviour_skipped`,
 `behaviours_kept`, `ritual_recorded`, `ritual_proposed`, `ritual_moved`, `ritual_retired`,
 `rituals_kept`, `ritual_started`, `ritual_ran`, `ritual_failed`, `ritual_skipped`, `ritual_offered`,
-`ritual_event`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
+`ritual_checked`, `ritual_file_adopted`, `ritual_file_declined`, `ritual_event`, `rule_proposed`, `rule_adopted`, `rules_acked`, `rules_loaded`,
 `reread_requested`, `stopped_unwatched`, `stop_quiet`, `item_added`, `item_updated`, `item_held`,
 `item_swapped`, `focus_noted`, `focus_override_approved`, `focus_overridden`, `item_aliased`,
 `item_merged`, `item_dropped`, `item_reopened`, `item_waiting`, `item_handed`,
@@ -868,8 +868,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   has active Rulings; it counts as the offer.
 - Old journals keep `instruction_recorded`, `instruction_closed` and `decision_recorded` rows,
   which still read.
-- `behaviour_recorded` carries `{behaviour, layer, when, checks, overrides, from_proposal, related,
-  undo}`; `behaviour_proposed` carries `{behaviour, state, when, checks, from_term}`;
+- `behaviour_recorded` carries `{behaviour, layer, when, checks, overrides, from_proposal, behaviours,
+  contract, unanswered, checked, undo}` (the record-time check, programme-behaviours-format.md section 10: rows set `flag: may_contradict` where
+  code sees a clash; older rows carry `related`); `behaviour_proposed` carries `{behaviour, state, when, checks, from_term}`;
   `behaviour_moved` carries `{behaviour, from, to, repo_key, target, hash, store_path}`;
   `behaviour_retired` carries `{behaviour, as, layers, target}`. All but `behaviour_proposed` add
   the approval fields. After `behaviour_moved` or `behaviour_retired` commits, the verb journals one
@@ -883,7 +884,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `ritual:repo:<key>:<id>`. `ritual_started` carries `{ritual, trigger, steps}`; `ritual_ran` carries `{ritual,
   trigger, outcome?}`; `ritual_failed` carries `{ritual, trigger, why}`; `ritual_skipped` carries `{ritual,
   trigger, why?}`. `ritual_ran` and `ritual_skipped` add the approval fields only when the ritual was missed.
-  `ritual_offered` carries `{offered: [{ritual, pending_at}]}`. `ritual_event` carries `{trigger: "resume",
+  `ritual_offered` carries `{offered: [{ritual, pending_at}]}`. `ritual_file_adopted` carries `{ritual, repo_key, hash, file, commit, trigger}` and `ritual_file_declined` `{ritual, repo_key, hash}`; the programme block holds `ritual_adoptions: {"<repo key>/<id>": {state: adopted|declined, hash, adopted_at|declined_at, prompt_id, snapshot?}}`. `ritual_checked` carries `{ritual, check, pending_at, late, result: pass|fail|error, reason, checked?, failed?: [{plugin, reason, files}], ref?, ref_sha?, ref_age_seconds?}`; a pass row is quiet bookkeeping for the sweep, a fail or error row is not. `ritual_event` carries `{trigger: "resume",
   silent_since}`: the one trigger no existing row represents, written after a write that follows a silence longer
   than two cadence periods. Start, takeover, handover, end and going-quiet read the existing rows
   `programme_started`, `taken_over`, `handed_over`, `programme_ended` and `stop_quiet`.

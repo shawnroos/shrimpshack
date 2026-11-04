@@ -10,6 +10,7 @@ that; a missed ritual is only ever offered, never run silently late. Pure over i
 from __future__ import annotations
 
 import datetime
+import re
 import os
 import sys
 
@@ -19,6 +20,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_rituals = load_lib_module("programme_rituals")
+programme_ritual_checks = load_lib_module("programme_ritual_checks")
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
 run_record_core = load_lib_module("run_record_core")
@@ -48,7 +50,7 @@ class _Index:
 
     def __init__(self, rows):
         self.answered, self.started, self.ended, self.events = {}, {}, {}, {}
-        self.moves, self.offered = [], {}
+        self.moves, self.offered, self.checked = [], {}, {}
         active_since_quiet = True
         for row in rows:
             at = run_record_core.parse_iso(row.get("at"))
@@ -61,8 +63,11 @@ class _Index:
                 if active_since_quiet:
                     _later(self.events, "quiet", at)
                 active_since_quiet = False
-            elif kind not in QUIET_BOOKKEEPING:
+            elif kind not in QUIET_BOOKKEEPING and not (
+                    kind == programme_rituals.CHECKED and payload.get("result") == "pass"):
                 active_since_quiet = True
+            if kind == programme_rituals.CHECKED and rid:
+                self.checked[(rid, payload.get("pending_at"))] = payload
             if kind in ANSWERS:
                 _later(self.answered, rid, at)
             if kind == programme_rituals.STARTED:
@@ -113,11 +118,60 @@ def _pending_time(programme, entry, index):
     return happened
 
 
-def _row(entry, state, pending):
+def _cap(text):
+    return text if len(text) <= TEXT_CAP else text[:TEXT_CAP - 1] + "…"
+
+
+_PLUGIN_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _check_summary(entry, index, pending_at):
+    """Only fixed words and validated plugin names reach the PM; the journal row is data, not text to relay."""
+    if not entry.get("check"):
+        return None
+    return _summarize(entry["check"]["name"], index.checked.get((entry["id"], pending_at)))
+
+
+def last_check(entry, rows):
+    """The newest ``ritual_checked`` row for a ritual, as the same safe summary; None when it never ran."""
+    if not entry.get("check"):
+        return None
+    latest = None
+    for row in rows:
+        if row.get("kind") == programme_rituals.CHECKED and (row.get("payload") or {}).get("ritual") == entry["id"]:
+            latest = row
+    if latest is None:
+        return None
+    return dict(_summarize(entry["check"]["name"], latest["payload"]), at=latest.get("at"),
+                pending_at=latest["payload"].get("pending_at"))
+
+
+def _summarize(name, got):
+    summary = {"name": name, "result": "not_run"}
+    if got is None:
+        return summary
+    result, reason = got.get("result"), got.get("reason")
+    summary["result"] = result if result in programme_ritual_checks.RESULTS else "error"
+    summary["reason"] = reason if reason in programme_ritual_checks.REASONS else "internal"
+    summary["checked"] = got.get("checked") if type(got.get("checked")) is int else None
+    summary["failed"] = [{"plugin": f["plugin"], "reason": f.get("reason") if f.get("reason") in programme_ritual_checks.REASONS else "internal"}
+                         for f in (got.get("failed") or [])[:10]
+                         if isinstance(f, dict) and isinstance(f.get("plugin"), str) and _PLUGIN_NAME.fullmatch(f["plugin"])]
+    if type(got.get("ref_age_seconds")) is int:
+        summary["ref_age_seconds"] = got["ref_age_seconds"]
+    return summary
+
+
+def _row(entry, state, pending, index=None):
     text = " ".join(entry["when"]["text"].split())
-    return {"ritual": entry["id"], "layer": entry["layer"], "trigger": entry["when"]["trigger"], "state": state,
-            "pending_at": pending.strftime(programme_rituals.TIME_FORMAT),
-            "when": text if len(text) <= TEXT_CAP else text[:TEXT_CAP - 1] + "…", "steps": list(entry["steps"])}
+    row = {"ritual": entry["id"], "layer": entry["layer"], "trigger": entry["when"]["trigger"], "state": state,
+           "pending_at": pending.strftime(programme_rituals.TIME_FORMAT),
+           "when": text if len(text) <= TEXT_CAP else text[:TEXT_CAP - 1] + "…", "steps": list(entry["steps"]),
+           **({"offers": [_cap(o) for o in entry["offers"]], "offers_rule": programme_rituals.OFFERS_RULE}
+              if entry.get("offers") else {})}
+    if index is not None and entry.get("check"):
+        row["check"] = _check_summary(entry, index, row["pending_at"])
+    return row
 
 
 def _context(record, run_id, lookup, store, rows):
@@ -161,7 +215,7 @@ def due(record, run_id, *, now=None, lookup=None, store=None, rows=None, cap=CAP
             continue
         started, ended = index.started.get(rid), index.ended.get(rid)
         if started and (ended is None or started > ended):
-            row = _row(entry, "in_flight", pending)
+            row = _row(entry, "in_flight", pending, index)
             row["offered"] = index.was_offered(rid, row["pending_at"])
             out["in_flight"].append(row)
             continue
@@ -174,12 +228,16 @@ def due(record, run_id, *, now=None, lookup=None, store=None, rows=None, cap=CAP
         if clock_now < pending or (answered and answered >= cut):
             continue
         if clock_now - pending <= grace:
-            out["due"].append(_row(entry, "due", pending))
+            out["due"].append(_row(entry, "due", pending, index))
             continue
-        row = _row(entry, "missed", pending)
+        row = _row(entry, "missed", pending, index)
         row["offered"] = index.was_offered(rid, row["pending_at"])
         out["missed"].append(row)
-    total = sum(len(v) for v in out.values())
+    proposals = programme_rituals.resolve(scoped, store=loaded)["file_rituals"]["proposals"]
+    if proposals:
+        out["file_proposals"] = [{"ritual": p["id"], "repo_key": p["repo_key"], "state": p["state"],
+                                  "hash_short": p["hash_short"]} for p in proposals[:cap]]
+    total = sum(len(out[k]) for k in ("due", "missed", "in_flight"))
     for bucket in out:
         out[bucket] = out[bucket][:cap]
     out.update(total=total, error="; ".join(loaded["notices"]) or None)

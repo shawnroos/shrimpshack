@@ -5,10 +5,14 @@ Read this when Shawn gives standing guidance on how the work is done, and before
 A behaviour is Shawn's standing guidance on how the work is
 done. It carries no authority and no done bar: who decides stays with
 Authority and Rulings, and acceptance stays with Done standards.
-- Before you record one, read the behaviours in force (`P rules`). When the
-  new one overlaps or disagrees with one of them, pass `--conflicts-with <id>`.
-  The new one wins, because the narrower layer wins (programme over repo over
-  personal).
+- Before you record one, run `P check-behaviour` with the fields you drafted (or `--from-proposal <id>`). It
+  records nothing. It lists the behaviours in force the new one applies
+  alongside (`behaviours`) and the parts of the programme contract it touches
+  (`contract`), each with the reason that listed it. `flag: may_contradict` marks a
+  structural clash. Read each listed pair's `lines` yourself: code does not detect
+  opposite meaning, so an empty list is not a pass. When the new one disagrees
+  with a behaviour, pass `--conflicts-with <id>`. The new one wins, because the
+  narrower layer wins (programme over repo over personal).
 - Draft the checks from his words. A check you can test from what the sweep
   sees (item state, a claim, a merge, a block, the tracker) is `--pm-check`.
   One only the agent doing the work can judge is `--agent-check`. Keep as many
@@ -16,12 +20,37 @@ Authority and Rulings, and acceptance stays with Done standards.
   reports it, so ask the worker to name the PR in its claim or make that check
   an agent check.
 - In one message, show Shawn the checks it printed, the ones you cannot test
-  and why, the `undo` line it printed, any conflict and which one wins, and
-  ask: "Keep it for this programme, move it to the repo, or make it global?"
+  and why, the behaviour result and the contract result (what each lists and
+  what is flagged), the `undo` line it printed, any conflict and which one wins,
+  and ask: "Keep it for this programme, move it to the repo, or make it global?"
   It moves only on his typed answer naming the layer.
-- When the output's `related` list shows a disagreement you did not link, name
-  it the same way. If he wants it linked, undo the new one and record it again
-  with `--conflicts-with`.
+- `synergies` says how the new behaviour should fit with one it listed: `link`
+  (a shared moment or tool: record it with `--relates-to`, or ask whether the
+  two should merge) and `ending_rule` (one ends the work its situation names,
+  and the other's `do` lines never say what happens then). It never blocks
+  recording. Code gives the target and the field, not the wording: write the
+  proposed change yourself from the row's `lines` and show it in the same
+  message as the conflicts. Apply an offered edit only on Shawn's typed words:
+  - `route: programme_edit`: `P propose-behaviour --edit-of <id>` with the
+    fields to change (give a full replacement for each field you name, for
+    example the whole `do` list), tell him the proposal id, and run
+    `P record-behaviour --from-proposal <id> --prompt <id>` once his reply
+    names it. The old wording stays in force until then.
+  - `route: copy_default_then_settle`: a shipped or file behaviour; follow
+    "Edit a default" below (copy it, then edit the copy).
+  - `route: record_with_conflicts_with`: a stored repo or personal behaviour;
+    record the new wording as a programme behaviour with `--conflicts-with <id>`.
+  - `action: adjust_new`: the change belongs in the behaviour you are
+    recording, so redraft it before you record.
+- Answer what the check listed when you record: `--relates-to <id>` for an item
+  that applies (a behaviour id, or `term:<key>`, `tool:<id>`, `ruling:<id>`,
+  `authority:<action>`, `done:<deliverable>`), and `--unrelated <id>=<reason>` for
+  one that does not. The output's `unanswered` counts the listed items you did
+  not answer. The check never refuses to record. A flagged item you did not
+  resolve goes to Shawn in the same message.
+- When the output shows a disagreement you did not link, name it the same way.
+  If he wants it linked, undo the new one and record it again with
+  `--conflicts-with`, `--relates-to` or `--unrelated`.
 - A new or changed behaviour reaches work in progress as a reminder from now
   on (step 5). Never send back work that already passed its trigger.
 - A behaviour has a trigger (`--trigger claim|merge|block|start`; none reads as

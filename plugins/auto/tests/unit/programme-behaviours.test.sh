@@ -627,9 +627,12 @@ it "record-behaviour --conflicts-with an unknown behaviour is refused"
 prog record-behaviour --run "$RUN" --prompt "$P1" --when "prioritising" --do "prioritise" --conflicts-with pnope
 check 1 "$CODE"
 has "pnope" "$OUT"
-it "record-behaviour names an in-force behaviour whose when shares words with the new one"
+it "record-behaviour lists an in-force behaviour whose instructions share two words with the new situation"
+prog record-behaviour --run "$RUN" --prompt "$P1" --when "prioritise datadog queue" --do "label it"
+has "pdatadog" "$(jfield "$OUT" 'd["behaviours"]')"
+it "record-behaviour does not list an in-force behaviour that shares only one word"
 prog record-behaviour --run "$RUN" --prompt "$P1" --when "a bug report comes in" --do "label it"
-has "pdatadog" "$(jfield "$OUT" 'd["related"]')"
+check "[]" "$(jfield "$OUT" 'd["behaviours"]')"
 
 fresh_store
 RUN="$(new_run)"

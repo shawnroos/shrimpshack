@@ -108,7 +108,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
 1. **Beat, expire and read.** Send one message with two calls: `P beat`, and one
    Bash call of the form `{ echo SWEEP-START; <step 2's prune, which finds the run
    from this session's lease>; P validate; P sweep --record-sources;
-   P propose-permission; P settle-permissions; P sweep-inputs --save; } 2>&1 | tail -c 6000`. If
+   P propose-permission; P settle-permissions; P run-ritual-checks; P sweep-inputs --save; } 2>&1 | tail -c 6000`. If
    `P beat` refuses because the programme ended, stop. `P expire` ends a
    programme whose agreement was never accepted; if it prints `"ended": true`,
    tell Shawn in one line and stop. The last JSON in that output is the verdict of
@@ -167,7 +167,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
    | Shawn's answer | Verb |
    | --- | --- |
    | Ship or decline a handed item | `P answer-handed <item> --choice ship\|decline --prompt <id>` (ship also needs `--kind <change-kind>`) |
-   | How work is done ("always X", "never Y", "when X, do Y") | `P record-behaviour --prompt <id> --when "<the situation>" --do <line> --dont <line> [--pm-check <text>] [--agent-check <text>]`, then see "Behaviours" below |
+   | How work is done ("always X", "never Y", "when X, do Y") | `P check-behaviour` (same flags, no `--prompt`), then `P record-behaviour --prompt <id> --when "<the situation>" --do <line> --dont <line>`; see "Behaviours" below |
    | A dated or scoped order or decision ("until Friday", "skip the full eval on AI-753", "you decide tool choice on AI-1050") | `P record-ruling <id> --effect decided\|grant\|restrict --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>] --prompt <id>`; for a new grant or decided Ruling his prompt must name the id, the kind and every item (or "programme"), otherwise it waits for `accept-context` |
    | Withdraw a Ruling | `P close-ruling <ruling-id> --as withdrawn --prompt <id>` |
    | Accept a proposed term change | `P amend-term <key> <proposed value> --prompt <id>` (add `--seconds <n>` for a fixed cadence) |
@@ -256,7 +256,7 @@ between the expiry and the re-arm are not reported; the next sweep reads them.
      <behaviour-id> --applied --why "<what you did>"`. The sweep stays open
      until that list is empty. `P rules` prints each behaviour's checks.
 5b. **Domain check.** Answer the digest's domain behaviours (domain.md).
-5c. **Rituals.** Answer the digest's Rituals: [references/rituals.md](references/rituals.md).
+5c. **Rituals.** [references/rituals.md](references/rituals.md).
 6. **Sources.** For each watcher line since the last sweep:
    - `source-unavailable <name> missing`, or a reason naming `op unsupported`:
      this machine cannot read the source. Run `P set-source <name> --unsupported`;

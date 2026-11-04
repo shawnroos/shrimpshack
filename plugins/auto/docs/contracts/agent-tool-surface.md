@@ -86,7 +86,9 @@ A programme's agreement (Scope and Rulings) and the protocol (Authority and Done
 programme is found by `--run <id>`, or else by the lease that names the caller's
 session.
 
-- **Read**: `describe`; `rules` prints the rules in force (the agreement's Scope
+- **Read**: `describe`; `host` prints which terminal host this session resolves to, the fact that decided it
+  (live pane proof, the one installed host command, or this session's registry row) and, when it refuses, what
+  was missing; it writes nothing; `rules` prints the rules in force (the agreement's Scope
   terms, active Rulings, Done standards, Authority entries outside the plugin layer,
   protocol changes, Ruling conflicts and old reservations to record again), rebuilt from the run record and wrapped in
   an `<auto-rules>` tag as data, followed by the restored context (decisions,
@@ -272,21 +274,28 @@ session.
   exact label `approval-label` prints; `record-ritual` and `propose-ritual` do not. `run-ritual`, `skip-ritual` and `retire-ritual` move the programme's next-due time past
   now. `handover` and `end` refuse while a ritual for their trigger is unanswered in the tenure that is
   ending; `--without-rituals` goes ahead and leaves it missed. The ritual verbs, in the order a run uses them:
-  `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`.
+  `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`. `adopt-ritual-file` and `decline-ritual-file` (each `<repo key>/<id> --prompt <id>`) put a repo's ritual file in force for this programme or take it out: the prompt must name the ritual id and the content hash of the file as it stands now (and the check, to adopt a file that carries one), and a prompt that names an earlier hash is refused. `run-ritual-checks` (with `--ritual <id>` to re-run one) runs the named check of each due or missed calendar ritual that carries one and has not been checked for its slot, outside the programme lock: a pass moves the clock and journals `ritual_checked`, a fail or error journals it and leaves the ritual due. It is chained in the sweep's step 1 and writes only when the caller drives the programme; otherwise the ritual stays due and is listed as `not_recorded`.
 - **Behaviours**: standing guidance on how the PM and its workers do the work. A
   behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
   --when <text>`) with `--do` or `--dont` lines (plus optional `--trigger claim|merge|block|start`, `--pm-check`,
   `--agent-check`, `--applies-to`, skills, tools, agents, formats, communication
   lines, evidence, stop, examples and why) applies one at once at the programme
   layer and journals `behaviour_recorded`. Its output lists the drafted checks, the
-  undo command and the behaviours in force whose situation or tools share words
-  with the new one, so the PM can name a conflict to Shawn. `--conflicts-with <id>`
-  sets the new entry to override that behaviour (the narrower layer wins). A do
+  undo command, the behaviours in force it applies alongside, the contract parts
+  it touches, and how many listed items are unanswered.
+  `check-behaviour` takes the same field flags (or `--from-proposal <id>`) without a prompt, prints the same
+  result with each listed behaviour's lines, and writes nothing. Both print a synergies list beside
+  the behaviour and contract results: how the new behaviour should link to, or be edited against, a listed one,
+  with the target of an offered edit and no wording. Nothing blocks recording.
+  `--relates-to <id>` and `--unrelated <id>=<reason>` store the answer on the entry.
+  `--conflicts-with <id>` sets the new entry to override that behaviour (the
+  narrower layer wins). A do
   line, skill, tool or agent that names a protected escalation (production deploys,
   releases, spend over cap, merging around the gate, refused permissions) is
   refused. `propose-behaviour` stores a proposal with no prompt, because a proposal
   applies nothing; `--from-term <term-id>` drafts one from a project term's area and
-  value and leaves the term unchanged. It journals `behaviour_proposed`.
+  value and leaves the term unchanged. `--edit-of <id>` plus the fields to change proposes an edit of an
+  active programme behaviour; applying it replaces the target in place. It journals `behaviour_proposed`.
   `record-behaviour --from-proposal <id> --prompt <id>` applies a proposal; the
   prompt must name the proposal id. `move-behaviour` (`<id> --to programme|repo|personal
   --prompt <id>`) needs a prompt that names the id and the layer ("programme",

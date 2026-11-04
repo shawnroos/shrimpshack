@@ -48,6 +48,7 @@ FIXES = {
     "ask-shown": _ITEM,
     "answer-domain-behaviour": _WRITE,
     "close-gone-pane": _WRITE,
+    "host": "`programme.sh host` takes no arguments; rerun it as `programme.sh host`",
     "recommendations-shown": _WRITE,
     "assign-item": _ITEM,
     "beat": _WRITE,
@@ -59,6 +60,7 @@ FIXES = {
     "check-mergeable": _ITEM,
     "claim": ("`programme.sh context --item <id> --run <id>` lists the item's deliverables; "
               "rerun `programme.sh claim` with one of them and a reference with no spaces"),
+    "check-behaviour": _READ,
     "clear-blocker": _ITEM,
     "clear-proposal": _WRITE,
     "close-ruling": _TYPED,
@@ -124,6 +126,9 @@ FIXES = {
     "fail-ritual": _WRITE,
     "skip-ritual": _WRITE,
     "offer-rituals": _WRITE,
+    "run-ritual-checks": _READ,
+    "adopt-ritual-file": _TYPED,
+    "decline-ritual-file": _TYPED,
     "rules": ("`programme.sh rules` prints the rules in force and their context digest; "
               "then `programme.sh rules --ack`"),
     "set-now": _WRITE,
