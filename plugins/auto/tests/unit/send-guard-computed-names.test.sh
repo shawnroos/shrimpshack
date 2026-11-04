@@ -109,6 +109,11 @@ EOF
 sleep 1.2
 row herdr default w2 sess-late w2:p51 term_p51
 sleep 1.2
+mkdir -p "${PROJ}/bin" "${PROJ}/b" "${PROJ}/gt"
+for planted in bin/python3 bin/make b/ls gt/python3 ls; do
+  printf 'H=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/${planted}"
+  chmod +x "${PROJ}/${planted}"
+done
 
 echo "send-guard-computed-names: a path written and run in one command is judged as the script it is (R1)"
 D <<'T'
@@ -618,6 +623,20 @@ T
 D <<'T'
 python3 big.py
 T
+"$PY" -c 'open("'"${PROJ}"'/native-big","wb").write(b"\xcf\xfa\xed\xfe" + b"\0" * 300000)'
+"$PY" -c 'open("'"${PROJ}"'/native-small","wb").write(b"\xcf\xfa\xed\xfe" + b"\0" * 100)'
+chmod +x "${PROJ}/native-big" "${PROJ}/native-small"
+A <<'T'
+./native-big
+T
+A <<'T'
+./native-small
+T
+AS=sess-late
+A <<'T'
+python3 -c "import sys; open(sys.argv[1], 'w').write('x')" f && bash old.sh
+T
+AS=sess-worker
 
 echo "send-guard-computed-names: a file that shadows a standard module is not imported unread (R5)"
 mkdir -p "${PROJ}/shadow"
@@ -960,13 +979,13 @@ D <<'T'
 X=b; PATH=$X:$PATH ls
 T
 D <<'T'
-export PATH=$PWD/b:$PATH
+export PATH=$PWD/b:$PATH; ls
 T
 D <<'T'
-declare -x PATH=b
+declare -x PATH=b; ls
 T
 D <<'T'
-export -- PATH=b
+export -- PATH=b; ls
 T
 D <<'T'
 HOME=h zsh -c true
@@ -1161,6 +1180,186 @@ print("deny" if out else "allow", "fast" if time.monotonic() - t0 < 8 else "slow
 PYEOF
 )"
 check "deny fast" "$V"
+
+echo "send-guard-computed-names: wrappers, PATH, cd in nested scripts and unpacked files (issues 214, 215, 216)"
+printf 'echo ok\n' > "${PROJ}/r.sh"
+printf 'H=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/sub/r.sh"
+D <<'T'
+watch -n 1 python3 -c 'import socket'
+T
+D <<'T'
+parallel python3 -c 'import socket' ::: 1
+T
+D <<'T'
+script -q /dev/null python3 -c 'import socket'
+T
+D <<'T'
+conda run -n base python3 -c 'import socket'
+T
+D <<'T'
+uv run fresh.py
+T
+D <<'T'
+uv run --script fresh.py
+T
+D <<'T'
+pipx run fresh.py
+T
+D <<'T'
+uv run --index-url u python fresh.py
+T
+A <<'T'
+uv run --with-editable . python -c 'print(1)'
+T
+A <<'T'
+PATH=./nodir:$PATH ls
+T
+A <<'T'
+PATH=./nodir:$PATH true
+T
+A <<'T'
+PATH=$PWD/node_modules/.bin:$PATH npx tool
+T
+it "denied: an absolute PATH directory holding a program the session wrote"
+check deny "$(verdict "$(hook sess-worker "PATH=${PROJ}/gt:\$PATH python3 -c 'print(1)'")")"
+it "denied: env PATH= naming a directory holding a program the session wrote"
+check deny "$(verdict "$(hook sess-worker "env PATH=${PROJ}/gt:/usr/bin python3 -c 'print(1)'")")"
+D <<'T'
+cd sub && bash -c 'bash r.sh'
+T
+D <<'T'
+cd sub && eval 'bash r.sh'
+T
+D <<'T'
+cd sub && echo $(bash r.sh)
+T
+D <<'T'
+(cd sub; sh -c 'bash r.sh')
+T
+D <<'T'
+cd sub && python3 -c 'import os; os.system("bash r.sh")'
+T
+D <<'T'
+cd sub && bash <<EOF
+bash r.sh
+EOF
+T
+A <<'T'
+bash -c 'bash r.sh'
+T
+D <<'T'
+tar xf a.tar && bash fresh-ok.sh
+T
+D <<'T'
+git checkout -- fresh-ok.sh && bash fresh-ok.sh
+T
+D <<'T'
+patch -p0 < x.diff && bash fresh-ok.sh
+T
+D <<'T'
+unzip -o z.zip && ./fresh-ok.sh
+T
+D <<'T'
+git -C . pull && bash fresh-ok.sh
+T
+A <<'T'
+bash fresh-ok.sh && tar xf a.tar
+T
+A <<'T'
+tar xf a.tar
+T
+A <<'T'
+git status; git log -1 && bash fresh-ok.sh
+T
+D <<'T'
+python3 -c "n = 'f'; open(n + '.sh', 'w').write('echo'); import os; os.system('bash fresh-ok.sh')"
+T
+D <<'T'
+python3 -c "import sys; open(sys.argv[1], 'w').write('x')" f.sh && bash fresh-ok.sh
+T
+A <<'T'
+python3 -c 'import sys; open(sys.argv[1], "r").read()' f && bash fresh-ok.sh
+T
+A <<'T'
+HOME=/tmp echo ok; python3 -c 'print(1)'
+T
+D <<'T'
+HOME=/tmp python3 -c 'print(1)'
+T
+A <<'T'
+PYTHONPATH=src echo ok; python3 -c 'print(1)'
+T
+
+echo "send-guard-computed-names: a dollar sign in single quotes reaches Python as written (issue 220)"
+A <<'T'
+python3 -c 'print("$NOT_SET_ANYWHERE")'
+T
+A <<'T'
+python3 -c 'import os; print(os.environ.get("$X"), "$(date)")'
+T
+A <<'T'
+python3 - <<<'print("$NOT_SET_ANYWHERE")'
+T
+D <<'T'
+python3 -c "print('$NOT_SET_ANYWHERE')"
+T
+D <<'T'
+python3 -c "print(\"$NOT_SET_ANYWHERE\")"
+T
+D <<'T'
+echo 'print("$NOT_SET_ANYWHERE")'; python3 -c "print(\"$NOT_SET_ANYWHERE\")"
+T
+D <<'T'
+python3 - <<<"print(\"$NOT_SET_ANYWHERE\")"
+T
+A <<'T'
+NOT_SET_ANYWHERE=ok; python3 -c "print(\"$NOT_SET_ANYWHERE\")"
+T
+D <<'T'
+python3 -c 'import subprocess; subprocess.run(["$X"])'
+T
+
+echo "send-guard-computed-names: wrappers that run a program path, not an interpreter name (issue 214)"
+printf 'H=$(printf %%s her); $H pane send-text w2:p77 hi\n' > "${PROJ}/runme"
+chmod +x "${PROJ}/runme"
+D <<'T'
+timeout 5 ./runme
+T
+D <<'T'
+flock /tmp/x ./runme
+T
+D <<'T'
+taskset 1 ./runme
+T
+D <<'T'
+taskset -c 0 ./runme
+T
+D <<'T'
+ionice -c 3 ./runme
+T
+D <<'T'
+uv --directory . run ./runme
+T
+D <<'T'
+timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 ./runme
+T
+D <<'T'
+timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 timeout 5 ./runme
+T
+D <<'T'
+cd d0; cd d1; cd d2; cd d3; cd d4; cd d5; cd d6; cd d7; bash fresh-ok.sh
+T
+D <<'T'
+python3 -c "import shutil, sys; shutil.copy('a', sys.argv[1]); import os; os.system('bash fresh-ok.sh')"
+T
+D <<'T'
+python3 -c "import pathlib, sys; pathlib.Path(sys.argv[1]).write_text('x'); import os; os.system('bash fresh-ok.sh')"
+T
+AS=sess-late
+D <<'T'
+python3 -c "open('old'+'.sh', 'w').write('echo'); import os; os.system('bash old.sh')"
+T
+AS=sess-worker
 
 echo "send-guard-computed-names: a command too large to read in time is refused, not left to the hook's kill (R10)"
 HUGE="$("$PY" -c 'print("bash a.sh; " * 3000)')"

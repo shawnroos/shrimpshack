@@ -35,6 +35,8 @@ _INLINE_FAULT = "CLAUDE_AUTO_TEST_SEND_GUARD_INLINE_FAULT"
 COMMAND_CAP = 100_000
 # The lexer and the passes around it cost under 40 us a character, so a scan that cannot fit in the time left is refused.
 SCAN_SECONDS_PER_CHAR = 4e-5
+_CD_TOO_MANY = ("inline", "runtime-built command", "",
+                "inline:the command changes directory more often than auto follows; split it into smaller commands")
 _TOO_LARGE = ("inline", "runtime-built command", "",
               "inline:the command is too large for auto to read in the time allowed; split it into smaller commands")
 # Bounds the last-seen file; a PM pane moves a handful of times in a programme's life.
@@ -474,6 +476,18 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
     runs, assigns, _globbed, progs = positions
     resolve = _resolver(tokens, assigns, spans, main, hosts, loops_ok)
     looked_up = _lookup_names(tokens, runs)
+    cwd_at = None
+    if proven is not None and ctx is not None and shell:
+        cwd_at = load_lib_module("send_guard_runners").track_cwd(sys.modules[__name__], tokens, runs, ctx, resolve)
+        if cwd_at is None:
+            found.append(_CD_TOO_MANY)
+            return
+
+    def cx(index=None):
+        """The context for a nested scan: it runs in the directories the token it came from may run in."""
+        if cwd_at is None:
+            return ctx
+        return ctx.child(cwd_at[index] if index is not None else frozenset().union(*cwd_at) | ctx.cwds)
 
     def program(index: int) -> str:
         return resolve(index, tokens[index]) or tokens[index] if 0 <= index < len(tokens) else ""
@@ -482,14 +496,14 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         for script in _substitution_scripts(spans):
             # A loop variable resolves only inside a body whose output sets a variable: that body is read as a value.
             _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=shell, expands=expands,
-                  loops_ok=script in resolve.value_bodies, ctx=ctx)
+                  loops_ok=script in resolve.value_bodies, ctx=cx())
         for body in bodies:
             for script in dict.fromkeys([body.text] + [line for line in body.text.splitlines() if line.strip()]):
                 if ctx is not None and ctx.expired():
                     found.append(_TOO_LARGE)
                     return
                 _scan(script, depth + 1, hosts, pane_ids, found, proven,
-                      shell=shell and body.shell, expands=expands and not body.quoted, ctx=ctx)
+                      shell=shell and body.shell, expands=expands and not body.quoted, ctx=cx())
     spaced = []
     for start, token in enumerate(tokens):
         if ctx is not None and start % 32 == 0 and ctx.expired():
@@ -512,7 +526,7 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
         if _INTERPRETERS.match(base) and depth < MAX_DEPTH and runs[start]:
             # Inline code of another language can call the host command through a string; scan every string in it.
             for literal in {m for t in _segment(tokens, start) for m in sum(_STRING_LITERAL.findall(t), ()) if " " in m}:
-                _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=ctx)
+                _scan(literal, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=cx(start))
         if script is None and base.casefold() in _SHELL_NAMES and depth < MAX_DEPTH and runs[start]:
             # A shell with no -c script reads one from stdin or a file, so any quoted text in the command may be
             # that script. Lex the unmarked text for this: `bash <(echo '<send>')` holds the script inside a
@@ -521,10 +535,11 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
                 # Once per scan: lexing the whole command for every shell word made a long command quadratic.
                 spaced.append({t for t in tokens + _lex(_newlines_as_breaks(main)) if " " in t})
             for quoted in spaced[0]:
-                _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=ctx)
+                _scan(quoted, depth + 1, hosts, pane_ids, found, proven, shell=False, expands=True, ctx=cx(start))
         if script is not None:
             if depth < MAX_DEPTH:
-                _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=script_shell, expands=expands, ctx=ctx)
+                _scan(script, depth + 1, hosts, pane_ids, found, proven, shell=script_shell, expands=expands,
+                      ctx=cx(start))
             continue
         if start in looked_up:
             continue
@@ -538,7 +553,8 @@ def _scan(text: str, depth: int, hosts: list, pane_ids: list, found: list, prove
                 found.append((host.name, hit[0], hit[1], hit[2] if len(hit) > 2 else ""))
     if proven is not None and ctx is not None and shell:
         load_lib_module("send_guard_runners").judge_runners(
-            sys.modules[__name__], tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_ids, found, proven, ctx)
+            sys.modules[__name__], tokens, positions, bodies, looked_up, resolve, depth, hosts, pane_ids, found, proven, ctx,
+            cwd_at, _newlines_as_breaks(marked))
 
 
 def _command_positions(tokens: list) -> tuple:
@@ -747,7 +763,7 @@ def _strict_hit(command: str, session_id, drivers: list, sender: dict, cwd=None,
     ids = [i for d in drivers for i in _ids(d)]
     started = load_lib_module("session_registry").session_start(session_id)
     if ctx is not None:
-        ctx.cwd = cwd
+        ctx.cwds = frozenset({cwd})
         ctx.session_start = started if started is not None else ctx.session_start
     unproven = host_sends(command, ids, proven=_proven_other(sender, session_id, drivers), cwd=cwd,
                           session_start=started, ctx=ctx)

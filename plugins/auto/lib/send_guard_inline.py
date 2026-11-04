@@ -8,6 +8,7 @@ or changed it; older files and files identical to the default branch are code th
 from __future__ import annotations
 
 import ast
+import copy
 import importlib
 import os
 import re
@@ -335,6 +336,32 @@ def _is_package(path: str) -> bool:
     return os.path.isdir(path) and any(n.startswith("__init__.") for n in os.listdir(path))
 
 
+_PATH_WRITERS = frozenset({"write_text", "write_bytes", "touch"})
+_DEST_WRITERS = frozenset({"copy", "copy2", "copyfile", "copytree", "move", "rename", "replace", "symlink"})
+
+
+def unfoldable_write(code: str) -> bool:
+    """Does this code write a file whose name it builds at run time? Such a name cannot be matched against the script
+    the same command runs, so the caller refuses the pair."""
+    try:
+        nodes = list(ast.walk(ast.parse(code)))
+    except Exception:
+        return True
+    for n in nodes:
+        if not isinstance(n, ast.Call):
+            continue
+        if isinstance(n.func, ast.Name) and n.func.id == "open":
+            mode = n.args[1] if len(n.args) > 1 else next((k.value for k in n.keywords if k.arg == "mode"), None)
+            writes = isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) & set("wax+")
+            if writes and (not n.args or _fold(n.args[0]) is None):
+                return True
+        elif isinstance(n.func, ast.Attribute) and n.func.attr in _PATH_WRITERS | _DEST_WRITERS:
+            target = n.func.value if n.func.attr in _PATH_WRITERS else (n.args[-1] if n.args else n.func.value)
+            if _fold(target) is None:
+                return True
+    return False
+
+
 def shadowed(code: str, directories):
     """Why a standard module the code imports would be replaced by a file in a directory Python searches first.
 
@@ -440,10 +467,16 @@ class Context:
     """What one guard call knows about where it runs; one per command."""
 
     def __init__(self, cwd=None, session_start=None):
-        self.cwd = cwd
+        self.cwds = frozenset({cwd})
         self.session_start = session_start if session_start is not None else time.time() - 6 * 3600
         self.deadline = time.monotonic() + DEADLINE
         self.files = 0
+
+    def child(self, cwds):
+        """The same call, scanning text that runs in these directories. The deadline is shared."""
+        other = copy.copy(self)
+        other.cwds = frozenset(cwds)
+        return other
 
     def expired(self) -> bool:
         return time.monotonic() > self.deadline
@@ -516,21 +549,36 @@ def fresh_text(path: str, ctx: Context):
     if ctx.files >= MAX_FILES or ctx.expired():
         return None, "the command names more script files than auto reads in the time allowed"
     ctx.files += 1
-    if same_as_default_branch(path, ctx):
-        return None, None
-    if st.st_size > FILE_CAP:
-        return None, "it is larger than auto reads (256 KB)"
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         try:
-            data = os.read(fd, FILE_CAP + 1)
+            head = os.read(fd, 16)
+            if head.startswith(_NATIVE_MAGIC):
+                # A compiled program is not code auto can read, whatever its size.
+                return None, None
+            if same_as_default_branch(path, ctx):
+                return None, None
+            if st.st_size > FILE_CAP:
+                return None, "it is larger than auto reads (256 KB)"
+            data = head + os.read(fd, FILE_CAP + 1 - len(head))
         finally:
             os.close(fd)
     except OSError:
         return None, "auto could not read it"
-    if data.startswith(_NATIVE_MAGIC):
-        return None, None
     return data.decode("utf-8", "replace"), None
+
+
+def session_wrote(path: str, ctx: Context) -> bool:
+    """Did this session write or change the file: newer than the session start, and not a tracked file equal to the
+    default branch."""
+    try:
+        lst = os.lstat(path)
+        st = os.stat(path)
+    except OSError:
+        return False
+    if max(lst.st_mtime, lst.st_ctime, st.st_mtime, st.st_ctime) < ctx.session_start:
+        return False
+    return not same_as_default_branch(path, ctx)
 
 
 def shebang_words(text: str) -> list:

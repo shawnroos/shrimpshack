@@ -60,9 +60,9 @@ Counts come from 339 transcripts touched in the last 30 days: 22,648 Bash comman
 | Scripts written and run in one command | 247 (1.1% of commands) | refusal share not yet measured; U1 measures it |
 | Inline interpreter commands by language | python 2,993; perl 27; php/lua/other 5; node 1 | non-Python is 0.15% of commands |
 | A first design that refused file writes and `pathlib` | 15.1% of all commands refused | too costly; file writes are now allowed and judged by what happens to the file next |
-| Final design, replayed through the old and new guard (23,562 commands) | 4.3% newly refused; 5.7% if 350 runs of scripts that no longer exist are counted; 3.4% leaving out script-file refusals too | see the note below; nothing the old guard denied is allowed |
+| Final design, replayed through the old and new guard (23,828 commands) | 5.2% newly refused; 6.7% if 348 runs of scripts that no longer exist are counted | see the note below; nothing the old guard denied is allowed |
 
-Reading every script under the command rule is the wrong tool. Reading only files the session itself wrote costs about 1% of commands. The replay is an ad hoc measurement, not a committed tool: it replays today's files and clock against old sessions, so scripts modified since then read as fresh and deleted ones read as missing. The largest parts of the 4.3% are by design: a process started from a command line that is not written out as literal strings (1.0%), and a command that writes a file and runs it in the same breath (0.9%). A broader rule that refused any Python that writes files in a command that also runs a script measured 6.9% and was replaced by matching the written names, with literal concatenations folded (`'x' + '.sh'`); names built from variables are a named residual. The PM can redirect either rule in review.
+Reading every script under the command rule is the wrong tool. Reading only files the session itself wrote costs about 1% of commands. The replay is an ad hoc measurement, not a committed tool: it replays today's files and clock against old sessions, so scripts modified since then read as fresh and deleted ones read as missing. The largest parts of the 5.2% are by design: a process started from a command line that is not written out as literal strings (1.0%), and a command that writes a file and runs it in the same breath (0.9%). A broader rule that refused any Python that writes files in a command that also runs a script measured 6.9% and was replaced by matching the written names, with literal concatenations folded (`'x' + '.sh'`); names built from variables are a named residual. The PM can redirect either rule in review.
 
 ### Key Decisions
 
@@ -101,14 +101,16 @@ Reading every script under the command rule is the wrong tool. Reading only file
 **Deferred to follow-up work (each logged as a P3 issue in `shawnroos/shrimpshack`):**
 
 - The runtime closure: host binaries and the herdr socket refuse a non-driver session. It is the only fix that closes the class.
-- Programs that start processes from their own arguments: `awk 'BEGIN{system(...)}'`, `find -exec`, `xargs`, `sed` with the `e` flag, `git -c` hooks, `make`.
-- `python3 -m <module>`, including `-m timeit` with inline code, and code a read file imports or sources (transitive code, such as a fresh test file under `bash tests/run.sh`).
-- Interpreters not on the name list (`lua5.4`, `ipython`, `awk`), wrappers not in KTD8 (`watch`, `script`, `parallel`), and `osascript` `do shell script` with a computed name.
-- Races: a file swapped between the hook's read and the shell's run by a background job started in an earlier command.
-- A worker moving the default-branch ref (`git update-ref`) to make its own script look identical to main.
-- An operand the guard cannot resolve (`bash "$f"`, a non-literal `cd` leaves the earlier directory possible but adds none), which is 23% of file runs and stays allowed as today.
-- Device paths spelled in pieces (`'/de' + 'v/tty'`), and startup files in Python site directories.
-- A `$` inside a single-quoted `-c` operand is read as an expansion, because the lexer drops the quote kind.
+- Programs that start processes from their own arguments: `awk 'BEGIN{system(...)}'`, `find -exec`, `xargs`, `sed` with the `e` flag, `git -c` hooks, `make` (#219).
+- `python3 -m <module>`, including `-m timeit` with inline code, and code a read file imports or sources (transitive code, such as a fresh test file under `bash tests/run.sh`) (#217).
+- Interpreters not on the name list (`lua5.4`, `ipython`, `awk`) and `osascript` `do shell script` with a computed name (#219).
+- Races: a file swapped between the hook's read and the shell's run by a background job started in an earlier command; a worker moving the default-branch ref to make its own script look identical to main (#218).
+- Device paths spelled in pieces (`'/de' + 'v/tty'`), and startup files in Python site directories (#221).
+- What the second pass (#214, #215, #216, #220) could not close by reading, each refused or left allowed as stated (#242):
+  - a program path behind a wrapper the guard does not follow (`watch ./x`) is not read; `watch python3 …` and `watch bash …` are;
+  - a script that existed before the session and is overwritten by Python under a name built at run time, then run in the same command, is read as the old file (refusing every such pair cost 2.2% of worker commands);
+  - an unpacking tool outside the list (`bsdtar`, `python3 -m zipfile`) before a script runs in the same command;
+  - a `cd` operand built at run time leaves the relative script path unresolved, which stays allowed as before.
 
 **Outside this plan:** Changing what the guard does for the driver session, and the driver-pane id lookup.
 
@@ -161,6 +163,12 @@ flowchart TB
   I -->|fail| X
   S -->|hit| X
 ```
+
+- KTD11. **`cd` is a set of directories, carried into every nested scan.** A `cd` may fail, sit in a subshell or follow `&&`/`||`, so a token may run in any directory reached so far; more than 64 refuses. `bash -c`, `eval`, `$(…)`, heredoc-fed shells and spawned command lines are scanned in the directories their token may run in. (issue #215)
+- KTD12. **A program named among another program's arguments is read; a `PATH` that names a directory is searched.** A shell or interpreter that follows an unknown program (`watch`, `script`, `parallel`, `conda run`) is treated as the program that runs, and only a file it names is read, never refused for being a plain mention. A `PATH` assignment is resolved to real directories (`$PWD`, `$HOME`, variables set in the text, relative parts); a program the session wrote in one of them is read. A loader setting (`HOME=`, `PYTHONPATH=`) applies to the command it is a prefix of, or to later commands when it stands alone as a statement. (issue #214)
+- KTD13. **An unpacking or checkout command before a script in the same text refuses; a run-time file name refuses only against a script the session wrote.** `tar`, `unzip`, `patch`, `rsync`, `git apply|checkout|pull|…` may create the script the same command then runs. Python that builds a file name at run time is refused only when the script run is one the session wrote or changed, which cut that rule from 2.2% to 0.1% of worker commands. (issue #216)
+- KTD14. **A real program binary is recognised by its header before any size check.** A compiled program is not code the guard can read at any size. (the `claude` false refusal)
+- KTD15. **A dollar sign in single quotes reaches Python as written.** The command text is lexed a second time keeping the quotes; every word equal to the code must stand in single quotes, and the two lexes must line up one for one, or nothing is credited. The equality and the quote check are redundant layers under the alignment check (issue #223). (issue #220)
 
 ### Assumptions
 
