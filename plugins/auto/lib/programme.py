@@ -330,8 +330,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
                                              recheck=programme_rulings.recheck_approval,
                                              legacy_refuses=programme_rulings.changes_ruling)
         except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
-                programme_behaviours.BehaviourError, programme_rituals.RitualError,
-                worker_contract.ContractError) as exc:
+                programme_behaviours.BehaviourError, programme_rituals.RitualError, worker_contract.ContractError) as exc:
             if (needs_prompt or prompt_id) and "sid" in seen:
                 _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
             raise

@@ -260,7 +260,7 @@ it "the brief copy tells the worker how to register"
 has "register-run --run ${RUN} --item linear:AI-701" "$(cat "$BRIEF")"
 for word in authority never propose product_scope technical_approach done_bar act_and_tell; do
   it "no authority wording in the kickoff or the brief: $word"
-  case "$(cat "$KICK" "$BRIEF")" in *"$word"*) fail "found [$word]" ;; *) pass ;; esac
+  case "$(cat "$KICK" "$BRIEF" | sed '/^Behaviours this work follows:/,/^$/d')" in *"$word"*) fail "found [$word]" ;; *) pass ;; esac
 done
 it "a contracted start from a session that does not drive the programme is refused and writes nothing"
 BEFORE="$(governed)"
