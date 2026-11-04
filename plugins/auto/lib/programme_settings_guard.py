@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Refuse a programme session's write to a settings file a permission proposal targets.
+"""Refuse the PM's write to a settings file a permission proposal targets.
 
-Best effort: the driving session and the sessions of unfinished items are refused
-Write, Edit, MultiEdit or Bash calls that name that settings.local.json. Only Shawn applies rules.
-While the programme's record cannot be read, the driver and every session in its space are
-refused any .claude/settings.local.json: which one a proposal targets cannot be known.
+Best effort: the driving session is refused Write, Edit, MultiEdit or Bash calls that name
+that settings.local.json. Only Shawn applies rules; workers are not checked. While the
+programme's record cannot be read, the driver is refused any .claude/settings.local.json:
+which one a proposal targets cannot be known.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
-session_registry = load_lib_module("session_registry")
 rules = load_lib_module("programme_permission_rules")
 
 SETTINGS_FILE = rules.DESTINATION_FILE
@@ -40,46 +39,19 @@ def _held_read(lease):
     return lease["run"], record if isinstance(record, dict) else None
 
 
-def _space_run(session_id, env):
-    space = session_registry.space_of_session(session_id)
-    if not space:
-        return None
-    try:
-        return _held_read(programme_home.read_lease(programme_home.lease_path(*space)))
-    except programme_home.ProgrammeHomeError:
-        return None
-
-
-def _item_ids(programme, session_id) -> list:
-    found = []
-    for item_id, item in sorted((programme.get("items") or {}).items()):
-        if not isinstance(item, dict) or item.get("state") in programme_home.FINISHED_ITEM_STATES:
-            continue
-        if session_id in programme_home.session_ids(item):
-            found.append(item_id)
-    return found
-
-
-def scope(session_id, env):
-    """(run_id, programme, item_ids), or (run_id, None, []) when the run's record cannot be read."""
+def scope(session_id):
+    """(run_id, programme), or (run_id, None) when the run's record cannot be read; None when this session drives nothing."""
     if not isinstance(session_id, str) or not session_id:
         return None
     unreadable = [r for r in map(_held_read, programme_home.leases_for_session(session_id))
                   if r is not None and r[1] is None]
     if unreadable:
-        return unreadable[0][0], None, []
+        return unreadable[0][0], None
     driven = [d for d in programme_home.driven_runs(session_id) if isinstance(d.get("record"), dict)]
-    found = (driven[0]["run"], driven[0]["record"]) if driven else _space_run(session_id, env)
-    if found is None:
+    if not driven:
         return None
-    run_id, record = found
-    if record is None:
-        return run_id, None, []
-    programme = record.get("programme")
-    if not isinstance(programme, dict) or programme.get("ended"):
-        return None
-    item_ids = _item_ids(programme, session_id)
-    return (run_id, programme, item_ids) if driven or item_ids else None
+    programme = driven[0]["record"].get("programme")
+    return None if not isinstance(programme, dict) or programme.get("ended") else (driven[0]["run"], programme)
 
 
 def _expanded(path: str) -> str:
@@ -141,10 +113,10 @@ def decision(stdin_raw: str):
     if "settings.local.json" not in json.dumps(tool_input).casefold():
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    found = scope(session_id, os.environ)
+    found = scope(session_id)
     if found is None:
         return None
-    run_id, programme, item_ids = found
+    run_id, programme = found
     destinations = None if programme is None else [
         p.get("destination") for p in programme.get("permission_proposals") or []
         if isinstance(p, dict) and isinstance(p.get("destination"), str) and os.path.isabs(p["destination"])]
@@ -160,7 +132,7 @@ def decision(stdin_raw: str):
             f"auto: this call names {target}, and the record of programme {run_id!r} cannot be read "
             "right now, so no settings file can be cleared. Only Shawn applies permission rules; "
             "retry once the programme is readable, or continue the work that does not need this."), None
-    payload = {"tool": tool_name, "path": target, "item_ids": item_ids}
+    payload = {"tool": tool_name, "path": target}
     if tool_name == "Bash":
         payload["command"] = tool_input.get("command")
     return _deny(

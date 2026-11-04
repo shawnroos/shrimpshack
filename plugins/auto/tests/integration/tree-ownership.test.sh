@@ -21,7 +21,11 @@
 # during an operator pause. A sub-agent is NEVER the operator. The exemption must
 # stay scoped to the DRIVING session alone. Scenario 5 is the regression.
 #
+# The destructive check is off by default, so the action scenarios run it through
+# its fenced hatch. Scenario 0 pins the default.
+#
 # Scenarios:
+#   0.      registered sub-agent or driving session + destructive, no hatch -> allow
 #   1. AE7  registered sub-agent + destructive -> deny + run PAUSED (fail-CLOSED)
 #   2.      unregistered session + destructive -> allow, run-record untouched
 #           (no cross-session capture of an unrelated Claude session)
@@ -145,6 +149,20 @@ PYEOF
 
 # ════════════════════════════════════════════════════════════════════════════
 echo "tree-ownership.test.sh"
+
+# ─── 0. default: the check is off for the whole tree ─────────────────────────
+it "off by default: registered sub-agent + destructive -> allow"
+REPO="$(mk_live_owned off-kid r0 sess-BOSS)"
+register_session "$REPO" r0 sess-KID
+out="$(EVENT sess-KID Bash 'rm -rf build/' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
+assert_empty "$out"
+it "off by default: driving session + destructive -> allow"
+out="$(EVENT sess-BOSS Bash 'git push --force' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
+assert_empty "$out"
+it "off by default: the run stays self-driven"
+assert_eq "self" "$(rd_loop "$REPO" r0 driver)"
+
+export CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK=1
 
 # ─── 1. AE7: registered sub-agent + destructive -> deny + PAUSE ───────────────
 it "AE7: registered sub-agent + destructive -> deny (fail-CLOSED)"

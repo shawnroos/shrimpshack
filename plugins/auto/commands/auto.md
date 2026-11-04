@@ -86,13 +86,12 @@ While a self-driven run owns this session, a PreToolUse hook denies any
 `AskUserQuestion` and redirects the driver to consult the `advisor` tool, then
 classify the question itself: a mechanical clarification is resolved
 autonomously; a substantive design/architecture fork is escalated to the
-operator via the pause handoff. A second PreToolUse hook deterministically pauses
-the run on an irreversible/destructive Bash/Write (the CLAUDE.md-anchored set).
-Both gates fire ONLY for the driving session (matched by `driving_session_id`,
-recorded at arm time) — a concurrent standalone ce-skill in the same worktree
-is never intercepted. Every advisor resolution and every backstop denial is
-appended to the run-record's `advisor_audit` record and surfaced in the exit
-report. `advisor` is in `allowed-tools` for this reason. Full behavior:
+operator via the pause handoff. Auto does not refuse destructive commands or
+pause a run for them: that check is off by default. The gate fires ONLY for the
+driving session (matched by `driving_session_id`, recorded at arm time) — a
+concurrent standalone ce-skill in the same worktree is never intercepted. Every
+advisor resolution is appended to the run-record's `advisor_audit` record and
+surfaced in the exit report. `advisor` is in `allowed-tools` for this reason. Full behavior:
 `skills/auto/SKILL.md` §4.6.
 
 ## v0.4.0 handoff-default flip (KTD-4)

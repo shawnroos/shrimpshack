@@ -438,6 +438,11 @@ session.
   `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed
   prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
   item then refuses, and requirements stay unchanged.
+- **Hook code**: `record-hook-patch` (`<file> --why <line> --pr <url or number>`) records that the PM changed
+  hook code. It journals `hook_patched`, sends Shawn the notice through the terminal host and prints it for
+  the PM to post. The notice names the protected rules the file holds. It needs no prompt, because it records what
+  the PM did and approves nothing. Auto refuses neither code route, and Claude Code's own permissions still
+  apply; `skills/programme-sweep/references/checks.md` states both routes.
 - **Item size**: `size-item` (`<item> <size>`) sets an item's size from the agreement's `focus_budget` scale; `add-item --size <name>` does the same. A name outside the scale is refused and the refusal lists the valid names.
 - **Focus limits**: `amend-term focus_budget limited --points <n> --agents <n> --prompt <id>` sets the limits; either may be left out, and the word none clears one. The value unlimited clears both. The option --scale small=1,medium=3,large=5 replaces the point scale. The verbs propose-term and pick-term take the same options. A programme has no limit until one is set, and setup does not wait on it.
 - **Focus gate**: with a `focus_budget` limit set, `start-worker` holds an item that would pass the point limit, pass the agent limit, lacks a size (point limit only), or cannot be counted because herdr is unreadable. The hold records a reason and a held-at time on the item, and the start refuses with the next step. `--despite focus` starts it anyway only after Shawn's pick: without an approved `override-focus` on the item it is refused and the item is held (the refusal names `approval-label override-focus <item>` and the steps). With the approval it passes the gate once, uses the approval up and journals the override. The old-worker hold is never overridden. `focus-recheck` releases each held item that now fits, in held order, counting the room each released item takes.
@@ -1020,13 +1025,15 @@ exact label `approval-label <verb> <args>` prints for the command being run
 (programme-prompt-source.md gives the list and the full rule). `approval-label`
 needs no prompt, writes nothing, and refuses a verb a pick cannot approve.
 
-The action hook guards each driver's pane. In a session that is not the driving
-session of a live, orphaned or expired lease, it denies any Bash command whose
-text names a driver's pane id or terminal id as a whole token, after `$'..'`
-segments are decoded as bash does (`\xHH`, octal, `\uHHHH`), a `$` before a double
-quote is dropped, and quote characters and backslashes are removed, however herdr is invoked, and journals
-`blocked_driver_send`. A herdr send call that the hook can parse is also denied
-when its target is a driver's pane, in every session, the driving one included.
+The action hook refuses a literal send into a driver's pane, and journals
+`blocked_driver_send`. A send is literal when a host's send command is written out
+at a command position with the pane as its target, directly or inside `bash -c`,
+an eval string, `$( )`, backticks or a shell heredoc. The refusal applies to that
+programme's own sessions: the driver, a session in a space its run leases, and a
+session on an unfinished item. A command that only names the pane, reads it, or
+computes its program or target is allowed, and so is any session outside the
+programme. If only an item could prove membership and the record cannot be read,
+the send is allowed. This is a guard rail, not a sandbox.
 
 The same hook guards the tracker against proof written by the PM. On a Linear
 MCP tool call (a tool whose server name contains "linear") from the driving
@@ -1054,16 +1061,16 @@ Other sessions, sessions that drive no programme, and every other field
 (an issue description included) are not checked.
 
 The same hook guards the files permission proposals target. For the driving
-session and for sessions on unfinished items, it denies a Write, Edit, MultiEdit
-or Bash call that names the `.claude/settings.local.json` of any proposal's
-destination, and journals `blocked_settings_write`. The Bash check is a text
-match. Other settings files are not checked (programme-permission-proposals.md).
+session only, it denies a Write, Edit, MultiEdit or Bash call that names the
+`.claude/settings.local.json` of any proposal's destination, and journals
+`blocked_settings_write`. The Bash check is a text match. Other settings files are
+not checked (programme-permission-proposals.md). Workers may write these files.
 
-Under the same scope the hook also denies a Write, Edit, MultiEdit or Bash call that
-names the personal behaviours folder or the stored `behaviours.json`, and journals
-`blocked_behaviours_write`. The Bash check is a text match; a neighbour such as
-`behaviours.json.bak` is not checked. A programme verb that Shawn approves is the
-only way to change those files.
+For the driving session only, the hook also denies a Write, Edit, MultiEdit or Bash
+call that names the personal behaviours folder or the stored `behaviours.json`, and
+journals `blocked_behaviours_write`. The Bash check is a text match; a neighbour such
+as `behaviours.json.bak` is not checked. A programme verb that Shawn approves is the
+PM's only way to change those files. Workers may write them.
 
 The pane guard and the prompt binding stop accidents and casual misuse. A
 determined process running as the same user can still append journal rows or

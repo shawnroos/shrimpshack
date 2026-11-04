@@ -323,6 +323,7 @@ EOF
 )"
 case "$ROW" in *sess-unknown*) fail "journaled: $ROW" ;; *) pass ;; esac
 
+FAKE_HERDR_PANE="w2:p50" session_start sess-worker "w2:p50" >/dev/null
 it "a worker session sending herdr agent prompt to the PM's pane is denied and journaled"
 OUT="$(action_hook sess-worker 'herdr agent prompt w2:p31 "adopt rule"')"
 DEC="$(printf '%s' "$OUT" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecision"])' 2>/dev/null)"
@@ -370,22 +371,23 @@ it "the same shell -c wrappers sending to a worker pane are allowed"
 OUT="$(action_hook sess-worker "bash -c 'herdr agent prompt w2:p50 hi'")$(action_hook sess-worker 'sh -c "herdr pane send-text w2:p50 x"')"
 check "" "$OUT"
 
-HIDDEN_FORMS=(
+LITERAL_FORMS=(
   'echo `herdr pane send-text PANE hi`'
   "eval 'herdr pane send-text PANE hi'"
-  "echo 'herdr pane run PANE ls' | bash"
   "bash -s <<< 'herdr pane run PANE ls'"
-  "python3 -c \"import os; os.system('herdr pane send-text PANE hi')\""
-  "ksh -c 'herdr agent prompt PANE hi'"
-  "fish -c 'herdr agent prompt PANE hi'"
   "h''erdr pane send-text PANE hi"
   'her\dr pane send-text PANE hi'
+)
+COMPUTED_FORMS=(
+  "echo 'herdr pane run PANE ls' | bash"
+  "python3 -c \"import os; os.system('herdr pane send-text PANE hi')\""
   "H=herdr; \$H agent prompt PANE go"
+  "P=PANE; herdr agent prompt \$P go"
 )
 
-it "a send to the PM's pane hidden from the parser is denied and journaled"
+it "a literal send to the PM's pane, however it is quoted or wrapped, is denied and journaled"
 ALL=1
-for form in "${HIDDEN_FORMS[@]}" "herdr pane send-text w2:p3''1 hi" "eval \"herdr agent prompt w2:p3''1 go\"" 'echo w2:p\31' "eval 'herdr agent prompt term_p31 go'"; do
+for form in "${LITERAL_FORMS[@]}" "herdr pane send-text w2:p3''1 hi" "eval \"herdr agent prompt w2:p3''1 go\"" "eval 'herdr agent prompt term_p31 go'"; do
   c="${form//PANE/w2:p31}"
   OUT="$(action_hook sess-worker "$c")"
   ROW="$(run_py "$RUN" <<'EOF'
@@ -401,14 +403,21 @@ EOF
 done
 check "1" "$ALL"
 
+it "a computed send to the PM's pane, or a command only naming it, is allowed"
+ALL=1
+for form in "${COMPUTED_FORMS[@]}" 'echo PANE' "echo w2:\$'p31'" "herdr pane get \$'\\x77'2:p31"; do
+  c="${form//PANE/w2:p31}"
+  OUT="$(action_hook sess-worker "$c")"
+  [ -z "$OUT" ] || { ALL=0; echo "      not allowed: $c ($OUT)"; }
+done
+check "1" "$ALL"
+
 FAKE_HERDR_PANE="w2:p310" session_start sess-peer310 "w2:p310" >/dev/null
 FAKE_HERDR_PANE="w2:p311" session_start sess-peer311 "w2:p311" >/dev/null
-it "the same hidden forms sending to a worker pane are allowed"
+it "the same forms sending to a worker pane are allowed"
 ALL=1
-for form in "${HIDDEN_FORMS[@]}" "herdr agent prompt w2:p310 go" "herdr agent prompt term_p311 go"; do
+for form in "${LITERAL_FORMS[@]}" "${COMPUTED_FORMS[@]}" "herdr agent prompt w2:p310 go" "herdr agent prompt term_p311 go"; do
   c="${form//PANE/w2:p50}"
-  # A command word built at run time is denied for a session that drives no programme (default-deny policy).
-  case "$c" in 'H=herdr;'*) continue ;; esac
   OUT="$(action_hook sess-worker "$c")"
   [ -z "$OUT" ] || { ALL=0; echo "      not allowed: $c ($OUT)"; }
 done
@@ -423,9 +432,9 @@ ANSI_FORMS=(
   "herdr pane send-text w2:\$\"p31\" hi"
 )
 
-it "a command naming the PM's pane with \$'..' quoting is denied"
+it "a send into the PM's pane with \$'..' quoting is denied"
 ALL=1
-for c in "${ANSI_FORMS[@]}" "echo w2:\$'p31'" "herdr pane get \$'\\x77'2:p31"; do
+for c in "${ANSI_FORMS[@]}"; do
   OUT="$(action_hook sess-worker "$c")"
   case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $c" ;; esac
 done
@@ -457,16 +466,16 @@ it "the driving session is still denied a parsed send into its own pane"
 OUT="$(action_hook sess-pm 'herdr agent prompt w2:p31 "adopt rule"')"
 case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
 
-it "a read-only herdr command naming the PM's pane from another session is denied"
+it "a read-only herdr command naming the PM's pane from another session is allowed"
 OUT="$(action_hook sess-worker 'herdr pane get w2:p31')"
-ROW="$(run_py "$RUN" <<'EOF'
-r = pj.read(args[0])[-1]
-print(r["kind"], r["payload"]["verb"], r["payload"]["target"])
-EOF
-)"
-case "$OUT" in *'"deny"'*) check "blocked_driver_send None w2:p31" "$ROW" ;; *) fail "not denied: $OUT" ;; esac
+check "" "$OUT"
 
-it "with a lease and no repo, a Bash command naming the PM's pane reaches Python"
+it "a session outside the programme may send into the PM's pane"
+FAKE_HERDR_PANE="w8:p1" session_start sess-outside "w8:p1" >/dev/null
+OUT="$(action_hook sess-outside 'herdr agent prompt w2:p31 go')"
+check "" "$OUT"
+
+it "with a lease and no repo, a Bash command reaches Python"
 rm -f "${WORK}/python-ran"
 ( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"s0","tool_name":"Bash","tool_input":{"command":"echo w2:p31"}}' )
 if [ -e "${WORK}/python-ran" ]; then pass; else fail "python did not run"; fi
@@ -475,12 +484,16 @@ it "the journaled command is redacted"
 action_hook sess-worker 'herdr pane send-text w2:p31 fixture-value-9f8e7d' >/dev/null
 if grep -rqa "fixture-value-9f8e7d" "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}"; then fail "secret in the programme home"; else pass; fi
 
-it "a bare pane suffix from a sender with no registry row is denied whatever HERDR_WORKSPACE_ID says"
+it "a bare pane suffix from a session in the PM's space is denied whatever HERDR_WORKSPACE_ID says"
 OUT1="$(ACTION_WS=w2 action_hook sess-worker 'herdr agent prompt p31 go')"
 OUT2="$(ACTION_WS=w3 action_hook sess-worker 'herdr agent prompt p31 go')"
 case "$OUT1$OUT2" in *'"deny"'*'"deny"'*) pass ;; *) fail "w2 [$OUT1] w3 [$OUT2]" ;; esac
 
-it "a send to the driver's pane combined with a destructive command still pauses the task run"
+it "a bare pane suffix from a sender with no registry row and no item is allowed"
+OUT="$(action_hook sess-no-row 'herdr agent prompt p31 go')"
+check "" "$OUT"
+
+it "a destructive command in a send to the driver's pane does not pause the task run"
 TASKREPO="${WORK}/taskrepo"
 mkdir -p "${TASKREPO}/.claude/auto"
 run_py "$TASKREPO" <<'EOF' >/dev/null
@@ -493,7 +506,7 @@ core = load_lib_module("run_record_core")
 print(core.read_run_record(args[0], "task-run")["loop"]["driver"])
 EOF
 )"
-case "$OUT" in *'RUN PAUSED'*'"deny"'*) check "manual" "$DRV" ;; *) fail "out [$OUT] driver [$DRV]" ;; esac
+case "$OUT" in *'RUN PAUSED'*) fail "out [$OUT]" ;; *) check "self" "$DRV" ;; esac
 
 it "the caller helper is false for a session that is only in agent_session_ids"
 OUT="$(run_py <<'EOF'
@@ -645,17 +658,23 @@ GUARDED_CALLS=(
 )
 export GUARD_ROOT="$DEST"
 
-it "with a proposal for the repository, an owner's Edit, MultiEdit, Write and echo into its settings.local.json are refused and journaled"
+it "with a proposal for the repository, the driver's Edit, MultiEdit, Write and echo into its settings.local.json are refused and journaled"
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"open\", \"destination\": \"${DEST}\"}]"
 ALL=1
 for call in "${GUARDED_CALLS[@]}"; do
-  OUT="$(file_call "$DEST" sess-own "${call%%|*}" "${call#*|}")"
+  OUT="$(file_call "$DEST" sess-pm5 "${call%%|*}" "${call#*|}")"
   ROW="$(last_row "$RUN5")"
   case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $call ($OUT)" ;; esac
-  [ "$(row_field "$ROW" kind tool)" = "blocked_settings_write ${call%%|*}" ] || { ALL=0; echo "      not journaled: $call ($ROW)"; }
+  [ "$(row_field "$ROW" kind tool item_ids)" = "blocked_settings_write ${call%%|*} None" ] || { ALL=0; echo "      not journaled as expected: $call ($ROW)"; }
 done
 [ -d "${DEST}/.claude/auto" ] && { ALL=0; echo "      the destination has .claude/auto"; }
 check "1" "$ALL"
+
+it "an item owner's same calls are allowed and journal nothing"
+BEFORE="$(last_row "$RUN5")"
+OUT=""
+for call in "${GUARDED_CALLS[@]}"; do OUT="${OUT}$(file_call "$DEST" sess-own "${call%%|*}" "${call#*|}")"; done
+check "|${BEFORE}" "${OUT}|$(last_row "$RUN5")"
 
 it "the driving session is refused too, and a resolved proposal still guards"
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"resolved\", \"destination\": \"${DEST}\"}]"
@@ -663,9 +682,9 @@ OUT="$(file_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${SETTINGS}\", \"old_s
 case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"open\", \"destination\": \"${DEST}\"}]"
 
-it "a listed session of an open item is refused too"
+it "a listed session of an open item is allowed"
 OUT="$(file_call "$DEST" sess-listed Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
+check "" "$OUT"
 
 # The hook timeout in hooks.json is 10 s; the 9 s cap keeps a hung hook from hanging the suite.
 timed_call() {
@@ -709,15 +728,20 @@ EOF
 
 [ -f "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN5}/programme.db" ] || echo "      fixture: ${RUN5} is not store-backed"
 for point in BEFORE_COMMIT AFTER_COMMIT; do
-  it "while a writer holds the programme store ($point), an owner's settings write is still denied within 3 s"
+  it "while a writer holds the programme store ($point), the driver's settings write is denied and an owner's is allowed, each within 3 s"
   start_writer_paused_at "$point" || fail "the writer never paused: $(head -c 200 "$WRITER_OUT")"
+  timed_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+  PM="$OUT|$RC|$ELAPSED"
   timed_call "$DEST" sess-own Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+  OWN="$OUT|$RC|$ELAPSED"
   kill "$WRITER_PID" 2>/dev/null; wait "$WRITER_PID" 2>/dev/null
-  case "$OUT" in
-    *'"deny"'*) "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 and sys.argv[2] == "0" else 1)' "$ELAPSED" "$RC" \
-                  && pass || fail "rc $RC, denied after ${ELAPSED}s" ;;
-    *) fail "rc $RC, no deny after ${ELAPSED}s (writer: $(head -c 200 "$WRITER_OUT")): $OUT" ;;
-  esac
+  "$PY" - "$PM" "$OWN" <<'EOF' && pass || fail "pm [$PM] own [$OWN] (writer: $(head -c 200 "$WRITER_OUT"))"
+import sys
+pm_out, pm_rc, pm_elapsed = sys.argv[1].rsplit("|", 2)
+own_out, own_rc, own_elapsed = sys.argv[2].rsplit("|", 2)
+sys.exit(0 if '"deny"' in pm_out and pm_rc == "0" and float(pm_elapsed) < 3
+         and own_out == "" and own_rc == "0" and float(own_elapsed) < 3 else 1)
+EOF
 done
 
 start_store_lock() {
@@ -735,7 +759,7 @@ EOF
   return 1
 }
 
-it "while the programme store cannot be read, the driver's, an owner's and any space session's settings writes (through a symlinked .claude too) and a send to the driver's pane are denied within 3 s"
+it "while the programme store cannot be read, the driver's settings writes (through a symlinked .claude too) and a send to the driver's pane are denied within 3 s; an owner's and a space session's settings writes are allowed"
 start_store_lock || fail "the store was never locked: $(head -c 200 "$LOCKER_OUT")"
 timed_call "$DEST" sess-own Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
 OWN="$OUT|$RC|$ELAPSED"
@@ -745,19 +769,24 @@ timed_call "$DEST" sess-idle Write "{\"file_path\": \"${OTHER}/.claude/settings.
 IDLE="$OUT|$RC|$ELAPSED"
 mkdir -p "${WORK}/realclaude" "${WORK}/linkrepo"
 ln -sfn "${WORK}/realclaude" "${WORK}/linkrepo/.claude"
-timed_call "$DEST" sess-own Write "{\"file_path\": \"${WORK}/linkrepo/.claude/settings.local.json\", \"content\": \"{}\"}"
+timed_call "$DEST" sess-pm5 Write "{\"file_path\": \"${WORK}/linkrepo/.claude/settings.local.json\", \"content\": \"{}\"}"
 LINKED="$OUT|$RC|$ELAPSED"
-timed_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+timed_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}"
 PLAIN="$OUT"
 timed_call "$NOREPO" sess-own Bash "{\"command\": \"herdr agent prompt w5:p1 go\"}"
 SEND="$OUT|$RC|$ELAPSED"
 kill "$LOCKER_PID" 2>/dev/null; wait "$LOCKER_PID" 2>/dev/null
 "$PY" - "$OWN" "$PM" "$IDLE" "$SEND" "$LINKED" "$PLAIN" <<'EOF' && pass || fail "own [$OWN] pm [$PM] idle [$IDLE] send [$SEND] linked [$LINKED] settings.json [$PLAIN]"
 import sys
-def ok_(a):
+def fast_with(a, expected):
     out, rc, elapsed = a.rsplit("|", 2)
-    return '"deny"' in out and rc == "0" and float(elapsed) < 3
-sys.exit(0 if all(ok_(a) for a in sys.argv[1:6]) and sys.argv[6] == "" else 1)
+    return expected(out) and rc == "0" and float(elapsed) < 3
+def denied(a):
+    return fast_with(a, lambda out: '"deny"' in out)
+def allowed(a):
+    return fast_with(a, lambda out: out == "")
+own, pm, idle, send, linked, plain = sys.argv[1:7]
+sys.exit(0 if allowed(own) and denied(pm) and allowed(idle) and denied(send) and denied(linked) and plain == "" else 1)
 EOF
 
 it "a programme over many spaces with its store held still denies the driver's settings write within 3 s"
@@ -793,11 +822,11 @@ it "malformed JSON on stdin: the action hook exits 0 with no output"
 OUT="$( cd "$DEST" && bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"sess-own","tool_name":"Edit", settings.local.json' )"
 check "0:" "$?:${OUT}"
 
-it "an owner's edit of settings.json, of a look-alike name, or of a repository with no proposal is not refused"
-OUT="$(file_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Write "{\"file_path\": \"${SETTINGS}.bak\", \"content\": \"{}\"}")"
-OUT="${OUT}$(file_call "$OTHER" sess-own Edit "{\"file_path\": \"${OTHER}/.claude/settings.local.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-OUT="${OUT}$(file_call "$OTHER" sess-own Bash "{\"command\": \"echo '{}' > .claude/settings.local.json\"}")"
+it "the driver's edit of settings.json, of a look-alike name, or of a repository with no proposal is not refused"
+OUT="$(file_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Write "{\"file_path\": \"${SETTINGS}.bak\", \"content\": \"{}\"}")"
+OUT="${OUT}$(file_call "$OTHER" sess-pm5 Edit "{\"file_path\": \"${OTHER}/.claude/settings.local.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+OUT="${OUT}$(file_call "$OTHER" sess-pm5 Bash "{\"command\": \"echo '{}' > .claude/settings.local.json\"}")"
 check "" "$OUT"
 
 BEH_DIR="${WORK}/personal/behaviours"
@@ -821,32 +850,30 @@ BEH_CALLS=(
   "Bash|{\"command\": \"env claude_auto_shipped_behaviours_dir=/elsewhere true\"}"
 )
 
-it "an owner's and the driver's Edit, MultiEdit, Write, echo and tee into the personal behaviours folder or behaviours.json are refused and journaled"
+it "the driver's Edit, MultiEdit, Write, echo and tee into the personal behaviours folder or behaviours.json are refused and journaled"
 ALL=1
-for who in sess-own sess-pm5; do
-  for call in "${BEH_CALLS[@]}"; do
-    OUT="$(file_call "$DEST" "$who" "${call%%|*}" "${call#*|}")"
-    ROW="$(last_row "$RUN5")"
-    case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied ($who): $call ($OUT)" ;; esac
-    [ "$(row_field "$ROW" kind tool)" = "blocked_behaviours_write ${call%%|*}" ] || { ALL=0; echo "      not journaled ($who): $call ($ROW)"; }
-  done
+for call in "${BEH_CALLS[@]}"; do
+  OUT="$(file_call "$DEST" sess-pm5 "${call%%|*}" "${call#*|}")"
+  ROW="$(last_row "$RUN5")"
+  case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $call ($OUT)" ;; esac
+  [ "$(row_field "$ROW" kind tool item_ids)" = "blocked_behaviours_write ${call%%|*} None" ] || { ALL=0; echo "      not journaled as expected: $call ($ROW)"; }
 done
 check "1" "$ALL"
 
-it "a session that drives no programme and owns no unfinished item may write the behaviours files"
+it "any session that does not drive the programme, an item owner included, may write the behaviours files"
 OUT=""
-for who in sess-idle sess-done; do
+for who in sess-own sess-listed sess-idle sess-done; do
   for call in "${BEH_CALLS[@]}"; do OUT="${OUT}$(file_call "$DEST" "$who" "${call%%|*}" "${call#*|}")"; done
 done
 check "" "$OUT"
 
-it "an owner's write to an unrelated file or a behaviours.json.bak neighbour is not refused"
-OUT="$(file_call "$DEST" sess-own Write "{\"file_path\": \"${BEH_STORE}.bak\", \"content\": \"x\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Write "{\"file_path\": \"${WORK}/personal/behaviours-notes.md\", \"content\": \"x\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/behaviours.md\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"echo x > ${BEH_STORE}.bak\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"grep -rn behaviours lib\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"ls behaviours\"}")"
+it "the driver's write to an unrelated file or a behaviours.json.bak neighbour is not refused"
+OUT="$(file_call "$DEST" sess-pm5 Write "{\"file_path\": \"${BEH_STORE}.bak\", \"content\": \"x\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Write "{\"file_path\": \"${WORK}/personal/behaviours-notes.md\", \"content\": \"x\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${DEST}/behaviours.md\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Bash "{\"command\": \"echo x > ${BEH_STORE}.bak\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Bash "{\"command\": \"grep -rn behaviours lib\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Bash "{\"command\": \"ls behaviours\"}")"
 check "" "$OUT"
 
 it "malformed JSON naming behaviours.json: the action hook exits 0 with no output"
@@ -859,10 +886,23 @@ rm -f "${WORK}/python-ran"
 ( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${TASKREPO}/a.txt\"}}" )
 if [ ! -e "${WORK}/python-ran" ]; then pass; else fail "python ran"; fi
 
+it "a Write of an ordinary file in an auto repository starts no Python"
+rm -f "${WORK}/python-ran"
+( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${TASKREPO}/a.txt\"}}" )
+if [ ! -e "${WORK}/python-ran" ]; then pass; else fail "python ran"; fi
+
 it "an Edit of settings.local.json in an auto repository reaches Python"
 rm -f "${WORK}/python-ran"
 ( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"${TASKREPO}/.claude/settings.local.json\"}}" )
 if [ -e "${WORK}/python-ran" ]; then pass; else fail "python did not run"; fi
+
+for CASE in 'behaviour lock|Write|{"file_path":"/x/programmes/.behaviour-files.lock"}|ran' 'Linear tool|mcp__linear__save_issue|{}|ran' 'other MCP tool|mcp__github__get_pr|{}|none'; do
+  IFS='|' read -r LABEL TOOL INPUT WANT <<< "$CASE"
+  it "the narrowed shim on a ${LABEL} in an auto repository: python ${WANT}"
+  rm -f "${WORK}/python-ran"
+  ( cd "$TASKREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< "{\"session_id\":\"sess-own\",\"tool_name\":\"${TOOL}\",\"tool_input\":${INPUT}}" )
+  check "$WANT" "$([ -e "${WORK}/python-ran" ] && echo ran || echo none)"
+done
 
 it "the data dir is a file: every hook exits 0 with no output"
 export CLAUDE_AUTO_DATA_DIR="${WORK}/datafile"

@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """auto U4: decision logic behind .claude/hooks/on-pretooluse-action.sh.
 
+The live checks here are the tracker, settings, behaviours and send guards.
+
+THE DESTRUCTIVE CHECK IS OFF BY DEFAULT: destructive commands are not refused and
+do not pause a run. ``decide`` and its helpers are dormant behind
+``_destructive_check_on``, which only a fenced test hatch turns on. The rest of
+this docstring describes the dormant check.
+
 The deterministic destructive-action backstop (KTD-4/5). On a Bash tool call,
 under the SAME live-run + session_id ownership gate as the question hook, match
 the `command` against the CLAUDE.md-anchored irreversible/destructive set and
@@ -743,6 +750,10 @@ def _guarded(check, stdin_raw):
         return None, None
 
 
+def _destructive_check_on() -> bool:
+    return test_hatch_enabled("CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK")
+
+
 def _cli(argv) -> int:
     repo_root = argv[0] if argv else os.getcwd()
     stdin_raw = ""
@@ -767,7 +778,7 @@ def _cli(argv) -> int:
         lambda raw: load_lib_module("programme_behaviour_guard").decision(raw), stdin_raw)
     driver_denial, driver_row = _guarded(driver_send_denial, stdin_raw)
     try:
-        decision = decide(repo_root, stdin_raw) if repo_root else None
+        decision = decide(repo_root, stdin_raw) if repo_root and _destructive_check_on() else None
     except Exception:
         decision = None  # any failure => allow (rel-001). Fail-closed is SCOPED
         # to a confirmed destructive match on a confirmed run, handled inside

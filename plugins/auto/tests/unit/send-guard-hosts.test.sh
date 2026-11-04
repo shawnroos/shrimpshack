@@ -138,17 +138,17 @@ every_form sess-worker "$HERDR_SEND" deny
 it "herdr: the PM typing into its own pane, every form"
 every_form pm-herdr "$HERDR_SEND" deny
 it "stub host: another session, every form"
-every_form sess-worker "$STUB_SEND" deny "${STUB_ENV[@]}"
+every_form sess-stub-other "$STUB_SEND" deny "${STUB_ENV[@]}"
 it "stub host: the PM typing into its own pane, every form"
 every_form pm-stub "$STUB_SEND" deny "${STUB_ENV[@]}"
 it "stub host: a send naming the PM's terminal id, every form"
 every_form pm-stub 'stubhost type stub-term go' deny "${STUB_ENV[@]}"
-it "rex default-deny: any rex call naming the PM's block, every form (PM sender)"
-every_form pm-rex 'rex send rex-blk-7 go' deny
-it "rex default-deny: any rex call naming the PM's block, every form (other session)"
-every_form sess-worker 'rex api send rex-blk-7 go' deny
-it "ghostty default-deny: an osascript naming the PM's terminal, every form (PM sender)"
-every_form pm-ghostty 'osascript -e tell-ghostty-input-text-to-ghost-term-9' deny
+it "rex: a typing verb aimed at the PM's block, every form (PM sender)"
+every_form pm-rex 'rex send -b rex-blk-7 go' deny
+it "rex: a typing verb aimed at the PM's block, every form (a session in its space)"
+every_form sess-rex-other 'rex send-key -b rex-blk-7 enter' deny
+it "ghostty: a typing verb naming the PM's terminal, every form (PM sender)"
+every_form pm-ghostty 'osascript -e input text go to terminal id ghost-term-9' deny
 
 echo "send-guard-hosts: a send to another pane stays allowed"
 it "herdr: the PM's sends to other panes, every form"
@@ -163,15 +163,20 @@ it "rex: a send to another block, every form"
 every_form sess-worker 'rex send -b rex-blk-8 go' allow
 it "a PM reading its own pane is allowed"
 check "allow" "$(verdict "$(hook pm-herdr 'herdr pane get w2:p31')")"
-it "another session naming the PM's pane in a read is denied"
-check "deny" "$(verdict "$(hook sess-worker 'herdr pane get w2:p31')")"
+it "another session naming the PM's pane in a read is allowed"
+check "allow" "$(verdict "$(hook sess-worker 'herdr pane get w2:p31')")"
 it "the ambiguous-host fix: an env -u prefix on a programme command is allowed"
 check "allow" "$(verdict "$(hook pm-herdr 'env -u REX_SESSION bash lib/programme.sh sweep')")"
-it "an env -u prefix does not let another session name the PM's pane"
-check "deny" "$(verdict "$(hook sess-worker 'env -u REX_SESSION herdr pane get w2:p31')")"
+it "an env -u prefix does not hide a send into the PM's pane"
+check "deny" "$(verdict "$(hook sess-worker 'env -u REX_SESSION herdr pane run w2:p31 ls')")"
+it "a session outside every programme sends into the PM's pane on any host, every form"
+row herdr default w7 sess-outside w7:p1 term_w7p1
+every_form sess-outside "$HERDR_SEND" allow
+every_form sess-outside 'rex send -b rex-blk-7 go' allow
+every_form sess-outside 'osascript -e input text go to terminal id ghost-term-9' allow
 
 echo "send-guard-hosts: AE6 on the stub host"
-OUT="$(hook sess-worker "$STUB_SEND" "${STUB_ENV[@]}")"
+OUT="$(hook sess-stub-other "$STUB_SEND" "${STUB_ENV[@]}")"
 it "a stub-host session sending into the PM's pane is denied"
 if is_deny "$OUT"; then pass; else fail "$OUT"; fi
 it "the attempt is journaled with the host verb and the target"
@@ -181,7 +186,7 @@ r = [x for x in pj.read(args[0]) if x["kind"] == "blocked_driver_send"][-1]
 print(r["kind"], r["session_id"], r["payload"]["verb"], r["payload"]["target"])
 PYEOF
 )"
-check "blocked_driver_send sess-worker send stub-pm" "$ROW"
+check "blocked_driver_send sess-stub-other send stub-pm" "$ROW"
 
 echo "send-guard-hosts: a host variable is not evidence (KTD3)"
 FAKES=(HERDR_ENV=0 HERDR_PANE_ID=w9:p9 HERDR_WORKSPACE_ID=w9 HERDR_SOCKET_PATH=/nonexistent/herdr.sock
@@ -192,18 +197,17 @@ every_form sess-worker "$HERDR_SEND" deny "${FAKES[@]}"
 it "herdr: the PM itself, fake host variables, every form"
 every_form pm-herdr "$HERDR_SEND" deny "${FAKES[@]}"
 it "stub: another session, fake host variables, every form"
-every_form sess-worker "$STUB_SEND" deny "${STUB_ENV[@]}" "${FAKES[@]}"
+every_form sess-stub-other "$STUB_SEND" deny "${STUB_ENV[@]}" "${FAKES[@]}"
 it "stub: the PM itself, fake host variables, every form"
 every_form pm-stub "$STUB_SEND" deny "${STUB_ENV[@]}" "${FAKES[@]}"
 it "rex and ghostty: fake host variables, every form"
-every_form pm-rex 'rex send rex-blk-7 go' deny "${FAKES[@]}"
-every_form pm-ghostty 'osascript -e tell-ghostty-input-text-to-ghost-term-9' deny "${FAKES[@]}"
+every_form pm-rex 'rex send -b rex-blk-7 go' deny "${FAKES[@]}"
+every_form pm-ghostty 'osascript -e input text go to terminal id ghost-term-9' deny "${FAKES[@]}"
 it "a bare pane suffix from a session the registry puts in the PM's workspace is denied whatever HERDR_WORKSPACE_ID says"
 row herdr default w2 sess-peer w2:p60 term_p60
 check "deny" "$(verdict "$(hook sess-peer 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w3)")"
-it "a bare pane suffix from a session the registry puts in another workspace is allowed when that pane is proven another session's"
+it "a bare pane suffix from a session the registry puts in another workspace is another pane"
 row herdr default w3 sess-far w3:p60 term_far
-row herdr default w3 sess-far-peer w3:p31 term_far_peer
 check "allow" "$(verdict "$(hook sess-far 'herdr agent prompt p31 go' HERDR_WORKSPACE_ID=w2)")"
 it "a stub driver is guarded only while AUTO_TEST_HOST selects the stub host module, and a lookalike variable does not select it"
 check "allow" "$(verdict "$(hook pm-stub "$STUB_SEND" CLAUDE_AUTO_TEST_HOST=stub)")"

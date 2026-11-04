@@ -231,10 +231,11 @@ Only a new typed applied arms one more attempt from `ineffective` or
 ## Settings writes are refused
 
 The PreToolUse hook refuses a Write, Edit, MultiEdit or Bash call that names a
-proposal's `.claude/settings.local.json`. It applies to the driving session and
-to sessions on unfinished items, for every proposal in the programme, whatever
-its state. It journals `blocked_settings_write` with `{tool, path, item_ids}`,
-plus the redacted `command` for Bash. Other settings files stay editable.
+proposal's `.claude/settings.local.json`. It applies to the driving session only,
+for every proposal in the programme, whatever its state. Workers may write the
+file. It journals `blocked_settings_write` with `{tool, path}`, plus the redacted
+`command` for Bash. Rows written before this change also carry `item_ids`. Other
+settings files stay editable.
 Shawn's own edits and "always allow" clicks are not tool calls and stay
 unaffected.
 

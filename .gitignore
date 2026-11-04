@@ -4,3 +4,6 @@
 **/.claude/scheduled_tasks.lock
 .DS_Store
 worktrees/
+
+# Real journal rows for the send-guard replay: private work detail, and this repo is public.
+plugins/auto/tests/fixtures/send-guard-replay.local.jsonl

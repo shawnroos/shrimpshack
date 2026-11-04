@@ -1,30 +1,16 @@
 #!/usr/bin/env bash
-# auto U4 PreToolUse hook (destructive-action backstop): the deterministic
-# irreversible-operation gate over Bash/Write.
+# auto PreToolUse hook: the tracker, settings, behaviours and send guards for a
+# programme. Each needs a lease, so a session with no lease starts no Python.
 #
-# WHY THIS EXISTS (KTD-4/5):
-#   The AskUserQuestion gate only intercepts decisions to *ask*, never decisions
-#   to *act*. This second hook matches Bash command / Write content against the
-#   CLAUDE.md-anchored destructive set (push --force, reset --hard, checkout .,
-#   restore ., clean -f / git clean -fdx, branch -D, rm -rf, known publish
-#   endpoints) and, under the SAME live-run + session_id gate, escalates via the
-#   pause handoff — independent of any question. This gives the "irreversible/
-#   destructive" boundary a real enforcement mechanism rather than prose the
-#   agent might ignore.
-#
-# FAILS CLOSED (the action backstop's asymmetry vs the question gate — KTD-4):
-#   on a confirmed destructive command for a confirmed live run, the hook PAUSES
-#   the run (driver=manual + blocked_on) UNCONDITIONALLY — even if the deny
-#   contract is unavailable. It never degrades to silent-allow on a destructive
-#   match. The write happens in the sibling lib/*.py; this wrapper still always
-#   exits 0 at the process level (the halt is on the run-record, not the exit code).
+# The destructive check in lib/on-pretooluse-action.py is off by default, so a
+# destructive command is not refused and does not pause a run.
 #
 # rel-001: presence-gate first; ALWAYS exit 0 at the process level; heavy work
 # exec'd into Python. Mirrors .claude/hooks/on-stop.sh.
 
 set -uo pipefail
 
-# ─── Presence gate (walk up from cwd for a <repo>/.claude/auto dir) ──────
+# Finds repo_root for Python's dormant destructive check. It gates nothing here.
 __cd_find_repo() {
   local dir="${PWD}"
   while [ -n "$dir" ] && [ "$dir" != "/" ]; do
@@ -37,8 +23,8 @@ __cd_find_repo() {
   return 1
 }
 
-# Programme gate (runs in every session, repo or not): a lease file means a
-# programme holds a space, and Bash commands naming its driver's pane are checked.
+# Lease gate (runs in every session, repo or not): a lease file means a programme
+# holds a space, and the guards in Python apply.
 __cd_leases="${CLAUDE_AUTO_DATA_DIR:-${HOME:-}/.claude/plugins/data/auto-shrimpshack}/programmes/leases"
 __cd_any_lease=0
 for __cd_f in "${__cd_leases}"/*.json; do
@@ -46,11 +32,12 @@ for __cd_f in "${__cd_leases}"/*.json; do
   break
 done
 
+[ "$__cd_any_lease" = 1 ] || exit 0
+
 __cd_repo="$(__cd_find_repo)" || __cd_repo=""
 if [ -n "$__cd_repo" ] && [ ! -d "${__cd_repo}/.claude/auto" ]; then
   __cd_repo=""
 fi
-[ -n "$__cd_repo" ] || [ "$__cd_any_lease" = 1 ] || exit 0
 
 PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -63,32 +50,27 @@ if [ ! -t 0 ]; then
   __cd_stdin_json="$(cat 2>/dev/null || true)"
 fi
 
-# Outside a repo the checks are the driver-pane check, which denies any Bash
-# command naming a driver's pane however herdr is spelled, the tracker guard on
-# Linear MCP calls and the settings guard, so no finer text prefilter here.
+# Python's live checks are the send check on Bash, the tracker guard on Linear
+# MCP calls and the settings and behaviours guards. Any other call starts no Python.
 __cd_settings=0
 # Case-insensitive: the macOS file system treats Settings.local.json as the same file.
 shopt -s nocasematch
-if [ "$__cd_any_lease" = 1 ] && [[ $__cd_stdin_json == *settings.local.json* ]]; then
+if [[ $__cd_stdin_json == *settings.local.json* ]]; then
   __cd_settings=1
 fi
-if [ "$__cd_any_lease" = 1 ] && [[ $__cd_stdin_json == *behaviours* ]]; then
+if [[ $__cd_stdin_json == *behaviours* || $__cd_stdin_json == *behaviour-files* ]]; then
   __cd_settings=1
 fi
 shopt -u nocasematch
-if [ -z "$__cd_repo" ]; then
-  [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
-    || [ "$__cd_settings" = 1 ] || exit 0
-fi
+[[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
+  || [ "$__cd_settings" = 1 ] || exit 0
 # Edit and MultiEdit are matched only for the settings guard.
 __cd_edit='"tool_name"[[:space:]]*:[[:space:]]*"(Multi)?Edit"'
 if [ "$__cd_settings" = 0 ] && [[ $__cd_stdin_json =~ $__cd_edit ]]; then
   exit 0
 fi
 
-# Hand off ALL decision logic to Python. `|| true` keeps the PROCESS exit 0
-# (rel-001); the fail-closed halt is recorded on the RUN_RECORD inside the .py, not
-# via a non-zero exit code.
+# Hand off ALL decision logic to Python. `|| true` keeps the PROCESS exit 0 (rel-001).
 exec "$PYTHON3" "${CLAUDE_PLUGIN_ROOT}/lib/on-pretooluse-action.py" "$__cd_repo" <<< "$__cd_stdin_json" || true
 
 exit 0

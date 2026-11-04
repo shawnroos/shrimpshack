@@ -323,6 +323,8 @@ re-arming. Next sweep reads the changes.
      command or run it another way: both route the read around Shawn.
    - A refusal in your own session is never read (it is on no item). Tell Shawn
      in one line instead.
+   - An Auto hook blocks work: [references/checks.md](references/checks.md) has
+     both code routes and `P record-hook-patch`.
 10. **Arm retry watchers.** For each queue entry with action `arm_retry_watcher`:
    1. Read the item's `watchers["retry-<item>"].retry.argv`.
    2. Monitor `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme-watch.sh" --item <item> -- bash "${CLAUDE_PLUGIN_ROOT}/lib/<argv[0]>" <argv[1:]>`.
@@ -380,7 +382,7 @@ re-arming. Next sweep reads the changes.
      id: the Ruling revision and its limits from `P context --item <item>` (for
      example `decision:browser-first@2`, "no Linux work"). Quote the limits; do
      not paraphrase them. The standing worker clauses (record before a long
-     wait, never prompt the PM's pane, a blocked command) are shipped files in
+     wait, never prompt the PM's pane, a refusal of an Auto limit) are shipped files in
      `behaviours/`, and you never retype them. A start with a handoff carries
      them. For a start without a handoff, and for a later prompt, add
      `--standing` to `P prompt-item`.

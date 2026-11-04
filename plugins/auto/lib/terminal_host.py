@@ -116,6 +116,8 @@ class TerminalHost:
     binaries = ()
     # Only a host that matches a session to its terminal by tty makes the SessionStart hook walk ps.
     needs_tty = False
+    # Variable spellings a session uses for this host's binary, read as the binary itself.
+    bin_tokens = frozenset()
 
     def _unimplemented(self, method) -> HostResult:
         cell = capability_table()[CAPABILITY_OF[method]][self.name]
@@ -153,13 +155,17 @@ class TerminalHost:
     def close_pane(self, pane, **_) -> HostResult:
         return self._unimplemented("close_pane")
 
+    def _runs_binary(self, argv) -> bool:
+        # Casefolded: a case-insensitive filesystem finds `HERDR` on PATH, so it is the same literal program.
+        return bool(argv) and (argv[0] in self.bin_tokens or os.path.basename(argv[0]).casefold() in self.binaries)
+
     def is_host_command(self, argv, pane_ids=()):
         """(verb, target) when ``argv`` (one simple command) types into a pane, else None.
 
-        The default denies: any call to one of this host's binaries that names a pane id is a send.
-        A host with a real verb list overrides this and still falls back to it.
+        The default reads any call to one of this host's binaries that names a pane id as a send. Each real host
+        overrides it with its typing verbs; only the test stub falls back to it.
         """
-        if not argv or os.path.basename(argv[0]) not in self.binaries:
+        if not self._runs_binary(argv):
             return None
         for token in argv[1:]:
             folded = token.casefold()
@@ -171,17 +177,6 @@ class TerminalHost:
     def is_piped_script(self, argv, text, pane_ids=()):
         """Like is_host_command for a command whose script arrives on stdin: ``text`` is everything the shell sees."""
         return None
-
-    def send_class(self, argv, text=""):
-        """None when ``argv`` is not a call to this host's command, else (kind, targets).
-
-        kind is "read" (cannot type into a pane), "send" (can) or "unknown" (not told apart, so treated as a send).
-        targets are the literal pane ids the call names, or None when any target is runtime-built, missing or hidden
-        in a script on stdin or in a file. The send-guard's one policy decides what to do with the answer.
-        """
-        if not argv or os.path.basename(argv[0]) not in self.binaries:
-            return None
-        return "unknown", None
 
     def installed(self) -> bool:
         return any(shutil.which(b) for b in self.binaries)

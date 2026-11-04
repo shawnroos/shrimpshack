@@ -625,10 +625,16 @@ goal. Like conversation-context, goal-aware suppression is interactive-only
 ## 12. Advisor gate (v0.6.0 — KTD-4/5)
 
 During a self-driven run the driver is hands-off for the *mechanical* work the
-operator types today, but **substantive design/architecture forks and
-irreversible/destructive actions still escalate to the operator**. Two
-`PreToolUse` hooks enforce this; both fire **only** when a live self-driven run
-owns the calling session.
+operator types today, but **substantive design/architecture forks still escalate
+to the operator**. A `PreToolUse` hook enforces this; it fires **only** when a
+live self-driven run owns the calling session.
+
+**The destructive check is off by default.** Destructive commands are not refused
+and do not pause a run. The check in `lib/on-pretooluse-action.py` is dormant
+behind `_destructive_check_on`, which only a fenced test hatch
+(`CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK` with `CLAUDE_AUTO_TEST_HARNESS`) turns on. The
+hook's shell shim starts Python only when a programme lease exists. The text below
+that names the action hook describes the dormant check.
 
 ### Ownership predicate (the load-bearing fact)
 
@@ -664,8 +670,8 @@ self-disarm the backstop:**
   gate regardless of beat freshness, and pausing a genuinely-dead run is harmless
   (fail-safe).
 
-A run paused-by-backstop must STAY armed (the action hook fails CLOSED) until an
-operator runs `/auto-resume continue`. Dimension #2 (a concurrent standalone
+A run the backstop paused before this check went off by default stays paused until
+an operator runs `/auto-resume continue`. Under the hatch, it stays armed until then. Dimension #2 (a concurrent standalone
 ce-skill is never gated) is preserved by the `session_id` equality conjunct
 alone, independent of the driver/staleness checks.
 
@@ -694,8 +700,8 @@ builds the step prompt).
 > ids into both the stdin payload and the run-record), so it proves nothing about
 > whether the two identifiers share a namespace in the live harness. A mismatch
 > would SILENTLY no-op BOTH gates — the question gate never redirects to the
-> advisor AND the destructive backstop never recognizes the run (`_owning_run_id`
-> returns None ⇒ allow), so destructive ops proceed unintercepted. This is NOT
+> advisor AND the dormant destructive check never recognizes the run (`_owning_run_id`
+> returns None ⇒ allow). This is NOT
 > caught by the fail-closed design, which covers only an unavailable `deny`
 > contract ("deny unavailable ⇒ pause"), NOT a session mismatch ("not my run ⇒
 > allow").
@@ -761,7 +767,10 @@ contract) degrades to allowing the question through — worst case the operator 
 asked directly. Under a confirmed-unavailable `deny` contract it allows the
 question but surfaces a loud `systemMessage` (never a pause).
 
-### Action hook (`Bash`/`Write` destructive backstop, fails CLOSED)
+### Action hook (dormant destructive check, off by default)
+
+Nothing in this section runs in production (see the start of §12). When the hatch
+turns it on, it behaves as follows.
 
 `lib/on-pretooluse-action.py`. Because the question hook only intercepts the
 decision to *ask*, a separate hook matches `Bash`/`Write` and applies a
@@ -812,16 +821,16 @@ acknowledged residual (fix-round-5 P2): they do NOT flow through the Bash
 `command` channel the classifier reads (their `tool_input` carries no `command`),
 and the hook is wired to the `Bash`/`Write` tool names only, so an MCP tool name
 never reaches it at all. Gating MCP-write tools would be a tool-name interception
-change beyond v0.6.0's detect-and-escalate scope; fan-out steps carry the
-prompt-embedded two-handoff instruction (KTD-5) covering the destructive set instead.
+change beyond v0.6.0's detect-and-escalate scope.
 
 ### Audit (KTD-5)
 
-Every autonomous advisor resolution AND every fired action backstop is appended
-to the run-record's `advisor_audit` list via `append_advisor_audit` (run-record-schema
-§2.1) — inside the locked write so concurrent fan-out denials/verdicts cannot
-clobber it. The exit report surfaces the list next to the P3 findings, so a
-wrong autonomous call or a fired backstop is diagnosable. `advisor_audit` is
+Every autonomous advisor resolution is appended to the run-record's
+`advisor_audit` list via `append_advisor_audit` (run-record-schema §2.1) — inside
+the locked write so concurrent fan-out denials/verdicts cannot clobber it. The
+exit report surfaces the list next to the P3 findings, so a wrong autonomous call
+is diagnosable. A run older than the destructive check's removal can also hold
+`kind="action"` rows. `advisor_audit` is
 NEVER read by any predicate.
 
 ## 13. Upstream-cluster detection → operator escalation (v0.6.0 — KTD-6)

@@ -23,6 +23,8 @@ tags: [send-guard, pretooluse-hook, default-deny, enumeration, shlex, fail-open,
 ---
 # Narrowing a shell-command guard needs default-deny for runtime-built commands and a differential against the old guard
 
+> **Superseded on 2026-11-04.** The send-guard no longer tries to stop a computed send. It refuses only a literal send into a PM's pane from that programme's own sessions, and a command that names the pane or builds its program or target at run time passes. See `docs/plans/2026-11-04-1658-feat-auto-permissive-by-default-plan.md` (KTD2 to KTD7). The advice below applies only if a default-deny guard returns. Do not use it to add a refusal back to `plugins/auto/lib/send_guard.py`.
+
 ## Context
 
 Issue #146 asked auto's send-guard to stop denying harmless worker commands: `agent-browser eval` with a JavaScript `=>`, the `EMAIL=$(grep … ~/.secrets …)` login, `rex session rename "$REX_SESSION"`, and `2>&1` redirects. PR #148 (pending at the time of writing) made the fix. The guard decides whether a worker's Bash command can type into the programme PM's herdr pane, Rex block or Ghostty terminal, and a hook exception or a hook timeout lets the command through.

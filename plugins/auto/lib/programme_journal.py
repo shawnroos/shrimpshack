@@ -73,6 +73,7 @@ KINDS = (
     "behaviour_reminded",
     "behaviour_skipped",
     "behaviours_kept",
+    "hook_patched",
     "ritual_recorded",
     "ritual_proposed",
     "ritual_moved",

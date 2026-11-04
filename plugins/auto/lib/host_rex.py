@@ -43,15 +43,14 @@ SAFETY_NET_SECONDS = 300.0
 # Only these leave or join the remit. Every CLI call, the watcher's own included, also raises client events.
 JOIN_LEAVE_EVENTS = frozenset({"block_created", "block_closed", "session_created", "session_destroyed"})
 SESSION_PREFIX = "session:"
-BIN_TOKENS = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 GLOBAL_VALUE_OPTS = frozenset({"-S", "--server", "-C", "--client", "--timeout", "--color"})
-# Everything else that names the PM's block is a send: an unknown or future verb must not slip through.
-READ_VERBS = frozenset({"capture", "ls", "list", "whoami", "version", "wait", "events", "actions", "keymap",
-                        "help", "completion", "terminfo"})
-READ_NOUNS = frozenset({"session", "window", "block", "client", "server", "hosts", "config", "skill", "home", "api"})
-# rename only changes a label and cannot type into a block, so it sits with the reads on purpose.
-READ_SUBVERBS = frozenset({"ls", "list", "inspect", "status", "logs", "describe", "show", "rename"})
+# Options that pick where a verb acts; each takes the next word, which must not be read as the verb.
+PLACE_OPTS = frozenset({"-s", "--session", "-w", "--window", "-b", "--block"})
 TYPING_VERBS = frozenset({"send", "send-key", "run", "split", "do"})
+NOUN_TYPING_VERBS = frozenset({"api call", "block send", "block send-key", "block call"})
+# The read methods `rex block inspect` lists. A method not named here counts as a write, so a new one is refused.
+BLOCK_READ_METHODS = frozenset({"blob_read", "clipboard_read", "format", "input_mode", "list_dir", "modes", "process",
+                                "program_status", "pwd", "size", "title"})
 # Rex accepts the end of an id as a target; 4 characters is the shortest tail worth treating as naming a block.
 MIN_ID_TAIL = 4
 _FRAGMENT_SPLIT = re.compile(r"[\s=,;:\"'{}\[\]]+")
@@ -64,6 +63,7 @@ native, degraded, refuse = terminal_host.native, terminal_host.degraded, termina
 class RexHost(terminal_host.TerminalHost):
     name = "rex"
     binaries = ("rex",)
+    bin_tokens = frozenset({"$REX", "${REX}", "$REX_BIN", "${REX_BIN}"})
 
     def installed(self) -> bool:
         return shutil.which("rex") is not None
@@ -155,26 +155,18 @@ class RexHost(terminal_host.TerminalHost):
         return degraded("Rex has no notification command, so the ask stays in the journal and the tracker",
                         value="journal")
 
-    def send_class(self, argv, text=""):
-        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
-            return None
-        rest = list(argv[1:])
-        verb = _verb_words(rest)
-        if not verb or _reads_only(verb):
-            return "read", []
-        return ("send" if _types(verb) else "unknown"), _blocks_of(rest) or None
-
     def is_host_command(self, argv, pane_ids=()):
-        if not argv or not (argv[0] in BIN_TOKENS or os.path.basename(argv[0]) == "rex"):
+        if not self._runs_binary(argv):
             return None
         rest = list(argv[1:])
         verb = _verb_words(rest)
-        if verb and _reads_only(verb):
+        label = _typing_verb(verb)
+        if not label:
             return None
-        for token in rest:
+        for block in _blocks_of(rest):
             for ident in pane_ids:
-                if ident and _names_block(token, ident):
-                    return " ".join(verb[:2] if verb[:1] == ["api"] else verb[:1]) or "rex", ident
+                if ident and _names_block(block, ident):
+                    return label, ident
         return None
 
 
@@ -402,30 +394,48 @@ def _verb_words(rest) -> list:
     while i < len(rest):
         tok = rest[i]
         if tok.startswith("-"):
-            i += 2 if tok in GLOBAL_VALUE_OPTS else 1
+            i += 2 if tok in GLOBAL_VALUE_OPTS or tok in PLACE_OPTS else 1
             continue
         words.append(tok)
-        if len(words) == 2:
+        if len(words) == 3:
             break
         i += 1
     return words
 
 
-def _types(verb) -> bool:
-    return verb[0] in TYPING_VERBS or list(verb[:2]) == ["api", "call"]
+def _typing_verb(verb):
+    pair = " ".join(verb[:2])
+    if pair == "block call" and verb[2:3] and verb[2] in BLOCK_READ_METHODS:
+        return None
+    if pair in NOUN_TYPING_VERBS:
+        return pair
+    return verb[0] if verb and verb[0] in TYPING_VERBS else None
+
+
+def _json_block(token):
+    try:
+        data = json.loads(token) if token.startswith("{") else None
+    except ValueError:
+        return None
+    block = data.get("block_id") if isinstance(data, dict) else None
+    return block if isinstance(block, str) else None
 
 
 def _blocks_of(rest) -> list:
+    """The blocks a call targets: -b <id>, --block <id>, --block=<id>, -b<id>, and block_id in a JSON argument."""
     blocks = [rest[i + 1] for i, tok in enumerate(rest[:-1]) if tok in ("-b", "--block")]
-    return blocks + [tok.split("=", 1)[1] for tok in rest if tok.startswith("--block=")]
-
-
-def _reads_only(verb) -> bool:
-    return verb[0] in READ_VERBS or (verb[0] in READ_NOUNS and len(verb) > 1 and verb[1] in READ_SUBVERBS)
+    for tok in rest:
+        if tok.startswith("--block="):
+            blocks.append(tok.split("=", 1)[1])
+        elif tok.startswith("-b") and not tok.startswith("--") and len(tok) > 2:
+            blocks.append(tok[2:])
+        elif block := _json_block(tok):
+            blocks.append(block)
+    return blocks
 
 
 def _names_block(token, ident) -> bool:
-    """True when `token` holds the block id or a tail of it, in any quoting, `--block=` or JSON form."""
+    """True when `token` holds the block id or a tail of it."""
     text, low = token.casefold(), ident.casefold()
     if low in text:
         return True
