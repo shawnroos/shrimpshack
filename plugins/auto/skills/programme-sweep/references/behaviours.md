@@ -24,6 +24,24 @@ Authority and Rulings, and acceptance stays with Done standards.
   what is flagged), the `undo` line it printed, any conflict and which one wins,
   and ask: "Keep it for this programme, move it to the repo, or make it global?"
   It moves only on his typed answer naming the layer.
+- `synergies` says how the new behaviour should fit with one it listed: `link`
+  (a shared moment or tool: record it with `--relates-to`, or ask whether the
+  two should merge) and `ending_rule` (one ends the work its situation names,
+  and the other's `do` lines never say what happens then). It never blocks
+  recording. Code gives the target and the field, not the wording: write the
+  proposed change yourself from the row's `lines` and show it in the same
+  message as the conflicts. Apply an offered edit only on Shawn's typed words:
+  - `route: programme_edit`: `P propose-behaviour --edit-of <id>` with the
+    fields to change (give a full replacement for each field you name, for
+    example the whole `do` list), tell him the proposal id, and run
+    `P record-behaviour --from-proposal <id> --prompt <id>` once his reply
+    names it. The old wording stays in force until then.
+  - `route: copy_default_then_settle`: a shipped or file behaviour; follow
+    "Edit a default" below (copy it, then edit the copy).
+  - `route: record_with_conflicts_with`: a stored repo or personal behaviour;
+    record the new wording as a programme behaviour with `--conflicts-with <id>`.
+  - `action: adjust_new`: the change belongs in the behaviour you are
+    recording, so redraft it before you record.
 - Answer what the check listed when you record: `--relates-to <id>` for an item
   that applies (a behaviour id, or `term:<key>`, `tool:<id>`, `ruling:<id>`,
   `authority:<action>`, `done:<deliverable>`), and `--unrelated <id>=<reason>` for
