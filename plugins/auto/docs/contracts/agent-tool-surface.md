@@ -438,6 +438,11 @@ session.
   `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed
   prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
   item then refuses, and requirements stay unchanged.
+- **Hook code**: `record-hook-patch` (`<file> --why <line> --pr <url or number>`) records that the PM changed
+  hook code. It journals `hook_patched`, sends Shawn the notice through the terminal host and prints it for
+  the PM to post. The notice names the protected rules the file holds. It needs no prompt, because it records what
+  the PM did and approves nothing. Auto refuses neither code route, and Claude Code's own permissions still
+  apply; `skills/programme-sweep/references/checks.md` states both routes.
 - **Item size**: `size-item` (`<item> <size>`) sets an item's size from the agreement's `focus_budget` scale; `add-item --size <name>` does the same. A name outside the scale is refused and the refusal lists the valid names.
 - **Focus limits**: `amend-term focus_budget limited --points <n> --agents <n> --prompt <id>` sets the limits; either may be left out, and the word none clears one. The value unlimited clears both. The option --scale small=1,medium=3,large=5 replaces the point scale. The verbs propose-term and pick-term take the same options. A programme has no limit until one is set, and setup does not wait on it.
 - **Focus gate**: with a `focus_budget` limit set, `start-worker` holds an item that would pass the point limit, pass the agent limit, lacks a size (point limit only), or cannot be counted because herdr is unreadable. The hold records a reason and a held-at time on the item, and the start refuses with the next step. `--despite focus` starts it anyway only after Shawn's pick: without an approved `override-focus` on the item it is refused and the item is held (the refusal names `approval-label override-focus <item>` and the steps). With the approval it passes the gate once, uses the approval up and journals the override. The old-worker hold is never overridden. `focus-recheck` releases each held item that now fits, in held order, counting the room each released item takes.

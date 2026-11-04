@@ -146,10 +146,11 @@ it "the start brief for a worker with a handoff carries the shipped record-befor
 COPY="$(start_brief AI-701)"
 has "$SENTENCE" "$COPY"
 
-it "the start brief carries the never-prompt and blocked-command clauses with the claim command filled in"
+it "the start brief carries the never-prompt and Auto-limit refusal clauses with the claim command filled in"
 has "Never prompt the PM's pane." "$COPY"
 has "Report with bash ${AUTO_ROOT}/lib/programme.sh claim --run ${RUN} --item linear:AI-701 --deliverable <name> --ref <ref>." "$COPY"
-has "Do not run a blocked command again, and do not try another tool, wrapper or worker for it." "$COPY"
+has "Do not run it again and do not try another tool, wrapper or worker for it." "$COPY"
+has "an Auto limit (not Claude Code) refuses a command" "$COPY"
 lacks "{claim_command}" "$COPY"
 
 it "prompt-item --standing sends the same clauses to a running worker, and without the flag it sends none"

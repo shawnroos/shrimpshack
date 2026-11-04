@@ -891,6 +891,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   than two cadence periods. Start, takeover, handover, end and going-quiet read the existing rows
   `programme_started`, `taken_over`, `handed_over`, `programme_ended` and `stop_quiet`.
 - `behaviour_skipped` is the row of `skip-behaviour`: `{item, behaviour, reason, why}` with `reason` `skipped` (the behaviour does not apply to the item) or `applied_by_pm`. It carries no prompt id, because it records the PM's judgment and approves nothing.
+- `hook_patched` is the row of `record-hook-patch`: `{file, why, pr, protects, text}`. `protects` lists the protected rules the file holds and `text` is the notice to Shawn. It carries no prompt id, because it records what the PM did and approves nothing.
 - `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
   field (the send writes no separate `prompt_sent` row) plus `{behaviour, reason, trigger, trigger_at,
   timing, sent_back_count, already_reminded}`. `trigger_at` is the item's first claim (claims store),

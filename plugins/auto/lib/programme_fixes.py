@@ -115,6 +115,7 @@ FIXES = {
     "reconcile-operations": _WRITE,
     "record-behaviour": _TYPED,
     "record-denial": _WRITE,
+    "record-hook-patch": _WRITE,
     "record-ruling": _TYPED,
     "record-issues": _WRITE,
     "record-tested-build": _WRITE,

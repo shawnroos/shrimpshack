@@ -992,7 +992,7 @@ _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__n
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
-for _mod in worker_contract.VERB_MODULES:
+for _mod in (*worker_contract.VERB_MODULES, "programme_checks"):
     _VERBS.update(load_lib_module(_mod).build_verbs(sys.modules[__name__]))
 
 

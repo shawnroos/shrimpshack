@@ -64,5 +64,17 @@ has "only when the folder is gone, the item's PR is merged and the" "$DOMAIN"
 has "You only recommend." "$DOMAIN"
 has "P recommendations-shown --fingerprint" "$DOMAIN"
 
+CHECKS="$(cat "${AUTO_ROOT}/skills/programme-sweep/references/checks.md" 2>/dev/null)"
+it "the sweep points to checks.md, which states the code routes and where hooks run from"
+has "references/checks.md" "$S"
+has "P record-hook-patch" "$S"
+has "Code by PR and publish" "$CHECKS"
+has "A patch to the installed copy" "$CHECKS"
+has "A change reaches workers only after publish and reload." "$CHECKS"
+has "neither route bypasses them" "$CHECKS"
+it "the sweep names the standing clause as a refusal of an Auto limit"
+has "a refusal of an Auto limit" "$S"
+lacks "a blocked command" "$S"
+
 echo "programme-sweep-skill.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
