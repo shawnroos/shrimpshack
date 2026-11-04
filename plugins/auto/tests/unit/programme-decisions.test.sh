@@ -402,9 +402,11 @@ check "1 (conflict) hand-item ${BEFORE}" \
   "$CODE $(printf '%s' "$OUT" | grep -o '(conflict)' | head -1) $(printf '%s' "$OUT" | grep -o 'hand-item' | head -1) $(decision_count)"
 rm -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL"
 
-it "the who-decides gate has exactly one caller in shipped code"
-check "1" "$(grep -rnE '(^|[^_a-zA-Z.])who_decides\(|\.who_decides\(' "${AUTO_ROOT}/lib" "${AUTO_ROOT}/hooks" 2>/dev/null \
-  | grep -v 'def who_decides' | wc -l | tr -d ' ')"
+it "the who-decides gate has exactly two callers in shipped code: the PM gate and the worker contract's read-time clamp"
+check "lib/programme_decisions.py lib/worker_contract.py" "$(cd "${AUTO_ROOT}" && grep -rlE '(^|[^_a-zA-Z.])who_decides\(|\.who_decides\(' lib hooks 2>/dev/null \
+  | sort | tr '\n' ' ' | sed 's/ $//')"
+it "each of those two callers calls the gate once"
+check "1 1" "$(grep -E '(^|[^_a-zA-Z.])who_decides\(|\.who_decides\(' "${AUTO_ROOT}/lib/programme_decisions.py" | grep -vc 'def who_decides') $(grep -cE '\.who_decides\(' "${AUTO_ROOT}/lib/worker_contract.py")"
 it "programme_decisions reads no autonomy map: the Authority level arrives as plain data"
 check "0" "$(grep -cE '"autonomy"' "${AUTO_ROOT}/lib/programme_decisions.py")"
 it "no other shipped module looks up a kind in the merged autonomy map to gate a decision"
@@ -471,8 +473,8 @@ print(sorted(pd.PROTECTED_KINDS), set(pd.PROTECTED_KINDS) <= set(pd.DECISION_KIN
 EOF
 )"
 
-it "the truth table covers 20 decision kinds"
-check 20 "$(printf '%s\n' $KINDS | wc -l | tr -d ' ')"
+it "the truth table covers 22 decision kinds"
+check 22 "$(printf '%s\n' $KINDS | wc -l | tr -d ' ')"
 
 table_mismatches() {
   local got="$1" kind scenario prot

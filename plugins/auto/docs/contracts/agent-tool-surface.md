@@ -66,6 +66,10 @@ shapes and per-verb rejection modes. In brief:
   never takes a result as an argument), `evidence-journal` (reads the checks journaled
   under .claude/auto/journal/). The exit predicate never reads this evidence, so a
   task run finishes exactly as it would without it.
+- **Goal binding**: `goal-bound` (args: the run, the goal doc version) is how a contracted worker reports the
+  goal doc version it bound with its own `/goal`. It refuses any session but the run's own, a run with no
+  contract, and a version outside 1 to the contract's goal version. The version only moves up. The exit
+  predicate never reads it, so an unbound or stale goal leaves the Stop hook holding on the predicate.
 
 This table is fenced by `tests/unit/doc-fence-agent-tool-surface.test.sh`: it
 derives the verb set from `describe` (hence from `_VERBS`) and fails if any verb
@@ -499,6 +503,83 @@ session.
   (args: `--fingerprint`) records that the outside-session list was shown and refuses a fingerprint that is
   not current. `answer-domain-behaviour` (args: behaviour id, `--as`, `--why`) answers a behaviour owed on
   the domain.
+- **Contracted worker start**: `start-worker <item> --contract <file> --plan <plan> -- <spinoff arguments>`
+  seeds version 1 of the contract on the item (its `auto_run` block, state "launched") and launches the
+  worker with a kickoff of `/auto <plan>` (launch mode 1). A second start after the registration window uses
+  mode 2, a kickoff that tells the worker to run `/auto` as its first action. After two failed modes the
+  item's state reads "launch-blocked" and the choice returns to Shawn. `register-run` (args: `--run`,
+  `--item`, `--auto-run`, `--repo`) is called by the item's owner session: it refuses a caller that is not
+  the owner, a run record whose own session is not the owner, a path outside the remit's repos, a run bound
+  to another item, an item that already has a bound run, and a run that predates contracts. It copies the
+  seed into the run record, then marks the item "bound"; a repeat after a crash between the two completes
+  the bind with no duplicate.
+- **Contract write**: `set-contract` (args: `--item`, optional `--run`; changes `--authority <kind>=<mode>[:<asks>]`
+  (repeatable), `--drop-authority <kind>` (repeatable), `--done-internal`, `--done-external` (the word none for empty),
+  `--workflow`, `--fan-out-cap`; optional `--bite` pulse or step) is the only way to change a worker's contract
+  after it starts. Only the programme's driving session that holds its lease may call it, for a worker in the
+  remit, and both checks run again inside the run-record lock. It never goes to a subagent (it is not a read
+  verb) and no picker answer approves it. It refuses an item with no contracted run or a launch-blocked one, a
+  done run (and says to start a follow-up run from a copy), a run that predates contracts, and an authority
+  entry above the programme's Authority table and active Rulings; narrowing and widening up to that ceiling are
+  accepted. With no `--bite`, a change that narrows any authority binds at the next pulse and every other
+  change at the next step boundary. While the item is "launched" it edits the item's seed contract and bumps
+  its version; once "bound" it bumps the run record's contract version and queues one pending entry for the
+  engine. Each accepted change journals `contract_set`; each refusal journals one `request_refused`. A
+  `--workflow` name must resolve in the worker's repo and pass the workflow validator, and the workflow must
+  have a step in the run's remaining phases; otherwise the call is refused. A workflow file that carries a key
+  from the contract's authority vocabulary is refused, because a workflow cannot grant authority. A change to a
+  different workflow reads the workflow_change authority: act_and_tell changes it and returns a tell, propose
+  hands Shawn an ask and changes nothing until the PM returns with `--approved` set to the ask id for that same
+  workflow, and never refuses. Once a workflow change has bitten,
+  the engine (the pulse, the wave and the dispatch prompt, never the worker) replaces the run's pending steps in
+  one write: they read skipped with the reason "workflow replaced v<N>", the new workflow's steps carry the
+  version in their ids, and dispatched steps and their findings stay. Two changes before the boundary
+  coalesce into the later one.
+- **Contract handover**: `handover-contract` (args: `--item`, optional `--run`) moves an item's contract to a
+  new worker. Same caller guard as `set-contract`, checked again inside the run-record lock. It closes the
+  item's bound run, then moves the item's `auto_run` block back to state "launched" with a seed copied from the
+  latest contract: version plus one, same authority, done bar, workflow and cap, and every pending entry
+  bound at the new run's first pulse. `start-worker <item> --contract <file> --plan <plan>` then launches the
+  new worker from that seed (the file is not read when the seed exists) and the worker calls `register-run`.
+  The run closes first, so a crash between the two writes leaves a closed run still bound to the item and
+  never two open runs; a repeat call finishes the move. The old run refuses contract writes, as any done run
+  does. It refuses an item that is not bound, a worker outside the remit, and a run with no contract. It
+  journals `contract_handover`.
+- **Worker questions**: `open-worker-questions` (args: optional `--run`, `--limit`) is read-only and lists the
+  open questions routed to the PM or Shawn. `escalate-worker-questions` (args: optional `--run`, `--limit`)
+  raises one Shawn ask for each open question that is routed to Shawn or past the limit; a second call raises
+  none. `answer-worker-question` (args: `--question`, `--text`, optional `--run`) returns the PM's answer to
+  the worker as a pending contract entry that bites at the next pulse. A PM answer is never a Shawn approval.
+  The last two refuse any caller but the driving session.
+- **Goal doc**: `write-goal` (args: the item, optional `--plan`, `--title`, repeated `--outcome`, `--out-of-scope`
+  and `--manual-step`, optional `--done-internal`, `--done-external`, `--bite` (pulse or step), `--approved` (an
+  ask id) and `--run`) creates the worker's goal doc at `<repo>/.claude/auto/goals/<run>.md`, or amends it in
+  place, and bumps the contract version and the goal version in one write. It refuses a caller that is not the
+  programme's driving session holding the lease, a worker outside the remit, an item with no bound Auto run,
+  a run with no contract, a done run, and a done bar that includes a step only a human can do (a non-terminal
+  step with a human verification criterion, or a manual step the PM names); the refusal names the step. An
+  amendment reads the goal_amend authority: act_and_tell writes and journals a tell, propose hands Shawn an ask
+  and writes nothing until the PM returns with the ask id for that same amendment, and never refuses.
+  `goal-status` (args: the item, optional `--run`) is read-only and reports none, current or goal-stale,
+  computed at read time.
+- **Contract status**: `contract-status` (args: optional item, optional `--run`) is read-only. For each
+  Auto-run worker it reads the run record the item's `auto_run` block names, never a pane: step counts by
+  state, the cached exit predicate (never recomputed), the last beat, the contract's version, applied
+  version and pending versions, "stale" computed at read time, the open worker questions with the oldest's
+  age, and `unverified_external`, the done bar's external kinds (`pr_merged`, `ci_green`) that no confirmed
+  merged deliverable on the item backs. `counts_as_done` is true only when the cached predicate is met and
+  `unverified_external` is empty, so a worker's claim or recorded verdicts never finish an item alone. An
+  item with no contract reads "no contract"; a record that is missing or moved reads "unresolvable". The
+  `sweep-inputs` verdict gains `contract_changed` (a contracted item's version, last beat, record mtime or
+  open-question count or oldest question moved since the last `--save`), `worker_question_due` (an open
+  question past its limit, or one owed to Shawn, not yet escalated) and `contract_status_unreadable`.
+- **Contract records on the programme**: an item's `auto_run` block holds state ("launched", "bound" or
+  "launch-blocked"), mode, attempts, `session_id`, contract (the seed), plan, `launched_at`,
+  `last_start_ok`, `run_id`, path, `bound_at` and, after a handover, `handed_over_from`. The item history
+  gains `run_launching`, `run_bound`, `launch_blocked` and `run_handover`. The journal gains `contract_set`,
+  `contract_handover`, `goal_written`, `worker_question`, `worker_question_answered` and
+  `worker_question_escalated`; a refused contract write reuses `request_refused`. The goal doc is Markdown,
+  so no `.json` file under `.claude/auto/` is anything but a run record.
 - **Decision log**: `log-decision <item|programme> --kind <decision-kind>
   (--term <id> | --silent) --why <text>` appends a PM decision to the decision
   log (`programme.decisions`), which is separate from the Rulings kept under
@@ -507,8 +588,8 @@ session.
   silent when nothing covered it), and why. It journals `pm_decided`. The
   decision kinds are a closed list in `lib/programme_decisions.py`: the plugin
   Authority kinds plus technical_approach, work_sequencing, worker_coordination,
-  tool_choice, optimisation_depth, product_scope, acceptance and
-  denied_operation. Any other kind is refused. Before it writes, `log-decision`
+  tool_choice, optimisation_depth, product_scope, acceptance,
+  denied_operation, goal_amend and workflow_change. Any other kind is refused. Before it writes, `log-decision`
   asks one gate (`who_decides`) whether the PM may decide the kind for that
   item, in this order: a protected kind (prod_deploy, full_release,
   spend_over_cap, merge_around_gate, denied_operation) stays with Shawn;

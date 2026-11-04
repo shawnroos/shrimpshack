@@ -486,11 +486,11 @@ def dispatch_batch(repo_root, run_id, step_ids, cap, *, launch_fn=None):
     """
     if cap is None or int(cap) < 0:
         raise DispatcherError(f"cap must be a non-negative int, got {cap!r}")
-    cap = int(cap)
+    cap, run_record = load_lib_module("worker_contract_apply").clamp_wave_with_record(
+        repo_root, run_id, int(cap))
     if launch_fn is None:
         launch_fn = _default_launch_fn
 
-    run_record = read_run_record(repo_root, run_id)
     by_id = _steps_by_id(run_record)
 
     results = []

@@ -88,6 +88,16 @@ finished"):
    same topology you showed. Only THEN report "saved `<name>` to <tier>". If the
    read-back fails validation, delete the file and report "save failed".
 
+## Writing for a programme worker (the PM path)
+
+When the PM designs a workflow for a contracted worker, write to the worker's **repo** tier
+(`<repo>/.claude/auto/workflows/`), never global, so one item's workflow cannot change another's and other
+items in the repo can name it. Before writing, run `python3 "${CLAUDE_PLUGIN_ROOT}/lib/workflow_design.py"
+check <draft.json>`: it refuses a draft that carries a key from the contract's authority vocabulary
+(`authority`, `autonomy`, `asks`, decision kinds, modes) or fails the validator. Then name it with
+`programme.py set-contract --item <id> --workflow <name>` and write the goal doc with `programme.py
+write-goal`. The workflow carries no authority; the contract does.
+
 ## Iteration-aware workflows (v0.3.0)
 
 A workflow may declare an optional `iteration` block to make the loop

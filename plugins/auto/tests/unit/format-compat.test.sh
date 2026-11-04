@@ -531,6 +531,44 @@ PYEOF
 )"
 assert_eq '{"down": true, "up": true}' "$r"
 
+it "contract.authority: decision-kind keys survive upgrade and downgrade verbatim, even when spelled like a mapped key"
+r="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, json, copy
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+fcm = load_lib_module("format_compat")
+act = {"mode": "act", "asks": "pm"}
+authority = {"product_scope": dict(act), "units": dict(act), "emitter": dict(act), "adapter_op": dict(act)}
+rec = {"run_id": "w", "units": [], "contract": {
+    "version": 2, "authority": copy.deepcopy(authority),
+    "done_bar": {"internal": ["steps_terminal"], "external": []}, "workflow": "a2", "fan_out_cap": 2}}
+before = copy.deepcopy(rec)
+up = fcm.upgrade_run_record(rec)
+down = fcm.downgrade_run_record(copy.deepcopy(up))
+print(json.dumps({
+    "keys_up": sorted(up["contract"]["authority"]),
+    "authority_intact": up["contract"]["authority"] == authority,
+    "record_keys_still_renamed": "steps" in up and "units" not in up,
+    "keys_down": sorted(down["contract"]["authority"]),
+    "roundtrip": down == before,
+    "idempotent": fcm.upgrade_run_record(copy.deepcopy(up)) == up,
+}, sort_keys=True))
+PYEOF
+)"
+assert_eq '{"authority_intact": true, "idempotent": true, "keys_down": ["adapter_op", "emitter", "product_scope", "units"], "keys_up": ["adapter_op", "emitter", "product_scope", "units"], "record_keys_still_renamed": true, "roundtrip": true}' "$r"
+
+it "a record with no contract key stays without one through upgrade and downgrade"
+r="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import sys, os, json
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+fcm = load_lib_module("format_compat")
+up = fcm.upgrade_run_record({"run_id": "w", "units": []})
+print(json.dumps({"up": "contract" in up, "down": "contract" in fcm.downgrade_run_record(up)}, sort_keys=True))
+PYEOF
+)"
+assert_eq '{"down": false, "up": false}' "$r"
+
 it "a v1 PRESET upgrades (invokes.backend_op/do_step), is never format-stamped, and round-trips"
 r="$(fc preset 2>&1)"
 expected='{"idempotent": true, "invokes": {"backend_op": "do_step", "prompt_template": "p.md"}, "no_format_stamp": true, "roundtrip": true}'

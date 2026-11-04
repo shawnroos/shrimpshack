@@ -127,6 +127,19 @@ Out of scope (do NOT hold this goal open on these): <deferred items, and any hum
 <!-- note: model-judged goal, independent of auto's Stop hook; release with `/goal clear`. -->
 ~~~
 
+## PM-callable: a contracted worker's goal doc
+
+A programme PM does not hand-write this doc. `programme.sh write-goal <item> --outcome <text>...` renders it
+from the worker's contract done bar and plan, using the rules above, at
+`<repo>/.claude/auto/goals/<run>.md` (Markdown with a version header, never JSON). It refuses a done bar
+with a step only a human can do and names the step; give such a step as `--manual-step` or route it to
+Shawn. Run it again to amend in place: that bumps the goal and contract versions, and a new done bar goes
+in the same call (`--done-internal`, `--done-external`). `goal_amend` decides the amendment: act_and_tell
+writes and returns a `tell` line for your next report to Shawn; propose hands Shawn an ask and writes
+nothing, and you re-run with `--approved <ask id>` after he ships it; never refuses. `programme.sh
+goal-status <item>` reads `goal-stale` when the contract moved past the doc. The worker binds the doc; you
+never run `/goal`.
+
 ## Invariants
 
 - **Never run `/goal`.** Author and surface only; the user binds.

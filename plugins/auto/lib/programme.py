@@ -330,7 +330,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
                                              recheck=programme_rulings.recheck_approval,
                                              legacy_refuses=programme_rulings.changes_ruling)
         except (ProgrammeError, ValueError, programme_terms.TermsError, programme_decisions.DecisionError,
-                programme_behaviours.BehaviourError, programme_rituals.RitualError) as exc:
+                programme_behaviours.BehaviourError, programme_rituals.RitualError, worker_contract.ContractError) as exc:
             if (needs_prompt or prompt_id) and "sid" in seen:
                 _journal_refusal(run_id, home, seen["sid"], verb or kind, target, prompt_id, exc)
             raise
@@ -927,6 +927,7 @@ _VERBS["host"] = _Verb(
 )
 
 programme_behaviours = load_lib_module("programme_behaviours")
+worker_contract = load_lib_module("worker_contract")
 _VERBS.update(programme_behaviours.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_behaviours_skip").build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_behaviour_file_verbs").build_verbs(sys.modules[__name__]))
@@ -944,6 +945,7 @@ _ERRORS = (
     programme_terms.TermsError,
     programme_behaviours.BehaviourError,
     programme_rituals.RitualError,
+    worker_contract.ContractError,
     programme_home.ProgrammeHomeError,
     programme_journal.JournalError,
     run_record_core.RunRecordError,
@@ -990,6 +992,8 @@ _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__n
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
+for _mod in worker_contract.VERB_MODULES:
+    _VERBS.update(load_lib_module(_mod).build_verbs(sys.modules[__name__]))
 
 
 if __name__ == "__main__":

@@ -407,10 +407,10 @@ def covers(row, item) -> bool:
 
 
 # A kind-less entry (an old decision record, instruction or reserved term) never reaches the gate.
-def rulings_for(programme, item, kind, now) -> list:
+def rulings_for(programme, item, kind, now, rows=None) -> list:
     return [{"id": r["id"], "rev": r["rev"], "kind": kind, "effect": r["effect"],
              "items": sorted(set(r["targets"]) | {item}), "until": r["until"] or "", "baseline": r["baseline"]}
-            for r in rulings(programme, now)
+            for r in (rows if rows is not None else rulings(programme, now))
             if r["state"] == "active" and r["kind"] is not None and r["kind"] == kind and covers(r, item)]
 
 

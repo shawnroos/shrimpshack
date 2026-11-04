@@ -39,6 +39,7 @@ AUTONOMY_ACTIONS = (
 DECISION_KINDS = AUTONOMY_ACTIONS + (
     "technical_approach", "work_sequencing", "worker_coordination", "tool_choice",
     "optimisation_depth", "product_scope", "acceptance", "denied_operation",
+    "goal_amend", "workflow_change",
 )
 PROTECTED_KINDS = ("prod_deploy", "full_release", "spend_over_cap", "merge_around_gate", DENIED_KIND)
 LEVEL_ORDER = ("never", "propose", "act_and_tell", "act")
@@ -62,6 +63,17 @@ def stamped(programme) -> bool:
 def handed(item) -> dict:
     handed = item.get("handed")
     return handed if isinstance(handed, dict) else {}
+
+
+def waits_on_shawn(item) -> bool:
+    return item.get("state") == "handed" and not handed(item).get("answered")
+
+
+def ship_approved(item, ask_id, kind, evidence_line) -> bool:
+    ask = handed(item)
+    answered = ask.get("answered")
+    return (ask.get("id") == ask_id and ask.get("kind") == kind and isinstance(answered, dict)
+            and answered.get("choice") == "ship" and evidence_line in (ask.get("evidence") or []))
 
 
 def ask_kind(item) -> str:

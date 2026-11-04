@@ -14,7 +14,8 @@ import re
 import shlex
 import sys
 
-READ_VERBS = frozenset({"status", "inbox", "describe", "check-mergeable"})
+READ_VERBS = frozenset({"status", "inbox", "describe", "check-mergeable", "contract-status", "goal-status",
+                        "open-worker-questions"})
 VIEWERS = frozenset({"cat", "head", "tail", "less", "grep", "rg", "wc", "ls", "file", "stat", "diff"})
 GIT_READS = frozenset({"show", "diff", "log", "blame", "status", "grep"})
 GH_PR_READS = frozenset({"view", "list", "checks", "diff", "status"})
@@ -107,8 +108,15 @@ def _is_read_call(rest):
     return rest[0] == "rules" and (not args or (len(args) == 2 and args[0] == "--run" and not args[1].startswith("-")))
 
 
+def _names_lib_script(token):
+    # Default-deny: any script shipped in this plugin's lib is programme code, whatever its name.
+    if not token.endswith((".py", ".sh")):
+        return False
+    return os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(token)))
+
+
 def _segment_refusal(segment):
-    mentions = any("programme" in token.lower() for token in segment)
+    mentions = any("programme" in token.lower() or _names_lib_script(token) for token in segment)
     if mentions and segment and _ASSIGNMENT.match(segment[0]):
         return "a sub-agent may not set environment variables on a command naming programme code"
     while segment and _ASSIGNMENT.match(segment[0]):

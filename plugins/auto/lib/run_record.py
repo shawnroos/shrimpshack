@@ -476,6 +476,15 @@ def _h_check_deliverable(argv):
     return 0
 
 
+def _h_goal_bound(argv):
+    if len(argv) != 3:
+        raise ValueError("usage: goal-bound <run> <goal-version>")
+    out = load_lib_module("goal_binding").record_bound(resolve_repo(), argv[1], argv[2])
+    json.dump(out, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
 def _h_evidence_journal(argv):
     json.dump(run_record_evidence.read_journal(argv[1], argv[2]), sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
@@ -555,6 +564,13 @@ _VERBS = {
         "driving session. Stores confirmed, refuted or unknown from the checker; never takes a result.",
     ),
     "evidence-journal": _Verb(_h_evidence_journal, "<repo> <run>  (the run's journaled evidence checks)", reads=True),
+    "goal-bound": _Verb(
+        _h_goal_bound,
+        "<run> <goal-version>  (the worker reports the goal doc version it bound)",
+        rejects="exit 2 if CLAUDE_CODE_SESSION_ID is unset or the version is not an integer; RunRecordError "
+        "unless the caller is the run's own session, the run has a contract and the version is from 1 to its goal "
+        "version. The engine never reads the stored version to decide done.",
+    ),
 }
 
 

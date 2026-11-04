@@ -80,7 +80,7 @@ the ``format`` marker, so reinstalled pre-rename code never sees an unknown
 version field): ``downgrade_run_record(upgrade_run_record(v1)) == v1`` **for every
 record v1 code actually writes** — which is the case the revert procedure needs.
 The qualifier is load-bearing, not throat-clearing: the inverse is DEPTH-BLIND, so a
-record carrying a v2-SPELLED key outside the three opaque containers does not
+record carrying a v2-SPELLED key outside the opaque containers does not
 round-trip. ``{"notes": {"steps": "x", "producer": "y"}}`` comes back as
 ``{"notes": {"units": "x", "emitter": "y"}}``. Real v1 records cannot contain such a
 key (free-form names are confined to the opaque containers below, whose KEYS are
@@ -157,6 +157,9 @@ _EDGE_CONTAINER = "dropped_depends_on_edges"
 #                    a renamed id silently never matches, so the criterion reads
 #                    PENDING forever and the gate never resolves.
 #   decision_payload an agent-supplied bag.
+#   authority        {"<decision_kind>": {mode, asks}} inside `contract` — the PM picks
+#                    the kinds at runtime; a kind spelled like a mapped key would be
+#                    renamed and then read as an unknown kind.
 #
 # Their KEYS pass through verbatim; their VALUES are still converted, so
 # `emit_templates.<name>.invokes.backend_op` and `.phase` still map correctly.
@@ -166,6 +169,7 @@ _OPAQUE_KEY_CONTAINERS = frozenset({
     "emit_templates",
     "judge_verdicts",
     "decision_payload",
+    "authority",
 })
 
 # A programme block nests runtime-chosen keys at several depths (item ids,

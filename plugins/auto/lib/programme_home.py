@@ -771,11 +771,11 @@ def write_lease(spec, run_id, home, session_id, now_iso) -> None:
     atomic_write(lease_path(*space), write, ".lease.")
 
 
-def atomic_write(path, write, prefix, folder=None) -> None:
+def atomic_write(path, write, prefix, folder=None, encoding=None) -> None:
     fd, tmp = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=folder or os.path.dirname(path))
     try:
         os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
             write(fh)
         os.replace(tmp, path)
     except BaseException:

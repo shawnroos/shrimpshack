@@ -177,6 +177,12 @@
     },
     "acceptance": {
       "level": "act"
+    },
+    "goal_amend": {
+      "level": "act_and_tell"
+    },
+    "workflow_change": {
+      "level": "act_and_tell"
     }
   }
 }

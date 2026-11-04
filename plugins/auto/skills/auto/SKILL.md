@@ -55,6 +55,8 @@ condition phrased to MIRROR auto's exit predicate (so the two gates
 agree) and saves it as a goal doc for the operator to bind by hand —
 auto still never runs `/goal` itself.
 
+A contracted worker whose pulse guidance says `GOAL BIND:` or `GOAL REBIND:` runs that `/goal` itself, then reports it with the `goal-bound` command the guidance names; the Stop hook still holds on the exit predicate.
+
 ## 1.5 Boss goal-doc drive (R12–R17)
 
 The boss may drive from **one editable goal doc as its sole required
@@ -180,7 +182,9 @@ IS the wake signal. Per wave:
    attempt, goal=…)` (U7) — rather than hand-wiring it: it renders the step
    packet, the R21 register-session line, the record-before-yield mandate, and
    the `run_record.sh record-verdict` contract with the attempt tag, so every
-   wave wires identically. **Record-before-yield (finding #2):** an agent MUST
+   wave wires identically. Pass `repo_root=` so the PM's contract text rides in
+   the prompt. A programme worker started as an Auto run calls `register-run`
+   from the "Programme registration" section of its brief once its run exists. **Record-before-yield (finding #2):** an agent MUST
    write its verdict BEFORE any long-running background wait (a >120s suite, a
    slow build) — never yield to wait for background work with the verdict still
    unwritten, or the step strands at `dispatched` and forces a wasteful re-run.

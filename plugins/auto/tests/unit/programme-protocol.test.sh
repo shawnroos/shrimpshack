@@ -128,7 +128,7 @@ print(a["merge_at_gate"]["level"], a["file_issue"]["level"], a["eval_backed_prer
       a["fix_other_team_code"]["level"], len(a))
 EOF
 )"
-check "act act act_and_tell never 15" "$OUT"
+check "act act act_and_tell never 17" "$OUT"
 
 it "no layer stores a level for a protected kind: the plugin defaults leave all five out"
 OUT="$(run_py <<'EOF'
