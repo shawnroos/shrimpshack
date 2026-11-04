@@ -303,11 +303,9 @@ and redirects you here. Do NOT stop to ask the operator. Instead:
 3. **Audit every cycle.** Append a record via
    `run_record.append_advisor_audit(repo, run, kind="advisor", subject="<the
    question>", classification="<mechanical|design-fork>", resolution="<resolved-
-   autonomously|escalated-via-pause>")`. The destructive-action backstop
-   (`lib/on-pretooluse-action.py`, §4.5 wall) appends its own `kind="action"`
-   record when it pauses the run. Both go through the LOCKED atomic-write
-   chokepoint, so concurrent fan-out denials cannot clobber the list. Surface
-   the audit list in the exit report next to the P3 findings (§5).
+   autonomously|escalated-via-pause>")`. The record goes through the LOCKED
+   atomic-write chokepoint, so concurrent fan-out denials cannot clobber the list.
+   Surface the audit list in the exit report next to the P3 findings (§5).
 
 This gate composes with §1: the deterministic Stop-hook predicate stays the
 single source of truth — the advisor gate only routes *clarifications*, never
@@ -316,23 +314,14 @@ re-derives the exit predicate. The gate fires ONLY for THIS driving session
 standalone ce-skill in the same worktree is never intercepted.
 
 **Two-handoff split — fan-out steps (KTD-5).** Work-loop `do_step` agents get
-their OWN `session_id`, so NEITHER PreToolUse hook (question gate OR
-destructive backstop) can reach them. When you construct a fan-out step prompt
-(§4 step 3), bake in all THREE constraints:
+their OWN `session_id`, so the question gate cannot reach them. When you
+construct a fan-out step prompt (§4 step 3), bake in BOTH constraints:
   - **(i) question routing:** "Do not call `AskUserQuestion`. For a mechanical
     clarification, consult the advisor and resolve it yourself; for a
     substantive design/architecture fork, pause-escalate via
     `auto-resume.py pause <run> \"<the fork>\"` — do not stop to ask the
     operator directly."
-  - **(ii) destructive-action avoidance:** "Do not run irreversible/destructive
-    operations (the CLAUDE.md-anchored set: `push --force`/`-f`/`--force-with-lease`
-    in ANY flag position, `reset --hard`, `checkout .` / `restore .`,
-    `clean -f`/`-fdx`, `branch -D`, `rm -rf`, `npm publish`, `gh release create`,
-    `gh repo delete`, `gh release delete`, `gh pr merge --admin`). If one is
-    needed, pause-escalate instead." `do_step` is the MOST likely locus of
-    destructive Bash (branch cleanup, file delete, force-push), and the action
-    hook cannot gate it — so the constraint MUST ride in the prompt.
-  - **(iii) self-termination on no-progress:** "If you cannot make progress
+  - **(ii) self-termination on no-progress:** "If you cannot make progress
     within N minutes (blocked on something you cannot resolve, or spinning
     without advancing), record a blocker verdict via `run_record.record_verdict`
     and RETURN — do not keep spinning." This catches soft-stalls from the
@@ -411,21 +400,19 @@ Each pulse, on a `rearm` intent in the work phase:
    carry: the **step id**; its **`attempt` generation** (from this dispatch — the
    agent passes it back so a superseded attempt's verdict is rejected as stale,
    AE3); the **backend invocation** (map `invokes.backend_op` → skill per §4
-   step 3 / `driver-reference.md` §7); the **constraint set** (the three §4.6
-   two-handoff constraints — question routing, destructive-action avoidance,
-   self-termination on no-progress); and the instruction to **self-write its
+   step 3 / `driver-reference.md` §7); the **constraint set** (the two §4.6
+   two-handoff constraints — question routing and self-termination on
+   no-progress); and the instruction to **self-write its
    verdict on completion** via `bash lib/run_record.sh record-verdict <run> <step>
    '<json-findings>' <attempt>`.
-   - **FIRST line of every phase sub-agent prompt (R21 — LOAD-BEARING SAFETY):**
+   - **FIRST line of every phase sub-agent prompt (R21):**
      `bash lib/run_record.sh register-session <run>`. A dispatched sub-agent carries
      its OWN `session_id`, so until it registers into the run's ownership set the
-     destructive-command backstop and the advisor gate are DARK for it —
-     including the `fix` phase, which writes code and runs Bash. Registration MUST
-     be the sub-agent's first action, before any Bash, so the fail-closed gate is
-     armed before it can run anything destructive. The verb reads
+     advisor gate is DARK for it. Registration MUST be the sub-agent's first
+     action, so the gate applies from the start. The verb reads
      `$CLAUDE_CODE_SESSION_ID` from the env itself — no id is passed as an arg, so
      a sub-agent can only ever add ITSELF to the set (never a third party).
-     Omitting this line silently reverts U8: the backstop never reaches the tree.
+     Omitting this line silently reverts U8: the advisor gate never reaches the tree.
    - **Source the sub-agent's operating contract from the `describe` CLI verb**
      — run `bash lib/run_record.sh describe <run>` so the sub-agent gets the whole
      operating surface AND this run's phase model (phase_order + current-phase
@@ -465,9 +452,9 @@ cleanly — surface kind + error. Full taxonomy:
 
 **Surface the advisor/action audit (v0.6.0).** Alongside the P3 findings,
 list the run-record's `advisor_audit` records — every advisor-resolved question
-(`kind=advisor`) AND every destructive-action backstop denial (`kind=action`),
+(`kind=advisor`), and any `kind=action` record on a run older than this change,
 each with its `subject` / `classification` / `resolution` / `at`. A wrong
-autonomous call or a fired backstop must be diagnosable at exit (KTD-5
+autonomous call must be diagnosable at exit (KTD-5
 visibility — trust is earned by surfacing the gate's decisions, not hiding
 them).
 

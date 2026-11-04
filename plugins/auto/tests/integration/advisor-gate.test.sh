@@ -18,7 +18,12 @@
 #     - live run + MISMATCHED session_id (standalone) -> allow (KTD-5)
 #     - no run-record / phase==done / driver==manual / stale (>3900s) -> allow
 #     - malformed run-record -> allow + exit 0 (rel-001)
-#   action hook (same ownership gate):
+#   action hook, default:
+#     - destructive on a live owned run -> no deny, driver stays self, no audit row
+#     - the check's hatch needs CLAUDE_AUTO_TEST_HARNESS too
+#     - repo with .claude/auto and no lease: the shim starts no Python
+#     - a run the backstop paused before the upgrade stays paused until continue
+#   action hook, dormant check under its hatch (same ownership gate):
 #     - destructive (push --force / rm -rf / reset --hard / branch -D) on a
 #       live owned run -> deny + the run is PAUSED (driver=manual, blocked_on)
 #     - benign (ls / git status) -> allow, run-record untouched
@@ -275,6 +280,81 @@ PYEOF
   set_driving_session "$repo" "$2" "$3"
   printf '%s' "$repo"
 }
+
+# ─── action: the destructive check is off by default ──────────────────────────
+for cmd in 'git push --force origin main' 'rm -rf build/' 'gh repo delete owner/repo --yes'; do
+  it "action off: '$cmd' on a live owned run -> no deny"
+  REPO="$(mk_live_owned "off-$(echo "$cmd" | tr -dc 'a-z')" actrun sess-AAA)"
+  out="$(EVENT sess-AAA Bash "$cmd" | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
+  assert_empty "$out"
+  it "action off: '$cmd' leaves driver==self"
+  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
+  it "action off: '$cmd' records no audit row"
+  assert_eq "0" "$(rd_audit "$REPO" actrun count)"
+done
+
+it "action off: the check's hatch without the harness sentinel stays off"
+REPO="$(mk_live_owned off-fence actrun sess-AAA)"
+out="$(EVENT sess-AAA Bash 'git push --force' | env -u CLAUDE_AUTO_TEST_HARNESS CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK=1 "$PY" "$ACTION_PY" "$REPO")"
+assert_empty "$out"
+it "action off: the harness sentinel without the check's hatch stays off"
+out="$(EVENT sess-AAA Bash 'git push --force' | env -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK CLAUDE_AUTO_TEST_HARNESS=1 "$PY" "$ACTION_PY" "$REPO")"
+assert_empty "$out"
+it "action off: the fence cases leave driver==self"
+assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
+
+MARKER_PY="${SANDBOX}/marker-python"
+cat > "$MARKER_PY" <<EOF
+#!/usr/bin/env bash
+touch "${SANDBOX}/python-ran"
+exit 0
+EOF
+chmod +x "$MARKER_PY"
+EMPTY_DATA="${SANDBOX}/no-leases"
+LEASED_DATA="${SANDBOX}/one-lease"
+mkdir -p "${EMPTY_DATA}" "${LEASED_DATA}/programmes/leases"
+printf '{}' > "${LEASED_DATA}/programmes/leases/w1.json"
+
+it "action.sh off: a repo with .claude/auto and no lease starts no Python"
+REPO="$(mk_live_owned off-nolease actrun sess-AAA)"
+rm -f "${SANDBOX}/python-ran"
+( cd "$REPO" && EVENT sess-AAA Bash 'git push --force' | CLAUDE_AUTO_DATA_DIR="$EMPTY_DATA" CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "$ACTION_SH" )
+if [ -e "${SANDBOX}/python-ran" ]; then fail "python ran"; else pass; fi
+
+it "action.sh off: a repo with a lease still starts Python"
+rm -f "${SANDBOX}/python-ran"
+( cd "$REPO" && EVENT sess-AAA Bash 'git push --force' | CLAUDE_AUTO_DATA_DIR="$LEASED_DATA" CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "$ACTION_SH" )
+if [ -e "${SANDBOX}/python-ran" ]; then pass; else fail "python did not run"; fi
+
+for data in "$EMPTY_DATA" "$LEASED_DATA"; do
+  it "action.sh off: git push --force from a live run proceeds ($(basename "$data"))"
+  out="$( cd "$REPO" && EVENT sess-AAA Bash 'git push --force origin main' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK CLAUDE_AUTO_DATA_DIR="$data" bash "$ACTION_SH" )"
+  assert_empty "$out"
+  it "action.sh off: that push leaves driver==self ($(basename "$data"))"
+  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
+done
+
+it "action off: a run the backstop paused before the upgrade allows the command"
+REPO="$(mk_live_owned off-prepaused actrun sess-AAA)"
+"$PY" - "$REPO" actrun "$RUN_RECORD_PY" <<'PYEOF'
+import sys, importlib.util
+repo, run, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3]
+s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
+L.apply_pause(repo, run, "auto destructive-action backstop: blocked `rm -rf`", backstop_latched=True)
+PYEOF
+out="$(EVENT sess-AAA Bash 'rm -rf build/' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
+assert_empty "$out"
+it "action off: that run stays paused"
+assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
+it "action off: /auto-resume continue resumes that run"
+CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-AAA" CLAUDE_CODE_CHILD_SESSION="" \
+  "$PY" "${AUTO_ROOT}/lib/auto-resume.py" continue actrun >/dev/null 2>&1
+assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
+it "action off: /auto-resume continue clears that run's latch"
+assert_eq "None" "$(rd_loop "$REPO" actrun backstop_latched)"
+
+# ─── Every case below exercises the dormant check through its fenced hatch ────
+export CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK=1
 
 # ─── action: destructive commands on a live owned run -> deny + PAUSE ──────────
 # Force-push is covered in EVERY flag position (fix-round-5 P1): the canonical
@@ -590,7 +670,7 @@ ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
 out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
 assert_empty "$out"
 it "action.sh shim: malformed run_record -> exit 0 (rel-001)"
-( cd "$REPO" && printf '%s' "$ev" | bash "$ACTION_SH" >/dev/null 2>&1 )
+( cd "$REPO" && printf '%s' "$ev" | CLAUDE_AUTO_DATA_DIR="$LEASED_DATA" bash "$ACTION_SH" >/dev/null 2>&1 )
 assert_eq "0" "$?"
 
 # ─── action: a sibling NON-DICT run-record does NOT disarm the backstop ───────────

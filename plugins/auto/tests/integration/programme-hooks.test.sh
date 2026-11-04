@@ -493,7 +493,7 @@ it "a bare pane suffix from a sender with no registry row and no item is allowed
 OUT="$(action_hook sess-no-row 'herdr agent prompt p31 go')"
 check "" "$OUT"
 
-it "a send to the driver's pane combined with a destructive command still pauses the task run"
+it "a destructive command in a send to the driver's pane does not pause the task run"
 TASKREPO="${WORK}/taskrepo"
 mkdir -p "${TASKREPO}/.claude/auto"
 run_py "$TASKREPO" <<'EOF' >/dev/null
@@ -506,7 +506,7 @@ core = load_lib_module("run_record_core")
 print(core.read_run_record(args[0], "task-run")["loop"]["driver"])
 EOF
 )"
-case "$OUT" in *'RUN PAUSED'*'"deny"'*) check "manual" "$DRV" ;; *) fail "out [$OUT] driver [$DRV]" ;; esac
+case "$OUT" in *'RUN PAUSED'*) fail "out [$OUT]" ;; *) check "self" "$DRV" ;; esac
 
 it "the caller helper is false for a session that is only in agent_session_ids"
 OUT="$(run_py <<'EOF'
