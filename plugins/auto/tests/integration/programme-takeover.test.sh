@@ -694,12 +694,12 @@ has '"pane_in_snapshot": false' "$ENTRY"
 
 as sess-m rules --ack
 offer_input() { "$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1].splitlines()[0])["input"]))' "$OUT"; }
-first_option() { "$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][0]["label"])' "$1"; }
+command_option() { "$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][1]["label"])' "$1"; }
 
 it "the handover picker, through the real hook: the wrong target is refused"
 as sess-m offer hand-pm --command 'handover sess-n'
 HAND_INPUT="$(offer_input)"
-HAND_LABEL="$(first_option "$HAND_INPUT")"
+HAND_LABEL="$(command_option "$HAND_INPUT")"
 has "sess-n" "$HAND_LABEL"
 P="$(PICK_INPUT="$HAND_INPUT" pick sess-m "$HAND_LABEL")"
 as sess-m handover sess-w2 --prompt "$P"
@@ -720,7 +720,7 @@ as sess-n rules --ack
 it "the end picker, through the real hook: its decline ends nothing"
 as sess-n offer end-programme --command 'end --why "all done"'
 END_INPUT="$(offer_input)"
-END_LABEL="$(first_option "$END_INPUT")"
+END_LABEL="$(command_option "$END_INPUT")"
 P="$(PICK_INPUT="$END_INPUT" pick sess-n "Not now")"
 as sess-n end --why "all done" --prompt "$P"
 check "1 " "$CODE $(last_entry "$RUN" programme_ended | sed 's/^null$//')"

@@ -928,10 +928,10 @@ session.
   `offer` of that command. `end` needs a typed end request in the driving session,
   or `--prompt <id>` answering an `offer` of that command there, or an orphaned
   lease; on an expired lease it needs none and ends the programme as `expire` does.
-  An answer is a pick of the option, or Shawn's own words with `--reads-as`; the
-  option binds the target, `--why` and `--without-rituals`, and a typed message
-  that answers no offer approves nothing. The row then has `request: null`, the
-  approval, the quote and any reading, and cites the prompt. Auto never tells
+  Both are authority moves: only a pick of the option answers, the decline comes
+  first, and own words refuse. The option binds the target, `--why` and
+  `--without-rituals`, and a typed message that answers no offer approves nothing. The
+  row then has `request: null`, the approval and the quote, and cites the prompt. Auto never tells
   Shawn to type these commands. Takeover and handover rewrite every
   lease of the run and the record's `driving_session_id` together (leases lock,
   then run-record lock), stamp the driver beat, and journal both session ids.

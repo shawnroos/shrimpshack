@@ -56,8 +56,8 @@ If Shawn typed the command, run the dispatch line below:
 If he did not, run `programme.sh offer end-programme --command 'end'` (add `--why` or
 `--without-rituals` to the command if they apply), ask with the `input` it prints,
 unchanged, and run nothing on "Not now". On his pick run the same command with
-`--prompt <pick id>`. If he answers in his own words, run it with `--prompt <id>
---reads-as <the option's text>`, and show him its `read_back` line word for word.
+`--prompt <pick id>`. His own words never approve it: relay them and ask again with the
+same picker.
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
 - Exit 2: the arguments did not parse (for example, an unquoted `--why` of

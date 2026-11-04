@@ -162,8 +162,8 @@ with tempfile.TemporaryDirectory(prefix='auto-lifecycle-picks-') as work:
     shown = next(o for o in options(printed) if o['label'] == label)['description']
     check('the end picker names the unfinished items', 'mem:open' in shown, shown)
     check('the end picker shows the reason', 'nothing left' in shown, shown)
-    check('the end picker asks with the command first and the decline last',
-          options(printed)[-1]['label'] == printed['decline'], options(printed))
+    check('the end picker is an authority move: the decline comes first',
+          options(printed)[0]['label'] == printed['decline'], options(printed))
 
     result = verb(sid, run, 'end', '--why', 'nothing left', '--prompt', pick(sid, run, printed['input']['questions'], printed['decline']))
     check('a pick of the decline ends nothing', result.returncode != 0 and not ended(run), said(result))
@@ -221,20 +221,25 @@ with tempfile.TemporaryDirectory(prefix='auto-lifecycle-picks-') as work:
     printed = offer(sid3, run3, 'end-programme', 'end')
     asked(sid3, printed)
     result = verb(sid3, run3, 'end', '--prompt', words(sid3, run3, 'yes, wrap it up'))
-    check('own words with no reading end nothing, and the fix names --reads-as',
-          refused(result, '--reads-as') and not ended(run3), said(result))
+    check('own words with no reading end nothing, and the fix says relay',
+          refused(result, 'relay') and not ended(run3), said(result))
     asked(sid3, printed)
     said_id = words(sid3, run3, 'yes, wrap it up')
     result = verb(sid3, run3, 'end', '--prompt', said_id, '--reads-as', label_of(printed))
-    check('own words with the reading end the programme', ok(result) and ended(run3), said(result))
-    payload = last(run3, 'programme_ended')['payload']
-    check('the end row records the reading and the quote',
-          payload.get('read_as') == label_of(printed) and payload.get('read_by') == 'pm'
-          and payload.get('quote') == 'yes, wrap it up', payload)
-    check('the end verb prints the read-back', 'read_back' in result.stdout and label_of(printed) in result.stdout, said(result))
+    check('own words with the reading end nothing, and the fix says relay',
+          refused(result, 'relay') and not ended(run3), said(result))
+    other_text = pick(sid3, run3, printed['input']['questions'], 'yes, wrap it up')
+    result = verb(sid3, run3, 'end', '--prompt', other_text, '--reads-as', label_of(printed))
+    check('Other text on the end picker ends nothing', refused(result, 'relay') and not ended(run3), said(result))
+    noted = picked(sid3, run3, printed, annotations={printed['input']['questions'][0]['question']: {'notes': 'and tidy up'}})
+    result = verb(sid3, run3, 'end', '--prompt', noted, '--reads-as', label_of(printed))
+    check('a noted pick of the end option ends nothing', refused(result, 'relay') and not ended(run3), said(result))
+    result = verb(sid3, run3, 'end', '--prompt', picked(sid3, run3, printed))
+    check('a plain pick after his words ends the programme', ok(result) and ended(run3), said(result))
 
     sid4 = 'end-pm4'
     run4 = programme(sid4, 'end-d')
+    offer(sid4, run4, 'end-programme', 'end')
     typed_request(sid4, run4, 'end', '/auto:programme-end')
     result = verb(sid4, run4, 'end')
     check('a typed /auto:programme-end still ends the programme', ok(result) and ended(run4), said(result))
@@ -251,7 +256,7 @@ with tempfile.TemporaryDirectory(prefix='auto-lifecycle-picks-') as work:
     long_label = label_of(offer(sid5, run5, 'hand-pm', f'handover {long_id} --without-rituals'))
     check('a full session id and the skipped rituals both fit the label', long_id in long_label and long_label.endswith('rituals'), long_label)
     printed = offer(sid5, run5, 'hand-pm', 'handover hand-next')
-    check('the handover picker lists the decline after the command', options(printed)[-1]['label'] == printed['decline'], options(printed))
+    check('the handover picker is an authority move: the decline comes first', options(printed)[0]['label'] == printed['decline'], options(printed))
 
     pid = picked(sid5, run5, printed)
     result = verb(sid5, run5, 'handover', 'hand-wrong', '--prompt', pid)
@@ -289,13 +294,18 @@ with tempfile.TemporaryDirectory(prefix='auto-lifecycle-picks-') as work:
     asked(sid7, printed)
     said_id = words(sid7, run7, 'yes, move it there')
     result = verb(sid7, run7, 'handover', 'hand-other', '--prompt', said_id, '--reads-as', label_of(printed))
-    check('own words approve only the target the picker named', result.returncode != 0 and driver(run7) == sid7, said(result))
+    check('own words naming another target hand nothing over', result.returncode != 0 and driver(run7) == sid7, said(result))
     result = verb(sid7, run7, 'handover', 'hand-next3', '--prompt', said_id, '--reads-as', label_of(printed))
-    check('own words with the reading hand over', ok(result) and driver(run7) == 'hand-next3', said(result))
-    payload = last(run7, 'handed_over')['payload']
-    check('the handover row records the reading', payload.get('read_as') == label_of(printed)
-          and payload.get('quote') == 'yes, move it there', payload)
-    check('the handover prints the read-back', 'read_back' in result.stdout, said(result))
+    check('own words with the reading hand nothing over, and the fix says relay',
+          refused(result, 'relay') and driver(run7) == sid7, said(result))
+    other_text = pick(sid7, run7, printed['input']['questions'], 'yes, move it there')
+    result = verb(sid7, run7, 'handover', 'hand-next3', '--prompt', other_text, '--reads-as', label_of(printed))
+    check('Other text on the handover picker hands nothing over', refused(result, 'relay') and driver(run7) == sid7, said(result))
+    noted = picked(sid7, run7, printed, annotations={printed['input']['questions'][0]['question']: {'notes': 'and tell them'}})
+    result = verb(sid7, run7, 'handover', 'hand-next3', '--prompt', noted, '--reads-as', label_of(printed))
+    check('a noted pick of the handover option hands nothing over', refused(result, 'relay') and driver(run7) == sid7, said(result))
+    result = verb(sid7, run7, 'handover', 'hand-next3', '--prompt', picked(sid7, run7, printed))
+    check('a plain pick after his words hands over', ok(result) and driver(run7) == 'hand-next3', said(result))
 
     # ---- No line tells Shawn to type a command ----
     check('the end fix line points at the picker', 'offer' in fixes.fix_for('end') and 'type' not in fixes.fix_for('end'), fixes.fix_for('end'))

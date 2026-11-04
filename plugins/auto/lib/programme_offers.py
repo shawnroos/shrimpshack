@@ -438,7 +438,7 @@ def _end(cmd, programme) -> dict:
     left = f"Not finished: {' '.join(unfinished)}." if unfinished else "No item is unfinished."
     skip = " without its rituals" if cmd.opts.get("without-rituals") else ""
     return _rendered(f"End this programme{skip}", f"No new work starts. {left} {cmd.extras('without-rituals')}",
-                     {"unfinished": unfinished})
+                     {"unfinished": unfinished}, authority=True)
 
 
 def _handover(cmd, _programme) -> dict:
@@ -446,7 +446,8 @@ def _handover(cmd, _programme) -> dict:
     # The label cap is 80, and a session id is 36: a longer sentence would cut off the rituals it skips.
     skip = " without its rituals" if cmd.opts.get("without-rituals") else ""
     return _rendered(f"Hand the PM to session {target}{skip}",
-                     "This session stops being the PM. Nothing from this chat carries over.", {"target": target})
+                     "This session stops being the PM. Nothing from this chat carries over.", {"target": target},
+                     authority=True)
 
 
 def _accept(_cmd, programme) -> dict:

@@ -15,9 +15,8 @@ If Shawn typed the command, run the dispatch line below:
 
 If he did not, run `programme.sh offer hand-pm --command 'handover <session-id>'`, ask
 with the `input` it prints, unchanged, and run nothing on "Not now". On his pick run
-`programme.sh handover <session-id> --prompt <pick id>`. If he answers in his own
-words, run it with `--prompt <id> --reads-as <the option's text>`, and show him its
-`read_back` line word for word.
+`programme.sh handover <session-id> --prompt <pick id>`. His own words never approve it:
+relay them and ask again with the same picker.
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
 - Success: the lease and the driving session now name the new session. This
