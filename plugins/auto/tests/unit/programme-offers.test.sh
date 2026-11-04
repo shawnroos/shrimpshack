@@ -348,8 +348,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     check('two options with one label are refused', result.returncode != 0 and 'same text' in said(result), said(result))
 
     # ---- default-deny and the label rules ----
-    for command, needle in (('carry-rulings r1', 'a pick cannot approve'),
-                            ('focus-note --agents 3', 'a pick cannot approve'),
+    for command, needle in (('focus-note --agents 3', 'a pick cannot approve'),
                             ('takeover --replace x', 'become-pm'),
                             ('drop-item <item> --reason x', 'placeholder'),
                             ('answer-handed mem:a --choice maybe', '--choice ship|decline'),
@@ -441,6 +440,9 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
         ('answer-permission not-now', ['answer-permission', 'perm-later', 'not-now']),
         ('move-behaviour', ['move-behaviour', behaviour_id, '--to', 'personal']),
         ('keep-behaviours', ['keep-behaviours', keep_behaviour, '--to', 'personal']),
+        ('record-behaviour', ['record-behaviour', '--when', 'on offers', '--do', 'use small steps']),
+        ('retire-behaviour', ['retire-behaviour', behaviour_named('on retiring'), '--as', 'retired']),
+        ('record-ritual', ['record-ritual', '--when', 'at offers', '--trigger', 'end', '--step', 'read the board']),
         ('move-ritual', ['move-ritual', second_ritual, '--to', 'personal']),
         ('keep-rituals', ['keep-rituals', keep_ritual, '--to', 'personal']),
         ('accept-context', ['accept-context', 'req-1']),
@@ -746,6 +748,60 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     result = drop('mem:s2', suggested)
     check('an accepted suggestion before an offer of that command approves nothing',
           refused(result, 'before') and still_open('mem:s2'), said(result))
+
+    # ---- Own words on a behaviour, ritual or carry-over offer ----
+    typed = said_to('from now on read the board first')
+    made = verb(w_sid, w_run, 'record-behaviour', '--prompt', typed, '--when', 'on own words', '--do', 'read the board')
+    check('fixture: a behaviour in the own-words programme', ok(made), said(made))
+    bid = json.loads(made.stdout)['behaviour']
+    printed = offer(w_sid, w_run, 'retire-own', f'retire-behaviour {bid} --as retired')
+    asked(printed)
+    words = said_to('yes retire that')
+    result = verb(w_sid, w_run, 'retire-behaviour', bid, '--as', 'retired', '--prompt', words, *reads_as(printed))
+    check('own words approve retire-behaviour, with the reading on the row', ok(result)
+          and journal_row('behaviour_retired', words)['payload'].get('read_as') == command_label(printed), said(result))
+    typed = said_to('run the board check at each end')
+    made = verb(w_sid, w_run, 'record-ritual', '--prompt', typed, '--when', 'on own words', '--trigger', 'end',
+                '--step', 'read the board')
+    check('fixture: a ritual in the own-words programme', ok(made), said(made))
+    rid = json.loads(made.stdout)['ritual']
+    printed = offer(w_sid, w_run, 'skip-own', f'skip-ritual {rid} --why later')
+    asked(printed)
+    words = said_to('skip it this time')
+    result = verb(w_sid, w_run, 'skip-ritual', rid, '--why', 'later', '--prompt', words, *reads_as(printed))
+    check('own words approve skip-ritual, with the reading on the row', ok(result)
+          and journal_row('ritual_skipped', words)['payload'].get('read_as') == command_label(printed), said(result))
+    made = verb(w_sid, w_run, 'propose-behaviour', '--when', 'on proposals', '--do', 'read the proposal')
+    assert ok(made), said(made)
+    draft = json.loads(made.stdout)['behaviour']
+    printed = offer(w_sid, w_run, 'apply-own', f'record-behaviour --from-proposal {draft}')
+    asked(printed)
+    words = said_to('yes but keep it short')
+    result = verb(w_sid, w_run, 'record-behaviour', '--from-proposal', draft, '--prompt', words, *reads_as(printed))
+    source = next(b for b in record(w_run)['programme']['behaviours'] if b['id'] == draft).get('source', {})
+    check('own words on a behaviour draft record his words as his', ok(result)
+          and source.get('wording') == 'shawn' and source.get('quote') == 'yes but keep it short', said(result) + str(source))
+
+    add_item(w_sid, w_run, 'mem:cx')
+    typed = said_to('cx: tool choice for mem:cx is yours')
+    made = verb(w_sid, w_run, 'record-ruling', 'cx', '--kind', 'tool_choice', '--effect', 'grant', '--scope', 'pick tools',
+                '--applies-to', 'mem:cx', '--prompt', typed)
+    check('fixture: a Ruling in the own-words programme', ok(made), said(made))
+
+    def own_remit(rec):
+        rec['programme']['remit'] = dict(rec['programme'].get('remit') or {},
+                                         repos=[{'github': 'shawn/own', 'path': str(work / 'own')}])
+    edit(w_run, own_remit)
+    listed = verb(w_sid, w_run, 'carry-rulings')
+    check('fixture: the carry-over offer is made', ok(listed), said(listed))
+    printed = offer(w_sid, w_run, 'carry-own', 'carry-rulings cx')
+    asked(printed)
+    words = said_to('yes keep that for next time')
+    result = verb(w_sid, w_run, 'carry-rulings', 'cx', '--prompt', words, *reads_as(printed))
+    carried = next((r for r in pj.read(w_run) if r['kind'] == 'rulings_carried'), {})
+    check('own words carry a Ruling: its row writes outside the common writer and still holds and prints the reading',
+          ok(result) and carried.get('payload', {}).get('read_as') == command_label(printed)
+          and 'read_back' in result.stdout, said(result))
 
     # ---- No open offer ----
     add_item(w_sid, w_run, 'mem:n1')

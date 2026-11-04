@@ -35,7 +35,9 @@ TEXT_CAP = 300
 # Room for a whole draft at the verbs' cap plus the facts around it: Shawn approves what he can read.
 DRAFT_TEXT_CAP = 900
 _KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
-_FLAGS = ("widening",)
+_FLAGS = ("ran-now", "widening")
+# What one option can show in full: the label and the 300-character description hold about this many ids and scopes.
+MAX_SET = 4
 _NOT_BOUND = ("--prompt", "--run", "--op", "--reads-as")
 STDIN_CAP = 256 * 1024
 _CONTENT = {"doc": None}
@@ -233,11 +235,18 @@ def _mover(noun, module_name):
     return render
 
 
+def _whole_set(label, ids) -> str:
+    if len(ids) > MAX_SET or len(label) > LABEL_CAP:
+        raise OfferError(f"{len(ids)} ids do not fit one option; split them across pickers, one offer each")
+    return label
+
+
 def _keeper(noun, module_name):
     def render(cmd, programme):
         cmd.first("<id>... --to <layer>")
+        label = _whole_set(f"Keep {noun}s {' and '.join(cmd.pos)} in {_layer_words(cmd)}", cmd.pos)
         entries = [_layered(module_name, programme, ident) for ident in cmd.pos]
-        return _rendered(f"Keep {noun}s {' and '.join(cmd.pos)} in {_layer_words(cmd)}", "", entries)
+        return _rendered(label, "", entries)
     return render
 
 
@@ -457,6 +466,7 @@ RENDERERS = {
     "start-ritual": _ritual_step("Start"),
     "swap-item": _swap,
 }
+RENDERERS.update(load_lib_module("programme_offers_stores").RENDERERS)
 _CONTENT_VERBS = ("set-remit",)
 
 

@@ -94,6 +94,7 @@ new_run() {
 print(setup([]))
 EOF
 }
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 tprompt() {
   run_py "$1" "$2" "${3:-typed}" <<'EOF'
 print(fixture_prompt(args[0], "sess-pm", args[1], args[2])["prompt_id"])
@@ -569,8 +570,8 @@ prog offer-rituals mm --run "$RUN7"
 check 0 "$CODE"
 check "True" "$(q "$RUN7" "str(due.due(rec, run)['missed'][0]['offered'])")"
 
-it "the ritual verbs a pick can approve are in PICK_VERBS, and record-ritual is not"
-check "True True False" "$(run_py <<'EOF'
+it "the ritual verbs a pick can approve are in PICK_VERBS, record-ritual among them"
+check "True True True" "$(run_py <<'EOF'
 pa = load_lib_module("programme_approval")
 print(all(v in pa.PICK_VERBS for v in ("start-ritual", "run-ritual", "skip-ritual", "retire-ritual", "move-ritual", "keep-rituals")),
       pa.label(["start-ritual", "r1"]) == "Approve start-ritual r1", "record-ritual" in pa.PICK_VERBS)
@@ -590,10 +591,10 @@ prog record-ritual --run "$RUN8" --from-proposal nothing --prompt "$T1"
 check 1 "$CODE"
 has "no proposed ritual" "$OUT"
 
-it "record-ritual --from-proposal refuses a prompt that does not name the proposal id"
+it "record-ritual --from-proposal refuses a declined pick of its offer"
 prog propose-ritual --run "$RUN8" --when "on takeover" --trigger takeover --step "read the journal"
 PROP="$(jfield "$OUT" 'd["ritual"]')"
-T2="$(tprompt "$RUN8" "yes go ahead")"
+T2="$(opick "$RUN8" --decline "record-ritual --from-proposal ${PROP}")"
 prog record-ritual --run "$RUN8" --from-proposal "$PROP" --prompt "$T2"
 check 1 "$CODE"
 check "proposed" "$(q "$RUN8" "next(r for r in prog['rituals'] if r['id']=='$PROP')['state']")"
@@ -602,11 +603,38 @@ it "record-ritual --from-proposal refuses a field option beside the proposal"
 prog record-ritual --run "$RUN8" --from-proposal "$PROP" --prompt "$T2" --when "something else"
 check 2 "$CODE"
 
-it "record-ritual --from-proposal activates the proposal when the prompt names its id"
-T3="$(tprompt "$RUN8" "record ${PROP}")"
+it "record-ritual --from-proposal activates the proposal on a pick of its offer, and marks the draft as the PM's"
+T3="$(opick "$RUN8" "record-ritual --from-proposal ${PROP}")"
 prog record-ritual --run "$RUN8" --from-proposal "$PROP" --prompt "$T3"
 check 0 "$CODE"
-check "active" "$(q "$RUN8" "next(r for r in prog['rituals'] if r['id']=='$PROP')['state']")"
+check "active pm_draft" "$(q "$RUN8" "' '.join((lambda r: (r['state'], r['source']['wording']))(next(r for r in prog['rituals'] if r['id']=='$PROP')))")"
+
+it "a missed ritual is started on a pick of its offer, and skipped on a pick too"
+RUN_M="$(new_run)"
+TM="$(tprompt "$RUN_M" "read the board every day")"
+prog record-ritual --run "$RUN_M" --prompt "$TM" --when "every day" --schedule "daily 09:00" --step "read the board"
+MISSED="$(jfield "$OUT" 'd["ritual"]')"
+run_py "$RUN_M" "$MISSED" <<'EOF'
+def mutate(rec):
+    rec["programme"]["ritual_clock"][args[1]] = {"next_due_at": "2026-01-05T09:00:00Z"}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+PM1="$(opick "$RUN_M" "start-ritual ${MISSED}")"
+prog start-ritual "$MISSED" --prompt "$PM1" --run "$RUN_M"
+GOT="$CODE"
+PM2="$(opick "$RUN_M" "skip-ritual ${MISSED}")"
+prog skip-ritual "$MISSED" --prompt "$PM2" --run "$RUN_M"
+check "0 0" "$GOT $CODE"
+
+it "older ritual rows with no wording, and rows with wording, both pass the closed key check"
+check "ok ok" "$(run_py <<'EOF'
+pr = load_lib_module("programme_rituals")
+base = {"id": "wx", "state": "active", "layer": "programme", "when": {"text": "at start", "trigger": "start"},
+        "steps": ["read the handover"]}
+print(" ".join(pr.verdict(dict(base, source=source), allow_adoption=False).get("reason") or "ok"
+               for source in ({"prompt_id": "p", "quote": "q"}, {"prompt_id": "p", "quote": "q", "wording": "pm_draft"})))
+EOF
+)"
 
 it "keep-rituals --to repo stores the ritual under the one remit repo and it resolves at the repo layer"
 mkdir -p "${WORK}/alpha" "${WORK}/beta"
@@ -825,7 +853,7 @@ prog propose-ritual --run "$RUN_I" --when "daily check" --schedule "daily 09:00"
 check 0 "$CODE"
 has "ask whether to publish" "$OUT"
 PROP_I="$(jfield "$OUT" 'd["ritual"]')"
-PI2="$(tprompt "$RUN_I" "record ${PROP_I}")"
+PI2="$(opick "$RUN_I" "record-ritual --from-proposal ${PROP_I} --ran-now --outcome 'all bumped'")"
 prog record-ritual --run "$RUN_I" --from-proposal "$PROP_I" --prompt "$PI2" --ran-now --outcome "all bumped"
 check 0 "$CODE"
 check "True" "$(jfield "$OUT" 'd["ran_now"]')"
@@ -890,10 +918,11 @@ EOF
 PC="$(tprompt "$RUN_C" "record the versions bumped check")"
 PCX="$(tprompt "$RUN_C" "record the weekly report")"
 
-it "C1: record-ritual --check needs a prompt that names the check, and defaults the repo from a one-repo remit"
+it "C1: record-ritual --check shows the check in its offer, typed words with no offer must name it, and the repo defaults from a one-repo remit"
 prog record-ritual --run "$RUN_C" --prompt "$PCX" --when "daily" --schedule "daily 09:00" --step "check versions" --check versions-bumped
 check 1 "$CODE"
 has "versions bumped" "$OUT"
+has "Check: versions-bumped" "$("$PY" "$PROG" offer ritual-check --command "record-ritual --when 'daily, shown' --schedule 'daily 09:00' --step 'check versions' --check versions-bumped" --run "$RUN_C" 2>&1)"
 prog record-ritual --run "$RUN_C" --prompt "$PC" --when "daily" --schedule "daily 09:00" --step "check versions" --check versions-bumped
 check 0 "$CODE"
 CK="$(jfield "$OUT" 'd["ritual"]')"

@@ -466,6 +466,7 @@ new_run() {
 print(setup([], repos=args[0]))
 EOF
 }
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 tprompt() {
   run_py "$1" "$2" "${3:-typed}" <<'EOF'
 print(fixture_prompt(args[0], "sess-pm", args[1], args[2])["prompt_id"])
@@ -573,24 +574,35 @@ check "${BEFORE}|${BID}@programme|{not json" "$(q "$RUN" "json.dumps(prog['behav
 fresh_store
 RUN="$(new_run one)"
 BID="$(record_one "$RUN")"
-P2="$(tprompt "$RUN" "keep ${BID} here, not the repo")"
+P2="$(opick "$RUN" --decline "move-behaviour ${BID} --to repo")"
 REC_BEFORE="$(q "$RUN" "json.dumps(prog, sort_keys=True)")"
 ROWS_BEFORE="$(q "$RUN" "[k for k in kinds() if k != 'approval_refused']")"
 REFUSED_BEFORE="$(q "$RUN" "count('approval_refused')")"
-it "move-behaviour --to repo with a prompt saying 'not the repo' is refused"
+it "move-behaviour --to repo on a declined pick is refused"
 prog move-behaviour "$BID" --to repo --prompt "$P2" --run "$RUN"
 check 1 "$CODE"
-has "negates" "$OUT"
+has "declined" "$OUT"
 it "the refused move writes nothing: record and non-refusal rows unchanged, no store file"
 check "${REC_BEFORE}|${ROWS_BEFORE}|False" "$(q "$RUN" "json.dumps(prog, sort_keys=True) + '|' + str([k for k in kinds() if k != 'approval_refused']) + '|' + str(os.path.exists(pb.store_path()))")"
 it "the refused move journals exactly one approval_refused row"
 check "$((REFUSED_BEFORE + 1))" "$(q "$RUN" "count('approval_refused')")"
 
+P3="$(tprompt "$RUN" "keep ${BID} here, not the repo")"
+it "typed words with no offer saying 'not the repo' do not move it"
+prog move-behaviour "$BID" --to repo --prompt "$P3" --run "$RUN"
+check 1 "$CODE"
+has "negates" "$OUT"
 P3="$(tprompt "$RUN" "make it global")"
-it "a move whose prompt does not name the behaviour is refused"
+it "typed words with no offer that do not name the behaviour do not move it"
 prog move-behaviour "$BID" --to personal --prompt "$P3" --run "$RUN"
 check 1 "$CODE"
 has "does not name" "$OUT"
+
+P3="$(opick "$RUN" "move-behaviour ${BID} --to personal")"
+it "a pick of a move to one layer does not approve a move to another"
+prog move-behaviour "$BID" --to repo --prompt "$P3" --run "$RUN"
+check 1 "$CODE"
+has "different command" "$OUT"
 
 P4="$(tprompt "$RUN" "move ${BID} to the repo")"
 it "with one repo in the remit, move-behaviour --to repo takes that repo's key"
@@ -678,7 +690,8 @@ it "record-behaviour --from-proposal without a typed prompt is refused"
 prog record-behaviour --from-proposal "$PID" --run "$RUN"
 check "1 proposed" "$CODE $(q "$RUN" "beh_of('$PID')['state']")"
 P1="$(tprompt "$RUN" "yes, apply ${PID}")"
-it "record-behaviour --from-proposal with a typed prompt makes it active and leaves the proposals"
+it "record-behaviour --from-proposal on a pick of its offer makes it active and leaves the proposals"
+P1="$(opick "$RUN" "record-behaviour --from-proposal $PID")"
 prog record-behaviour --from-proposal "$PID" --prompt "$P1" --run "$RUN"
 check "0 active [] ${PID}@programme" "$CODE $(q "$RUN" "' '.join([beh_of('$PID')['state'], str([b['id'] for b in prog['behaviours'] if b['state'] == 'proposed']), ids(run)])")"
 
@@ -861,6 +874,59 @@ print("%s %s %s|%s %s %s" % (t["claim"], t["merge"], t["block"], u["claim"], u["
 EOF
 )"
 
+it "keep-behaviours: a set larger than one option can show is refused with a fix to split"
+fresh_store
+RUN="$(new_run one)"
+"$PY" "$PROG" offer keep-many --command "keep-behaviours b1 b2 b3 b4 b5 --to repo" --run "$RUN" > "${WORK}/keep-many.out" 2>&1
+check 1 "$?"
+has "split" "$(cat "${WORK}/keep-many.out")"
+
+it "the verbs moved to offers record who worded a draft: a pick of a proposal is pm_draft, and the view does not credit Shawn"
+fresh_store
+RUN="$(new_run one)"
+prog propose-behaviour --run "$RUN" --when "a draft arrives" --do "read the draft"
+DRAFT="$(jfield "$OUT" 'd["behaviour"]')"
+PD="$(opick "$RUN" "record-behaviour --from-proposal ${DRAFT}")"
+prog record-behaviour --from-proposal "$DRAFT" --prompt "$PD" --run "$RUN"
+check "0 pm_draft" "$CODE $(q "$RUN" "beh_of('$DRAFT')['source']['wording']")"
+check "pm_draft|source: PM draft Shawn approved by pick" "$(run_py "$RUN" "$DRAFT" <<'EOF'
+view = load_lib_module("programme_view")
+row = next(b for b in view.behaviours_view(record(args[0]), load_lib_module("programme").prompt_lookup)["behaviours"] if b["id"] == args[1])
+print(row["wording"] + "|" + load_lib_module("programme_view_behaviours").source_text(row))
+EOF
+)"
+
+it "record-behaviour on typed words with no draft is his wording"
+PW="$(tprompt "$RUN" "from now on, reproduce every bug first")"
+prog record-behaviour --run "$RUN" --prompt "$PW" --when "a bug comes in" --do "reproduce it first"
+WB="$(jfield "$OUT" 'd["behaviour"]')"
+check "0 shawn" "$CODE $(q "$RUN" "beh_of('$WB')['source']['wording']")"
+
+it "retire-behaviour is approved through its offer, and a decline leaves it in force"
+PD="$(opick "$RUN" --decline "retire-behaviour ${WB} --as retired")"
+prog retire-behaviour "$WB" --as retired --prompt "$PD" --run "$RUN"
+GOT="$CODE"
+PD="$(opick "$RUN" "retire-behaviour ${WB} --as retired")"
+prog retire-behaviour "$WB" --as retired --prompt "$PD" --run "$RUN"
+check "1 0 retired" "$GOT $CODE $(q "$RUN" "beh_of('$WB')['state']")"
+
+it "an accepted suggestion approves no behaviour verb"
+PS="$(run_py "$RUN" <<'EOF'
+print(fixture_prompt(args[0], "sess-pm", "record behaviour with these words", prompt_source="suggestion_accepted")["prompt_id"])
+EOF
+)"
+prog record-behaviour --run "$RUN" --prompt "$PS" --when "a suggestion arrives" --do "ignore it"
+check 1 "$CODE"
+has "accepted suggestion" "$OUT"
+
+it "older store rows with no wording, and rows with wording, both load"
+check "None|None" "$(run_py <<'EOF'
+print("|".join(str(pb.verdict(dict(beh("older"), source=source), allow_adoption=False).get("reason"))
+               for source in ({"prompt_id": "p1", "quote": "older words"},
+                              {"prompt_id": "p2", "quote": "newer words", "wording": "pm_draft"})))
+EOF
+)"
+
 fresh_store
 RUN="$(new_run one)"
 B1="$(record_one "$RUN")"
@@ -881,20 +947,32 @@ fresh_store
 RUN="$(new_run one)"
 B1="$(record_one "$RUN")"
 B2="$(record_one "$RUN")"
-PK="$(tprompt "$RUN" "keep ${B1} globally, all projects")"
-it "a prompt that names only one of two behaviours moves only that one"
+PK="$(opick "$RUN" "keep-behaviours ${B1} --to personal")"
+it "a pick of one behaviour does not approve a set no option offered, so the PM asks again"
+STORE_BEFORE="$(q "$RUN" "json.dumps(pb.read_store(), sort_keys=True)")"
 prog keep-behaviours "$B1" "$B2" --to personal --prompt "$PK" --run "$RUN"
+check "1 ${STORE_BEFORE}" "$CODE $(q "$RUN" "json.dumps(pb.read_store(), sort_keys=True)")"
+has "different command" "$OUT"
+it "a pick of a set keeps exactly that set"
+prog keep-behaviours "$B1" --to personal --prompt "$PK" --run "$RUN"
 check "0 personal None" "$CODE $(q "$RUN" "'%s %s' % (stored('$B1')['layer'], stored('$B2'))")"
-it "the output names the behaviour the prompt left out"
-check "['${B1}'] ['${B2}']" "$(jfield "$OUT" 'str(d["kept"]) + " " + str(d["not_named"])')"
+
+fresh_store
+RUN="$(new_run one)"
+B1="$(record_one "$RUN")"
+B2="$(record_one "$RUN")"
+PK="$(tprompt "$RUN" "keep ${B1} globally, all projects")"
+it "typed words with no offer that name one of two behaviours move only that one, and the output names the other"
+prog keep-behaviours "$B1" "$B2" --to personal --prompt "$PK" --run "$RUN"
+check "0 personal None ['${B2}']" "$CODE $(q "$RUN" "'%s %s' % (stored('$B1')['layer'], stored('$B2'))") $(jfield "$OUT" 'str(d["not_named"])')"
 
 PK2="$(tprompt "$RUN" "keep ${B2} for the repo")"
-it "keep-behaviours whose prompt names none of the ids is refused and writes nothing"
+it "typed words with no offer that name none of the ids are refused and write nothing"
 STORE_BEFORE="$(q "$RUN" "json.dumps(pb.read_store(), sort_keys=True)")"
 prog keep-behaviours "$B1" --to repo --prompt "$PK2" --run "$RUN"
 check "1 ${STORE_BEFORE}" "$CODE $(q "$RUN" "json.dumps(pb.read_store(), sort_keys=True)")"
 PK3="$(tprompt "$RUN" "do not keep ${B2} in the repo")"
-it "keep-behaviours with a negated layer is refused"
+it "typed words with no offer that negate the layer are refused"
 prog keep-behaviours "$B2" --to repo --prompt "$PK3" --run "$RUN"
 check 1 "$CODE"
 PK4="$(tprompt "$RUN" "keep ${B2} and bnosuch for the repo")"

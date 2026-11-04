@@ -78,6 +78,8 @@ def show_text(b) -> list:
 
 
 def source_text(b) -> str:
+    if b.get("wording") == "pm_draft":
+        return "source: PM draft Shawn approved by pick"
     if b.get("quote"):
         return f"source: Shawn: \"{b['quote']}\""
     return f"source: {b['label']}" if b.get("label") else "source: none recorded"

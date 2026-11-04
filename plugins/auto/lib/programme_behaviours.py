@@ -133,7 +133,7 @@ def _check_extras(entry) -> None:
         for field, text in entry["examples"].items():
             programme_protocol._text(text, "examples." + field)
     if "source" in entry:
-        _sub(entry["source"], (), ("prompt_id", "quote"), "source")
+        _sub(entry["source"], (), ("prompt_id", "quote", "wording"), "source")
     overrides = entry.get("overrides", [])
     if not isinstance(overrides, list) or not all(isinstance(o, str) and ID_RE.fullmatch(o) for o in overrides):
         raise _Reject("bad_value", "overrides")
@@ -587,11 +587,11 @@ def _edit_view(programme, entry, others) -> tuple:
     return dict(entry, id=target["id"]), [o for o in others if o["id"] != target["id"]], target
 
 
-def _from_proposal(host, programme, prompt, proposal) -> dict:
+def _from_proposal(programme, prompt, proposal) -> dict:
     entry = _programme_entry(programme, proposal)
     if entry is None or entry.get("state") != "proposed":
         raise BehaviourError(f"no proposed behaviour {proposal!r}")
-    host.require_named(prompt, proposal)
+    load_lib_module("programme_offers_stores").require_bound(prompt, BehaviourError)
     return dict(entry, state=ACTIVE)
 
 
@@ -632,7 +632,7 @@ def _h_record(host, argv):
     related, unrelated = answers = behaviour_report.answers(opts)
 
     def change(programme, prompt, rec):
-        proposed = _from_proposal(host, programme, prompt, proposal) if proposal else _draft(opts, bid)
+        proposed = _from_proposal(programme, prompt, proposal) if proposal else _draft(opts, bid)
         entry, others, target = _edit_view(programme, proposed, _active(programme, load_store(host.prompt_lookup)))
         entry["overrides"] = _overrides(entry, opts["conflicts-with"], {e["id"] for e in others})
         result = behaviour_report.report(host, rec, entry, others, lines=False, given=answers)
@@ -640,7 +640,7 @@ def _h_record(host, argv):
             entry["relates_to"] = related
         if unrelated:
             entry["unrelated"] = unrelated
-        entry["source"] = {"prompt_id": prompt["prompt_id"], "quote": programme_journal.redact(prompt["quote"])}
+        entry["source"] = load_lib_module("programme_offers_stores").source_of(prompt)
         if target:
             applied = _mark(dict(_programme_entry(programme, proposal), state="retired"), "applied", prompt,
                             edited=target["id"])
@@ -945,11 +945,11 @@ _SPECS = (
      "--prompt <id> " + _FIELDS_DOC + " [--conflicts-with <id>]... [--relates-to <id>]... "
      "[--unrelated <id>=<reason>]... [--run <id>], or --from-proposal <id> --prompt <id> "
      "[--conflicts-with <id>]... [--relates-to <id>]... [--unrelated <id>=<reason>]... [--run <id>]",
-     "no typed prompt from the driving session; no --when, or neither --do nor --dont; a bad --applies-to; a "
+     "no prompt from the driving session; no --when, or neither --do nor --dont; a bad --applies-to; a "
      "do line, skill, tool or agent that names a protected escalation; a --conflicts-with id that is not a "
      "behaviour in force; a --relates-to or --unrelated id that is neither a behaviour in force nor a part of the "
      "contract; an --unrelated with no reason; with --from-proposal, any field option, an id that is not a "
-     "proposal, or a prompt that does not name the proposal id. Applies at once at the programme layer and "
+     "proposal, or a prompt that does not answer its offer. Applies at once at the programme layer and "
      "prints the behaviour and contract check beside the checks. The check never refuses."),
     ("check-behaviour", _h_check,
      _FIELDS_DOC + " [--conflicts-with <id>]... [--run <id>], or --from-proposal <id> [--conflicts-with <id>]... "
@@ -968,20 +968,20 @@ _SPECS = (
      "replaces the ones given; applying it with record-behaviour --from-proposal replaces the target in place."),
     ("move-behaviour", _h_move,
      "<id> --to programme|repo|personal --prompt <id> [--repo <key>] [--run <id>]",
-     "no typed prompt from the driving session; a prompt that does not name the behaviour id and the layer "
-     "(programme, repo, or personal, global or all projects), or holds a negation anywhere before the layer "
+     "no prompt from the driving session; typed words with no offer that do not name the behaviour id and the "
+     "layer (programme, repo, or personal, global or all projects), or hold a negation anywhere before the layer "
      "word; an unreadable behaviours store; a behaviour that is not active; a move to the layer it is on; "
      "--to repo with a remit of several repos and no --repo, or a --repo outside the remit."),
     ("retire-behaviour", _h_retire,
      "<id> --as retired|undone --prompt <id> [--run <id>]",
-     "no typed prompt from the driving session; an unknown or already retired behaviour; an unreadable "
+     "no prompt from the driving session; an unknown or already retired behaviour; an unreadable "
      "behaviours store when the behaviour lives there. The entry stays visible as retired."),
     ("keep-behaviours", _h_keep,
      "<id>... --to repo|personal --prompt <id> [--repo <key>] [--run <id>]",
-     "no typed prompt from the driving session; a prompt that does not name the layer (repo, or personal, "
-     "global or all projects) or negates it, or names none of the ids; a named id that is not an active "
-     "programme-layer behaviour; an unreadable behaviours store; --to repo with several remit repos and no "
-     "--repo; an ended programme. Ids the prompt does not name are left out and listed as not_named."),
+     "no prompt from the driving session; typed words with no offer that do not name the layer (repo, or personal, "
+     "global or all projects) or negate it, or name none of the ids; a named id that is not an active "
+     "programme-layer behaviour; an unreadable store; --to repo with several remit repos and no --repo; an ended "
+     "programme. A pick of a different set is refused. Ids typed words do not name are listed as not_named."),
     ("remind-behaviour", _h_remind,
      "<item> <id> --reason relevant|sent_back [--trigger claim|merge|block|start] [--despite <attempt>]... [--run <id>]",
      "a session that does not drive the programme; a behaviour not in force for the item's worker (unknown, "

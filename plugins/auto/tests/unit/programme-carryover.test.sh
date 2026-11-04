@@ -69,6 +69,7 @@ $(cat)
 PYEOF
 }
 
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 new_programme() {
   run_py "$1" <<'EOF'
 print(ph.create_programme([args[0]], "sess-pm")["run"])
@@ -210,7 +211,7 @@ has "offer" "$OUT"
 it "carry-rulings with no ids offers every active Ruling"
 prog carry-rulings --run "$RUN_A"
 check '0 ["g1", "r1"]' "$CODE $(field "$RUN_A" 'prog["carryover_offer"]["offered"]')"
-it "carry-rulings refuses a prompt that does not name the Ruling"
+it "carry-rulings refuses typed words with no offer that do not name the Ruling"
 P_VAGUE="$(prompt "$RUN_A" 'yes carry that one')"
 prog carry-rulings g1 --prompt "$P_VAGUE" --run "$RUN_A"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
@@ -266,6 +267,82 @@ prog carry-rulings r1 --prompt "$P_KEEP_R1" --run "$RUN_A"
 check "0 2" "$CODE $("$PY" -c '
 import json, sys
 print(len(json.load(open(sys.argv[1]))["keys"]["shawn/alpha"]))' "$STORE")"
+
+# ── carrying by pick ──
+RUN_PICK="$(new_programme w-pick)"
+it_ruling() {
+  local p
+  p="$(prompt "$RUN_PICK" "$1: tool choice for herdr:p is yours")"
+  prog record-ruling "$1" --effect grant --kind tool_choice --scope "scope of $1" --applies-to herdr:p --prompt "$p" --run "$RUN_PICK"
+}
+remit "$RUN_PICK" "{\"spaces\":[\"w-pick\"],\"repos\":[{\"path\":\"${GAMMA}\",\"github\":\"shawn/picks\"}]}"
+prog add-item herdr:p --title "An item" --kind fix_only --run "$RUN_PICK"
+for n in 01 02 03 04 05 06 07 08 09 10 11 12; do it_ruling "c${n}"; done
+prog carry-rulings --run "$RUN_PICK"
+
+it "carry by pick: twelve Rulings cannot be one option, and the refusal says to split"
+"$PY" "$PROG" offer carry-all --command "carry-rulings c01 c02 c03 c04 c05 c06 c07 c08 c09 c10 c11 c12" --run "$RUN_PICK" > "${WORK}/offer.out" 2>&1
+check "1" "$?"
+has "split" "$(cat "${WORK}/offer.out")"
+
+it "carry by pick: twelve Rulings split across three pickers, each spending one pick, all stored"
+SPENT=""
+for set in "c01 c02 c03 c04" "c05 c06 c07 c08" "c09 c10 c11 c12"; do
+  P_SET="$(opick "$RUN_PICK" "carry-rulings ${set}")"
+  prog carry-rulings $set --prompt "$P_SET" --run "$RUN_PICK"
+  SPENT="${SPENT}${CODE}"
+  LAST_PICK="$P_SET"
+done
+check "000 12" "$SPENT $("$PY" -c '
+import json, sys
+print(len({e["ruling"] for e in json.load(open(sys.argv[1]))["keys"]["shawn/picks"]}))' "$STORE")"
+
+it "carry by pick: a pick already spent carries nothing more"
+prog carry-rulings c09 c10 c11 c12 --prompt "$LAST_PICK" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+
+it "carry by pick: a set no option offered is refused, so the PM asks again"
+it_ruling c13
+it_ruling c14
+prog carry-rulings --run "$RUN_PICK"
+P_SET="$(opick "$RUN_PICK" "carry-rulings c13 c14")"
+prog carry-rulings c13 --prompt "$P_SET" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "different command" "$OUT"
+
+it "carry by pick: a Ruling changed after the offer is refused"
+P_SET="$(opick "$RUN_PICK" "carry-rulings c13")"
+P_CHANGE="$(prompt "$RUN_PICK" "c13: tool choice for herdr:p stays yours, changed")"
+prog record-ruling c13 --effect grant --kind tool_choice --scope "scope of c13 changed" --applies-to herdr:p --prompt "$P_CHANGE" --run "$RUN_PICK"
+prog carry-rulings c13 --prompt "$P_SET" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+
+it "carry by pick: an accepted suggestion carries nothing"
+prog carry-rulings --run "$RUN_PICK"
+P_SUGGEST="$("$PY" - "$AUTO_ROOT" "$RUN_PICK" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
+from programme_prompts import append_prompt
+print(append_prompt(sys.argv[2], "sess-pm", "carry c14 to the next programme", prompt_source="suggestion_accepted")["prompt_id"])
+EOF
+)"
+prog carry-rulings c14 --prompt "$P_SUGGEST" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+
+it "a carried Ruling keeps its wording mark on arrival, and an older one with none adds no key"
+check "pm_draft|False" "$(run_py <<'EOF'
+co = load_lib_module("programme_carryover")
+rec = {"run_id": "run-x"}
+ruling = {"kind": "tool_choice", "effect": "grant", "scope": "pick tools", "quote": "a draft", "wording": "pm_draft"}
+held, older = co.entry_for("wm", ruling, "shawn/k", rec), co.entry_for("wo", dict(ruling, wording=None), "shawn/k", rec)
+programme = ph.normalize_programme({})
+ctx = pc._mutable(programme)
+co._arrive(ctx, held, "shawn/k")
+co._arrive(ctx, older, "shawn/k")
+print(ctx["decisions"]["wm"][-1]["carried"]["wording"] + "|" + str("wording" in ctx["decisions"]["wo"][-1]["carried"]))
+EOF
+)"
 
 # ── arrival in the next programme on the project ─────────────────────────
 RUN_B="$(new_programme w3)"

@@ -122,17 +122,18 @@ def offer_lines(entries) -> list:
     lines += [f"carry-over offer: behaviour {e['id']} (when {e['when']}: do {'; '.join(e['do']) or '-'}; "
               f"don't {'; '.join(e['dont']) or '-'})" for e in kept]
     if rulings:
-        lines.append("Ask Shawn in this one offer which to carry to the next programme on this project, then "
-                     "record his pick with carry-rulings --prompt <id> <ruling-id>...")
+        lines.append("Ask Shawn which to carry to the next programme on this project: offer carry-rulings <ruling-id>... "
+                     "(at most 4 ids in one option, split the rest across pickers), then run it citing his answer")
     if kept:
-        lines.append("For each behaviour he keeps, ask repo or global, then run keep-behaviours <id>... "
-                     "--to repo|personal --prompt <id> before end")
+        lines.append("For the behaviours he keeps, ask repo or global: offer keep-behaviours <id>... --to repo|personal "
+                     "(at most 4 ids in one option), then run it citing his answer, before end")
     return lines
 
 
 def entry_for(rid, ruling, key, rec) -> dict:
+    wording = {"wording": ruling["wording"]} if ruling.get("wording") else {}
     return dict({k: ruling.get(k) for k in CARRIED_KEYS}, id="k" + secrets.token_hex(3), key=key, ruling=rid,
-                quote=ruling.get("quote"), wording=ruling.get("wording"), run_id=rec["run_id"], at=run_record_core.now_iso())
+                quote=ruling.get("quote"), run_id=rec["run_id"], at=run_record_core.now_iso(), **wording)
 
 
 def adopt(entry, prompt, rec) -> dict:
@@ -192,12 +193,12 @@ def _arrive(ctx, entry, key):
     content = {"scope": programme_sanitize.clean(entry.get("scope")), "reason": entry.get("reason"),
                "limits": [programme_sanitize.clean(v) for v in entry.get("limits") or []], "applies_to": [],
                "requirements": [], "kind": kind, "effect": entry["effect"], "until": entry.get("until")}
-    # Pending with no items: it binds only when Shawn's typed prompt names the items it now applies to.
+    # Pending with no items: it binds only when Shawn's prompt names the items it now applies to.
     revision = pc._append(ctx["decisions"].setdefault(rid, []), content, None, accept=False, delta=None)
     revision.update(quote=None, baseline=None,
                     carried={"from": key, "entry": entry.get("id"), "run_id": entry.get("run_id"),
                              "quote": programme_sanitize.clean(entry.get("quote"), cap=0),
-                             "wording": entry.get("wording")})
+                             **({"wording": entry["wording"]} if entry.get("wording") else {})})
     return {"ruling": rid, "kind": kind, "effect": entry["effect"], "origin": key}, None
 
 
@@ -297,9 +298,9 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
     rows = programme_journal.read(run_id)
     index = _offer_index(rows, ids, host.programme_rulings.prompt_index(rows, prompt["prompt_id"]))
     if index is None:
-        raise host.ProgrammeError(f"prompt {prompt['prompt_id']!r} was not typed after an offer naming "
+        raise host.ProgrammeError(f"prompt {prompt['prompt_id']!r} did not come after an offer naming "
                                   f"{', '.join(ids)}: run carry-rulings with no ids, show Shawn the offer, then "
-                                  "cite the prompt he types")
+                                  "cite his answer")
     host.programme_rulings.check_newest(rows, prompt["prompt_id"])
     host.programme_rulings.check_prompt_unused(rows, prompt["prompt_id"])
     offered = {e.get("id"): e.get("rev") for e in rows[index]["payload"]["carryover"]
@@ -315,7 +316,7 @@ def _check_carry(host, run_id, programme, prompt, ids) -> tuple:
     stale = [rid for rid in ids if offered.get(rid) != active[rid].get("rev")]
     if stale:
         raise host.ProgrammeError(f"Ruling {', '.join(stale)} changed after the offer Shawn answered: run "
-                                  "carry-rulings with no ids for a fresh offer, then cite the prompt he types after it")
+                                  "carry-rulings with no ids for a fresh offer, then cite his answer to it")
     return active, keys
 
 
@@ -339,7 +340,8 @@ def _carry(host, opts, ids):
         active, keys = _check_carry(host, run_id, programme, prompt, ids)
         adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
         seen.update(prompt=prompt, adopted=adopted)
-        return {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path()}
+        return {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path(),
+                **prompt.get("reading", {})}
 
     def compose(payload, _):
         return programme_journal.entry("rulings_carried", sid, dict(payload, prompt_id=seen["prompt"]["prompt_id"],
@@ -372,15 +374,15 @@ _SPECS = (
     ("carry-rulings", _h_carry_rulings, "[--prompt <id> <ruling-id>...] [--run <id>]",
      "with no ids: a caller that is not the driving session or an ended programme; it lists every active "
      "Ruling and every active programme-layer behaviour in one carry-over offer, and records the offer-made "
-     "marker that releases the stop. With ids: no typed "
-     "prompt from the driving session, one that does not name each id or was typed before an offer naming "
-     "them, a prompt that already approved a Ruling change, a Ruling whose revision changed after that offer "
+     "marker that releases the stop. With ids: no "
+     "prompt from the driving session, one from before an offer naming them, typed words with no offer that do "
+     "not name each id, a pick of a different set, a prompt that already approved a Ruling change, a Ruling whose revision changed after that offer "
      "(or an offer that did not record it), an id that is not an active Ruling, a remit with no repo, an "
      "archived programme; it also runs "
      "after end. Stores each Ruling under every remit repo's key for the next programme on that project. With ids, "
      "on a home still on its old JSON files, once every check above passes it moves the home to programme.db and "
      "runs the carry there, checks and all, and refuses, changing nothing, when that move cannot run; a prompt "
-     "typed before the move approves nothing."),
+     "from before the move approves nothing."),
 )
 
 

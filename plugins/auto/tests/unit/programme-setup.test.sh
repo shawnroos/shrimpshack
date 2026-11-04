@@ -253,7 +253,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
               'is not typed' not in out and 'needs a typed prompt' not in out and 'already used' not in out
               and 'approval label' not in out, out)
     for args in (('record-ruling', 'r8', '--effect', 'restrict', '--kind', 'tool_choice', '--scope', 'mine'),
-                 ('close-ruling', 'tdeploy', '--as', 'withdrawn'), ('carry-rulings', 'tdeploy')):
+                 ('close-ruling', 'tdeploy', '--as', 'withdrawn')):
         result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{args[0]}?': 'Approve ' + ' '.join(args)}))
         check(f'{args[0]} refuses a pick of its exact label: a Ruling binds only through an offer or typed words',
               refused(result, f'{args[0]} needs a typed prompt' if args[0] == 'carry-rulings' else f'approves no {args[0]}'),
@@ -405,8 +405,6 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     result = verb(a_sid, run, 'adopt-rule', 'negated-rule', '--prompt', suggested)
     check('adopt-rule refuses an accepted suggestion that negates the rule',
           refused(result, 'not a plain yes') and 'negated-rule' in proposed_ids(), result.stdout + result.stderr)
-    for name in ('retire-behaviour', 'carry-rulings', 'record-behaviour'):
-        check(f'{name} is not on the pick list: it does not bind its target', name not in approval_mod.PICK_VERBS)
     check('every pick-list verb is a real CLI verb', approval_mod.PICK_VERBS <= set(programme_mod._VERBS),
           approval_mod.PICK_VERBS - set(programme_mod._VERBS))
     suggested = typed_prompt(run, a_sid, f"{ruling['area']}: use snake case",

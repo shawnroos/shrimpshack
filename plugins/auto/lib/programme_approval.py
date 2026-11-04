@@ -18,17 +18,24 @@ programme_naming = load_lib_module("programme_naming")
 programme_home = load_lib_module("programme_home")
 programme_offers = load_lib_module("programme_offers")
 
-# Default-deny: a pick or an accepted suggestion approves only these verbs. carry-rulings stays typed-only.
+# Default-deny: a pick or an accepted suggestion approves only these verbs.
 PICK_VERBS = frozenset((
     "adopt-rule", "adopt-autonomy", "adopt-check", "close-ruling", "define-requirement", "edit-project-term",
     "record-ruling", "set-remit", "amend-term", "move-behaviour",
     "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context", "lift-pause",
     "answer-permission", "dispose-action", "accept-agreement", "swap-item", "override-focus",
-    "move-ritual", "keep-rituals", "retire-ritual", "start-ritual", "run-ritual", "skip-ritual"))
+    "move-ritual", "keep-rituals", "retire-ritual", "start-ritual", "run-ritual", "skip-ritual",
+    "adopt-behaviour-file", "adopt-ritual-file", "carry-rulings", "copy-default", "decline-ritual-file",
+    "record-behaviour", "record-ritual", "retire-behaviour", "settle-default-update"))
 ACCEPT_VERB = "accept-agreement"
 # The accept is the moment the PM gains authority: a pick must name the terms digest Shawn saw, and an
 # accepted suggestion shows him no terms at all, so it never approves the accept.
 _NO_SUGGESTION_VERBS = frozenset((ACCEPT_VERB,))
+# These no longer check that the approval names its target, and the model wrote an accepted suggestion.
+_STORE_VERBS = frozenset((
+    "adopt-behaviour-file", "adopt-ritual-file", "carry-rulings", "copy-default", "decline-ritual-file",
+    "keep-behaviours", "keep-rituals", "move-behaviour", "move-ritual", "record-behaviour", "record-ritual",
+    "retire-behaviour", "retire-ritual", "run-ritual", "settle-default-update", "skip-ritual", "start-ritual"))
 ACCEPT_FIX = (f"run `programme.sh approval-label {ACCEPT_VERB}`, offer its output as one AskUserQuestion option, "
               "then rerun citing the pick with --prompt <pick id> --terms <the digest that label names>")
 # set-remit reads its change from stdin, which no label can show, so a pick binds it only through an offer.
@@ -226,6 +233,9 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
     if origin == "suggested" and verb in _NO_SUGGESTION_VERBS:
         raise error(f"{verb} needs a typed prompt or a pick of its terms-bound label; prompt {prompt_id!r} "
                     "is an accepted suggestion, which shows Shawn no terms", fix=accept_fix(_block(record)))
+    if origin == "suggested" and verb in _STORE_VERBS:
+        raise error(f"prompt {prompt_id!r} is an accepted suggestion: the model wrote it, so it approves no {verb}",
+                    fix=approval_fix(verb, verb_argv))
     offer = programme_offers.offer_for(rows, row) if origin == "picked" else None
     if origin == "picked" and offer is None and verb == ACCEPT_VERB and "--terms" not in (verb_argv or []):
         raise error(f"prompt {prompt_id!r} is a pick, so {ACCEPT_VERB} needs --terms <digest> naming the "

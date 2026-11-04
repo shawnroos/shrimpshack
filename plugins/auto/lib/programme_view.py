@@ -507,7 +507,7 @@ def _behaviour_row(entry, forced, overriders, deliveries) -> dict:
            "deliveries": deliveries.get(entry["id"], []),
            "prompt_id": source.get("prompt_id"),
            "quote": programme_journal.redact(source["quote"]) if source.get("quote") else None,
-           "in_force": (entry["layer"], entry.get("repo_key"), entry["id"]) in forced}
+           "wording": source.get("wording"), "in_force": (entry["layer"], entry.get("repo_key"), entry["id"]) in forced}
     if row["state"] == programme_behaviours.ACTIVE and not row["in_force"]:
         row["overridden_by"] = sorted(overriders.get(entry["id"], ()))
     return row

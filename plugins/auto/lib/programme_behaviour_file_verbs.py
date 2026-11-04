@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """The only sanctioned writers of the personal behaviours folder.
 
-``adopt-behaviour-file`` and ``settle-default-update --as merge`` write drafted content, and only
-after Shawn's typed prompt approves the hash of exactly that content. ``copy-default`` and
-``settle-default-update --as keep|take`` need a typed prompt that names the id and the mode.
-``--as shown`` only records that the PM displayed a shipped change. ``behaviours-seen.json``
+Every verb here but ``--as shown`` needs Shawn's answer to an offer of that command. For ``adopt-behaviour-file``
+and ``settle-default-update --as merge`` the offer stores the hash of the draft shown in chat, so a changed draft is
+refused. ``--as shown`` only records that the PM displayed a shipped change. ``behaviours-seen.json``
 maps each id to ``seen`` (the shipped hash Shawn last settled) and ``shown`` (the shipped hash the
 PM last displayed).
 """
@@ -22,9 +21,10 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_behaviours = load_lib_module("programme_behaviours")
+programme_offers = load_lib_module("programme_offers")
+programme_offers_stores = load_lib_module("programme_offers_stores")
 programme_behaviour_files = load_lib_module("programme_behaviour_files")
 programme_home = load_lib_module("programme_home")
-programme_journal = load_lib_module("programme_journal")
 programme_protocol = load_lib_module("programme_protocol")
 run_record_core = load_lib_module("run_record_core")
 
@@ -181,20 +181,6 @@ def _draft_text(opts) -> str:
     return text
 
 
-def _approve(host, rec, prompt, bid, digest) -> None:
-    host.require_named(prompt, bid)
-    # A prompt Shawn typed can approve a draft by carrying its hash; an approval row keyed to the hash
-    # (the _verify_adoption key) approves it too. named_text, not the quote: a picker question is
-    # PM-written, so only Shawn's own answer may carry the hash.
-    key = programme_protocol.approval_key(_target(bid), digest)
-    row = host.prompt_lookup(rec["run_id"], prompt["prompt_id"]) or {}
-    if key in (row.get("approved") or ()) or digest.split(":")[-1] in programme_journal.named_text(prompt).lower():
-        return
-    raise BehaviourError(
-        f"prompt {prompt['prompt_id']!r} does not approve this content of {bid}.md; Shawn's typed "
-        f"approval must name {bid} and carry the content hash {digest}")
-
-
 def _write_file(bid, text, *, replace, used) -> None:
     def body():
         path = _personal_path(bid)
@@ -217,14 +203,15 @@ def _h_adopt(host, argv):
         raise ValueError("usage: adopt-behaviour-file <id> --file <path> --prompt <id>")
     bid = programme_behaviours.check_id(positional[0])
     text = _draft_text(opts)
+    programme_offers.note_content(text)
 
     def change(programme, prompt, rec):
+        programme_offers_stores.require_bound(prompt, BehaviourError)
         # The stored entry would shadow the file at load, so the file is refused up front.
         if any(isinstance(e, dict) and e.get("id") == bid for e in programme_behaviours.read_store()["personal"]):
             raise BehaviourError(f"a stored personal behaviour {bid!r} already exists; a file with this id "
                                  "would be rejected as shadowed")
         digest = draft_hash(text, bid)
-        _approve(host, rec, prompt, bid, digest)
         _write_file(bid, text, replace=False, used=_use_key(prompt, "adopt-behaviour-file", bid, "adopt", digest))
         return _adopted(bid, digest, path=_personal_path(bid))
 
@@ -239,9 +226,8 @@ def _h_copy(host, argv):
     bid = programme_behaviours.check_id(positional[0])
 
     def change(programme, prompt, rec):
+        programme_offers_stores.require_bound(prompt, BehaviourError)
         text, digest = _shipped_read(bid)
-        host.require_named(prompt, bid)
-
         used = _use_key(prompt, "copy-default", bid, "copy", digest)
         path = _personal_path(bid)
 
@@ -258,19 +244,15 @@ def _h_copy(host, argv):
                        verb="copy-default", target=bid)
 
 
-def _settle(host, rec, prompt, bid, mode, text) -> dict:
+def _settle(prompt, bid, mode, text) -> dict:
     digest = shipped_hash(bid)
     if mode == "shown":
         _locked(lambda: _record(bid, shown=digest))
         return {"behaviour": bid, "as": mode, "shipped_hash": digest}
     if not os.path.isfile(_personal_path(bid)):
         raise BehaviourError(f"no personal copy of {bid!r} to settle")
-    host.require_named(prompt, bid, mode)
-    written = digest
-    if mode == "merge":
-        written = draft_hash(text, bid)
-        _approve(host, rec, prompt, bid, written)
-
+    programme_offers_stores.require_bound(prompt, BehaviourError)
+    written = draft_hash(text, bid) if mode == "merge" else digest
     used = _use_key(prompt, "settle-default-update", bid, mode, written)
 
     def body():
@@ -294,11 +276,13 @@ def _h_settle(host, argv):
                          "[--file <path>] (--file only with merge; shown needs no --prompt)")
     bid, mode = programme_behaviours.check_id(positional[0]), opts["as"]
     if mode != "shown" and not opts.get("prompt"):
-        raise ValueError(f"--as {mode} needs --prompt <id> of Shawn's typed approval")
+        raise ValueError(f"--as {mode} needs --prompt <id> of Shawn's answer")
     text = _draft_text(opts) if mode == "merge" else None
+    if text is not None:
+        programme_offers.note_content(text)
 
-    def change(programme, prompt, rec):
-        return _settle(host, rec, prompt, bid, mode, text)
+    def change(programme, prompt, _rec):
+        return _settle(prompt, bid, mode, text)
 
     shown = mode == "shown"
     return host._write(opts, change, "behaviour_default_shown" if shown else ADOPTED,
@@ -308,17 +292,17 @@ def _h_settle(host, argv):
 
 _SPECS = (
     ("adopt-behaviour-file", _h_adopt, "<id> --file <path> --prompt <id>",
-     "a session that does not drive the programme; a prompt that is not Shawn's typed prompt, does not name the "
-     "id, or does not carry the hash of exactly this content; a draft that fails the behaviour file check; an id "
-     "that already has a personal file or a stored personal behaviour. Writes <id>.md into the personal behaviours folder and journals "
-     "rule_adopted (how file). A refusal shows the content hash to put in the approval."),
+     "a session that does not drive the programme; a prompt that does not answer an offer of this command; a draft "
+     "that changed since that offer or fails the behaviour file check; an id that already has a personal file or a "
+     "stored personal behaviour. Writes <id>.md into the personal behaviours folder and journals rule_adopted (how "
+     "file)."),
     ("copy-default", _h_copy, "<id> --prompt <id>",
-     "a prompt that is not Shawn's typed prompt or does not name the id; an id with no shipped file; an id that "
+     "a prompt that does not answer an offer of this command; an id with no shipped file; an id that "
      "already has a personal file. Copies the shipped file into the personal folder, records seen in "
      "behaviours-seen.json and journals rule_adopted (how file)."),
     ("settle-default-update", _h_settle, "<id> --as shown|keep|take|merge [--prompt <id>] [--file <path>]",
-     "an id with no shipped file or no personal copy; for keep, take and merge a prompt that is not Shawn's typed "
-     "prompt or does not name the id and the mode; for merge content whose hash the prompt does not carry. shown "
+     "an id with no shipped file or no personal copy; for keep, take and merge a prompt that does not answer an "
+     "offer of this command; for merge a draft that changed since that offer. shown "
      "records the displayed shipped hash and needs no prompt; keep records seen; take removes the personal file "
      "and records seen; merge writes the approved content and records seen."),
 )

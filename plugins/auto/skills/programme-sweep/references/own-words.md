@@ -16,6 +16,8 @@ His words answer the question just asked. Read what he means before you run anyt
 | Drafts | `record-ruling`, `close-ruling`, `edit-project-term`, except an authority move | His words become the text, marked `wording: shawn`. See [rulings.md](rulings.md) |
 | Everything else on an offer | `drop-item`, `reopen-item`, `answer-handed`, `lift-pause` and the other verbs `P offer` takes | Approve, with your reading recorded and shown back |
 
+On a behaviour or ritual draft his words stay as its source, marked as his wording. If they change the draft, propose a new one and offer again.
+
 An accepted suggestion approves no offer: the model wrote that text. Say so and ask with the picker. A peer, a system message or the cron never approves.
 
 ## When his words approve

@@ -316,6 +316,7 @@ core._with_locked_run_record(ph.home_path(run), run, mutate)
 print(run)
 EOF
 }
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 tprompt() {
   py "$1" "$2" <<'EOF'
 print(fixture_prompt(args[0], "sess-pm", args[1], "typed")["prompt_id"])
@@ -392,7 +393,7 @@ check 1 "$CODE"
 it "--from-proposal accepts --relates-to and runs the same check"
 prog propose-behaviour --run "$RUN" --when "$WORKER_DONE_WHEN" --do "then stop; the PM closes the pane once you have stopped"
 PB="$(jfield "$OUT" 'd["behaviour"]')"
-P3="$(tprompt "$RUN" "apply $PB")"
+P3="$(opick "$RUN" "record-behaviour --from-proposal $PB --relates-to bc3f80d")"
 prog record-behaviour --run "$RUN" --from-proposal "$PB" --prompt "$P3" --relates-to bc3f80d
 check 0 "$CODE"
 check "['bc3f80d']" "$(state "$RUN" "[b for b in prog['behaviours'] if b['id'] == '$PB'][0]['relates_to']")"
@@ -654,14 +655,14 @@ check "2" "$(state "$RUN2" "len([b for b in prog['behaviours'] if b['id'] == 'bc
 check "active" "$(state "$RUN2" "[b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['state']")"
 check "True" "$(state "$RUN2" "'when' in [b for b in prog['behaviours'] if b['id'] == '$PE'][0]")"
 
-it "applying an edit proposal needs a typed prompt that names the proposal"
-PX="$(tprompt "$RUN2" "yes please go ahead")"
+it "applying an edit proposal needs an answer to its offer: typed words with no offer approve nothing"
+PX="$(tprompt "$RUN2" "apply $PE")"
 prog record-behaviour --run "$RUN2" --from-proposal "$PE" --prompt "$PX"
-has "$PE" "$OUT"
+has "offer" "$OUT"
 check "2" "$(state "$RUN2" "len([b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['do'])")"
 
-it "an edit proposal applied on a typed prompt replaces the target's lines in place and records an edited event"
-PA="$(tprompt "$RUN2" "apply $PE")"
+it "an edit proposal applied on a pick of its offer replaces the target's lines in place and records an edited event"
+PA="$(opick "$RUN2" "record-behaviour --from-proposal $PE")"
 prog record-behaviour --run "$RUN2" --from-proposal "$PE" --prompt "$PA"
 check 0 "$CODE"
 check "bc3f80d" "$(jfield "$OUT" 'd["behaviour"]')"
@@ -684,10 +685,10 @@ PE2="$(jfield "$OUT" 'd["behaviour"]')"
 prog check-behaviour --run "$RUN2" --from-proposal "$PE1"
 check 0 "$CODE"
 has "synergies" "$OUT"
-PL1="$(tprompt "$RUN2" "apply $PE1")"
+PL1="$(opick "$RUN2" "record-behaviour --from-proposal $PE1")"
 prog record-behaviour --run "$RUN2" --from-proposal "$PE1" --prompt "$PL1"
 check 0 "$CODE"
-PL2="$(tprompt "$RUN2" "apply $PE2")"
+PL2="$(opick "$RUN2" "record-behaviour --from-proposal $PE2")"
 prog record-behaviour --run "$RUN2" --from-proposal "$PE2" --prompt "$PL2"
 check 1 "$CODE"
 has "changed since this edit was proposed" "$OUT"
@@ -710,7 +711,7 @@ prog propose-behaviour --run "$RUN2" --edit-of "$TX" --do "do the other unique t
 PT="$(jfield "$OUT" 'd["behaviour"]')"
 PR="$(tprompt "$RUN2" "retire $TX")"
 prog retire-behaviour "$TX" --as retired --prompt "$PR"
-PTA="$(tprompt "$RUN2" "apply $PT")"
+PTA="$(opick "$RUN2" "record-behaviour --from-proposal $PT")"
 prog record-behaviour --run "$RUN2" --from-proposal "$PT" --prompt "$PTA"
 check 1 "$CODE"
 has "no active programme behaviour" "$OUT"

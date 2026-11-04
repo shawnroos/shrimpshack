@@ -94,6 +94,7 @@ new_run() {
 print(setup([]))
 EOF
 }
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 tprompt() {
   run_py "$1" "$2" "${3:-typed}" <<'EOF'
 print(fixture_prompt(args[0], "sess-pm", args[1], args[2])["prompt_id"])
@@ -287,29 +288,31 @@ else
 fi
 
 # ---- adoption by content hash ----
-it "F5: adopt-ritual-file needs typed words naming the id, the check and the hash, and puts it in force"
+it "F5: adopt-ritual-file needs a pick of its offer, not typed words, and puts it in force"
 H1="$(fh "$RUN1")"
-P_NO="$(tprompt "$RUN1" "adopt plugin-versions")"
-prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_NO" --run "$RUN1"
+P_TYPED="$(tprompt "$RUN1" "adopt plugin-versions ${H1} with the versions bumped check")"
+prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_TYPED" --run "$RUN1"
 check 1 "$CODE"
-has "does not name" "$OUT"
-P_NOHASH="$(tprompt "$RUN1" "adopt plugin-versions with the versions bumped check")"
-prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_NOHASH" --run "$RUN1"
-check 1 "$CODE"
-has "${H1}" "$OUT"
-P_OK="$(tprompt "$RUN1" "adopt plugin-versions ${H1} with the versions bumped check")"
+has "offer" "$OUT"
+OFFERED="$("$PY" "$PROG" offer adopt-file --command "adopt-ritual-file acme/r1/plugin-versions" --command "decline-ritual-file acme/r1/plugin-versions" --run "$RUN1" 2>&1)"
+it "F5a: adopt and decline are two options of one picker, showing the hash and the check"
+has "Adopt ritual file plugin-versions (content ${H1})" "$OFFERED"
+has "Decline ritual file plugin-versions (content ${H1})" "$OFFERED"
+has "versions-bumped" "$OFFERED"
+P_OK="$(opick "$RUN1" "adopt-ritual-file acme/r1/plugin-versions" "decline-ritual-file acme/r1/plugin-versions")"
 prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_OK" --run "$RUN1"
 check 0 "$CODE"
 check '{"adopted": [["plugin-versions", "adopted"]], "in_force": ["plugin-versions"], "notices": [], "proposals": [], "rejected": []}' "$(fview "$RUN1")"
 
-it "F5b: a prompt that names the id and hash but not the check is refused for a file that carries a check"
+it "F5b: a pick of decline does not adopt, and a decline option approves nothing"
 mkrepo r11
 RUN11="$(files_run r11)"
-H11="$(fh "$RUN11")"
-P_NOCHK="$(tprompt "$RUN11" "adopt plugin-versions ${H11}")"
-prog adopt-ritual-file acme/r11/plugin-versions --prompt "$P_NOCHK" --run "$RUN11"
+P_DECLINE_PICK="$(opick "$RUN11" --option 1 "adopt-ritual-file acme/r11/plugin-versions" "decline-ritual-file acme/r11/plugin-versions")"
+prog adopt-ritual-file acme/r11/plugin-versions --prompt "$P_DECLINE_PICK" --run "$RUN11"
 check 1 "$CODE"
-has "versions bumped" "$OUT"
+P_NOT_NOW="$(opick "$RUN11" --decline "adopt-ritual-file acme/r11/plugin-versions")"
+prog adopt-ritual-file acme/r11/plugin-versions --prompt "$P_NOT_NOW" --run "$RUN11"
+check 1 "$CODE"
 check '{"adopted": [], "in_force": [], "notices": [], "proposals": [["plugin-versions", "proposed"]], "rejected": []}' "$(fview "$RUN11")"
 
 it "F5c: the adopted ritual is a repo-layer ritual with its repo key and check, and it counts as a file ritual"
@@ -319,10 +322,10 @@ print(e["layer"], e["repo_key"], e["check"]["name"])
 EOF
 )"
 
-it "F6: a prompt that names a stale hash is refused"
+it "F6: a pick from before the file changed is refused"
 mkrepo r7
 RUN7="$(files_run r7)"
-HOLD="$(fh "$RUN7")"
+P_STALE="$(opick "$RUN7" "adopt-ritual-file acme/r7/plugin-versions")"
 push_file r7 "plugin-versions.md" "---
 when: changed
 schedule: daily 09:00
@@ -330,7 +333,6 @@ schedule: daily 09:00
 Steps:
 - a different step
 "
-P_STALE="$(tprompt "$RUN7" "adopt plugin-versions ${HOLD} with the versions bumped check")"
 prog adopt-ritual-file acme/r7/plugin-versions --prompt "$P_STALE" --run "$RUN7"
 check 1 "$CODE"
 has "changed since" "$OUT"
@@ -351,8 +353,7 @@ EOF
 )"
 
 it "F8: declining takes the ritual out of force, and a changed file proposes it again"
-H2="$(fh "$RUN1")"
-P_DEC="$(tprompt "$RUN1" "decline plugin-versions ${H2}")"
+P_DEC="$(opick "$RUN1" "decline-ritual-file acme/r1/plugin-versions")"
 prog decline-ritual-file acme/r1/plugin-versions --prompt "$P_DEC" --run "$RUN1"
 check 0 "$CODE"
 check '{"adopted": [], "in_force": [], "notices": [], "proposals": [], "rejected": []}' "$(fview "$RUN1")"
@@ -401,10 +402,9 @@ EOF
 
 # ---- code review round 1 ----
 adopted_run() { # name -> a programme that has adopted <name>'s plugin-versions file
-  local run hash prompt
+  local run prompt
   run="$(files_run "$1")"
-  hash="$(fh "$run")"
-  prompt="$(tprompt "$run" "adopt plugin-versions ${hash} with the versions bumped check")"
+  prompt="$(opick "$run" "adopt-ritual-file acme/$1/plugin-versions")"
   prog adopt-ritual-file "acme/$1/plugin-versions" --prompt "$prompt" --run "$run"
   echo "$run"
 }
