@@ -26,7 +26,7 @@ PICK_VERBS = frozenset((
     "answer-permission", "dispose-action", "accept-agreement", "swap-item", "override-focus",
     "move-ritual", "keep-rituals", "retire-ritual", "start-ritual", "run-ritual", "skip-ritual",
     "adopt-behaviour-file", "adopt-ritual-file", "carry-rulings", "copy-default", "decline-ritual-file",
-    "record-behaviour", "record-ritual", "retire-behaviour", "settle-default-update"))
+    "end", "handover", "record-behaviour", "record-ritual", "retire-behaviour", "settle-default-update"))
 ACCEPT_VERB = "accept-agreement"
 # The accept is the moment the PM gains authority: a pick must name the terms digest Shawn saw, and an
 # accepted suggestion shows him no terms at all, so it never approves the accept.
@@ -337,7 +337,7 @@ def _takeover_answer(rows, row, prompt_id, driver, error) -> str:
     shown = programme_journal.redact(answer)
     if answer != want and not programme_offers.takeover_matches(pick["questions"], answer, driver):
         raise error(f"pick {prompt_id!r} answer {shown!r} does not approve this takeover; "
-                    f"the answer must be exactly {want!r}")
+                    f"it needs a pick of {programme_offers.takeover_label(driver)!r} on the picker `become-pm` prints")
     return shown
 
 
@@ -345,5 +345,5 @@ def takeover_pick(rows, row, prompt_id, sid, driver, error, stopped=False) -> di
     # Typed or suggested text never approves a takeover: an instruction to a worker would hand it the PM role.
     if _from_shawn(row, prompt_id, sid, error) != "picked":
         why = "the PM stopped; replacing it still" if stopped else "the PM is live, so replacing it"
-        raise error(f"{why} needs a pick of {takeover_label(driver)!r}; prompt {prompt_id!r} is not a pick")
+        raise error(f"{why} needs a pick of {programme_offers.takeover_label(driver)!r}; prompt {prompt_id!r} is not a pick")
     return {"origin": "picked", "answer": _takeover_answer(rows, row, prompt_id, driver, error)}

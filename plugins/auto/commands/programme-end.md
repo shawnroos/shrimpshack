@@ -1,12 +1,14 @@
 ---
 description: End this space's auto programme
 argument-hint: ""
-allowed-tools: Bash, CronDelete, TaskStop
+allowed-tools: Bash, CronDelete, TaskStop, AskUserQuestion
 ---
 
-Shawn typed this to end the programme. The prompt hook has already journaled the
-request. It is accepted when typed in the driving session, or from any session
-when the lease is orphaned. When the lease is expired (the agreement was never
+Shawn typed this, or asked in any words, to end the programme. A typed
+`/auto:programme-end` is journaled by the prompt hook and accepted in the driving
+session, or from any session when the lease is orphaned. Otherwise the driving
+session asks him with the end picker (below); never tell him to type this command.
+When the lease is expired (the agreement was never
 accepted within one cadence), `end` needs no typed request and ends the programme
 the way `expire` does, with reason agreement_unaccepted: there is no accepted
 agreement to protect. A `--why` of several words must be in single quotes
@@ -47,9 +49,15 @@ behaviours. `end` releases the lease, so the offer comes before it.
    - On a refusal (an unreadable behaviours store, a negated layer, an
      orphaned lease), tell him the reason in one line and go on.
 
-Run the dispatch line below:
+If Shawn typed the command, run the dispatch line below:
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" end "$ARGUMENTS"`
+
+If he did not, run `programme.sh offer end-programme --command 'end'` (add `--why` or
+`--without-rituals` to the command if they apply), ask with the `input` it prints,
+unchanged, and run nothing on "Not now". On his pick run the same command with
+`--prompt <pick id>`. If he answers in his own words, run it with `--prompt <id>
+--reads-as <the option's text>`, and show him its `read_back` line word for word.
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
 - Exit 2: the arguments did not parse (for example, an unquoted `--why` of

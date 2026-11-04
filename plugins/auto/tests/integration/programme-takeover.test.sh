@@ -177,13 +177,14 @@ check "1 sess-pm" "$CODE $(driver_of "$RUN")"
 it "the refusal names the PM by its pane and tab name"
 has 'the PM in pane "PM" in tab "Work" (w2:p10)' "$OUT"
 
-it "the refusal gives the exact reply that replaces it, and what happens either way"
-has "To replace it, type: /auto:programme-takeover --replace sess-pm " "$OUT"
+it "the refusal points at the takeover picker, and says what happens either way"
+has "To replace it, ask Shawn with the takeover picker" "$OUT"
 has "that PM's next programme write is refused" "$OUT"
-has "If you type nothing, that PM keeps driving" "$OUT"
+has "Otherwise that PM keeps driving" "$OUT"
+case "$OUT" in *"type:"*|*"you type"*) fail "the refusal tells Shawn to type: $OUT" ;; *) pass ;; esac
 
-it "the refusal is journaled with the reply"
-has "--replace sess-pm" "$(last_entry "$RUN" request_refused)"
+it "the refusal is journaled with the picker line"
+has "takeover picker" "$(last_entry "$RUN" request_refused)"
 
 it "a replace naming another pane is refused and says so"
 typed sess-b '/auto:programme-takeover --replace scratch' >/dev/null
@@ -389,7 +390,8 @@ if len(sys.argv) > 5:
     tool_input["answers"] = {question: answer}
 asked["sessionId"] = sid
 asked["message"]["content"][0].update(id=tool_use_id, input=tool_input)
-response = {"questions": [{"question": question}], "answers": {question: answer}, "annotations": {}}
+response = {"questions": [{"question": question}], "answers": {question: answer},
+            "annotations": {question: {"notes": os.environ["PICK_NOTE"]}} if os.environ.get("PICK_NOTE") else {}}
 result.update(sessionId=sid, toolUseResult=response)
 result["message"]["content"][0]["tool_use_id"] = tool_use_id
 path = pathlib.Path(work) / "picks" / uuid.uuid4().hex / (sid + ".jsonl")
@@ -460,7 +462,7 @@ P="$(pick sess-p "Keep the current PM")"
 as sess-p takeover --prompt "$P"
 check "1 $D" "$CODE $(driver_of "$RUN")"
 has "does not approve this takeover" "$OUT"
-has "fix: run \`programme.sh approval-label takeover --replace $D\`" "$OUT"
+has "fix: ask Shawn with the \`input\` that \`programme.sh become-pm\` prints" "$OUT"
 has "then rerun \`programme.sh takeover --prompt <pick id>\`" "$OUT"
 
 it "a pre-filled pick of the takeover label is refused"
@@ -479,7 +481,7 @@ it "a typed ask cannot replace a PM herdr shows live; it needs the pick"
 A="$(ask sess-p "be the PM" 0)"
 as sess-p takeover --prompt "$A"
 check "1 $D" "$CODE $(driver_of "$RUN")"
-has "needs a pick of '$LABEL'" "$OUT"
+has "needs a pick of 'Take over from the PM in session $D'" "$OUT"
 
 it "become-pm prints the takeover picker, decline first, and its plain option names the driver's session id"
 as sess-p become-pm
@@ -510,6 +512,29 @@ PYEOF
 OTHER_LABEL="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][1]["label"])' "$OTHER_INPUT")"
 P="$(PICK_INPUT="$OTHER_INPUT" pick sess-p "$OTHER_LABEL")"
 as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+
+it "Other text on the printed takeover picker is refused"
+P="$(PICK_INPUT="$TAKE_INPUT" pick sess-p "yes, take over")"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+has "does not approve this takeover" "$OUT"
+
+it "a pick of the takeover option with a note is refused"
+P="$(PICK_INPUT="$TAKE_INPUT" PICK_NOTE="but keep the rules" pick sess-p "$PLAIN")"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+has "note" "$OUT"
+
+it "own words with a reading do not approve a takeover"
+A="$(ask sess-p "yes, take over" 0)"
+as sess-p takeover --prompt "$A" --reads-as "$PLAIN"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+has "needs a pick" "$OUT"
+
+it "an accepted suggestion with a reading does not approve a takeover"
+S="$(suggested sess-p "yes, take over")"
+as sess-p takeover --prompt "$S" --reads-as "$PLAIN"
 check "1 $D" "$CODE $(driver_of "$RUN")"
 
 it "a pick of the exact label, marked recommended, replaces the live PM"
@@ -551,7 +576,7 @@ has "before the current PM took the programme" "$OUT"
 it "a pick naming the PM before the last takeover is refused; its fix asks for a pick naming the PM now"
 as sess-u takeover --prompt "$P2"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "fix: run \`programme.sh approval-label takeover --replace sess-t\`" "$OUT"
+has "fix: ask Shawn with the \`input\` that \`programme.sh become-pm\` prints" "$OUT"
 
 register sess-t w2:p85 term_p85
 snapshot "w2:p85|PM|sess-t|term_p85" "w2:p31|scratch|sess-w2|term_p31"
@@ -584,15 +609,15 @@ it "an orphaned lease: Shawn's typed ask is refused; a stopped PM still needs th
 A="$(ask sess-k "be the PM" 0)"
 as sess-k takeover --prompt "$A"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "the PM stopped; replacing it still needs a pick of '$LABEL_T'" "$OUT"
+has "the PM stopped; replacing it still needs a pick of 'Take over from the PM in session sess-t'" "$OUT"
 it "the refusal's fix offers the takeover picker, not become-pm"
-has "fix: run \`programme.sh approval-label takeover --replace sess-t\`" "$OUT"
+has "fix: ask Shawn with the \`input\` that \`programme.sh become-pm\` prints" "$OUT"
 
 it "an orphaned lease: an accepted suggestion is refused"
 S="$(suggested sess-k "yes, take over as PM")"
 as sess-k takeover --prompt "$S"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
-has "needs a pick of '$LABEL_T'" "$OUT"
+has "needs a pick of 'Take over from the PM in session sess-t'" "$OUT"
 
 it "an orphaned lease: a pick of the option that keeps the current PM is refused"
 P="$(pick sess-k "Keep the current PM")"
@@ -643,13 +668,13 @@ it "a PM herdr shows gone: Shawn's typed ask is refused"
 A="$(ask sess-m "take over as PM" 0)"
 as sess-m takeover --prompt "$A"
 check "1 sess-k" "$CODE $(driver_of "$RUN")"
-has "the PM stopped; replacing it still needs a pick of '$LABEL_K'" "$OUT"
+has "the PM stopped; replacing it still needs a pick of 'Take over from the PM in session sess-k'" "$OUT"
 
 it "a PM herdr shows gone: an accepted suggestion is refused"
 S="$(suggested sess-m "yes, take over as PM")"
 as sess-m takeover --prompt "$S"
 check "1 sess-k" "$CODE $(driver_of "$RUN")"
-has "needs a pick of '$LABEL_K'" "$OUT"
+has "needs a pick of 'Take over from the PM in session sess-k'" "$OUT"
 
 it "a PM herdr shows gone: a pick of the option that keeps the current PM is refused"
 P="$(pick sess-m "Keep the current PM")"
@@ -666,6 +691,48 @@ has '"reason": "driver_gone"' "$ENTRY"
 has '"request": null' "$ENTRY"
 has '"origin": "picked"' "$ENTRY"
 has '"pane_in_snapshot": false' "$ENTRY"
+
+as sess-m rules --ack
+offer_input() { "$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1].splitlines()[0])["input"]))' "$OUT"; }
+first_option() { "$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][0]["label"])' "$1"; }
+
+it "the handover picker, through the real hook: the wrong target is refused"
+as sess-m offer hand-pm --command 'handover sess-n'
+HAND_INPUT="$(offer_input)"
+HAND_LABEL="$(first_option "$HAND_INPUT")"
+has "sess-n" "$HAND_LABEL"
+P="$(PICK_INPUT="$HAND_INPUT" pick sess-m "$HAND_LABEL")"
+as sess-m handover sess-w2 --prompt "$P"
+check "1 sess-m" "$CODE $(driver_of "$RUN")"
+has "approved a different command" "$OUT"
+
+it "the handover picker, through the real hook: the named target takes the programme"
+as sess-m handover sess-n --prompt "$P"
+check "0 sess-n" "$CODE $(driver_of "$RUN")"
+ENTRY="$(last_entry "$RUN" handed_over)"
+has '"request": null' "$ENTRY"
+has "\"prompt_id\": \"$P\"" "$ENTRY"
+
+register sess-n w2:p92 term_p92
+snapshot "w2:p92|New PM|sess-n|term_p92" "w2:p31|scratch|sess-w2|term_p31"
+as sess-n rules --ack
+
+it "the end picker, through the real hook: its decline ends nothing"
+as sess-n offer end-programme --command 'end --why "all done"'
+END_INPUT="$(offer_input)"
+END_LABEL="$(first_option "$END_INPUT")"
+P="$(PICK_INPUT="$END_INPUT" pick sess-n "Not now")"
+as sess-n end --why "all done" --prompt "$P"
+check "1 " "$CODE $(last_entry "$RUN" programme_ended | sed 's/^null$//')"
+
+it "the end picker, through the real hook: a pick ends the programme"
+P="$(PICK_INPUT="$END_INPUT" pick sess-n "$END_LABEL")"
+as sess-n end --why "all done" --prompt "$P"
+check "0" "$CODE"
+ENTRY="$(last_entry "$RUN" programme_ended)"
+has '"reason": "ended_by_shawn"' "$ENTRY"
+has "\"prompt_id\": \"$P\"" "$ENTRY"
+has '"why": "all done"' "$ENTRY"
 
 echo
 echo "programme-takeover.test.sh: ${PASS} passed, ${FAIL} failed"

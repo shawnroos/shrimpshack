@@ -35,7 +35,7 @@ TEXT_CAP = 300
 # Room for a whole draft at the verbs' cap plus the facts around it: Shawn approves what he can read.
 DRAFT_TEXT_CAP = 900
 _KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
-_FLAGS = ("ran-now", "widening")
+_FLAGS = ("ran-now", "widening", "without-rituals")
 # What one option can show in full: the label and the 300-character description hold about this many ids and scopes.
 MAX_SET = 4
 _NOT_BOUND = ("--prompt", "--run", "--op", "--reads-as")
@@ -430,6 +430,25 @@ def _dispose(cmd, _programme) -> dict:
     return _rendered(f"Record {target} as {how}")
 
 
+def _end(cmd, programme) -> dict:
+    if cmd.pos:
+        raise OfferError("usage: end [--why <text>] [--without-rituals]")
+    unfinished = sorted(key for key, item in (programme.get("items") or {}).items()
+                        if (item or {}).get("state") in load_lib_module("programme_archive").UNFINISHED)
+    left = f"Not finished: {' '.join(unfinished)}." if unfinished else "No item is unfinished."
+    skip = " without its rituals" if cmd.opts.get("without-rituals") else ""
+    return _rendered(f"End this programme{skip}", f"No new work starts. {left} {cmd.extras('without-rituals')}",
+                     {"unfinished": unfinished})
+
+
+def _handover(cmd, _programme) -> dict:
+    target = cmd.first("<session-id> [--without-rituals]")
+    # The label cap is 80, and a session id is 36: a longer sentence would cut off the rituals it skips.
+    skip = " without its rituals" if cmd.opts.get("without-rituals") else ""
+    return _rendered(f"Hand the PM to session {target}{skip}",
+                     "This session stops being the PM. Nothing from this chat carries over.", {"target": target})
+
+
 def _accept(_cmd, programme) -> dict:
     digest = load_lib_module("programme_approval").terms_digest(programme)
     return _rendered(f"Accept the agreement with terms {digest}",
@@ -465,6 +484,8 @@ RENDERERS = {
     "dispose-action": _dispose,
     "drop-item": _drop,
     "edit-project-term": _edit_term,
+    "end": _end,
+    "handover": _handover,
     "keep-behaviours": _keeper("behaviour", "programme_behaviours"),
     "keep-rituals": _keeper("ritual", "programme_rituals"),
     "lift-pause": _lift_pause,

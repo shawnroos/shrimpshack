@@ -234,8 +234,12 @@ check "0 ask-shawn" "$CODE $(field step)"
 check "$LABEL" "$(field label)"
 check "programme.sh takeover --prompt <pick id>" "$(field command)"
 has "AskUserQuestion picker" "$OUT"
-has "recommended option" "$OUT"
-has "decline option" "$OUT"
+has "with the \`input\` above unchanged" "$OUT"
+case "$OUT" in *approval-label*) fail "become-pm still names approval-label" ;; *) pass ;; esac
+check "Not now|Take over from the PM in session sess-pm" "$("$PY" -c '
+import json, sys
+step = json.loads(sys.argv[1].splitlines()[0])
+print("|".join(o["label"] for o in step["input"]["questions"][0]["options"]))' "$OUT")"
 
 it "a live PM: another session's typed prompt is not journaled"
 typed sess-b "take over as PM" >/dev/null
@@ -302,11 +306,10 @@ as sess-c takeover --prompt p000000
 check "1 sess-b" "$CODE $(driver_of "$RUN")"
 FIX="$(printf '%s\n' "$OUT" | sed -n 's/^fix: //p' | tail -n 1)"
 case "$FIX" in "programme.sh become-pm"*) fail "the fix loops back to become-pm: $FIX" ;; *) pass ;; esac
-it "following that fix prints the label become-pm printed"
-LABEL_CMD="$(printf '%s' "$FIX" | sed -n 's/^run `programme.sh \([^`]*\)`.*/\1/p')"
-read -ra PARTS <<< "$LABEL_CMD"
-as sess-c "${PARTS[@]}"
-check "0 Approve takeover --replace sess-b" "$CODE $OUT"
+it "that fix names the picker become-pm prints and the takeover to rerun"
+has "\`programme.sh become-pm\` prints" "$FIX"
+has "\`programme.sh takeover --prompt <pick id>\`" "$FIX"
+case "$FIX" in *approval-label*) fail "the fix still names approval-label: $FIX" ;; *) pass ;; esac
 
 it "the ask-shawn route works for a stopped PM: a pick of the label, through the real hook, moves the lease"
 P="$(pick sess-c "Approve takeover --replace sess-b (Recommended)")"

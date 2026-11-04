@@ -86,14 +86,15 @@ FIXES = {
     "dispose-item": _ENDED,
     "drop-item": _OFFERED,
     "edit-project-term": _OFFERED,
-    "end": "ask Shawn to type /auto:programme-end in this session, then rerun `programme.sh end`",
+    "end": ("run `programme.sh offer end-programme --command 'end'`, ask Shawn with the input it prints, unchanged, "
+            "then rerun `programme.sh end --prompt <pick id>`"),
     "expire": _ENDED,
     "focus-note": _WRITE,
     "focus-recheck": _WRITE,
     "hand-item": _ITEM,
     "copy-default": _OFFERED,
-    "handover": ("ask Shawn to type /auto:programme-handover <session-id> in the driving session, "
-                 "then rerun `programme.sh handover`"),
+    "handover": ("run `programme.sh offer hand-pm --command 'handover <session-id>'`, ask Shawn with the input it "
+                 "prints, unchanged, then rerun `programme.sh handover <session-id> --prompt <pick id>`"),
     "inbox": _READ,
     "sweep-inputs": _READ,
     "keep-behaviours": _OFFERED,

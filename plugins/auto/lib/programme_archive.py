@@ -265,7 +265,7 @@ def _caller_may_close(record, sid, *, need_ended=True) -> None:
     if sealed(programme):
         raise ArchiveError("the programme is archived; its home is read-only", "sealed")
     if need_ended and not programme.get("ended"):
-        raise ArchiveError("the programme has not ended; end it first with /auto:programme-end", "not_ended")
+        raise ArchiveError("the programme has not ended; end it first through its picker (`programme.sh offer end-programme --command 'end'`)", "not_ended")
     closers = {record.get("driving_session_id")}
     if programme.get("ended"):
         closers.add((programme.get(CLOSURE) or {}).get("ended_by"))
@@ -356,7 +356,8 @@ def evaluate(run_id, record) -> list:
     ended = programme.get("ended")
     return [
         _check("ended", [] if ended else [{"id": "programme", "reason": "the programme has not ended"}],
-               "type /auto:programme-end in the driving session, then run end"),
+               "in the driving session, run `programme.sh offer end-programme --command 'end'`, ask Shawn with the "
+               "input it prints, then run `programme.sh end --prompt <pick id>`"),
         _check("authority", _integrity(run_id), "the database failed its integrity check; repair it first"),
         _check("operations", _open_operations(programme),
                "run reconcile-operations; an action that stays uncertain needs dispose-action --attempt"),

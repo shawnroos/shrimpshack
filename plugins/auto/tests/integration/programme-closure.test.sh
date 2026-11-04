@@ -364,6 +364,15 @@ EOF
 it "the closing context names the programme that received the typed request"
 has "journaled this /auto:programme-takeover request into programme $ORUN" "$TAKE_OUT"
 
+RUNP="$(new_programme w60)"
+prog check-archive --run "$RUNP"
+it "the check that a programme has not ended names the end picker, not typing"
+has "programme.sh offer end-programme" "$OUT"
+case "$OUT" in *"type /auto:programme-end"*) fail "the remedy tells Shawn to type: $OUT" ;; *) pass ;; esac
+end_typed "$RUNP" >/dev/null
+it "a typed end still ends the programme"
+check "ended" "$(arch_field "$RUNP" '"ended" if prog.get("ended") else "live"')"
+
 echo
 echo "programme-closure.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

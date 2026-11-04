@@ -1,16 +1,23 @@
 ---
 description: Hand this session's auto programme to another Claude session
 argument-hint: "<session-id>"
-allowed-tools: Bash, CronDelete, TaskStop
+allowed-tools: Bash, CronDelete, TaskStop, AskUserQuestion
 ---
 
-Shawn typed this in the programme's driving session to move the PM to another
-session. The prompt hook has already journaled the request, with the session id
-he named. Only a typed request in the driving session counts.
+Shawn typed this, or asked in any words, to move the PM to another session. A typed
+`/auto:programme-handover <session-id>` in the driving session is journaled by the
+prompt hook. Otherwise ask him with the handover picker; never tell him to type this
+command.
 
-Run the dispatch line below:
+If Shawn typed the command, run the dispatch line below:
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" handover "$ARGUMENTS"`
+
+If he did not, run `programme.sh offer hand-pm --command 'handover <session-id>'`, ask
+with the `input` it prints, unchanged, and run nothing on "Not now". On his pick run
+`programme.sh handover <session-id> --prompt <pick id>`. If he answers in his own
+words, run it with `--prompt <id> --reads-as <the option's text>`, and show him its
+`read_back` line word for word.
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
 - Success: the lease and the driving session now name the new session. This
