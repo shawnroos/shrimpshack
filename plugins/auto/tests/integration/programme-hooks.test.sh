@@ -658,17 +658,23 @@ GUARDED_CALLS=(
 )
 export GUARD_ROOT="$DEST"
 
-it "with a proposal for the repository, an owner's Edit, MultiEdit, Write and echo into its settings.local.json are refused and journaled"
+it "with a proposal for the repository, the driver's Edit, MultiEdit, Write and echo into its settings.local.json are refused and journaled"
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"open\", \"destination\": \"${DEST}\"}]"
 ALL=1
 for call in "${GUARDED_CALLS[@]}"; do
-  OUT="$(file_call "$DEST" sess-own "${call%%|*}" "${call#*|}")"
+  OUT="$(file_call "$DEST" sess-pm5 "${call%%|*}" "${call#*|}")"
   ROW="$(last_row "$RUN5")"
   case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $call ($OUT)" ;; esac
-  [ "$(row_field "$ROW" kind tool)" = "blocked_settings_write ${call%%|*}" ] || { ALL=0; echo "      not journaled: $call ($ROW)"; }
+  [ "$(row_field "$ROW" kind tool item_ids)" = "blocked_settings_write ${call%%|*} None" ] || { ALL=0; echo "      not journaled as expected: $call ($ROW)"; }
 done
 [ -d "${DEST}/.claude/auto" ] && { ALL=0; echo "      the destination has .claude/auto"; }
 check "1" "$ALL"
+
+it "an item owner's same calls are allowed and journal nothing"
+BEFORE="$(last_row "$RUN5")"
+OUT=""
+for call in "${GUARDED_CALLS[@]}"; do OUT="${OUT}$(file_call "$DEST" sess-own "${call%%|*}" "${call#*|}")"; done
+check "|${BEFORE}" "${OUT}|$(last_row "$RUN5")"
 
 it "the driving session is refused too, and a resolved proposal still guards"
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"resolved\", \"destination\": \"${DEST}\"}]"
@@ -676,9 +682,9 @@ OUT="$(file_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${SETTINGS}\", \"old_s
 case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
 set_proposals "$RUN5" "[{\"id\": \"pp1\", \"state\": \"open\", \"destination\": \"${DEST}\"}]"
 
-it "a listed session of an open item is refused too"
+it "a listed session of an open item is allowed"
 OUT="$(file_call "$DEST" sess-listed Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-case "$OUT" in *'"deny"'*) pass ;; *) fail "not denied: $OUT" ;; esac
+check "" "$OUT"
 
 # The hook timeout in hooks.json is 10 s; the 9 s cap keeps a hung hook from hanging the suite.
 timed_call() {
@@ -722,15 +728,20 @@ EOF
 
 [ -f "${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN5}/programme.db" ] || echo "      fixture: ${RUN5} is not store-backed"
 for point in BEFORE_COMMIT AFTER_COMMIT; do
-  it "while a writer holds the programme store ($point), an owner's settings write is still denied within 3 s"
+  it "while a writer holds the programme store ($point), the driver's settings write is denied and an owner's is allowed, each within 3 s"
   start_writer_paused_at "$point" || fail "the writer never paused: $(head -c 200 "$WRITER_OUT")"
+  timed_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+  PM="$OUT|$RC|$ELAPSED"
   timed_call "$DEST" sess-own Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+  OWN="$OUT|$RC|$ELAPSED"
   kill "$WRITER_PID" 2>/dev/null; wait "$WRITER_PID" 2>/dev/null
-  case "$OUT" in
-    *'"deny"'*) "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 and sys.argv[2] == "0" else 1)' "$ELAPSED" "$RC" \
-                  && pass || fail "rc $RC, denied after ${ELAPSED}s" ;;
-    *) fail "rc $RC, no deny after ${ELAPSED}s (writer: $(head -c 200 "$WRITER_OUT")): $OUT" ;;
-  esac
+  "$PY" - "$PM" "$OWN" <<'EOF' && pass || fail "pm [$PM] own [$OWN] (writer: $(head -c 200 "$WRITER_OUT"))"
+import sys
+pm_out, pm_rc, pm_elapsed = sys.argv[1].rsplit("|", 2)
+own_out, own_rc, own_elapsed = sys.argv[2].rsplit("|", 2)
+sys.exit(0 if '"deny"' in pm_out and pm_rc == "0" and float(pm_elapsed) < 3
+         and own_out == "" and own_rc == "0" and float(own_elapsed) < 3 else 1)
+EOF
 done
 
 start_store_lock() {
@@ -748,7 +759,7 @@ EOF
   return 1
 }
 
-it "while the programme store cannot be read, the driver's, an owner's and any space session's settings writes (through a symlinked .claude too) and a send to the driver's pane are denied within 3 s"
+it "while the programme store cannot be read, the driver's settings writes (through a symlinked .claude too) and a send to the driver's pane are denied within 3 s; an owner's and a space session's settings writes are allowed"
 start_store_lock || fail "the store was never locked: $(head -c 200 "$LOCKER_OUT")"
 timed_call "$DEST" sess-own Edit "{\"file_path\": \"${SETTINGS}\", \"old_string\": \"a\", \"new_string\": \"b\"}"
 OWN="$OUT|$RC|$ELAPSED"
@@ -758,19 +769,24 @@ timed_call "$DEST" sess-idle Write "{\"file_path\": \"${OTHER}/.claude/settings.
 IDLE="$OUT|$RC|$ELAPSED"
 mkdir -p "${WORK}/realclaude" "${WORK}/linkrepo"
 ln -sfn "${WORK}/realclaude" "${WORK}/linkrepo/.claude"
-timed_call "$DEST" sess-own Write "{\"file_path\": \"${WORK}/linkrepo/.claude/settings.local.json\", \"content\": \"{}\"}"
+timed_call "$DEST" sess-pm5 Write "{\"file_path\": \"${WORK}/linkrepo/.claude/settings.local.json\", \"content\": \"{}\"}"
 LINKED="$OUT|$RC|$ELAPSED"
-timed_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}"
+timed_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}"
 PLAIN="$OUT"
 timed_call "$NOREPO" sess-own Bash "{\"command\": \"herdr agent prompt w5:p1 go\"}"
 SEND="$OUT|$RC|$ELAPSED"
 kill "$LOCKER_PID" 2>/dev/null; wait "$LOCKER_PID" 2>/dev/null
 "$PY" - "$OWN" "$PM" "$IDLE" "$SEND" "$LINKED" "$PLAIN" <<'EOF' && pass || fail "own [$OWN] pm [$PM] idle [$IDLE] send [$SEND] linked [$LINKED] settings.json [$PLAIN]"
 import sys
-def ok_(a):
+def fast_with(a, expected):
     out, rc, elapsed = a.rsplit("|", 2)
-    return '"deny"' in out and rc == "0" and float(elapsed) < 3
-sys.exit(0 if all(ok_(a) for a in sys.argv[1:6]) and sys.argv[6] == "" else 1)
+    return expected(out) and rc == "0" and float(elapsed) < 3
+def denied(a):
+    return fast_with(a, lambda out: '"deny"' in out)
+def allowed(a):
+    return fast_with(a, lambda out: out == "")
+own, pm, idle, send, linked, plain = sys.argv[1:7]
+sys.exit(0 if allowed(own) and denied(pm) and allowed(idle) and denied(send) and denied(linked) and plain == "" else 1)
 EOF
 
 it "a programme over many spaces with its store held still denies the driver's settings write within 3 s"
@@ -806,11 +822,11 @@ it "malformed JSON on stdin: the action hook exits 0 with no output"
 OUT="$( cd "$DEST" && bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"sess-own","tool_name":"Edit", settings.local.json' )"
 check "0:" "$?:${OUT}"
 
-it "an owner's edit of settings.json, of a look-alike name, or of a repository with no proposal is not refused"
-OUT="$(file_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Write "{\"file_path\": \"${SETTINGS}.bak\", \"content\": \"{}\"}")"
-OUT="${OUT}$(file_call "$OTHER" sess-own Edit "{\"file_path\": \"${OTHER}/.claude/settings.local.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-OUT="${OUT}$(file_call "$OTHER" sess-own Bash "{\"command\": \"echo '{}' > .claude/settings.local.json\"}")"
+it "the driver's edit of settings.json, of a look-alike name, or of a repository with no proposal is not refused"
+OUT="$(file_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${DEST}/.claude/settings.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Write "{\"file_path\": \"${SETTINGS}.bak\", \"content\": \"{}\"}")"
+OUT="${OUT}$(file_call "$OTHER" sess-pm5 Edit "{\"file_path\": \"${OTHER}/.claude/settings.local.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+OUT="${OUT}$(file_call "$OTHER" sess-pm5 Bash "{\"command\": \"echo '{}' > .claude/settings.local.json\"}")"
 check "" "$OUT"
 
 BEH_DIR="${WORK}/personal/behaviours"
@@ -834,32 +850,30 @@ BEH_CALLS=(
   "Bash|{\"command\": \"env claude_auto_shipped_behaviours_dir=/elsewhere true\"}"
 )
 
-it "an owner's and the driver's Edit, MultiEdit, Write, echo and tee into the personal behaviours folder or behaviours.json are refused and journaled"
+it "the driver's Edit, MultiEdit, Write, echo and tee into the personal behaviours folder or behaviours.json are refused and journaled"
 ALL=1
-for who in sess-own sess-pm5; do
-  for call in "${BEH_CALLS[@]}"; do
-    OUT="$(file_call "$DEST" "$who" "${call%%|*}" "${call#*|}")"
-    ROW="$(last_row "$RUN5")"
-    case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied ($who): $call ($OUT)" ;; esac
-    [ "$(row_field "$ROW" kind tool)" = "blocked_behaviours_write ${call%%|*}" ] || { ALL=0; echo "      not journaled ($who): $call ($ROW)"; }
-  done
+for call in "${BEH_CALLS[@]}"; do
+  OUT="$(file_call "$DEST" sess-pm5 "${call%%|*}" "${call#*|}")"
+  ROW="$(last_row "$RUN5")"
+  case "$OUT" in *'"deny"'*) ;; *) ALL=0; echo "      not denied: $call ($OUT)" ;; esac
+  [ "$(row_field "$ROW" kind tool item_ids)" = "blocked_behaviours_write ${call%%|*} None" ] || { ALL=0; echo "      not journaled as expected: $call ($ROW)"; }
 done
 check "1" "$ALL"
 
-it "a session that drives no programme and owns no unfinished item may write the behaviours files"
+it "any session that does not drive the programme, an item owner included, may write the behaviours files"
 OUT=""
-for who in sess-idle sess-done; do
+for who in sess-own sess-listed sess-idle sess-done; do
   for call in "${BEH_CALLS[@]}"; do OUT="${OUT}$(file_call "$DEST" "$who" "${call%%|*}" "${call#*|}")"; done
 done
 check "" "$OUT"
 
-it "an owner's write to an unrelated file or a behaviours.json.bak neighbour is not refused"
-OUT="$(file_call "$DEST" sess-own Write "{\"file_path\": \"${BEH_STORE}.bak\", \"content\": \"x\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Write "{\"file_path\": \"${WORK}/personal/behaviours-notes.md\", \"content\": \"x\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Edit "{\"file_path\": \"${DEST}/behaviours.md\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"echo x > ${BEH_STORE}.bak\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"grep -rn behaviours lib\"}")"
-OUT="${OUT}$(file_call "$DEST" sess-own Bash "{\"command\": \"ls behaviours\"}")"
+it "the driver's write to an unrelated file or a behaviours.json.bak neighbour is not refused"
+OUT="$(file_call "$DEST" sess-pm5 Write "{\"file_path\": \"${BEH_STORE}.bak\", \"content\": \"x\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Write "{\"file_path\": \"${WORK}/personal/behaviours-notes.md\", \"content\": \"x\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Edit "{\"file_path\": \"${DEST}/behaviours.md\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Bash "{\"command\": \"echo x > ${BEH_STORE}.bak\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Bash "{\"command\": \"grep -rn behaviours lib\"}")"
+OUT="${OUT}$(file_call "$DEST" sess-pm5 Bash "{\"command\": \"ls behaviours\"}")"
 check "" "$OUT"
 
 it "malformed JSON naming behaviours.json: the action hook exits 0 with no output"

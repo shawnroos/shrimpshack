@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Refuse a programme session's direct write to the personal behaviours folder or behaviours.json.
+"""Refuse the PM's direct write to the personal behaviours folder or behaviours.json.
 
-Best effort, in the same scope as the settings guard: the driving session and the sessions
-of unfinished items are refused Write, Edit, MultiEdit or Bash calls that name either target.
-The sanctioned way to change them is a programme.py verb that Shawn approves.
+Best effort, in the same scope as the settings guard: the driving session is refused Write,
+Edit, MultiEdit or Bash calls that name either target; workers are not checked. The PM's way
+to change them is a programme.py verb that Shawn approves.
 """
 
 from __future__ import annotations
@@ -92,16 +92,16 @@ def decision(stdin_raw: str):
     if "behaviours" not in named and "behaviour-files" not in named:
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    found = settings_guard.scope(session_id, os.environ)
+    found = settings_guard.scope(session_id)
     if found is None:
         return None
-    run_id, _programme, item_ids = found
+    run_id, _programme = found
     cwd = data.get("cwd")
     cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
     target = _target(tool_name, tool_input, cwd)
     if target is None:
         return None
-    payload = {"tool": tool_name, "path": target, "item_ids": item_ids}
+    payload = {"tool": tool_name, "path": target}
     if tool_name == "Bash":
         payload["command"] = tool_input.get("command")
     return settings_guard._deny(

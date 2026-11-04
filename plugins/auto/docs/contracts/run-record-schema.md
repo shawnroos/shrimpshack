@@ -919,12 +919,13 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
     `prompt_id`, `quote` and `cites`.
   - `permission_settled {settled, pending}`, written only when at least one
     proposal changed state.
-  - `blocked_settings_write {tool, path, item_ids, command?}`, written by the
-    PreToolUse hook when it refuses a call that names a proposal's
-    `.claude/settings.local.json`.
-  - `blocked_behaviours_write {tool, path, item_ids, command?}`, written by the
-    PreToolUse hook when it refuses a call that names the personal behaviours
-    folder or the stored `behaviours.json`.
+  - `blocked_settings_write {tool, path, command?}`, written by the
+    PreToolUse hook when it refuses a driving session's call that names a
+    proposal's `.claude/settings.local.json`. Older rows also carry `item_ids`.
+  - `blocked_behaviours_write {tool, path, command?}`, written by the
+    PreToolUse hook when it refuses a driving session's call that names the
+    personal behaviours folder or the stored `behaviours.json`. Older rows also
+    carry `item_ids`.
 
 `<home>/claims.jsonl` is the worker inbox. Each line has the journal line shape with
 kind `claim`, `session_id` = the worker, payload `{item, deliverable, ref}`. Inbox

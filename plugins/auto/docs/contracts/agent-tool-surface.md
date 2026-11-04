@@ -1054,16 +1054,16 @@ Other sessions, sessions that drive no programme, and every other field
 (an issue description included) are not checked.
 
 The same hook guards the files permission proposals target. For the driving
-session and for sessions on unfinished items, it denies a Write, Edit, MultiEdit
-or Bash call that names the `.claude/settings.local.json` of any proposal's
-destination, and journals `blocked_settings_write`. The Bash check is a text
-match. Other settings files are not checked (programme-permission-proposals.md).
+session only, it denies a Write, Edit, MultiEdit or Bash call that names the
+`.claude/settings.local.json` of any proposal's destination, and journals
+`blocked_settings_write`. The Bash check is a text match. Other settings files are
+not checked (programme-permission-proposals.md). Workers may write these files.
 
-Under the same scope the hook also denies a Write, Edit, MultiEdit or Bash call that
-names the personal behaviours folder or the stored `behaviours.json`, and journals
-`blocked_behaviours_write`. The Bash check is a text match; a neighbour such as
-`behaviours.json.bak` is not checked. A programme verb that Shawn approves is the
-only way to change those files.
+For the driving session only, the hook also denies a Write, Edit, MultiEdit or Bash
+call that names the personal behaviours folder or the stored `behaviours.json`, and
+journals `blocked_behaviours_write`. The Bash check is a text match; a neighbour such
+as `behaviours.json.bak` is not checked. A programme verb that Shawn approves is the
+PM's only way to change those files. Workers may write them.
 
 The pane guard and the prompt binding stop accidents and casual misuse. A
 determined process running as the same user can still append journal rows or
