@@ -148,13 +148,20 @@ def _unspent(used) -> None:
 
 
 # The spent mark is written in the same file write as seen, so a write that failed spends nothing.
-def _record(bid, used=None, **fields) -> None:
-    doc = _seen_doc()
-    if bid:
-        doc[bid] = dict(doc.get(bid) or {}, **fields)
+def _store_seen(doc, used) -> None:
     if used:
         doc.setdefault(SPENT, {})[used] = {"at": run_record_core.now_iso()}
     _atomic(seen_path(), json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+def _spend(used) -> None:
+    _store_seen(_seen_doc(), used)
+
+
+def _record(bid, used=None, **fields) -> None:
+    doc = _seen_doc()
+    doc[bid] = dict(doc.get(bid) or {}, **fields)
+    _store_seen(doc, used)
 
 
 def _draft_text(opts) -> str:
@@ -195,7 +202,7 @@ def _write_file(bid, text, *, replace, used) -> None:
         if os.path.exists(path) and not replace and _read_text(path) != text:
             raise BehaviourError(f"{bid}.md already exists in the personal behaviours folder; "
                                  "settle-default-update --as merge replaces it")
-        _with_rollback(path, lambda: _atomic(path, text), lambda: _record(None, used=used))
+        _with_rollback(path, lambda: _atomic(path, text), lambda: _spend(used))
 
     _locked(body)
 
