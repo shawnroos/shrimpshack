@@ -52,6 +52,8 @@ FIXES = {
     "answer-handed": _PICKED,
     "answer-permission": _PICKED,
     "approval-label": _LABEL,
+    "offer": ("rerun `programme.sh offer <question-key> --command '<verb> <args>'` with a verb a pick can approve "
+              "(`programme.sh describe` lists them); `programme.sh become-pm` prints the takeover picker"),
     "archive": _ENDED,
     "ask-relayed": _ITEM,
     "ask-shown": _ITEM,

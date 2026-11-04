@@ -565,6 +565,7 @@ def _become_step(host, out, sid, space):
         return dict(out, step="stand-down")
     approval = load_lib_module("programme_approval")
     return dict(out, step="ask-shawn", label=approval.takeover_label(driver),
+                input=approval.programme_offers.takeover_input(driver),
                 command="programme.sh takeover --prompt <pick id>")
 
 
@@ -900,6 +901,7 @@ def _h_set_remit(host, argv):
         doc = json.loads(raw)
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
+    load_lib_module("programme_offers").note_content(doc)
     # Before the leases lock: finishing a move cut off mid-way takes that lock itself.
     run, home, _ = host._locate(opts, finish_move=True)
 

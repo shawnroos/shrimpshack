@@ -1025,6 +1025,25 @@ exact label `approval-label <verb> <args>` prints for the command being run
 (programme-prompt-source.md gives the list and the full rule). `approval-label`
 needs no prompt, writes nothing, and refuses a verb a pick cannot approve.
 
+`offer` (`<question-key> --command '<verb> <args>' [--command ...]`) is the stored form of the same
+approval, and `approval-label` stays as an alias for now. Only the driving session may run it. It takes
+1 to 3 commands, writes one `approval_offered` row, and prints the exact AskUserQuestion input in its input field.
+Auto writes the question, the header and every option from the command. Each question carries a decline option, named
+in the decline field, which has no command; on an authority move (`accept-agreement`, `adopt-autonomy
+--widening`, a remit widening, `answer-permission <id> applied`, a wider `accept-context`) the decline comes first. A
+`set-remit` offer takes on stdin the JSON the verb will read. Every verb on the pick list has a renderer, a verb with
+no renderer is refused, and a label holds no flag and no `, `. Takeover cannot be offered: this session does not drive
+yet. `become-pm` prints its picker in its input field, written from the driver's session id, and `takeover` compares a pick of
+it to the current driver under the leases lock.
+
+A pick binds to an offer only when the whole questions array in the transcript hashes to that offer's
+`asked_hash`, and the offer's session still drives. The answer must be one of its options, the running command must
+hash to that option's `argv_hash`, stdin must hash to its `content_hash` when set, and the facts the option showed
+must render the same now. Any miss refuses and names a new offer. A picker with no matching offer falls back to the
+`approval-label` comparison. The PostToolUse hook adds an `offer` hint to `<auto-data>`: the command to run, or, on
+a decline, that nothing runs. It also journals `approval_declined` citing the pick, which spends it. The hint is not
+evidence; the check above reads the transcript.
+
 The action hook refuses a literal send into a driver's pane, and journals
 `blocked_driver_send`. A send is literal when a host's send command is written out
 at a command position with the pane as its target, directly or inside `bash -c`,

@@ -382,6 +382,9 @@ tool_use_id = "toolu_" + uuid.uuid4().hex[:12]
 tool_input = {"questions": [{"question": question, "header": "PM", "multiSelect": False,
                              "options": [{"label": answer, "description": "Move the lease here."},
                                          {"label": "Keep the current PM", "description": "Change nothing."}]}]}
+if os.environ.get("PICK_INPUT"):
+    tool_input = json.loads(os.environ["PICK_INPUT"])
+    question = tool_input["questions"][0]["question"]
 if len(sys.argv) > 5:
     tool_input["answers"] = {question: answer}
 asked["sessionId"] = sid
@@ -478,6 +481,37 @@ as sess-p takeover --prompt "$A"
 check "1 $D" "$CODE $(driver_of "$RUN")"
 has "needs a pick of '$LABEL'" "$OUT"
 
+it "become-pm prints the takeover picker, decline first, and its plain option names the driver's session id"
+as sess-p become-pm
+TAKE_INPUT="$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1].splitlines()[0])["input"]))' "$OUT")"
+PLAIN="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][1]["label"])' "$TAKE_INPUT")"
+DECLINE="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][0]["label"])' "$TAKE_INPUT")"
+has "$D" "$PLAIN"
+check "Not now" "$DECLINE"
+
+it "a pick of the takeover decline is refused"
+P="$(PICK_INPUT="$TAKE_INPUT" pick sess-p "$DECLINE")"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+
+it "the plain option on a reworded picker is refused"
+P="$(pick sess-p "$PLAIN")"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+
+it "the plain option for another session is refused, compared on session id under the lock"
+OTHER_INPUT="$("$PY" - "$AUTO_ROOT" <<'PYEOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+print(json.dumps(load_lib_module("programme_offers").takeover_input("sess-gone")))
+PYEOF
+)"
+OTHER_LABEL="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][1]["label"])' "$OTHER_INPUT")"
+P="$(PICK_INPUT="$OTHER_INPUT" pick sess-p "$OTHER_LABEL")"
+as sess-p takeover --prompt "$P"
+check "1 $D" "$CODE $(driver_of "$RUN")"
+
 it "a pick of the exact label, marked recommended, replaces the live PM"
 P="$(pick sess-p "$LABEL (Recommended)")"
 as sess-p takeover --prompt "$P"
@@ -488,6 +522,20 @@ has '"request": null' "$ENTRY"
 has "\"prompt_id\": \"$P\"" "$ENTRY"
 has "\"from_session\": \"$D\"" "$ENTRY"
 case "$ENTRY" in *unrequested*) fail "a picked replace is not unrequested" ;; *) pass ;; esac
+
+it "a pick of the plain option on the printed picker replaces the live PM"
+register sess-p w2:p81 term_p81
+snapshot "w2:p81|New PM|sess-p|term_p81" "w2:p31|scratch|sess-w2|term_p31"
+as sess-v become-pm
+V_INPUT="$("$PY" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1].splitlines()[0])["input"]))' "$OUT")"
+V_PLAIN="$("$PY" -c 'import json,sys; print(json.loads(sys.argv[1])["questions"][0]["options"][1]["label"])' "$V_INPUT")"
+PV="$(PICK_INPUT="$V_INPUT" pick sess-v "$V_PLAIN")"
+as sess-v takeover --prompt "$PV"
+check "0 sess-v" "$CODE $(driver_of "$RUN")"
+has "\"answer\": \"$V_PLAIN\"" "$(last_entry "$RUN" taken_over)"
+PB="$(pick sess-p "Approve takeover --replace sess-v")"
+as sess-p takeover --prompt "$PB"
+check "0 sess-p" "$CODE $(driver_of "$RUN")"
 
 it "the same pick cited again, after another session became PM, is refused"
 register sess-p w2:p81 term_p81

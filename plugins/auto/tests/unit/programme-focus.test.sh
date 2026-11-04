@@ -348,12 +348,23 @@ fx = [json.loads(l) for l in open(os.path.join(sys.argv[1], "tests/fixtures/asku
 ASK, ANSWER = fx[0], fx[1]
 run, answer, folder = args
 sid, tid, q = "sess-pm", "toolu_" + uuid.uuid4().hex[:10], "Swap or queue?"
+questions = [{"question": q, "header": "Setup", "multiSelect": False,
+              "options": [{"label": answer, "description": ""}, {"label": "other", "description": ""}]}]
+if os.environ.get("PICK_THROUGH_OFFER") and answer.startswith("Approve "):
+    import subprocess
+    made = subprocess.run([sys.executable, os.path.join(sys.argv[1], "lib/programme.py"), "offer", "focus",
+                           "--command", answer[len("Approve "):], "--run", run], capture_output=True, text=True)
+    with open(os.path.join(folder, "..", "offered.log"), "a") as log:
+        log.write("offered\n" if made.returncode == 0 else "refused: " + answer + ": " + made.stderr.replace("\n", " ") + "\n")
+    if made.returncode == 0:
+        printed = json.loads(made.stdout)
+        questions = printed["input"]["questions"]
+        q = questions[0]["question"]
+        answer = next(o["label"] for o in questions[0]["options"] if o["label"] != printed["decline"])
 answers = {q: answer}
 path = pathlib.Path(folder) / (sid + ".jsonl")
 ask = copy.deepcopy(ASK); ask.update(uuid="a-" + tid, sessionId=sid)
-ask["message"]["content"][0].update(id=tid, input={"questions": [
-    {"question": q, "header": "Setup", "multiSelect": False,
-     "options": [{"label": answer, "description": ""}, {"label": "other", "description": ""}]}]})
+ask["message"]["content"][0].update(id=tid, input={"questions": questions})
 res = copy.deepcopy(ANSWER)
 res.update(uuid="u-" + tid, sessionId=sid, sourceToolAssistantUUID="a-" + tid,
            toolUseResult={"questions": [{"question": q}], "answers": answers,
@@ -1110,5 +1121,9 @@ drop 302
 remit_space drop
 
 echo ""
+if [ -n "${PICK_THROUGH_OFFER:-}" ]; then
+  echo "through offer: $(grep -c '^offered$' "${WORK}/offered.log") offered, $(grep -c '^refused' "${WORK}/offered.log") refused"
+  grep '^refused' "${WORK}/offered.log"
+fi
 echo "programme-focus.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

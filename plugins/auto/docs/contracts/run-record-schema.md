@@ -888,6 +888,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   than two cadence periods. Start, takeover, handover, end and going-quiet read the existing rows
   `programme_started`, `taken_over`, `handed_over`, `programme_ended` and `stop_quiet`.
 - `behaviour_skipped` is the row of `skip-behaviour`: `{item, behaviour, reason, why}` with `reason` `skipped` (the behaviour does not apply to the item) or `applied_by_pm`. It carries no prompt id, because it records the PM's judgment and approves nothing.
+- `approval_offered` is the row of `offer`: `{offer_id, question_key, input, decline, asked_hash, options}`. `input` is the AskUserQuestion input Auto printed and `asked_hash` hashes its questions array. Each option holds its `label` and `description`; every option but the decline also holds `argv_hash`, `subject`, `authority`, `command` and, for a command that reads stdin, `content_hash`. A rewritten row can rebind an option, so this stops a PM's mistake, not a PM that edits the journal.
+- `approval_declined` is written by the PostToolUse hook when Shawn picks an offer's decline: `{offer_id}`, citing the pick, which spends it.
 - `hook_patched` is the row of `record-hook-patch`: `{file, why, pr, protects, text}`. `protects` lists the protected rules the file holds and `text` is the notice to Shawn. It carries no prompt id, because it records what the PM did and approves nothing.
 - `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
   field (the send writes no separate `prompt_sent` row) plus `{behaviour, reason, trigger, trigger_at,

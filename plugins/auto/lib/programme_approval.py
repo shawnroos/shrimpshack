@@ -16,6 +16,7 @@ programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
 programme_naming = load_lib_module("programme_naming")
 programme_home = load_lib_module("programme_home")
+programme_offers = load_lib_module("programme_offers")
 
 # Default-deny: a pick or an accepted suggestion approves only these verbs, each of which checks that the
 # approval names its target. Verbs that record the prompt's words as content stay typed-only, and so do
@@ -140,6 +141,18 @@ def _strip_recommended(answer) -> str:
     return answer[:-len(_RECOMMENDED)] if answer.casefold().endswith(_RECOMMENDED) else answer
 
 
+# The old label stays an alias until the instructions move to `offer`. An offered picker never falls back to it:
+# offered labels are plain text, and a picker Auto did not print has no offer row.
+def _picked(rows, row, offer, record, verb_argv, prompt_id, error) -> dict:
+    if offer is None:
+        return {"answer": _picked_answer(rows, row, verb_argv, prompt_id, error)}
+    try:
+        answer = programme_journal.pick_answer(rows, row)
+    except ValueError as exc:
+        raise error(str(exc), fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv)) from None
+    return programme_offers.bind(offer, _strip_recommended(answer), verb_argv or [], record, _block(record), error)
+
+
 def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
     try:
         answer = programme_journal.pick_answer(rows, row)
@@ -185,7 +198,8 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
     if origin == "suggested" and verb in _NO_SUGGESTION_VERBS:
         raise error(f"{verb} needs a typed prompt or a pick of its terms-bound label; prompt {prompt_id!r} "
                     "is an accepted suggestion, which shows Shawn no terms", fix=accept_fix(_block(record)))
-    if origin == "picked" and verb == ACCEPT_VERB and "--terms" not in (verb_argv or []):
+    offer = programme_offers.offer_for(rows, row) if origin == "picked" else None
+    if origin == "picked" and offer is None and verb == ACCEPT_VERB and "--terms" not in (verb_argv or []):
         raise error(f"prompt {prompt_id!r} is a pick, so {ACCEPT_VERB} needs --terms <digest> naming the "
                     "terms Shawn picked", fix=accept_fix(_block(record)))
     if origin not in programme_protocol.HUMAN_ORIGINS:
@@ -196,7 +210,7 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
     approval = {"prompt_id": prompt_id, "quote": payload.get("text") or "", "origin": origin,
                 "text_hash": text_hash(payload.get("text")), "at": row.get("at"), "origin_verified": True}
     if origin == "picked":
-        approval["answer"] = _picked_answer(rows, row, verb_argv, prompt_id, error)
+        approval.update(_picked(rows, row, offer, record, verb_argv, prompt_id, error))
     # Naming checks only look at the word before a name, so "No, do not adopt r1" would name r1. This also
     # refuses "never" as a value; those changes need typed text.
     # Path tokens are skipped: "/T/" in a macOS temp path would read as the "t" of "don't".
@@ -261,13 +275,13 @@ def _from_shawn(row, prompt_id, sid, error) -> str:
 
 def _takeover_answer(rows, row, prompt_id, driver, error) -> str:
     try:
-        answer = programme_journal.pick_answer(rows, row)
+        pick = programme_journal.checked_pick(rows, row)
     except ValueError as exc:
         raise error(str(exc)) from None
-    answer = _strip_recommended(answer)
+    answer = _strip_recommended(pick["answer"])
     want = takeover_label(driver)
     shown = programme_journal.redact(answer)
-    if answer != want:
+    if answer != want and not programme_offers.takeover_matches(pick["questions"], answer, driver):
         raise error(f"pick {prompt_id!r} answer {shown!r} does not approve this takeover; "
                     f"the answer must be exactly {want!r}")
     return shown

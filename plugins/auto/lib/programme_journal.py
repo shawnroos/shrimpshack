@@ -75,6 +75,8 @@ KINDS = (
     "behaviour_skipped",
     "behaviours_kept",
     "hook_patched",
+    "approval_offered",
+    "approval_declined",
     "ritual_recorded",
     "ritual_proposed",
     "ritual_moved",
@@ -463,7 +465,7 @@ def pick_use(rows, source):
     return None
 
 
-def pick_answer(rows, row) -> str:
+def checked_pick(rows, row) -> dict:
     source = row["payload"]["source"]
     if len(source["answers"]) != 1:
         raise ValueError(f"pick {row['prompt_id']!r} must hold exactly one question to approve a change")
@@ -476,13 +478,18 @@ def pick_answer(rows, row) -> str:
     if used is not None:
         raise ValueError(f"pick {row['prompt_id']!r} was already used ({used.get('kind')}); "
                          "one picker answer approves one change")
-    return next(iter(pick["answers"].values()))
+    return dict(pick, answer=next(iter(pick["answers"].values())))
+
+
+def pick_answer(rows, row) -> str:
+    return checked_pick(rows, row)["answer"]
 
 
 def named_text(prompt) -> str:
     # A pick's question is PM-written, so only Shawn's answer can name what it approves.
     if prompt.get("origin") == "picked":
-        return redact(prompt.get("answer") or "")
+        # An offered pick is bound to its command, so the command's own words stand in for the plain option text.
+        return redact(prompt.get("named") or prompt.get("answer") or "")
     return redact(prompt["quote"])
 
 

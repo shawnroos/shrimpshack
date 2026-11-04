@@ -29,6 +29,7 @@ _LINEAR = "the Linear done, cancelled and root-cause rule"
 # A new file that implements one of these rules must be added here, or its patch notice stays silent.
 PROTECTED = {
     "programme_approval": (_PICKER, _PICK),
+    "programme_offers": (_PICKER, _PICK),
     "programme_pick_source": (_PICKER, _PICK),
     "programme_journal": (_PICK,),
     "programme_setup": (_PICK,),

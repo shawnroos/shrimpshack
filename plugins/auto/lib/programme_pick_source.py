@@ -237,7 +237,7 @@ def read_pick(row):
         gap = f"leaves {len(unanswered)} of {len(asked)} questions unanswered, so it approves nothing"
     elif _has_note(result):
         gap = "carries a note, which counts as Shawn's own words, so it approves no option"
-    return {"answers": result["answers"], "gap": gap}
+    return {"answers": result["answers"], "gap": gap, "questions": questions}
 
 
 def approval_gap(row):

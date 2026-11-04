@@ -75,6 +75,8 @@ A verified pick, or a `suggested` prompt, also approves the `--prompt` verbs on 
 
 A pick cited this way must hold exactly one question, and its answer must equal the approval label of the command being run: "Approve " followed by the shell-quoted verb and arguments, without `--prompt` and `--run`. `programme.sh approval-label <verb> <args>` prints it. A trailing " (Recommended)" is ignored. `set-remit` takes its change on stdin, which no label can show, so a pick never approves it; a typed prompt or an accepted suggestion does. An option value that starts with `--` is refused, so a label cannot hide `--run` inside another option. Any other answer approves nothing, so a decline cannot be misread as approval whatever its wording. Earlier free-text checks on the answer leaked three review rounds running ("No", "Skip r1", "Keep item-x" approving drop-item). Naming checks still read only the answer. An accepted suggestion containing a negation word (including "never") approves nothing; type it instead. One pick approves one change: a pick that any earlier row cites, under any prompt id journaled for the same picker answer, is refused. The approval records `origin: picked` or `origin: suggested`.
 
+A pick of a picker that `programme.sh offer` printed binds by stored offer, not by label: `agent-tool-surface.md` gives the rule. The label comparison stays only for a picker with no matching offer, as an alias until the instructions move to `offer`.
+
 ## Failure behavior
 
 Missing, malformed, changed, truncated, or unsupported source records refuse approval without changing programme state.
