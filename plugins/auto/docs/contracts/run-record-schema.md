@@ -776,7 +776,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `operation_settled`, `operation_uncertain`, `resources_reconciled`, `item_disposed`,
 `uncertainty_accepted`, `archive_check_failed`, `programme_archived`, `successor_created`,
 `permission_proposed`, `permission_answered`, `permission_verified`, `permission_settled`,
-`blocked_settings_write`, `blocked_behaviours_write`, `blocked_limit_write`.
+`blocked_settings_write`, `blocked_behaviours_write`.
 
 - `item_held {item, reason}` is journaled by `start-worker` each time the focus gate refuses a start (one row per refusal).
   `focus_override_approved {item, next, prompt_id, quote}` is journaled by `override-focus`.
@@ -896,7 +896,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - A verb's row approved through an offer carries `wording` and `offer_id`. `wording` is `pm_draft` on a pick, where `quote` holds the draft or the option text, and `shawn` on his own words. A Ruling revision, its `closed` block, a project term, the remit term and a Shawn decision carry the same `wording`, and the first three also carry `approved: {prompt_id, origin, offer_id, read_by}`. A row with no `wording` reads as `shawn`. A carried Ruling keeps its mark. `RULING_KEYS` leaves these fields out, so they never make a Ruling look changed.
 - A verb's row approved by Shawn's own words on an offer also carries `read_as` (the option text), `read_by: "pm"`, `offer_id` and `read_back` (the line the PM shows him). `quote` holds his words.
 - `hook_patched` is the row of `record-hook-patch`: `{file, why, pr, protects, text}`. `protects` lists the protected rules the file holds and `text` is the notice to Shawn. It carries no prompt id, because it records what the PM did and approves nothing.
-- `limit_refused` is one call refused under an agreed limit: `{check, item, scope, tool, path?, command?}`. `item` is null when the setting is the programme's. The command is redacted and capped. Nothing pauses.
+- `limit_refused` is one call refused under an agreed limit: `{check, item, scope, tool, limits?, path?, command?}`. `item` is null when the setting is the programme's. `limits` lists every limit on when the call would write a protected place, and `path` is then the real path, or `CLAUDE_AUTO_DATA_DIR`. A call that two guards refuse has two rows. The command is redacted and capped. Nothing pauses.
 - `check_set` is the row of `set-check`: `{check, state, scope, item?, set_by, text, items_still_differ?}`. `scope` is `programme`, `item` or `own`. A change that needed Shawn's pick also carries `prompt_id` and `quote` and cites the pick. `items_still_differ` lists the live items whose own setting beats a programme change.
 - `checks_unreadable` is written by `programme_checks.session_checks`: `{since, outcome, detail}`. `outcome` is the hold (`unavailable`, `corrupt`, `unsupported`), `unreadable`, or `bad_shape` with `detail` naming where the setting sits and not its value. One row covers one episode. A hold leaves `.checks-unreadable.json` in the home, because the journal needs the store the hold blocks, and the first read after the store frees writes the row. While the settings cannot be read, each check uses its default.
 - `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
@@ -930,9 +930,6 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   - `blocked_settings_write {tool, path, command?}`, written by the
     PreToolUse hook when it refuses a driving session's call that names a
     proposal's `.claude/settings.local.json`. Older rows also carry `item_ids`.
-  - `blocked_limit_write {tool, path, limits, item, command?}`, written by the
-    PreToolUse hook when it refuses a write to a protected place from a session
-    with a limit on. `path` is the real path, or `CLAUDE_AUTO_DATA_DIR`.
   - `blocked_behaviours_write {tool, path, command?}`, written by the
     PreToolUse hook when it refuses a driving session's call that names the
     personal behaviours folder or the stored `behaviours.json`. Older rows also

@@ -252,7 +252,7 @@ def _read_stdin(raw: str):
     return sid, _command_text(data)
 
 
-def destructive_denial(stdin_raw: str):
+def destructive_denial(stdin_raw: str) -> tuple | None:
     session_id, command = _read_stdin(stdin_raw)
     label = _matched_destructive(command)
     if label is None or session_id is None:
@@ -263,7 +263,7 @@ def destructive_denial(stdin_raw: str):
     return checks.limit_refusal(DESTRUCTIVE_LIMIT, session_id, "Bash", f"runs `{label}`", command=command)
 
 
-def driver_send_denial(stdin_raw: str) -> dict | None:
+def driver_send_denial(stdin_raw: str) -> tuple | None:
     session_id, command = _read_stdin(stdin_raw)
     if not command:
         return None
@@ -391,7 +391,7 @@ def _remit_write(tool_name, tool_input, programme):
     return None
 
 
-def tracker_write_denial(stdin_raw: str) -> dict | None:
+def tracker_write_denial(stdin_raw: str) -> tuple | None:
     data = json.loads(stdin_raw) if stdin_raw else None
     if not isinstance(data, dict) or not _is_tracker_tool(data.get("tool_name")):
         return None
@@ -426,7 +426,6 @@ def tracker_write_denial(stdin_raw: str) -> dict | None:
 # The hook is killed at its 10 s timeout and a killed hook denies nothing, so a guard never
 # waits out a held programme store: each read gives up quickly (a hold denies), and the
 # journal row is written after the deny is on stdout, giving up if the lock stays held.
-STORE_WAIT_MS = 250
 JOURNAL_LOCK_WAIT = 1.0
 COMMAND_CAP = 2000
 
@@ -458,6 +457,10 @@ def _guarded(check, stdin_raw):
         return None, None
 
 
+def _decision_of(module):
+    return lambda raw: load_lib_module(module).decision(raw)
+
+
 def _cli() -> int:
     stdin_raw = ""
     if not sys.stdin.isatty():
@@ -466,7 +469,8 @@ def _cli() -> int:
         except Exception:
             stdin_raw = ""
     try:
-        load_lib_module("programme_store").bound_waits(STORE_WAIT_MS)
+        store = load_lib_module("programme_store")
+        store.bound_waits(store.HOOK_WAIT_MS)
         load_lib_module("programme_home").cache_reads()
     except Exception:
         pass
@@ -475,22 +479,18 @@ def _cli() -> int:
         _emit(tracker_denial)
         _journal(tracker_row)
         return 0
-    settings_denial, settings_row = _guarded(
-        lambda raw: load_lib_module("programme_settings_guard").decision(raw), stdin_raw)
-    behaviours_denial, behaviours_row = _guarded(
-        lambda raw: load_lib_module("programme_behaviour_guard").decision(raw), stdin_raw)
-    driver_denial, driver_row = _guarded(driver_send_denial, stdin_raw)
-    limits_denial, limits_row = _guarded(
-        lambda raw: load_lib_module("programme_limits").decision(raw), stdin_raw)
-    destructive, destructive_row = _guarded(destructive_denial, stdin_raw)
-    decision = destructive or settings_denial or behaviours_denial or driver_denial or limits_denial
+    results = [_guarded(guard, stdin_raw) for guard in (
+        destructive_denial,
+        _decision_of("programme_settings_guard"),
+        _decision_of("programme_behaviour_guard"),
+        driver_send_denial,
+        _decision_of("programme_limits"),
+    )]
+    decision = next((denial for denial, _row in results if denial), None)
     if decision is not None:
         _emit(decision)
-    _journal(destructive_row)
-    _journal(settings_row)
-    _journal(behaviours_row)
-    _journal(driver_row)
-    _journal(limits_row)
+    for _denial, row in results:
+        _journal(row)
     return 0
 
 

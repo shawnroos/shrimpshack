@@ -41,7 +41,7 @@ A contract's `--limit <check>` and a behaviour file's `limit: <check>` name a li
 
 A limit that is on binds every session attached to the item, its sub-agents and takeover sessions, until the item finishes or the programme ends. A launched session that is attached to no item has no limit: run `P add-item` or attach it if it must carry one. Your own session takes a limit only when it is attached to an item.
 
-A refusal stops one call, journals it as `limit_refused` or `blocked_limit_write`, and pauses nothing. It names the limit, and the worker asks you to lift it. While any limit is on, the session also cannot write:
+A refusal stops one call, journals it as `limit_refused`, and pauses nothing. It names the limit, and the worker asks you to lift it. While any limit is on, the session also cannot write:
 
 - the programme's files, or set `CLAUDE_AUTO_DATA_DIR`
 - the installed plugin cache

@@ -270,13 +270,21 @@ it "a refusal names the limit, its item and the route to lift it"
 OUT="$(call sess-lim Edit "{\"file_path\": \"${CACHE_HOOK}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
 has "no-destructive-commands" "$OUT"
 has "linear:AI-1" "$OUT"
-has "Ask the PM" "$OUT"
+has "ask the PM" "$OUT"
 has "set-check no-destructive-commands off" "$OUT"
 has "$CACHE_HOOK" "$OUT"
 
+it "an item's limit is lifted by the command the refusal gives: an item setting beats the programme setting"
+has "set-check no-destructive-commands off --item linear:AI-1" "$OUT"
+
+it "a refusal says what else a limited session cannot write"
+has "the programme's files" "$OUT"
+has "the installed plugin" "$OUT"
+has "disableAllHooks" "$OUT"
+
 last_limit_row() {
   run_py "$RUN" <<'EOF'
-rows = [r for r in pj.read(args[0]) if r["kind"] == "blocked_limit_write"]
+rows = [r for r in pj.read(args[0]) if r["kind"] == "limit_refused" and "limits" in r["payload"]]
 print(json.dumps(rows[-1]["payload"], sort_keys=True) if rows else "none")
 print(rows[-1]["session_id"] if rows and "session_id" in rows[-1] else "")
 EOF
@@ -319,9 +327,21 @@ check "$BEFORE" "$AFTER"
 check "allow" "$(sh_verdict sess-lim "git status")"
 
 it "a read journals no row"
-N="$(count_rows blocked_limit_write)"
+N="$(count_rows limit_refused)"
 sh_verdict sess-lim "cat ${HOME_FILE}" >/dev/null
-check "$N" "$(count_rows blocked_limit_write)"
+check "$N" "$(count_rows limit_refused)"
+
+it "with two limits on, a refusal names both, since lifting one does not free the call"
+edit_run "prog['items']['linear:AI-2']['check_settings'] = {'no-destructive-commands': $ON, 'no-settings-writes': $ON}"
+OUT="$(sh_verdict sess-free "rm ${CACHE_HOOK}"; call sess-free Edit "{\"file_path\": \"${CACHE_HOOK}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+has "each must be lifted: no-destructive-commands, no-settings-writes" "$OUT"
+has '"limits": ["no-destructive-commands", "no-settings-writes"]' "$(last_limit_row)"
+edit_run "prog['items']['linear:AI-2']['check_settings'] = None"
+
+it "a programme's limit is lifted for the one worker through its item, as the refusal says"
+edit_run "prog['check_settings'] = {'no-destructive-commands': $ON}"
+has "set-check no-destructive-commands off --item linear:AI-2" "$(call sess-free Edit "{\"file_path\": \"${CACHE_HOOK}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
+edit_run "prog['check_settings'] = {}"
 
 it "a limit turned on mid-run applies on the next call, and lifting it applies on the next call"
 check "allow" "$(sh_verdict sess-free "rm ${CACHE_HOOK}")"
@@ -358,6 +378,47 @@ check "ran" "$(marker_call Edit "{\"file_path\": \"${AUTO_ROOT}/lib/x.py\"}")"
 
 it "an ordinary Edit, MultiEdit or Write starts no Python"
 check "none none none" "$(marker_call Edit "{\"file_path\": \"${NOREPO}/a.txt\"}") $(marker_call MultiEdit "{\"file_path\": \"${NOREPO}/a.txt\"}") $(marker_call Write "{\"file_path\": \"${NOREPO}/a.txt\"}")"
+
+cwd_marker_call() {
+  rm -f "${WORK}/python-ran"
+  local raw
+  raw="$(payload sess-lim "$1" "$2" "$3")"
+  ( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "$HOOK" <<< "$raw" )
+  [ -e "${WORK}/python-ran" ] && printf 'ran' || printf 'none'
+}
+it "a Read, an ordinary Edit or an ordinary Bash with cwd inside the plugin root starts no Python"
+check "none none none" "$(cwd_marker_call "$AUTO_ROOT" Read "{\"file_path\": \"${NOREPO}/a.txt\"}") $(cwd_marker_call "$AUTO_ROOT" Edit "{\"file_path\": \"${NOREPO}/a.txt\"}") $(cwd_marker_call "$AUTO_ROOT" Bash "{\"command\": \"git status\"}")"
+
+it "the same calls with cwd inside the programme folder or the plugin cache start no Python"
+check "none none" "$(cwd_marker_call "$PROGRAMMES" Edit "{\"file_path\": \"${NOREPO}/a.txt\"}") $(cwd_marker_call "$CACHE" Read "{\"file_path\": \"${NOREPO}/a.txt\"}")"
+
+it "a transcript path inside the plugin root starts no Python"
+rm -f "${WORK}/python-ran"
+RAW="$("$PY" -c 'import json,sys; print(json.dumps({"session_id": "sess-lim", "transcript_path": sys.argv[1], "cwd": sys.argv[2], "tool_name": "Read", "tool_input": {"file_path": "a.txt"}}))' "${AUTO_ROOT}/t.jsonl" "$NOREPO")"
+( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "$HOOK" <<< "$RAW" )
+check "none" "$([ -e "${WORK}/python-ran" ] && printf ran || printf none)"
+
+it "with cwd inside the plugin root, a call whose input names a protected target still starts Python"
+check "ran ran ran" "$(cwd_marker_call "$AUTO_ROOT" Edit "{\"file_path\": \"${AUTO_ROOT}/lib/x.py\"}") $(cwd_marker_call "$AUTO_ROOT" Write "{\"file_path\": \"${HOME_FILE}\"}") $(cwd_marker_call "$AUTO_ROOT" Bash "{\"command\": \"rm ${CACHE_HOOK}\"}")"
+
+it "a settings or behaviours name anywhere in the payload still starts Python, for their guards"
+check "ran ran" "$(cwd_marker_call "${NOREPO}/.claude/settings.local.json" Read "{\"file_path\": \"a.txt\"}") $(cwd_marker_call "${NOREPO}/behaviours" Read "{\"file_path\": \"a.txt\"}")"
+
+it "macOS's bash 3.2 reads a large payload with no tool_input key inside the hook's time limit"
+BIG="${WORK}/big-payload.json"
+"$PY" -c 'import json; print(json.dumps({"session_id": "sess-lim", "tool_name": "Write", "other": {"content": "x" * 200000}}))' > "$BIG"
+START="$("$PY" -c 'import time; print(time.time())')"
+( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" /bin/bash "$HOOK" < "$BIG" ) >/dev/null
+check "True" "$("$PY" -c "import time; print(time.time() - $START < 5)")"
+
+it "a limited session in a protected folder running a call that names nothing is not refused"
+cwd_verdict() {
+  local raw out
+  raw="$(payload sess-lim "$1" "$2" "$3")"
+  out="$( cd "$NOREPO" && bash "$HOOK" <<< "$raw" )"
+  [ -z "$out" ] && printf 'allow' || printf 'deny'
+}
+check "allow allow" "$(cwd_verdict "${HOME_FILE%/*}" Bash "{\"command\": \"rm record.json\"}") $(cwd_verdict "${HOME_FILE%/*}" Edit "{\"file_path\": \"record.json\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
 
 # ---- settings that cannot be read ----
 

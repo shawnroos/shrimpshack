@@ -15,7 +15,6 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
-programme_record = load_lib_module("programme_record")
 run_record_core = load_lib_module("run_record_core")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_store = load_lib_module("programme_store")
@@ -48,6 +47,10 @@ PROTECTED = {
 }
 
 
+def _record():
+    return load_lib_module("programme_record")
+
+
 def _protects(path) -> list:
     return list(PROTECTED.get(os.path.splitext(os.path.basename(path))[0], ()))
 
@@ -72,7 +75,7 @@ def _h_record(host, argv):
 
     def notify(payload):
         # A host's notify value is an exit code or a reason word, so 0 is the only delivered value.
-        return {"notified": programme_record.notify_host("auto: hook code patched", payload["text"]) == 0}
+        return {"notified": _record().notify_host("auto: hook code patched", payload["text"]) == 0}
 
     return host._write(opts, change, PATCHED, verb="record-hook-patch", target=path, after=notify)
 
@@ -86,7 +89,6 @@ LIMIT_REFUSED = "limit_refused"
 AUTO_RUN = "auto_run"
 OWN = "own"
 STATES = ("on", "off")
-STORE_WAIT_MS = 250
 JOURNAL_LOCK_WAIT = 0.5
 DETAIL_CAP = 300
 
@@ -305,7 +307,7 @@ def session_checks(session_id, now=None) -> dict:
     # Lowers the store wait for the rest of the process, so only a short-lived hook calls this.
     matches, unreadable = [], []
     try:
-        programme_store.bound_waits(STORE_WAIT_MS)
+        programme_store.bound_waits(programme_store.HOOK_WAIT_MS)
         for run, lease_session, record, hold in _held_runs(now):
             try:
                 if not isinstance(record, dict):
@@ -357,7 +359,7 @@ def _bound_to(item, run_id, repo_root) -> bool:
 def task_run_state(name, run_id, repo_root) -> bool:
     """A check for a task run. Only a run bound to a live item has a setting; a standalone run gets the default."""
     try:
-        programme_store.bound_waits(STORE_WAIT_MS)
+        programme_store.bound_waits(programme_store.HOOK_WAIT_MS)
         for _run, _session, record, _hold in _held_runs(None):
             programme = record.get("programme") if isinstance(record, dict) else None
             for item in _items(programme).values():
@@ -378,14 +380,11 @@ def limit_refusal(name, session_id, tool, what, **detail) -> tuple:
               f"Nothing is paused. Continue the work that does not need this, or ask the PM: "
               f"`programme.sh set-check {name} off{lift}` lifts it. This attempt is journaled.")
     payload = {"check": name, "item": item, "scope": source.get("scope"), "tool": tool, **detail}
-    return {"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason": reason,
-    }}, (source.get("run"), LIMIT_REFUSED, session_id, payload)
+    deny = load_lib_module("programme_settings_guard")._deny(reason)
+    return deny, (source.get("run"), LIMIT_REFUSED, session_id, payload)
 
 
-def refusal(name, state, own=False, item=None):
+def refusal(name, own=False, item=None):
     if name not in CHECKS:
         return f"unknown check {name!r}; the checks are {', '.join(CHECKS)}"
     if not CHECKS[name].can_turn_off:
@@ -408,9 +407,10 @@ def place(programme, ident, own=False) -> tuple:
         return OWN, None, programme
     if not ident:
         return "programme", None, programme
-    key = programme_record._resolve(programme, programme_record.check_item_id(ident))
+    record = _record()
+    key = record._resolve(programme, record.check_item_id(ident))
     if not _live_item(programme["items"][key]):
-        raise programme_record.RecordError(f"item {key!r} is finished, and a finished item's settings never apply")
+        raise record.RecordError(f"item {key!r} is finished, and a finished item's settings never apply")
     return "item", key, programme["items"][key]
 
 
@@ -422,15 +422,18 @@ def stored_state(block, name, scope):
     return _entry(block, name).get(OWN if scope == OWN else "state")
 
 
+def _limit_is_on(programme, item, name) -> bool:
+    return bool(_setting(item, name) or _setting(programme, name))
+
+
+def _limit_ask(name, key) -> str:
+    scope = f" --item {key}" if key else ""
+    return f"programme.sh offer limit-{name} --command 'set-check {name} on{scope}'"
+
+
 def limit_asks(programme, key, names) -> list:
-    item = (programme.get("items") or {}).get(key) if key else None
-    asks = []
-    for name in names:
-        if _setting(item, name) or _setting(programme, name):
-            continue
-        scope = f" --item {key}" if key else ""
-        asks.append(f"programme.sh offer limit-{name} --command 'set-check {name} on{scope}'")
-    return asks
+    item = _items(programme).get(key) if key else None
+    return [_limit_ask(name, key) for name in names if not _limit_is_on(programme, item, name)]
 
 
 def _contract_limits(rows, key, item) -> list:
@@ -438,22 +441,22 @@ def _contract_limits(rows, key, item) -> list:
                 and "limits" in r["payload"]]
     if set_rows:
         return set_rows[-1]["payload"]["limits"]
-    run = item.get("auto_run")
+    run = item.get(AUTO_RUN)
     seed = run.get("contract") if isinstance(run, dict) else None
     return seed.get("limits") or [] if isinstance(seed, dict) else []
 
 
 def _still_off(programme, item, name) -> bool:
-    return name in CHECKS and CHECKS[name].limit and not (_setting(item, name) or _setting(programme, name))
+    return name in CHECKS and CHECKS[name].limit and not _limit_is_on(programme, item, name)
 
 
 def named_limits(programme, rows, behaviours) -> list:
-    out = [{"check": b["limit"], "via": f"behaviour {b.get('id')}", "ask": limit_asks(programme, None, [b["limit"]])[0]}
+    out = [{"check": b["limit"], "via": f"behaviour {b.get('id')}", "ask": _limit_ask(b["limit"], None)}
            for b in behaviours or [] if b.get("limit") and b.get("in_force") and _still_off(programme, None, b["limit"])]
     for key, item in sorted(_items(programme).items()):
         if not _live_item(item):
             continue
-        out += [{"check": name, "via": f"the contract of item {key}", "ask": limit_asks(programme, key, [name])[0]}
+        out += [{"check": name, "via": f"the contract of item {key}", "ask": _limit_ask(name, key)}
                 for name in _contract_limits(rows or [], key, item) if _still_off(programme, item, name)]
     return out
 
@@ -496,7 +499,7 @@ def _h_set_check(host, argv):
         raise ValueError(_SET_USAGE)
     name, state = positional
     own, ident = bool(opts.get("own")), opts.get("item")
-    why = refusal(name, state, own, ident)
+    why = refusal(name, own, ident)
     if why:
         raise host.ProgrammeError(why, fix=_SEE_CHECKS)
     needs = needs_pick(name, state, own)

@@ -418,7 +418,7 @@ def _set_check(cmd, programme) -> dict:
         raise OfferError("usage: set-check <name> on|off [--item <id>]")
     name, state = cmd.pos
     own, ident = cmd.flag("own"), cmd.opt("item")
-    why = checks.refusal(name, state, own, ident)
+    why = checks.refusal(name, own, ident)
     if why:
         raise OfferError(why)
     if not checks.needs_pick(name, state, own):

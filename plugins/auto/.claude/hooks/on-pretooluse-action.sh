@@ -33,27 +33,33 @@ fi
 # Python's live checks are the send check and the destructive limit on Bash, the tracker guard on
 # Linear MCP calls, the settings and behaviours guards and the writes a limit protects.
 # Any other call starts no Python.
-__cd_settings=0
+__cd_file_guard=0
 # Case-insensitive: the macOS file system treats Settings.local.json as the same file.
 shopt -s nocasematch
 if [[ $__cd_stdin_json == *settings.local.json* ]]; then
-  __cd_settings=1
+  __cd_file_guard=1
 fi
 if [[ $__cd_stdin_json == *behaviours* || $__cd_stdin_json == *behaviour-files* ]]; then
-  __cd_settings=1
+  __cd_file_guard=1
 fi
 # What a limited session may not write. Python decides; this keeps other calls from starting it.
-if [[ $__cd_stdin_json == *programmes* || $__cd_stdin_json == *plugins/cache* \
-   || $__cd_stdin_json == *"$CLAUDE_PLUGIN_ROOT"* \
-   || $__cd_stdin_json == *disableAllHooks* || $__cd_stdin_json == *allowManagedHooksOnly* ]]; then
-  __cd_settings=1
+# Only tool_input counts, as in programme_limits._may_name_target: a cwd inside the plugin would start Python on every call.
+# bash 3.2's prefix strip is quadratic up to the match: 200 KB with no key takes 15 s, and the hook is killed at 10 s.
+__cd_tool_input="$__cd_stdin_json"
+if [[ ${__cd_stdin_json:0:4096} == *\"tool_input\"* ]]; then
+  __cd_tool_input="${__cd_stdin_json#*\"tool_input\"}"
+fi
+if [[ $__cd_tool_input == *programmes* || $__cd_tool_input == *plugins/cache* \
+   || $__cd_tool_input == *"$CLAUDE_PLUGIN_ROOT"* \
+   || $__cd_tool_input == *disableAllHooks* || $__cd_tool_input == *allowManagedHooksOnly* ]]; then
+  __cd_file_guard=1
 fi
 shopt -u nocasematch
 [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
-  || [ "$__cd_settings" = 1 ] || exit 0
+  || [ "$__cd_file_guard" = 1 ] || exit 0
 # Edit and MultiEdit are matched only for the guards named above.
 __cd_edit='"tool_name"[[:space:]]*:[[:space:]]*"(Multi)?Edit"'
-if [ "$__cd_settings" = 0 ] && [[ $__cd_stdin_json =~ $__cd_edit ]]; then
+if [ "$__cd_file_guard" = 0 ] && [[ $__cd_stdin_json =~ $__cd_edit ]]; then
   exit 0
 fi
 
@@ -82,7 +88,7 @@ __cd_could_match() {
   shopt -u nocasematch
   return "$status"
 }
-if [ "$__cd_settings" = 0 ] && [[ $__cd_stdin_json == *'"Bash"'* && $__cd_stdin_json != *'"mcp__'*[Ll]inear* ]] \
+if [ "$__cd_file_guard" = 0 ] && [[ $__cd_stdin_json == *'"Bash"'* && $__cd_stdin_json != *'"mcp__'*[Ll]inear* ]] \
   && ! __cd_could_match; then
   exit 0
 fi

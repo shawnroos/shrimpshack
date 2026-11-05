@@ -333,6 +333,10 @@ def db_path(run_id: str) -> str:
     return os.path.join(programme_home.home_path(run_id), DB_NAME)
 
 
+# A hook is killed at its timeout and a killed hook denies nothing, so a hook never waits out a held store.
+HOOK_WAIT_MS = 250
+
+
 def bound_waits(ms: int) -> None:
     global BUSY_TIMEOUT_MS
     BUSY_TIMEOUT_MS = min(BUSY_TIMEOUT_MS, ms)

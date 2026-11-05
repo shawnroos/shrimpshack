@@ -632,8 +632,6 @@ def _journal_stopped_unwatched(session_id, now) -> None:
 
 
 STOP_CHECK = "stop-block"
-# The hook is killed at its 10 s timeout, so a held programme store costs a short wait, as in the PreToolUse guards.
-STORE_WAIT_MS = 250
 
 
 def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
@@ -698,7 +696,8 @@ def _cli(argv) -> int:
         except Exception:
             stdin_raw = ""
     try:
-        load_lib_module("programme_store").bound_waits(STORE_WAIT_MS)
+        store = load_lib_module("programme_store")
+        store.bound_waits(store.HOOK_WAIT_MS)
         load_lib_module("programme_home").cache_reads()
     except Exception:
         pass

@@ -1091,7 +1091,7 @@ A session under `no-destructive-commands` or `no-settings-writes` has the matchi
 For a session with at least one limit on, the hook denies a Write, Edit, MultiEdit or Bash write to the
 programme's folder or the installed plugin cache, a Bash call that sets
 `CLAUDE_AUTO_DATA_DIR`, and a write of `disableAllHooks` or `allowManagedHooksOnly` to a
-`settings.json` or `settings.local.json`. It journals `blocked_limit_write` and
+`settings.json` or `settings.local.json`. It journals `limit_refused` and
 pauses nothing. File tools match by real path. A Bash call that names one of these
 passes only if it only reads, or runs the plugin's own scripts; the match is by text, so
 it is best effort. A session with no limit on is not checked. `start-worker` adds the

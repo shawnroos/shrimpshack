@@ -9,6 +9,7 @@ plugin's own scripts, so a path built at run time or a script written elsewhere 
 from __future__ import annotations
 
 import collections
+import functools
 import json
 import os
 import re
@@ -24,14 +25,14 @@ programme_home = load_lib_module("programme_home")
 settings_guard = load_lib_module("programme_settings_guard")
 behaviour_guard = load_lib_module("programme_behaviour_guard")
 
-BLOCKED_KIND = "blocked_limit_write"
 DATA_ENV = "CLAUDE_AUTO_DATA_DIR"
 ROOT_ENV = "CLAUDE_PLUGIN_ROOT"
 HOOK_KEYS = ("disableAllHooks", "allowManagedHooksOnly")
 SETTINGS_NAMES = ("settings.json", "settings.local.json")
 _PLUGIN_ROOT = os.path.dirname(_LIB_DIR)
 _FILE_TOOLS = ("Write", "Edit", "MultiEdit")
-_ENV_REFS = re.compile(r"\$(?:\{(%s)[^}]*\}|(%s)\b)" % (f"{DATA_ENV}|{ROOT_ENV}", f"{DATA_ENV}|{ROOT_ENV}"))
+_ENV_NAMES = f"{DATA_ENV}|{ROOT_ENV}"
+_ENV_REFS = re.compile(rf"\$(?:\{{({_ENV_NAMES})[^}}]*\}}|({_ENV_NAMES})\b)")
 _FRAGMENT = re.compile(r"[\s=:,'\"(){}\[\]]+")
 _ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
 _PUNCTUATION = ";&|<>()\n"
@@ -51,10 +52,14 @@ _READER_WRITES = {
 Segment = collections.namedtuple("Segment", "words targets")
 
 
-def _plugin_dirs() -> set:
-    configs = [os.path.expanduser("~/.claude"), os.environ.get("CLAUDE_CONFIG_DIR")]
+@functools.lru_cache(maxsize=None)
+def _real_plugin_dirs(configs) -> frozenset:
     dirs = {os.path.join(c, "plugins", "cache") for c in configs if c}
-    return {os.path.realpath(d).casefold() for d in dirs | {_PLUGIN_ROOT}}
+    return frozenset(os.path.realpath(d).casefold() for d in dirs | {_PLUGIN_ROOT})
+
+
+def _plugin_dirs() -> frozenset:
+    return _real_plugin_dirs((os.path.expanduser("~/.claude"), os.environ.get("CLAUDE_CONFIG_DIR")))
 
 
 def _under(path: str, dirs) -> bool:
@@ -62,7 +67,7 @@ def _under(path: str, dirs) -> bool:
     return any(folded == d or folded.startswith(d + os.sep) for d in dirs)
 
 
-def _protected() -> set:
+def _protected() -> frozenset:
     return _plugin_dirs() | {os.path.realpath(programme_home.programmes_dir()).casefold()}
 
 
@@ -89,8 +94,12 @@ def _segments(command: str) -> list:
     return [s for s in found if s.words or s.targets]
 
 
+def _fragments(word):
+    return filter(None, _FRAGMENT.split(word))
+
+
 def _protected_path(word, bases, dirs):
-    for fragment in filter(None, _FRAGMENT.split(word)):
+    for fragment in _fragments(word):
         for base in bases:
             path = settings_guard._resolved(fragment, base)
             if _under(path, dirs):
@@ -132,7 +141,7 @@ def _runs_plugin_script(segment, bases, dirs) -> bool:
 
 def _settings_word(words):
     for word in words:
-        for fragment in filter(None, _FRAGMENT.split(word)):
+        for fragment in _fragments(word):
             if _is_settings_name(fragment):
                 return fragment
     return None
@@ -197,12 +206,11 @@ def _may_name_target(tool_input) -> bool:
     return any(word in text for word in words)
 
 
-def refusal_text(names, item, target) -> str:
-    listed = ", ".join(names)
-    return (f"auto: limit {listed} is on for item {item}, so this session cannot write {target}. "
-            "A command that names it must only read it. Only this call is refused, and the attempt is journaled. "
-            f"Ask the PM to lift the limit (`programme.sh set-check {names[0]} off`), "
-            "and continue the work that does not need this.")
+def _refused_write(names, target) -> str:
+    others = f". These limits are all on, and each must be lifted: {', '.join(names)}" if len(names) > 1 else ""
+    return (f"would write {target}. While a limit is on, this session cannot write the programme's files or the "
+            "installed plugin, set `CLAUDE_AUTO_DATA_DIR`, or write `disableAllHooks` or `allowManagedHooksOnly` to a "
+            f"settings file, and a command that names one of them must only read it{others}")
 
 
 def decision(stdin_raw: str):
@@ -227,13 +235,9 @@ def decision(stdin_raw: str):
     # Read only after a hit: this walks every held lease, and most calls name nothing protected.
     checks_module = load_lib_module("programme_checks")
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    checks = checks_module.session_checks(session_id)
-    names = [name for name in checks_module.limit_names() if checks["states"].get(name)]
+    states = checks_module.hook_checks(session_id)["states"]
+    names = [name for name in checks_module.limit_names() if states.get(name)]
     if not names:
         return None
-    source = checks["decided_by"][names[0]]
-    payload = {"tool": tool_name, "path": target, "limits": names, "item": source["item"]}
-    if tool_name == "Bash":
-        payload["command"] = tool_input.get("command")
-    return settings_guard._deny(refusal_text(names, source["item"], target)), \
-        (source["run"], BLOCKED_KIND, session_id, payload)
+    return checks_module.limit_refusal(names[0], session_id, tool_name, _refused_write(names, target), limits=names,
+                                       **settings_guard.written(tool_name, tool_input, target))
