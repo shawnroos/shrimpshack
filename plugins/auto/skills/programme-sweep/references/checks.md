@@ -55,11 +55,11 @@ While any limit is on, the session also cannot write:
 - the installed plugin cache
 - `disableAllHooks` or `allowManagedHooksOnly` in a `settings.json` or `settings.local.json`
 
-It is also refused `set-check` and any Bash call that sets `CLAUDE_CODE_SESSION_ID`, because `programme.sh` knows its caller only by that variable.
+Each of those would let the worker switch off the hook that enforces its limit. A session with no limit on has none of these checks.
 
-Each of those would let the worker switch off the hook that enforces its limit. Reads stay open, and so do runs of the plugin's own scripts. A session with no limit on has none of these checks.
+Text cannot prove who a Bash call acts as, so a limited session's Bash is refused by default. A command that names one of those places passes only when every part is a plain read (`cat`, `head`, `tail`, `grep`, `wc`, `ls`, `stat`, `diff`, `jq` and a few like them; `sed`, `sort`, `less` and `tree` are not reads), or runs the plugin's scripts with a literal verb. `programme.sh` runs only with `status`, `rules`, `describe`, `context`, `inbox`, `contract-status`, `open-worker-questions`, `claim` or `register-run`, with no `$` or backtick in its arguments. Any command that names `SESSION_ID`, substitutes a command, or is too long to examine in full is refused, because `programme.sh` knows its caller only by `CLAUDE_CODE_SESSION_ID`.
 
-A limit is a best-effort text and path check. A file tool is matched by real path, and a Bash command by its text. A path built at run time, a script written first and run later, a glob, a symlink into these folders, a settings file copied from one made earlier, or a key spelled with a JSON unicode escape can get past it. Do not use a limit to contain a session you do not trust.
+A limit is a best-effort text and path check. A file tool is matched by real path, and a Bash command by its text. A script written first and run later, any spelling that reaches `programme.sh` through a file, a path built at run time, a glob, a symlink into these folders, a settings file copied from one made earlier, or a key spelled with a JSON unicode escape can get past it. Do not use a limit to contain a session you do not trust.
 
 ## Code by PR and publish
 

@@ -68,25 +68,27 @@ fi
 #    host binary, so a hidden name must match here too. Any $'..' goes to Python undecoded.
 #  - on-pretooluse-action._DESTRUCTIVE_PATTERNS, on the decoded text. The JSON here writes a tab or a
 #    newline as \t or \n, so a pattern's words are matched apart, with anything between.
-#  - programme_limits._may_name_target, also after the hiding characters go.
-#  - programme_settings_guard.decision's settings file names, also after the hiding characters go.
+#  - programme_limits._may_name_target, after the hiding characters, the expansion marks and the spaces go,
+#    so a name split by an expansion (CLAUDE_CODE_SESS$(:)ION_ID) still matches.
+#  - programme_settings_guard.names_settings, also after the hiding characters go.
 # tests/integration/check-settings.test.sh fails if a host or a pattern is added without this.
 __cd_hosts='herdr|rex|osascript|stubhost'
-__cd_protected='programmes|plugins|claude_auto_data_dir|claude_plugin_root|claude_code_session_id|set-check|disableallhooks|allowmanagedhooksonly'
+__cd_protected='programmes|plugins|claude_auto_data_dir|claude_plugin_root|session_id|set-check|disableallhooks|allowmanagedhooksonly'
 __cd_settings='settings\.(local\.)?json'
 __cd_destructive='push.*-f|reset.*--hard|(checkout|restore).*\.|clean.*-.*f|branch.*-d|rm.*-(rf|fr)|npm.*publish|gh.*(release.*(create|delete)|repo.*delete|pr.*merge.*--admin)'
 __cd_could_match() {
   # bash 3.2's pattern substitution is quadratic: 2 KB takes 0.5 s, and the hook is killed at 10 s.
   # Past this size starting Python is the cheaper test.
   [ "${#__cd_stdin_json}" -le 1500 ] || return 0
-  local input="${__cd_stdin_json#*\"tool_input\"}" plain status=1
+  local input="${__cd_stdin_json#*\"tool_input\"}" plain joined status=1
   [[ $input != *"\$'"* ]] || return 0
   # The JSON of a backslash-newline, which the shell joins away.
   plain="${input//\\\\\\n/}"
   plain="${plain//\$\\\"/}"
   plain="${plain//[\"\'\\]/}"
+  joined="${plain//[\$\(\)\{\}\`[:space:]]/}"
   shopt -s nocasematch
-  if [[ $plain =~ $__cd_hosts || $plain =~ $__cd_protected || $plain =~ $__cd_settings || $input =~ $__cd_destructive ]]
+  if [[ $plain =~ $__cd_hosts || $joined =~ $__cd_protected || $plain =~ $__cd_settings || $input =~ $__cd_destructive ]]
   then status=0; fi
   shopt -u nocasematch
   return "$status"

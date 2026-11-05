@@ -179,7 +179,8 @@
 #   programme_checks     → programme_home, run_record_core, programme_sanitize, programme_store,
 #                          programme_check_health; programme_record [lazy], programme_guard_text [lazy]
 #   programme_check_health → programme_home, run_record_core, programme_sanitize; programme_journal [lazy]
-#   programme_limit_terms → programme_checks (never the reverse). programme_brief, programme_sources,
+#   programme_limit_terms → programme_checks (never the reverse); programme_limits [lazy] (the run verbs
+#                          a brief names). programme_brief, programme_sources,
 #                          programme_view, worker_contract_write and programme_behaviour_file_verbs
 #                          load it lazily.
 #   programme_behaviour_files → programme_behaviours, programme_protocol

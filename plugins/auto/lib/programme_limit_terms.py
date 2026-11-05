@@ -23,10 +23,12 @@ def brief_lines(programme, key) -> list:
     names = item_limits(programme, key)
     if not names:
         return []
+    verbs = ", ".join(load_lib_module("programme_limits").RUN_VERBS)
     return ["Limits on this work:", *(f"- `{name}`: {checks.CHECKS[name].text}" for name in names),
             "While a limit is on, Auto also refuses your writes to the programme's files, to the installed plugin "
-            "and of `disableAllHooks` or `allowManagedHooksOnly` in a settings file, and refuses `set-check` and "
-            "setting `CLAUDE_CODE_SESSION_ID`. Reads stay open. A refusal "
+            "and of `disableAllHooks` or `allowManagedHooksOnly` in a settings file, and any command that names "
+            "`SESSION_ID`. A command that names those places passes only as a plain read (`cat`, `grep`, `jq` and "
+            f"the like) or as `programme.sh` with one of: {verbs}. A refusal "
             "stops only that call and is journaled. Keep working on the rest; the PM sees the refusal "
             "and lifts the limit when the work needs it."]
 
