@@ -121,7 +121,7 @@ def _changes(journal_entries) -> list:
         prompt_id = p.get("prompt_id")
         out.append({"at": row.get("at"), "kind": row["kind"], "term": p.get("term_id"),
                     "text": f"{p.get('area')}: {was}{p.get('value')}",
-                    "source": p.get("source") or (f"typed prompt {prompt_id}" if prompt_id else "the PM"),
+                    "source": p.get("source") or (f"Shawn's answer {prompt_id}" if prompt_id else "the PM"),
                     "prompt_id": prompt_id, "quote": programme_journal.redact(p["quote"]) if p.get("quote") else None,
                     "wording": p.get("wording")})
     return out[::-1]

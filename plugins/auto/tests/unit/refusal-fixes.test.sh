@@ -103,13 +103,6 @@ for verb in ("beat", "start", "reconcile-leases", "reconcile-operations"):
 EOF
 )"
 
-it "approval-label's own fix names approval-label usage, not the typed-approval text"
-check "ok" "$(run_py <<'EOF'
-fix = load_lib_module("programme_fixes").fix_for("approval-label")
-print("ok" if "approval-label <verb>" in fix and not fix.startswith("ask Shawn to type") else fix)
-EOF
-)"
-
 it "a non-driving session running set-waiting refuses at exit 1"
 CLAUDE_CODE_SESSION_ID="sess-stranger" prog set-waiting w2:item --who shawn --run "$RUN"
 check 1 "$CODE"
@@ -126,20 +119,29 @@ EOF
 it "adopt-rule citing an unverified prompt refuses at exit 1"
 prog adopt-rule docs-verified --prompt "$P_CRON" --run "$RUN"
 check 1 "$CODE"
-it "its fix names approval-label for the same command and a picker"
-has "fix: run \`programme.sh approval-label adopt-rule docs-verified\`" "$(last_line)"
-has "AskUserQuestion" "$(last_line)"
+it "its fix names offer for the same command, ask with what it prints, cite the answer"
+has "fix: run \`programme.sh offer <question-key> --command 'adopt-rule <args>'\`" "$(last_line)"
+has "ask Shawn with the input it prints" "$(last_line)"
+has "--prompt <its id>" "$(last_line)"
+lacks "approval-label" "$OUT"
 
-it "adopt-rule citing an unknown prompt id gets the same approval-label fix"
+it "adopt-rule citing an unknown prompt id gets the same offer fix"
 prog adopt-rule docs-verified --prompt p000000 --run "$RUN"
 check 1 "$CODE"
-has "programme.sh approval-label adopt-rule docs-verified" "$(last_line)"
+has "programme.sh offer <question-key> --command 'adopt-rule <args>'" "$(last_line)"
+lacks "approval-label" "$OUT"
 
-it "a verb a pick cannot approve gets a typed-prompt fix, not approval-label"
+it "the approval-label verb is gone: an unknown subcommand at exit 2 with no fix line"
 prog approval-label record-ruling
+check 2 "$CODE"
+has "unknown subcommand 'approval-label'" "$OUT"
+lacks "fix:" "$OUT"
+
+it "offering a verb a pick cannot approve refuses with a fix that names offer, not a label"
+prog offer pick --command "set-now testing" --run "$RUN"
 check 1 "$CODE"
-has "fix: " "$(last_line)"
-lacks "approval-label" "$(last_line)"
+has "fix: rerun \`programme.sh offer" "$(last_line)"
+lacks "approval-label" "$OUT"
 
 it "a refusal with no specific fix prints the verb's table entry"
 TABLE="$(run_py <<'EOF'

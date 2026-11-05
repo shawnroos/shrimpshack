@@ -259,7 +259,7 @@ _S = programme_layered_store.LayeredStore(
     "ritual", file_name=STORE_NAME, lock_name=STORE_LOCK, path_env=STORE_PATH_ENV, error=RitualError,
     verdict=lambda entry: verdict(entry), target=lambda entry: target(entry))
 OFFERS_RULE = "questions for Shawn, never actions: ask him, and act only on his answer"
-REWORD_FIX = ("reword the named step so it no longer names the protected action; typing an approval does not "
+REWORD_FIX = ("reword the named step so it no longer names the protected action; an approval does not "
               "change this. To ask Shawn about the action, put the question in --offer")
 
 
@@ -477,12 +477,9 @@ def _h_record(host, argv):
             entry = _programme_entry(programme, proposal)
             if entry is None or entry.get("state") != "proposed":
                 raise RitualError(f"no proposed ritual {proposal!r}")
-            load_lib_module("programme_offers_stores").require_bound(prompt, RitualError)
             entry = dict(entry, state=ACTIVE)
         else:
             entry = _draft(opts, rid, programme)
-        if entry.get("check"):
-            host.require_named(prompt, entry["check"]["name"].replace("-", " "))
         entry["source"] = load_lib_module("programme_offers_stores").source_of(prompt)
         schedule = entry["when"].get("schedule")
         if opts.get("ran-now") and not schedule:
@@ -519,16 +516,6 @@ def _h_propose(host, argv):
         return out
 
     return host._write(opts, change, PROPOSED)
-
-
-def _check_layer_named(host, prompt, rid, to) -> None:
-    options = LAYER_WORDS[to]
-    host.require_named(prompt, options, *([rid] if rid else []))
-    # require_named looks only at the word just before the name, so "not the repo" would pass it.
-    words = host._name_words(programme_journal.named_text(prompt))
-    start = min(s for option in options for s, _ in host._runs(words, host._squash(option)))
-    if set(words[:start]) & set(host._NEGATIONS):
-        raise RitualError(f"prompt {prompt['prompt_id']!r} negates the {to} layer; a move needs a plain yes")
 
 
 def _repo_key(programme, wanted) -> str:
@@ -606,7 +593,6 @@ def _h_move(host, argv):
     seen = {"rid": rid}
 
     def change(programme, prompt, rec):
-        _check_layer_named(host, prompt, rid, to)
         out = _move(host, programme, prompt, rec, rid, to, opts.get("repo"))
         seen.update(out, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
         adopted = out["adopted"]
@@ -659,14 +645,10 @@ def _h_keep(host, argv):
     seen = {}
 
     def change(programme, prompt, rec):
-        _check_layer_named(host, prompt, None, to)
         _require_readable_store()
-        named = [r for r in wanted if not programme_naming.missing(programme_journal.named_text(prompt), [r])]
-        if not named:
-            raise RitualError(f"prompt {prompt['prompt_id']!r} names none of {', '.join(wanted)}")
         key = _repo_key(programme, opts.get("repo")) if to == "repo" else None
         adopted = []
-        for rid in named:
+        for rid in wanted:
             local = _programme_entry(programme, rid)
             if local is None or local.get("state", ACTIVE) != ACTIVE:
                 raise RitualError(f"no active programme-layer ritual {rid!r} to keep")
@@ -674,7 +656,7 @@ def _h_keep(host, argv):
             _refuse(adopted[-1], verdict(adopted[-1]))
             put_programme_entry(programme, _pointer(local, to, key))
         seen.update(adopted=adopted, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
-        return {"kept": named, "not_named": [r for r in wanted if r not in named], "to": to, "repo_key": key,
+        return {"kept": wanted, "to": to, "repo_key": key,
                 "targets": [target(a) for a in adopted], "store_path": store_path()}
 
     return host._write(opts, change, KEPT, prompt_id=opts.get("prompt"), needs_prompt=True,
@@ -702,7 +684,7 @@ def note_gap(run_id, session_id, previous_beat, record) -> bool:
 _SPECS = (
     ("record-ritual", _h_record,
      "--prompt <id> " + _FIELDS_DOC + " [--run <id>], or --from-proposal <id> --prompt <id> [--run <id>]",
-     "no prompt from the driving session; typed words with no offer that do not name the check, when it has one; "
+     "no prompt from the driving session; a prompt that answers no open offer of this command; "
      "no --when or --step; neither or both of --trigger and --schedule; "
      "a step that names a protected escalation; with --from-proposal, any field option, an id that is not a "
      "proposal, or a prompt that does not answer its offer. Applies at once at the programme layer."),
@@ -711,15 +693,13 @@ _SPECS = (
      "Needs no prompt: a proposal applies nothing."),
     ("move-ritual", _h_move,
      "<id> --to programme|repo|personal --prompt <id> [--repo <key>] [--run <id>]",
-     "no prompt from the driving session; typed words with no offer that do not name the ritual id and the layer, "
-     "or hold a negation before the layer word; an unreadable rituals store; a ritual that is not active; a move "
+     "no prompt from the driving session; a prompt that answers no open offer of this command; an unreadable rituals store; a ritual that is not active; a move "
      "to the layer it is on; --to repo with a remit of several repos and no --repo, or a --repo outside the remit."),
     ("retire-ritual", _h_retire, "<id> --as retired|undone --prompt <id> [--run <id>]",
      "no prompt from the driving session; an unknown or already retired ritual; an unreadable rituals "
      "store when the ritual lives there. The entry stays visible as retired and its clock is dropped."),
     ("keep-rituals", _h_keep, "<id>... --to repo|personal --prompt <id> [--repo <key>] [--run <id>]",
-     "no prompt from the driving session; typed words with no offer that do not name the layer or negate it, or "
-     "name none of the ids; a named id that is not an active programme-layer ritual; an unreadable rituals store; "
+     "no prompt from the driving session; a prompt that answers no open offer of this command; an id that is not an active programme-layer ritual; an unreadable rituals store; "
      "--to repo with several remit repos and no --repo. A pick of a different set is refused."),
 )
 

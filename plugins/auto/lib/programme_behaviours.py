@@ -571,7 +571,7 @@ def _apply_edit(entry, target, prompt, proposal) -> dict:
 def _undo(entry, edited) -> str:
     if edited:
         return (f"the replaced wording is kept as 'previous' on the last 'edited' event of {entry['id']}: "
-                f"propose it back with propose-behaviour --edit-of {entry['id']} and apply it on Shawn's typed reply")
+                f"propose it back with propose-behaviour --edit-of {entry['id']} and apply it on Shawn's answer to its offer")
     return f"retire-behaviour {entry['id']} --as undone --prompt <id>"
 
 
@@ -591,7 +591,6 @@ def _from_proposal(programme, prompt, proposal) -> dict:
     entry = _programme_entry(programme, proposal)
     if entry is None or entry.get("state") != "proposed":
         raise BehaviourError(f"no proposed behaviour {proposal!r}")
-    load_lib_module("programme_offers_stores").require_bound(prompt, BehaviourError)
     return dict(entry, state=ACTIVE)
 
 
@@ -694,17 +693,6 @@ def _h_propose(host, argv):
     return host._write(opts, change, PROPOSED)
 
 
-def _check_layer_named(host, prompt, bid, to) -> None:
-    options = LAYER_WORDS[to]
-    host.require_named(prompt, options, *([bid] if bid else []))
-    # require_named looks only at the word just before the name, so "not the repo" would
-    # pass it; any negation earlier in the prompt refuses.
-    words = host._name_words(programme_journal.named_text(prompt))
-    start = min(s for option in options for s, _ in host._runs(words, host._squash(option)))
-    if set(words[:start]) & set(host._NEGATIONS):
-        raise BehaviourError(f"prompt {prompt['prompt_id']!r} negates the {to} layer; a move needs a plain yes")
-
-
 def _repo_key(programme, wanted) -> str:
     keys = programme_carryover.repo_keys(programme)
     if wanted:
@@ -792,7 +780,6 @@ def _h_move(host, argv):
     seen = {"bid": bid}
 
     def change(programme, prompt, rec):
-        _check_layer_named(host, prompt, bid, to)
         out = _move(host, programme, prompt, rec, bid, to, opts.get("repo"))
         seen.update(out, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
         adopted = out["adopted"]
@@ -842,15 +829,11 @@ KEPT = "behaviours_kept"
 
 
 def _keep(host, programme, prompt, rec, wanted, to, repo) -> dict:
-    _check_layer_named(host, prompt, None, to)
     read_store()
     loaded = load_store(host.prompt_lookup)
-    named = [b for b in wanted if not programme_naming.missing(programme_journal.named_text(prompt), [b])]
-    if not named:
-        raise BehaviourError(f"prompt {prompt['prompt_id']!r} names none of {', '.join(wanted)}")
     key = _repo_key(programme, repo) if to == "repo" else None
     adopted, dropped = [], {}
-    for bid in named:
+    for bid in wanted:
         local = _programme_entry(programme, bid)
         if local is None or local.get("state", ACTIVE) != ACTIVE:
             raise BehaviourError(f"no active programme-layer behaviour {bid!r} to keep")
@@ -861,8 +844,7 @@ def _keep(host, programme, prompt, rec, wanted, to, repo) -> dict:
         adopted.append(adopt(moved, prompt, rec))
         _refuse(adopted[-1], verdict(adopted[-1]))
         put_programme_entry(programme, _pointer(local, to, key))
-    return {"kept": named, "not_named": [b for b in wanted if b not in named], "adopted": adopted, "key": key,
-            "dropped_overrides": dropped}
+    return {"kept": wanted, "adopted": adopted, "key": key, "dropped_overrides": dropped}
 
 
 # Re-running on a kept entry re-adopts it; the store write replaces it by id (_place), so
@@ -877,7 +859,7 @@ def _h_keep(host, argv):
     def change(programme, prompt, rec):
         out = _keep(host, programme, prompt, rec, wanted, to, opts.get("repo"))
         seen.update(out, prompt=prompt, run=rec["run_id"], sid=rec.get("driving_session_id"))
-        return {"kept": out["kept"], "not_named": out["not_named"], "to": to, "repo_key": out["key"],
+        return {"kept": out["kept"], "to": to, "repo_key": out["key"],
                 "targets": [target(a) for a in out["adopted"]], "store_path": store_path(),
                 "dropped_overrides": out["dropped_overrides"]}
 
@@ -968,9 +950,7 @@ _SPECS = (
      "replaces the ones given; applying it with record-behaviour --from-proposal replaces the target in place."),
     ("move-behaviour", _h_move,
      "<id> --to programme|repo|personal --prompt <id> [--repo <key>] [--run <id>]",
-     "no prompt from the driving session; typed words with no offer that do not name the behaviour id and the "
-     "layer (programme, repo, or personal, global or all projects), or hold a negation anywhere before the layer "
-     "word; an unreadable behaviours store; a behaviour that is not active; a move to the layer it is on; "
+     "no prompt from the driving session; a prompt that answers no open offer of this command; an unreadable behaviours store; a behaviour that is not active; a move to the layer it is on; "
      "--to repo with a remit of several repos and no --repo, or a --repo outside the remit."),
     ("retire-behaviour", _h_retire,
      "<id> --as retired|undone --prompt <id> [--run <id>]",
@@ -978,10 +958,9 @@ _SPECS = (
      "behaviours store when the behaviour lives there. The entry stays visible as retired."),
     ("keep-behaviours", _h_keep,
      "<id>... --to repo|personal --prompt <id> [--repo <key>] [--run <id>]",
-     "no prompt from the driving session; typed words with no offer that do not name the layer (repo, or personal, "
-     "global or all projects) or negate it, or name none of the ids; a named id that is not an active "
+     "no prompt from the driving session; a prompt that answers no open offer of this command; an id that is not an active "
      "programme-layer behaviour; an unreadable store; --to repo with several remit repos and no --repo; an ended "
-     "programme. A pick of a different set is refused. Ids typed words do not name are listed as not_named."),
+     "programme. A pick of a different set is refused."),
     ("remind-behaviour", _h_remind,
      "<item> <id> --reason relevant|sent_back [--trigger claim|merge|block|start] [--despite <attempt>]... [--run <id>]",
      "a session that does not drive the programme; a behaviour not in force for the item's worker (unknown, "

@@ -193,7 +193,7 @@ def _arrive(ctx, entry, key):
     content = {"scope": programme_sanitize.clean(entry.get("scope")), "reason": entry.get("reason"),
                "limits": [programme_sanitize.clean(v) for v in entry.get("limits") or []], "applies_to": [],
                "requirements": [], "kind": kind, "effect": entry["effect"], "until": entry.get("until")}
-    # Pending with no items: it binds only when Shawn's prompt names the items it now applies to.
+    # Pending with no items: it binds only when Shawn approves the items it now applies to.
     revision = pc._append(ctx["decisions"].setdefault(rid, []), content, None, accept=False, delta=None)
     revision.update(quote=None, baseline=None,
                     carried={"from": key, "entry": entry.get("id"), "run_id": entry.get("run_id"),
@@ -336,7 +336,6 @@ def _carry(host, opts, ids):
         if programme_home.sealed(programme):
             raise host.ProgrammeError("the programme is archived; nothing more is carried over from it")
         prompt = host._typed_prompt(run_id, rec, opts["prompt"], "carry-rulings")
-        host.require_named(prompt, *ids)
         active, keys = _check_carry(host, run_id, programme, prompt, ids)
         adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
         seen.update(prompt=prompt, adopted=adopted)
@@ -375,8 +374,7 @@ _SPECS = (
      "with no ids: a caller that is not the driving session or an ended programme; it lists every active "
      "Ruling and every active programme-layer behaviour in one carry-over offer, and records the offer-made "
      "marker that releases the stop. With ids: no "
-     "prompt from the driving session, one from before an offer naming them, typed words with no offer that do "
-     "not name each id, a pick of a different set, a prompt that already approved a Ruling change, a Ruling whose revision changed after that offer "
+     "prompt from the driving session, one from before an offer naming them, a prompt that answers no open offer of this command, a pick of a different set, a prompt that already approved a Ruling change, a Ruling whose revision changed after that offer "
      "(or an offer that did not record it), an id that is not an active Ruling, a remit with no repo, an "
      "archived programme; it also runs "
      "after end. Stores each Ruling under every remit repo's key for the next programme on that project. With ids, "

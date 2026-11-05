@@ -43,11 +43,11 @@ The auto programme's setup walkthrough (branch `feature/programme-setup-in-mod`)
    - "No" approved, because the naming check looks only at the word before a name and the PM's question named the rule;
    - "Skip r1" approved past a negation denylist;
    - "Keep item-x" approved `drop-item` past an opener allowlist that was not tied to the verb.
-   Exact labels closed it. `label(argv)` in `plugins/auto/lib/programme_approval.py` is "Approve " plus the shell-quoted verb and arguments, without `--prompt` and `--run`. A pick approves only when its single answer, minus a trailing " (Recommended)", equals the label of the command actually being run. The read-only verb `approval-label` prints the label, and the PM uses it word for word as the approve option. Every other option approves nothing, whatever its wording. Three corollaries:
-   - a verb whose change arrives on stdin (`set-remit`) cannot be bound by a label, so picks refuse it;
-   - an option value may not start with `--`, or `--why --run x` lets two different commands share one label;
-   - picks reach only a default-deny allowlist of verbs (`PICK_VERBS`), so a verb added later refuses picks until someone adds it on purpose.
-7. **An accepted prompt suggestion is not typed text.** When Shawn presses Enter on Claude Code's grey suggested prompt, the transcript row carries `promptSource: "suggestion_accepted"` (observed in Claude Code 2.1.310), not `"typed"`. A model wrote that text, so auto resolves it to its own origin, `suggested`, which approves only what a pick may approve. Typed-only verbs and takeover requests still need text Shawn typed.
+   Exact labels closed it first, and stored offers replaced the labels. `programme.sh offer` writes the option from the command, journals the hash of the command and of what the option showed, and prints the exact AskUserQuestion input. A pick approves only when the picker's questions hash to that stored offer, its single answer (minus a trailing " (Recommended)") is an option of that offer, and that option holds the hash of the command actually being run. The PM cannot word an option one way and run another, and Shawn never sees a command to copy. A picker no offer printed approves nothing, and so does any other answer, whatever its wording. Three corollaries:
+   - a verb whose change arrives on stdin (`set-remit`) binds through a hash of the same JSON given to the offer;
+   - a change to the facts the option showed forces a new offer, so a pick approves only what Shawn saw;
+   - offers reach only a default-deny table of renderers, so a verb added later has no approval until someone adds its renderer. `tests/unit/no-exact-text.test.sh` fails when a verb takes `--prompt` with no renderer.
+7. **An accepted prompt suggestion is not typed text.** When Shawn presses Enter on Claude Code's grey suggested prompt, the transcript row carries `promptSource: "suggestion_accepted"` (observed in Claude Code 2.1.310), not `"typed"`. A model wrote that text, so auto resolves it to its own origin, `suggested`, which approves nothing. Typed end, handover and takeover requests need text Shawn sent himself.
 
 ## Why This Matters
 
@@ -67,11 +67,11 @@ Answer                                               take-all match
 "instead of take all recommendations, walk each step" refuse (one-word negation accepted it)
 ```
 
-Approval label (item 6):
+Stored offer (item 6):
 
 ```text
-Command                                   Approve option            Any other answer
-programme.sh adopt-rule r1 --prompt p7    "Approve adopt-rule r1"   approves nothing ("No", "Skip r1", "Keep r1 as a proposal")
+Command                                   Option Auto writes        Any other answer
+programme.sh adopt-rule r1 --prompt p7    "Adopt rule r1"           approves nothing ("No", "Skip r1", "Keep r1 as a proposal")
 ```
 
 Related: `docs/solutions/architecture-patterns/read-permission-refusals-from-the-transcript-not-hooks.md` (the same transcript-over-hooks trust model for permission refusals).

@@ -337,17 +337,15 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-drafts-') as work:
     reworded = [dict(printed['input']['questions'][0], question='Reworded?')]
     result = cites(argv, pick(printed, questions=reworded))
     check('a picker Auto did not print approves no Ruling', result.returncode != 0 and not revisions('d-nooffer'), said(result))
-    check('approval-label does not exist for a draft verb', verb('approval-label', 'record-ruling', 'x').returncode != 0, '')
-    label_said = said(verb('approval-label', 'set-remit'))
-    check('approval-label on set-remit points to offer', 'offer' in label_said and 'typed' not in label_said, label_said)
+    check('approval-label no longer exists', verb('approval-label', 'record-ruling', 'x').returncode != 0, '')
     old_label = [{'question': 'Old?', 'header': 'old', 'multiSelect': False,
                   'options': [{'label': 'Approve ' + shlex.join(argv), 'description': ''}, {'label': 'No', 'description': ''}]}]
     result = cites(argv, pick(printed, 'Approve ' + shlex.join(argv), questions=old_label))
-    check('a pick of the old exact label binds no Ruling', refused(result, 'approves no record-ruling')
+    check('a pick of the old exact label binds no Ruling', refused(result, 'answers a picker no offer printed')
           and not revisions('d-nooffer'), said(result))
     naming = typed('record d-nooffer work_sequencing programme', 'suggestion_accepted')
     result = cites(argv, naming)
-    check('an accepted suggestion that names everything binds no Ruling', refused(result, 'approves no record-ruling')
+    check('an accepted suggestion that names everything binds no Ruling', refused(result, 'is an accepted suggestion')
           and not revisions('d-nooffer'), said(result))
     assert ok(verb(*ruling('d-gap', scope='waits for an offer')))
     result = cites(['close-ruling', 'd-gap', '--as', 'withdrawn'], typed('an unrelated remark'))

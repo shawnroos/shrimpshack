@@ -325,7 +325,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
     )
     if (focusedRow !== key) continue
     hint(`${key}:withdraw`, WITHDRAW_HINT, 9)
-    // close-ruling takes a fulfilled close without a typed prompt only for a grant.
+    // close-ruling takes a fulfilled close with no approval only for a grant.
     if (armed && ruling.effect === 'grant') {
       line(`${key}:actions`, pad(9), action('act:fulfil', 'f', 'close as fulfilled', () => act.fulfil(ruling.id)))
     }

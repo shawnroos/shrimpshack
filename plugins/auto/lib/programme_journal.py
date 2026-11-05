@@ -460,6 +460,9 @@ def pick_use(rows, source):
         if row.get("kind") in ("prompt", "approval_refused"):
             continue
         payload = row.get("payload") or {}
+        # A verb that changed nothing approved nothing, so its answer can still approve the same command.
+        if payload.get("unchanged"):
+            continue
         refs = set(row.get("cites") or []) | {payload.get("prompt_id")}
         # Setup verbs record the pick's path and tool_use_id on their own payload, not as a cite.
         if ids & refs or _same_pick(payload, path, tool_use_id):
@@ -487,21 +490,11 @@ def pick_answer(rows, row) -> str:
     return checked_pick(rows, row)["answer"]
 
 
-def named_text(prompt) -> str:
-    # An approval bound to an offer is bound to its command, so the command's own words stand in for what he said.
-    if prompt.get("named"):
-        return redact(prompt["named"])
-    # A pick's question is PM-written, so only Shawn's answer can name what it approves.
-    if prompt.get("origin") == "picked":
-        return redact(prompt.get("answer") or "")
-    return redact(prompt["quote"])
-
-
 def wording_of(prompt) -> str:
     return (prompt.get("reading") or {}).get("wording") or SHAWN
 
 
-# His words on an offered draft replace it. A typed approval with no offer carries no reading and leaves the draft.
+# His words on an offered draft replace it.
 def his_text(prompt):
     return prompt["quote"] if prompt and (prompt.get("reading") or {}).get("wording") == SHAWN else None
 

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 
 PASS=0
 FAIL=0
@@ -368,7 +368,7 @@ prog rules --ack
 prog accept-agreement --prompt "$P_CRON"
 it "scenario 3: the restored worker text, arriving as a cron prompt, accepts nothing"
 check 1 "$CODE"
-has "is not typed" "$OUT"
+has "is not Shawn's words or a verified pick" "$OUT"
 it "scenario 3: the agreement stays unaccepted"
 check "None" "$(run_py "$RUN" <<'EOF'
 print(load(args[0])["programme"]["agreement"].get("accepted"))
@@ -462,7 +462,7 @@ check "0 absent" "$CODE $([ -e "$FLAG" ] && echo present || echo absent)"
 CLAUDE_CODE_SESSION_ID=sess-h prog accept-agreement --prompt "$P_DEC"
 it "scenario 3: after the ack the old session's prompt still approves nothing"
 check 1 "$CODE"
-has "was not typed in the driving session" "$OUT"
+has "was not given in the driving session" "$OUT"
 ( cd "$NOREPO" && "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" sess-h "/auto:programme-handover sess-pm" >/dev/null 2>&1 )
 CLAUDE_CODE_SESSION_ID=sess-h prog handover sess-pm
 CLAUDE_CODE_SESSION_ID=sess-pm prog rules --ack >/dev/null

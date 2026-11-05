@@ -26,9 +26,9 @@ If `takeover --prompt` refuses, run its `fix:` line: it names the picker to ask
 with and the takeover to rerun with that pick id.
 
 Run the dispatch line below only when Shawn typed `/auto:programme-takeover`
-himself; never tell him to type it. The prompt hook journaled that typed request;
-the typed text, not the argument, is what counts, so pass `--replace` only when
-Shawn typed it.
+himself. Offer the picker instead of asking him for it. The prompt hook journaled
+his request; what he sent, not the argument, is what counts, so pass `--replace`
+only when his request holds it.
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" takeover "$ARGUMENTS"`
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """``skip-behaviour``: the PM's answer to a due behaviour that is not sent to the worker.
 
-It records the PM's own judgment, so it needs no typed prompt. Without ``--applied`` the row means
+It records the PM's own judgment, so it needs no approval. Without ``--applied`` the row means
 "does not apply to this item"; with it, the PM applied a PM-only behaviour itself.
 """
 

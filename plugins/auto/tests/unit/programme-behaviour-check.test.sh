@@ -300,7 +300,7 @@ EOF
 )"
 has 'term:cadence' "$OUT"
 
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 OUT=""
 CODE=0
 prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
@@ -657,7 +657,7 @@ check "True" "$(state "$RUN2" "'when' in [b for b in prog['behaviours'] if b['id
 
 it "applying an edit proposal needs an answer to its offer: typed words with no offer approve nothing"
 PX="$(tprompt "$RUN2" "apply $PE")"
-prog record-behaviour --run "$RUN2" --from-proposal "$PE" --prompt "$PX"
+PROG="${AUTO_ROOT}/lib/programme.py" prog record-behaviour --run "$RUN2" --from-proposal "$PE" --prompt "$PX"
 has "offer" "$OUT"
 check "2" "$(state "$RUN2" "len([b for b in prog['behaviours'] if b['id'] == 'bc3f80d'][0]['do'])")"
 

@@ -7,9 +7,9 @@ allowed-tools: Bash, CronDelete, TaskStop, AskUserQuestion
 Shawn typed this, or asked in any words, to end the programme. A typed
 `/auto:programme-end` is journaled by the prompt hook and accepted in the driving
 session, or from any session when the lease is orphaned. Otherwise the driving
-session asks him with the end picker (below); never tell him to type this command.
+session asks him with the end picker (below).
 When the lease is expired (the agreement was never
-accepted within one cadence), `end` needs no typed request and ends the programme
+accepted within one cadence), `end` needs no request and ends the programme
 the way `expire` does, with reason agreement_unaccepted: there is no accepted
 agreement to protect. A `--why` of several words must be in single quotes
 (`--why 'nothing left to do'`): the dispatch line wraps the arguments in double quotes.
@@ -25,22 +25,22 @@ behaviours. `end` releases the lease, so the offer comes before it.
    driving session, and go straight to the dispatch line.
 2. No `carry-over offer:` lines: go straight to the dispatch line.
 3. Otherwise, show Shawn those lines in one message.
-   - Rulings: ask which to carry to the next programme on this project, and
-     wait for his typed reply. A pick never carries a Ruling.
-   - Behaviours: ask through one AskUserQuestion picker, never a typed reply,
-     which to keep and whether each goes to the repo (every programme on this
-     repo) or global (every project). Each option that keeps something is the
-     exact output of
-     `programme.sh approval-label keep-behaviours <behaviour-id>... --to repo|personal`;
-     add a "Keep none" option. If Shawn answers with a set no option offered,
-     ask again with a picker whose option is that set's label.
-4. When he names Rulings to carry, run
+   - Rulings: ask which to carry to the next programme on this project. Run
+     `programme.sh offer carry --command 'carry-rulings <ruling-id>...'` with
+     up to 3 commands, one for each set you recommend, and ask with the input
+     it prints.
+   - Behaviours: ask which to keep and whether each goes to the repo (every
+     programme on this repo) or global (every project). Run
+     `programme.sh offer keep --command 'keep-behaviours <behaviour-id>... --to repo|personal'`
+     and ask with the input it prints. If Shawn answers with a set no option
+     offered, offer that set and ask again.
+4. When he answers about Rulings, run
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" carry-rulings --prompt <id> <ruling-id>...`,
-   citing his typed reply's prompt id. Carry none when he says none.
+   citing his answer's prompt id. Carry none when he declines.
    - Carried Rulings arrive in the next programme pending, with no items, and
-     bind only when his typed prompt there names the items.
+     bind only when he approves them there with their items.
 5. When he picks behaviours to keep, run one `keep-behaviours` call per picked
-   label, citing that pick's id:
+   option, citing that pick's id:
    `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" keep-behaviours <behaviour-id>... --to repo|personal --prompt <pick id>`.
    "Global" or "all projects" is `--to personal`. When the remit holds several
    repos, add `--repo <key>` for the repo he named, in the label too. The verb
@@ -79,9 +79,9 @@ same picker.
      checks watcher processes and worker sessions without stopping anything.
   4. Run `check-archive --run <run>`. Each failed check names its remedy: for
      an unfinished item, `dispose-item <id> --as stopped_unfinished|handed_over
-     --why <text> --run <run>`; for an uncertain action, ask Shawn with an
-     AskUserQuestion picker offering the `approval-label dispose-action ...`
-     output and cite the pick with `dispose-action --prompt <pick id>`. A disposition records how work stopped;
+     --why <text> --run <run>`; for an uncertain action, run
+     `offer dispose --command 'dispose-action ...'`, ask Shawn with the input it
+     prints, and cite the pick with `dispose-action --prompt <pick id>`. A disposition records how work stopped;
      it never marks a requirement as passed.
   5. When every check passes, run `archive --run <run>`. The archive is sealed
      and read-only. If it refuses, show Shawn the failed check and stop.

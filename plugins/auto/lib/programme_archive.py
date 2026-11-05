@@ -569,10 +569,9 @@ def _h_dispose_action(host, argv):
         raise ValueError("usage: dispose-action (--attempt <id>|--resource <id>) "
                          "--as abandoned_unknown|accepted_unknown --prompt <id> --run <id>")
     if not opts.get("prompt"):
-        raise ValueError("dispose-action needs --prompt <id> of a typed prompt that names the attempt or resource")
+        raise ValueError("dispose-action needs --prompt <id> of his answer to `programme.sh offer`")
 
     def change(programme, prompt, rec):
-        host.require_named(prompt, target)
         if opts.get("attempt"):
             entry = load_lib_module("programme_recovery").operations(programme).get(target)
             if not isinstance(entry, dict) or entry.get("state") not in ("admitted", "uncertain"):
@@ -721,10 +720,10 @@ _SPECS = (
      "unfinished work stopped; it confirms no requirement."),
     ("dispose-action", _h_dispose_action,
      "(--attempt <id>|--resource <id>) --as abandoned_unknown|accepted_unknown --prompt <id> --run <id>",
-     "a prompt that is not typed in the driving session or does not name the attempt or resource; an "
+     "a prompt that answers no open offer of this command; an "
      "archived programme; an operation that is not admitted or uncertain; a released resource. Records "
-     "a human's acceptance of the uncertainty (origin_verified true: the transcript shows a human typed "
-     "the prompt); the action is never recorded as completed."),
+     "a human's acceptance of the uncertainty (origin_verified true: the transcript shows the "
+     "answer is his); the action is never recorded as completed."),
     ("archive", _h_archive, "--run <id> [--op <id>]",
      "a programme that has not ended; any failed check (named with its remedy; the programme stays "
      "ended and unarchived); a candidate superseded by a later write. Seals once: a retry returns the "

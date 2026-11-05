@@ -24,7 +24,7 @@ An accepted suggestion approves no offer: the model wrote that text. Say so and 
 
 1. Take the prompt id from the `<auto-data>` tag of his message or pick.
 2. Run the offered command with `--prompt <id> --reads-as '<the option's text>'`.
-3. Show the `read_back` line to Shawn in your next message, word for word.
+3. Show the `read_back` line to Shawn in your next message, unchanged.
 
 One message approves one command.
 

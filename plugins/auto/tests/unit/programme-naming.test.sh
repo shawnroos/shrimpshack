@@ -27,15 +27,10 @@ named() {
 import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
-prog = load_lib_module("programme")
+pn = load_lib_module("programme_naming")
 text, needs = sys.argv[2], json.loads(sys.argv[3])
-if "WIDEN" in needs:
-    needs = [n for n in needs if n != "WIDEN"] + list(prog._widen_word({"widening": True}))
-try:
-    prog.require_named({"prompt_id": "p1", "quote": text}, *needs)
-    print("PASS")
-except prog.ProgrammeError:
-    print("REFUSE")
+needs = [["widen", "widening", "widened"] if n == "WIDEN" else n for n in needs]
+print("REFUSE" if pn.missing(text, needs) else "PASS")
 PYEOF
 }
 
@@ -77,46 +72,6 @@ expect PASS "adopt verified.lookup for shrimpshack" '["shrimpshack", "verified.l
 expect REFUSE "adopt verified.lookups for shrimpshack" '["shrimpshack", "verified.lookup"]'
 expect REFUSE "drop Файл правка" '[["Файл правка"]]'
 expect REFUSE "drop it" '["!!!"]'
-
-refuse_by_id() {
-  "$PY" - "$AUTO_ROOT" "$1" "$2" "$3" <<'PYEOF' 2>&1
-import os, sys
-sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
-from _bootstrap import load_lib_module
-pn = load_lib_module("programme_naming")
-quote, choice, typed_at = sys.argv[2:5]
-items = {"linear:WEB-12": {"state": "handed", "title": "Editor places missed crop"},
-         "linear:WEB-99": {"state": "open", "title": "Unrelated work item"}}
-ask = {"at": "2026-10-20T10:00:00Z", "facts_at": "2026-10-20T10:00:00Z"}
-print("REFUSE" if pn.item_refusal(quote, items, "linear:WEB-12", choice, prompt_at=typed_at, ask=ask) else "PASS")
-PYEOF
-}
-FRESH="2026-10-20T10:05:00Z"
-STALE="2026-10-20T09:55:00Z"
-it "an id reply with the choice word approves"
-check "PASS" "$(refuse_by_id "ship WEB-12" ship "$FRESH")"
-it "an id reply with words between the choice word and the id approves"
-check "PASS" "$(refuse_by_id "decline the WEB-12 change" decline "$FRESH")"
-it "an id reply carrying the opposite choice word is refused"
-check "REFUSE" "$(refuse_by_id "decline WEB-12" ship "$FRESH")"
-it "an id reply with the choice word negated is refused"
-check "REFUSE" "$(refuse_by_id "do not ship WEB-12" ship "$FRESH")"
-it "an id-only reply with no choice word is refused"
-check "REFUSE" "$(refuse_by_id "WEB-12 looks risky" ship "$FRESH")"
-it "an id reply typed before the ask's current facts were set is refused"
-check "REFUSE" "$(refuse_by_id "ship WEB-12" ship "$STALE")"
-it "an id reply naming both choices is refused"
-check "REFUSE" "$(refuse_by_id "ship or decline WEB-12" ship "$FRESH")"
-
-it "a missing prompt approves nothing to check"
-check "PASS" "$("$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
-import os, sys
-sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
-from _bootstrap import load_lib_module
-load_lib_module("programme").require_named(None, "merge_pr")
-print("PASS")
-PYEOF
-)"
 
 echo ""
 echo "programme-naming.test.sh: ${PASS} passed, ${FAIL} failed"

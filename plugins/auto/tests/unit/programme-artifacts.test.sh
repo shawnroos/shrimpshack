@@ -273,7 +273,7 @@ try:
     prog._typed_prompt(args[0], rec, args[1])
     print("ACCEPTED")
 except prog.ProgrammeError as exc:
-    print("REFUSED", "not typed" in str(exc))
+    print("REFUSED", "not Shawn's words" in str(exc))
 EOF
 )"
 check "REFUSED True" "$OUT"

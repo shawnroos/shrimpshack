@@ -230,8 +230,8 @@ _NEXT_STEPS = {
 }
 _QUEUE_STEP = ("Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, "
                "or {override_step}")
-_OVERRIDE_STEP = ("ask Shawn to approve breaking the budget: offer `programme.sh approval-label override-focus "
-                  "{key}` through AskUserQuestion, run `override-focus {key} --prompt <pick id>`, then start "
+_OVERRIDE_STEP = ("ask Shawn to approve breaking the budget: run `programme.sh offer focus --command 'override-focus "
+                  "{key}'`, ask with the input it prints, run `override-focus {key} --prompt <pick id>`, then start "
                   "again with `--despite {override}`.")
 
 

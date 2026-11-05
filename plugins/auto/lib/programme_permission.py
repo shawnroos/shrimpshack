@@ -226,16 +226,6 @@ def notify_pending(run_id, home) -> dict:
     return results
 
 
-# Binding to an offer already proves the rest: the offer's facts hold the state and changed_at, so an answer from
-# before the last change fails there, and a spent pick or message fails before this verb runs.
-def _gate(host, proposal, choice, prompt) -> None:
-    if not prompt.get("named"):
-        raise host.ProgrammeError(
-            f"prompt {prompt['prompt_id']!r} answers no offer of this command, so it approves nothing",
-            fix=f"run `programme.sh offer <question-key> --command 'answer-permission {proposal['id']} {choice}'`, ask "
-                "with the input it prints, then rerun citing his answer")
-
-
 def _answer(programme, proposal, choice, prompt, live) -> dict:
     nxt = state.step(proposal, choice)
     if nxt == state.VERIFY:
@@ -263,13 +253,13 @@ def _h_answer_permission(host, argv):
         proposal = state.find(programme, proposal_id)
         if proposal is None:
             raise RecordError(f"no permission proposal {proposal_id!r} in this programme")
-        _gate(host, proposal, choice, prompt)
         return _answer(programme, proposal, choice, prompt, live)
 
     def kind(payload):
         return "permission_verified" if payload.get("verify") else "permission_answered"
 
-    return host._write(opts, change, kind, prompt_id=opts.get("prompt"), needs_prompt=True)
+    return host._write(opts, change, kind, prompt_id=opts.get("prompt"), needs_prompt=True, verb="answer-permission",
+                       target=positional[0])
 
 
 def in_force(programme) -> list:

@@ -325,6 +325,20 @@ with tempfile.TemporaryDirectory(prefix='auto-lifecycle-picks-') as work:
         hits = banned.findall((root / 'lib' / name).read_text())
         check(f'{name} tells nobody to type a programme command', not hits, hits)
 
+    # ---- After end only the approvals that run after end can be asked ----
+    sid9 = 'hand-pm5'
+    run9 = programme(sid9, 'hand-e')
+    verb(sid9, run9, 'add-item', 'linear:AI-9', '--title', 'late item')
+    ph.end_programme(run9, 'ended_by_shawn')
+    result = verb(sid9, run9, 'offer', 'carry', '--command', 'carry-rulings')
+    check('after end, an unrenderable carry reaches the renderer, not the ended refusal',
+          'has ended' not in said(result), said(result))
+    result = verb(sid9, run9, 'offer', 'drop', '--command', 'drop-item linear:AI-9')
+    check('after end, an offer of any other verb is refused', refused(result, 'has ended'), said(result))
+    result = verb(sid9, run9, 'offer', 'dispose', '--command', 'dispose-action --attempt op-1 --as accepted_unknown')
+    check('after end, dispose-action can be offered', 'has ended' not in said(result), said(result))
+
 print(f'programme-lifecycle-picks.test.sh: {passed} passed, {failed} failed')
+
 sys.exit(1 if failed else 0)
 PY

@@ -4,7 +4,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 
 PASS=0
 FAIL=0
@@ -215,7 +215,7 @@ check 1 "$CODE"
 check '["on_change", "pending", 900]' "$(field "[${T}[\"cadence\"][\"value\"], ${T}[\"cadence\"][\"proposal\"][\"state\"], ${T}[\"cadence\"][\"proposal\"][\"extras\"][\"seconds\"]]")"
 it "the refused amend writes one approval_refused row with the reason"
 check "$((REFUSED_BEFORE + 1))" "$(count_kind approval_refused)"
-has "typed" "$(last_row approval_refused)"
+has "is not Shawn's words or a verified pick" "$(last_row approval_refused)"
 
 it "AE9: an accepted amend to 1800s with a pending 900s proposal marks it superseded"
 P_1800="$(prompt typed 'cadence fixed, every 30 minutes')"

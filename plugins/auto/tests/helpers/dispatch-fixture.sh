@@ -2,7 +2,7 @@
 # No real herdr, spinoff or tracker ever runs: PATH puts the fakes first and every call is logged.
 # Needs AUTO_ROOT, PY and WORK set by the caller.
 
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 PASS=0
 FAIL=0
 CURRENT="anonymous"

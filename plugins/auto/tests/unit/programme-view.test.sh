@@ -750,7 +750,7 @@ has "$(printf '  r-tools grant tool_choice "let the PM pick tools"\n    d000002 
 has "$(printf '  no Ruling applied\n    d000003 work_sequencing by pm: docs first')" "$AGREE_OUT"
 
 it "an amendment shows with its source and redacted quote"
-has "project_term_amended t000001: test depth: none -> unit tests only · source typed prompt p000009" "$AGREE_OUT"
+has "project_term_amended t000001: test depth: none -> unit tests only · source Shawn's answer p000009" "$AGREE_OUT"
 it "the secret in the quote never reaches the page"
 lacks "sk-abcdefghijklmnopqrstuvwx" "$AGREE_OUT$AGREE_JSON"
 

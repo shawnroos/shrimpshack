@@ -3,14 +3,6 @@
 
 from __future__ import annotations
 
-import os
-import sys
-
-_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_lib_module  # noqa: E402
-
 FALLBACK = "programme.sh become-pm"
 
 _WRITE = ("`programme.sh become-pm` if this session does not drive the programme; "
@@ -18,22 +10,17 @@ _WRITE = ("`programme.sh become-pm` if this session does not drive the programme
 _ITEM = ("`programme.sh status` lists the items and their state; `programme.sh describe` names what {verb} "
          "needs, then rerun it")
 _READ = "`programme.sh status` names the programme run ids; rerun `programme.sh {verb}` with --run <id>"
-_PICKED = ("run `programme.sh approval-label {verb} <args>`, offer its output as one AskUserQuestion option, "
-           "then rerun citing the pick with --prompt <pick id>")
-_TYPED = "ask Shawn to type the approval for {verb} in this session, then rerun with --prompt <its id>"
 _OFFERED = ("run `programme.sh offer <question-key> --command '{verb} <args>'`, ask Shawn with the input it prints, "
             "then rerun citing his answer with --prompt <its id>")
 _PICK_ID = "ask Shawn with an AskUserQuestion picker, then rerun citing the pick with --pick <pick id>"
 _START = ("`programme.sh become-pm` if a programme already holds this space; else the refusal names what "
           "start needs, such as a herdr pane or --space <server.workspace>")
-_LABEL = ("rerun `programme.sh approval-label <verb> <args>` with a verb a pick can approve "
-          "(`programme.sh describe` lists them), or `approval-label takeover --replace <driving session id>`")
 _ENDED = ("`programme.sh check-archive --run <id>` names each failed check and its remedy; "
           "`programme.sh status --run <id>` shows the end state")
 
 FIXES = {
-    "accept-agreement": load_lib_module("programme_approval").ACCEPT_FIX,
-    "accept-context": _PICKED,
+    "accept-agreement": _OFFERED,
+    "accept-context": _OFFERED,
     "ack-protocol": _WRITE,
     "answer-worker-question": _WRITE,
     "contract-status": _ITEM,
@@ -45,15 +32,14 @@ FIXES = {
     "set-contract": _ITEM,
     "write-goal": _ITEM,
     "add-item": _ITEM,
-    "adopt-autonomy": _PICKED,
+    "adopt-autonomy": _OFFERED,
     "adopt-behaviour-file": _OFFERED,
-    "adopt-check": _PICKED,
-    "adopt-rule": _PICKED,
+    "adopt-check": _OFFERED,
+    "adopt-rule": _OFFERED,
     "alias-item": _ITEM,
-    "amend-term": _PICKED,
+    "amend-term": _OFFERED,
     "answer-handed": _OFFERED,
-    "answer-permission": _PICKED,
-    "approval-label": _LABEL,
+    "answer-permission": _OFFERED,
     "offer": ("rerun `programme.sh offer <question-key> --command '<verb> <args>'` with a verb a pick can approve "
               "(`programme.sh describe` lists them); `programme.sh become-pm` prints the takeover picker"),
     "archive": _ENDED,
@@ -82,7 +68,7 @@ FIXES = {
     "create-successor": _ENDED,
     "define-requirement": _OFFERED,
     "describe": "rerun `programme.sh describe` with no arguments",
-    "dispose-action": _PICKED,
+    "dispose-action": _OFFERED,
     "dispose-item": _ENDED,
     "drop-item": _OFFERED,
     "edit-project-term": _OFFERED,
@@ -98,7 +84,7 @@ FIXES = {
     "inbox": _READ,
     "sweep-inputs": _READ,
     "keep-behaviours": _OFFERED,
-    "lift-pause": _PICKED,
+    "lift-pause": _OFFERED,
     "log-decision": _ITEM,
     "mark-read": "`programme.sh inbox` prints the current offset; rerun `programme.sh mark-read` with it",
     "merge-item": _ITEM,

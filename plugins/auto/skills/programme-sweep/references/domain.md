@@ -32,7 +32,7 @@ The digest's "Behaviours due on the domain" section lists each PM behaviour (aud
 
 `domain` in the `P sweep` output lists the agent sessions outside the remit; the digest shows them under "Outside
 sessions" and the Programme view under "Recommended for the remit", each with a reason. You only recommend. Adding
-one takes Shawn's typed line through the `auto:programme-remit` skill, and its repos list replaces the old list.
+one takes Shawn's answer to a picker through the `auto:programme-remit` skill, and its repos list replaces the old list.
 
 When `why` has `recommendations_not_shown`, post the list once in one AskUserQuestion picker with two options, "Add
 some (I will type the repos)" and "Leave the remit as it is", then run `P recommendations-shown --fingerprint

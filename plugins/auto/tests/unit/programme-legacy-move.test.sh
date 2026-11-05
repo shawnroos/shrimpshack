@@ -7,7 +7,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 
 PASS=0
 FAIL=0
@@ -101,6 +102,7 @@ remit() {
 pyget() {
   "$PY" -c 'import json,sys; d=json.loads(sys.argv[1].splitlines()[-1]); v=eval(sys.argv[2]); print(v if isinstance(v, str) else json.dumps(v, sort_keys=True))' "$1" "$2" 2>&1
 }
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 prompt_in() {
   run_py "$1" "$2" "${3:-sess-pm}" <<'EOF'
 print(fixture_prompt(args[0], args[2], args[1], "typed")["prompt_id"])
@@ -152,9 +154,9 @@ adopted_home() {
   old_remit "$run" "{\"spaces\":[\"${space}\"],\"repos\":[{\"path\":\"${repo}\"}]}"
   prog add-item herdr:x --title "x" --kind fix_only --run "$run"
   old_prog record-ruling "c${s}" --kind technical_approach --effect restrict --scope "c${s}" --applies-to herdr:x \
-    --prompt "$(prompt_in "$run" "c${s}: I pick the technical approach on herdr:x")" --run "$run"
+    --prompt "$(opick "$run" "record-ruling c${s} --kind technical_approach --effect restrict --scope c${s} --applies-to herdr:x")" --run "$run"
   old_prog carry-rulings --run "$run"
-  old_prog carry-rulings "c${s}" --prompt "$(prompt_in "$run" "carry c${s} to the next programme")" --run "$run"
+  old_prog carry-rulings "c${s}" --prompt "$(opick "$run" "carry-rulings c${s}")" --run "$run"
   prog record-behaviour --run "$run" --prompt "$(prompt_in "$run" "always reproduce a reported bug ${s}")" \
     --when "a bug ${s} is reported" --pm-check "the item is a bug" --do "reproduce the bug ${s} first"
   bid="$(pyget "$OUT" 'd["behaviour"]')"
@@ -249,14 +251,14 @@ OUT="$(CLAUDE_CODE_SESSION_ID=sess-other "$PY" "$PROG" record-ruling r1 --kind t
   --scope s --applies-to herdr:x --run "$LR" 2>&1)"; CODE=$?
 check "1 $HR" "$CODE $(home_hash "$LR")"
 has "driving session" "$OUT"
-it "legacy: record-ruling citing a prompt that does not name the id refuses without moving; only the refusal is journaled"
+it "legacy: record-ruling citing typed words with no open offer refuses without moving; only the refusal is journaled"
 P_LR="$(prompt_in "$LR" 'I pick the tool choice on herdr:x')"
-prog record-ruling r1 --kind tool_choice --effect restrict --scope s --applies-to herdr:x --prompt "$P_LR" --run "$LR"
+PROG="$REAL_PROG" prog record-ruling r1 --kind tool_choice --effect restrict --scope s --applies-to herdr:x --prompt "$P_LR" --run "$LR"
 check "1 False approval_refused" "$CODE $(is_promoted "$LR") $(run_py "$LR" <<'EOF'
 print(pj.read(args[0])[-1]["kind"])
 EOF
 )"
-has "does not name" "$OUT"
+has "no open offer" "$OUT"
 it "legacy: a set-remit adding a space another live programme leases refuses without moving or writing a lease"
 LS="$(new_legacy w46)"
 OTHER="$(new_programme w47)"
@@ -287,13 +289,15 @@ has "Moving it to programme.db failed" "$OUT"
 LW="$(new_legacy w50)"
 prog add-item herdr:x --title "x" --kind fix_only --run "$LW"
 old_prog record-ruling rw --kind tool_choice --effect restrict --scope "w" --applies-to herdr:x \
-  --prompt "$(prompt_in "$LW" 'rw: I pick the tool choice on herdr:x')" --run "$LW"
-it "legacy: close-ruling --as withdrawn citing a prompt typed before the move moves the home, then refuses that prompt"
-prog close-ruling rw --as withdrawn --prompt "$(prompt_in "$LW" 'withdraw rw')" --run "$LW"
+  --prompt "$(opick "$LW" 'record-ruling rw --kind tool_choice --effect restrict --scope w --applies-to herdr:x')" --run "$LW"
+it "legacy: close-ruling --as withdrawn citing a pick made before the move moves the home, then refuses that pick"
+P_LW="$(opick "$LW" 'close-ruling rw --as withdrawn')"
+PROG="$REAL_PROG" prog close-ruling rw --as withdrawn --prompt "$P_LW" --run "$LW"
 check "1 True" "$CODE $(is_promoted "$LW")"
 has "imported from a legacy journal" "$OUT"
-it "legacy: a prompt typed after the move withdraws the Ruling on the moved home"
-prog close-ruling rw --as withdrawn --prompt "$(prompt_in "$LW" 'withdraw rw')" --run "$LW"
+it "legacy: a pick made after the move withdraws the Ruling on the moved home"
+P_LW="$(opick "$LW" 'close-ruling rw --as withdrawn')"
+PROG="$REAL_PROG" prog close-ruling rw --as withdrawn --prompt "$P_LW" --run "$LW"
 check "0 closed withdrawn" "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["as"]')"
 
 LP="$(new_legacy w51)"
@@ -465,9 +469,9 @@ prog propose-agreement --run "$LC" --project-term "naming=kebab case files" --so
 old_remit "$LC" "{\"spaces\":[\"w58\"],\"repos\":[{\"path\":\"${REPO3}\"}]}"
 prog add-item herdr:x --title "x" --kind fix_only --run "$LC"
 old_prog record-ruling c3 --kind technical_approach --effect restrict --scope c3 --applies-to herdr:x \
-  --prompt "$(prompt_in "$LC" "c3: I pick the technical approach on herdr:x")" --run "$LC"
+  --prompt "$(opick "$LC" "record-ruling c3 --kind technical_approach --effect restrict --scope c3 --applies-to herdr:x")" --run "$LC"
 old_prog carry-rulings --run "$LC"
-old_prog carry-rulings c3 --prompt "$(prompt_in "$LC" "carry c3 to the next programme")" --run "$LC"
+old_prog carry-rulings c3 --prompt "$(opick "$LC" "carry-rulings c3")" --run "$LC"
 LN="$(new_legacy w59)"
 prog propose-agreement --run "$LN" --project-term "naming=kebab case files" --source "repo README"
 it "a set-remit on a JSON home refused for a carried Ruling moves the home once and makes no PM worktree"

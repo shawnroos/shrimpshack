@@ -4,7 +4,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 PASS=0
@@ -133,6 +133,9 @@ print(len([r for r in pj.read(args[0]) if r["kind"] == "prompt" and r.get("sessi
 EOF
 }
 
+# The take-over option of the picker in become-pm's `input`.
+printed_option() { "$PY" -c 'import json,sys; print(json.loads(sys.stdin.read().splitlines()[0])["input"]["questions"][0]["options"][-1]["label"])' <<< "$OUT"; }
+
 field() { "$PY" -c 'import json,sys; print(json.loads(sys.stdin.read().splitlines()[0]).get(sys.argv[1]))' "$1" <<< "$OUT"; }
 
 # The space lease and everything in the programme home, hashed: become-pm must leave them byte-identical.
@@ -159,22 +162,22 @@ programme_records.save(args[0], rec)
 EOF
 }
 
-# A picker answered in a session that is not the PM, journaled by the real PostToolUse hook.
-# A fourth argument pre-fills the answer in the tool input.
+# The takeover picker become-pm prints, answered in a session that is not the PM and journaled by the real
+# PostToolUse hook. pick <session> <driver>
 pick() {
   register_session "$1" w2 >/dev/null
   ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$WORK" "$@" <<'PYEOF'
 import json, os, pathlib, re, subprocess, sys, uuid
-root, work, sid, answer = sys.argv[1:5]
+root, work, sid, driver = sys.argv[1:5]
+sys.path.insert(0, os.path.join(root, "lib"))
+from _bootstrap import load_lib_module
+offers = load_lib_module("programme_offers")
 rows = [json.loads(line) for line in (pathlib.Path(root) / "tests/fixtures/askuser_transcript.jsonl").read_text().splitlines()]
 asked, result = rows[0], rows[1]
-question = "Who should drive the programme?"
+tool_input = offers.takeover_input(driver)
+question = tool_input["questions"][0]["question"]
+answer = offers.takeover_label(driver)
 tool_use_id = "toolu_" + uuid.uuid4().hex[:12]
-tool_input = {"questions": [{"question": question, "header": "PM", "multiSelect": False,
-                             "options": [{"label": answer, "description": "Move the lease here."},
-                                         {"label": "Keep the current PM", "description": "Change nothing."}]}]}
-if len(sys.argv) > 5:
-    tool_input["answers"] = {question: answer}
 asked["sessionId"] = sid
 asked["message"]["content"][0].update(id=tool_use_id, input=tool_input)
 response = {"questions": [{"question": question}], "answers": {question: answer}, "annotations": {}}
@@ -221,17 +224,16 @@ import json, re, sys
 ctx = json.loads(sys.stdin.read())["hookSpecificOutput"]["additionalContext"]
 print(json.loads(re.search(r"\{.*\}", ctx).group(0))["prompt_id"])' <<< "$(typed sess-pm 'yes, run it on those terms')")"
 as sess-pm accept-agreement --prompt "$P_ACCEPT"
-LABEL="Approve takeover --replace sess-pm"
 BEFORE="$(state_hash "$RUN")"
 
 it "the caller drives: become-pm names already-pm"
 as sess-pm become-pm
 check "0 already-pm $RUN" "$CODE $(field step) $(field run)"
 
-it "a live PM held by another session: become-pm names ask-shawn with the exact label and command"
+it "a live PM held by another session: become-pm names ask-shawn with the picker and command"
 as sess-b become-pm
 check "0 ask-shawn" "$CODE $(field step)"
-check "$LABEL" "$(field label)"
+check "None" "$(field label)"
 check "programme.sh takeover --prompt <pick id>" "$(field command)"
 has "AskUserQuestion picker" "$OUT"
 has "with the \`input\` above unchanged" "$OUT"
@@ -248,8 +250,8 @@ check "0" "$(prompts_of "$RUN" sess-b)"
 it "become-pm writes nothing: the journal, run record and lease are byte-identical"
 check "$BEFORE" "$(state_hash "$RUN")"
 
-it "the ask-shawn route works: a pick of the printed label, cited as printed, moves the lease"
-P="$(pick sess-b "$LABEL (Recommended)")"
+it "the ask-shawn route works: a pick of the printed picker, cited as printed, moves the lease"
+P="$(pick sess-b sess-pm)"
 as sess-b become-pm
 CMD="$(field command)"
 CMD="${CMD#programme.sh }"
@@ -274,24 +276,24 @@ register sess-b w2:p40 term_p40
 snapshot "w2:p31|scratch|sess-w2|term_p31"
 set_beat "$RUN" 0
 
-it "a live lease whose driver herdr shows gone: become-pm names ask-shawn with the exact label"
+it "a live lease whose driver herdr shows gone: become-pm names ask-shawn with the picker"
 as sess-c become-pm
-check "0 ask-shawn gone Approve takeover --replace sess-b" "$CODE $(field step) $(field presence) $(field label)"
+check "0 ask-shawn gone Take over from the PM in session sess-b" "$CODE $(field step) $(field presence) $(printed_option)"
 
 snapshot "w2:p40|PM|sess-b|term_p40" "w2:p31|scratch|sess-w2|term_p31"
 set_beat "$RUN" 3
 
 it "an orphaned lease whose PM herdr still shows: become-pm names ask-shawn"
 as sess-c become-pm
-check "0 ask-shawn Approve takeover --replace sess-b" "$CODE $(field step) $(field label)"
+check "0 ask-shawn Take over from the PM in session sess-b" "$CODE $(field step) $(printed_option)"
 
 snapshot "w2:p31|scratch|sess-w2|term_p31"
 register sess-c w2:p45 term_p45
 
-it "an orphaned lease: become-pm names ask-shawn with the exact label, and writes nothing"
+it "an orphaned lease: become-pm names ask-shawn with the picker, and writes nothing"
 BEFORE="$(state_hash "$RUN")"
 as sess-c become-pm
-check "0 ask-shawn orphaned Approve takeover --replace sess-b" "$CODE $(field step) $(field lease_status) $(field label)"
+check "0 ask-shawn orphaned Take over from the PM in session sess-b" "$CODE $(field step) $(field lease_status) $(printed_option)"
 check "programme.sh takeover --prompt <pick id>" "$(field command)"
 has "AskUserQuestion picker" "$OUT"
 check "$BEFORE" "$(state_hash "$RUN")"
@@ -311,8 +313,8 @@ has "\`programme.sh become-pm\` prints" "$FIX"
 has "\`programme.sh takeover --prompt <pick id>\`" "$FIX"
 case "$FIX" in *approval-label*) fail "the fix still names approval-label: $FIX" ;; *) pass ;; esac
 
-it "the ask-shawn route works for a stopped PM: a pick of the label, through the real hook, moves the lease"
-P="$(pick sess-c "Approve takeover --replace sess-b (Recommended)")"
+it "the ask-shawn route works for a stopped PM: a pick of the picker, through the real hook, moves the lease"
+P="$(pick sess-c sess-b)"
 as sess-c become-pm
 CMD="$(field command)"
 CMD="${CMD#programme.sh }"
@@ -345,7 +347,7 @@ set_beat "$RUN" 3
 
 it "a former PM whose successor went orphaned gets ask-shawn, not stand-down"
 as sess-b become-pm
-check "0 ask-shawn Approve takeover --replace sess-c" "$CODE $(field step) $(field label)"
+check "0 ask-shawn Take over from the PM in session sess-c" "$CODE $(field step) $(printed_option)"
 
 it "an unreadable run record: become-pm refuses with step refused and a fix"
 LEASE_FILE="${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json"

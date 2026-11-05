@@ -4,7 +4,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 
 PASS=0
 FAIL=0
@@ -238,7 +239,7 @@ prog drop-item herdr:w2/p27
 check 2 "$CODE"
 
 it "drop-item citing a typed prompt that names the item, with no offer, is refused"
-prog drop-item linear:AI-801 --reason "Shawn dropped it" --prompt "$P_TYPED"
+PROG="$REAL_PROG" prog drop-item linear:AI-801 --reason "Shawn dropped it" --prompt "$P_TYPED"
 check "1 open" "$CODE $(field 'items["linear:AI-801"]["state"]' | tr -d '"')"
 has "programme.sh offer" "$OUT"
 
@@ -251,11 +252,12 @@ has "\"cites\": [\"${P_DROP}\"]" "$(journal_last item_dropped)"
 
 it "reopen-item on a dropped item with no prompt is refused"
 prog reopen-item linear:AI-801
-check "1 typed prompt" "$CODE $(printf '%s' "$OUT" | grep -o 'typed prompt' | head -1)"
+check "1 needs --prompt" "$CODE $(printf '%s' "$OUT" | grep -o 'needs --prompt' | head -1)"
 it "reopen-item citing a typed prompt with no offer is refused, even naming the item"
 P_REOPEN_TYPED="$(prompt typed 'reopen AI-801')"
-prog reopen-item linear:AI-801 --prompt "$P_REOPEN_TYPED"
+PROG="$REAL_PROG" prog reopen-item linear:AI-801 --prompt "$P_REOPEN_TYPED"
 check "1 dropped" "$CODE $(field 'items["linear:AI-801"]["state"]' | tr -d '"')"
+has "no open offer" "$OUT"
 
 it "reopen-item with a pick of its offer reopens the dropped item"
 P_REOPEN="$(pick_offered 'reopen-item linear:AI-801')"
@@ -448,17 +450,17 @@ check '0 "prod-deploy"' "$CODE $(field 'items["linear:AI-811"]["handed"]["op"]')
 
 it "answer-handed without a prompt is refused"
 prog answer-handed linear:AI-802 --choice ship
-check "1 typed prompt" "$CODE $(printf '%s' "$OUT" | grep -o 'typed prompt' | head -1)"
+check "1 needs --prompt" "$CODE $(printf '%s' "$OUT" | grep -o 'needs --prompt' | head -1)"
 it "answer-handed with a cron prompt is refused"
 prog answer-handed linear:AI-802 --choice ship --prompt "$P_CRON"
 check 1 "$CODE"
 P_VAGUE_SHIP="$(prompt typed 'ship it')"
 it "answer-handed citing a typed prompt with no offer is refused"
-prog answer-handed linear:AI-802 --choice ship --prompt "$P_VAGUE_SHIP"
+PROG="$REAL_PROG" prog answer-handed linear:AI-802 --choice ship --prompt "$P_VAGUE_SHIP"
 check "1 handed" "$CODE $(field 'items["linear:AI-802"]["state"]' | tr -d '"')"
 has "programme.sh offer" "$OUT"
 it "answer-handed citing typed words that name the item, with no offer, is refused"
-prog answer-handed linear:AI-802 --choice ship --prompt "$(prompt typed 'ship ai 802')"
+PROG="$REAL_PROG" prog answer-handed linear:AI-802 --choice ship --prompt "$(prompt typed 'ship ai 802')"
 check "1 handed" "$CODE $(field 'items["linear:AI-802"]["state"]' | tr -d '"')"
 
 P_SHIP="$(pick_offered 'answer-handed linear:AI-802 --choice ship')"
@@ -614,7 +616,7 @@ handed_ask linear:AI-920 "Skill reframe work" --session s-920 --session-name "$R
 ANSWERS="$(journal_count handed_answered)"
 for words in "ship ${REFRAME}" "ship AI-920" "don't ship ${REFRAME}" "what is left on ${REFRAME}?"; do
   it "typed words with no offer approve nothing: ${words}"
-  prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt typed "$words")"
+  PROG="$REAL_PROG" prog answer-handed linear:AI-920 --choice ship --prompt "$(prompt typed "$words")"
   check "1 handed" "$CODE $(state linear:AI-920)"
 done
 it "a cron prompt naming the session approves nothing"
@@ -643,13 +645,13 @@ check "0 open" "$CODE $(state linear:AI-928)"
 
 prog add-item linear:AI-929 --title "Stale branch cleanup"
 it "drop-item refuses a typed title with no offer"
-prog drop-item linear:AI-929 --reason "not needed" --prompt "$(prompt typed 'drop Stale branch cleanup')"
+PROG="$REAL_PROG" prog drop-item linear:AI-929 --reason "not needed" --prompt "$(prompt typed 'drop Stale branch cleanup')"
 check "1 open" "$CODE $(state linear:AI-929)"
 it "drop-item takes a pick of its offer"
 prog drop-item linear:AI-929 --reason "not needed" --prompt "$(pick_offered 'drop-item linear:AI-929 --reason "not needed"')"
 check "0 dropped" "$CODE $(state linear:AI-929)"
 it "reopen-item refuses a typed title with no offer"
-prog reopen-item linear:AI-929 --prompt "$(prompt typed 'reopen Stale branch cleanup')"
+PROG="$REAL_PROG" prog reopen-item linear:AI-929 --prompt "$(prompt typed 'reopen Stale branch cleanup')"
 check "1 dropped" "$CODE $(state linear:AI-929)"
 it "reopen-item takes a pick of its offer"
 prog reopen-item linear:AI-929 --prompt "$(pick_offered 'reopen-item linear:AI-929')"

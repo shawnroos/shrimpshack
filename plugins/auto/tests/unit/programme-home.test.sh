@@ -463,7 +463,7 @@ core = load_lib_module("run_record_core")
 print(sorted(core.read_run_record(ph.home_path(args[0]), args[0])["programme"]["agreement"]))
 EOF
 }
-PROGPY="${AUTO_ROOT}/lib/programme.py"
+PROGPY="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 it "an accepted record with no project terms and no stamp survives writes through the verbs without gaining either"
 CODES=""
 "$PY" "$PROGPY" add-item linear:AI-7 --title "Crop" --kind fix_only >/dev/null 2>&1; CODES="${CODES}$?"

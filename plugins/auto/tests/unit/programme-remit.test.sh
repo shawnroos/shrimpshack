@@ -4,7 +4,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 
 PASS=0
 FAIL=0
@@ -204,19 +204,20 @@ it "after acceptance set-remit needs a typed prompt"
 remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}'
 check 1 "$CODE"
 
-it "a prompt that does not name the added team is refused"
-VAGUE="$(prompt 'add that other team too')"
-remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}' --prompt "$VAGUE"
+it "typed words with no open offer add no team, even naming it"
+TYPED="$(prompt 'add the CUE team to the remit')"
+PROG="${AUTO_ROOT}/lib/programme.py" remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}' --prompt "$TYPED"
 check 1 "$CODE"
-has "CUE" "$OUT"
+has "no open offer" "$OUT"
+check '["AI"]' "$(field '[t["key"] for t in prog["remit"]["tracker"]["teams"]]')"
 
-it "a prompt naming the added team is accepted"
+it "a pick of the offer to add the team is accepted"
 NAMED="$(prompt 'add the CUE team to the remit')"
 remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}' --prompt "$NAMED"
 check 0 "$CODE"
 check '["shawn", ["AI", "CUE"]]' "$(field '[prog["agreement"]["terms"]["remit"]["set_by"], [t["key"] for t in prog["remit"]["tracker"]["teams"]]]')"
 
-it "removing a team needs a prompt naming it"
+it "removing a team goes through its offer too"
 DROP="$(prompt 'drop CUE from the remit')"
 remit_in '{"tracker":{"teams":[{"key":"AI"}]}}' --prompt "$DROP"
 check 0 "$CODE"

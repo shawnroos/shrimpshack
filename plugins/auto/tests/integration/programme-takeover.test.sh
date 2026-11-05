@@ -4,7 +4,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 PASS=0
@@ -411,6 +411,20 @@ PYEOF
   )
 }
 
+# A pick of the takeover option on the picker become-pm prints for that driver: take_pick <session> <driver> [prefilled]
+take_pick() {
+  local sid="$1" driver="$2" printed
+  shift 2
+  printed="$("$PY" - "$AUTO_ROOT" "$driver" <<'PYEOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+from _bootstrap import load_lib_module
+print(json.dumps(load_lib_module("programme_offers").takeover_input(sys.argv[2])))
+PYEOF
+)"
+  PICK_INPUT="$printed" pick "$sid" "Take over from the PM in session ${driver}${TAKE_SUFFIX:-}" "$@"
+}
+
 # A typed prompt from a session that is not the PM, journaled hours_ago with a verifiable transcript.
 ask() {
   ( cd "$NOREPO" && "$PY" - "$AUTO_ROOT" "$RUN" "$@" <<'PYEOF'
@@ -451,11 +465,6 @@ D="$(driver_of "$RUN")"
 register "$D" w2:p80 term_p80
 snapshot "w2:p80|PM|${D}|term_p80" "w2:p31|scratch|sess-w2|term_p31"
 set_beat "$RUN" 0
-LABEL="Approve takeover --replace $D"
-
-it "approval-label takeover --replace prints the exact label the pick route checks"
-as sess-p approval-label takeover --replace "$D"
-check "0 $LABEL" "$CODE $OUT"
 
 it "a pick answering the other option is refused, and its fix offers the takeover picker"
 P="$(pick sess-p "Keep the current PM")"
@@ -465,14 +474,14 @@ has "does not approve this takeover" "$OUT"
 has "fix: ask Shawn with the \`input\` that \`programme.sh become-pm\` prints" "$OUT"
 has "then rerun \`programme.sh takeover --prompt <pick id>\`" "$OUT"
 
-it "a pre-filled pick of the takeover label is refused"
-P="$(pick sess-p "$LABEL" prefilled)"
+it "a pre-filled pick of the takeover option is refused"
+P="$(take_pick sess-p "$D" prefilled)"
 as sess-p takeover --prompt "$P"
 check "1 $D" "$CODE $(driver_of "$RUN")"
-has "is not a verified" "$OUT"
+has "is not Shawn's verified words" "$OUT"
 
 it "a pick made in another session is refused"
-P="$(pick sess-q "$LABEL")"
+P="$(take_pick sess-q "$D")"
 as sess-p takeover --prompt "$P"
 check "1 $D" "$CODE $(driver_of "$RUN")"
 has "was not given in this session" "$OUT"
@@ -537,8 +546,8 @@ S="$(suggested sess-p "yes, take over")"
 as sess-p takeover --prompt "$S" --reads-as "$PLAIN"
 check "1 $D" "$CODE $(driver_of "$RUN")"
 
-it "a pick of the exact label, marked recommended, replaces the live PM"
-P="$(pick sess-p "$LABEL (Recommended)")"
+it "a pick of the takeover option replaces the live PM"
+P="$(take_pick sess-p "$D")"
 as sess-p takeover --prompt "$P"
 check "0 sess-p" "$CODE $(driver_of "$RUN")"
 ENTRY="$(last_entry "$RUN" taken_over)"
@@ -558,14 +567,16 @@ PV="$(PICK_INPUT="$V_INPUT" pick sess-v "$V_PLAIN")"
 as sess-v takeover --prompt "$PV"
 check "0 sess-v" "$CODE $(driver_of "$RUN")"
 has "\"answer\": \"$V_PLAIN\"" "$(last_entry "$RUN" taken_over)"
-PB="$(pick sess-p "Approve takeover --replace sess-v")"
+
+it "the takeover option answered with the Recommended suffix replaces the live PM"
+PB="$(TAKE_SUFFIX=" (Recommended)" take_pick sess-p sess-v)"
 as sess-p takeover --prompt "$PB"
 check "0 sess-p" "$CODE $(driver_of "$RUN")"
 
 it "the same pick cited again, after another session became PM, is refused"
 register sess-p w2:p81 term_p81
 snapshot "w2:p81|New PM|sess-p|term_p81" "w2:p31|scratch|sess-w2|term_p31"
-P2="$(pick sess-u "Approve takeover --replace sess-p")"
+P2="$(take_pick sess-u sess-p)"
 typed sess-t '/auto:programme-takeover --replace sess-p' >/dev/null
 as sess-t takeover --replace sess-p
 check "0 sess-t" "$CODE $(driver_of "$RUN")"
@@ -589,7 +600,6 @@ check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "needs a pick" "$OUT"
 
 snapshot "w2:p31|scratch|sess-w2|term_p31"
-LABEL_T="Approve takeover --replace sess-t"
 
 it "a session in the space only by HERDR env, with no registry row, cannot take over a stopped PM"
 P=p000000
@@ -627,7 +637,7 @@ has "does not approve this takeover" "$OUT"
 
 it "an orphaned lease: a pick made in another session is refused"
 register sess-j w2:p87 term_p87
-P="$(pick sess-j "$LABEL_T")"
+P="$(take_pick sess-j sess-t)"
 as sess-k takeover --prompt "$P"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "was not given in this session" "$OUT"
@@ -638,7 +648,7 @@ as_in w9 sess-w9 takeover --prompt "$A" --run "$RUN"
 check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "not in the programme's space" "$OUT"
 
-P="$(pick sess-k "$LABEL_T")"
+P="$(take_pick sess-k sess-t)"
 
 it "a lease whose status did not come from a readable run record is refused, not read as orphaned"
 LEASE_FILE="${CLAUDE_AUTO_DATA_DIR}/programmes/leases/default.w2.json"
@@ -649,7 +659,7 @@ check "1 sess-t" "$CODE $(driver_of "$RUN")"
 has "run record could not be read" "$OUT"
 cp -f "${WORK}/lease.bak" "$LEASE_FILE"
 
-it "an orphaned lease: Shawn's pick of the exact label moves the lease, as orphaned"
+it "an orphaned lease: Shawn's pick of the takeover option moves the lease, as orphaned"
 as sess-k takeover --prompt "$P"
 check "0 sess-k" "$CODE $(driver_of "$RUN")"
 ENTRY="$(last_entry "$RUN" taken_over)"
@@ -662,7 +672,6 @@ case "$ENTRY" in *unrequested*) fail "a picked takeover is not unrequested" ;; *
 register sess-k w2:p90 term_p90
 register sess-m w2:p91 term_p91
 set_beat "$RUN" 0.05
-LABEL_K="Approve takeover --replace sess-k"
 
 it "a PM herdr shows gone: Shawn's typed ask is refused"
 A="$(ask sess-m "take over as PM" 0)"
@@ -682,8 +691,8 @@ as sess-m takeover --prompt "$P"
 check "1 sess-k" "$CODE $(driver_of "$RUN")"
 has "does not approve this takeover" "$OUT"
 
-it "a PM herdr shows gone is replaced on Shawn's pick of the exact label, as driver_gone"
-P="$(pick sess-m "$LABEL_K")"
+it "a PM herdr shows gone is replaced on Shawn's pick of the takeover option, as driver_gone"
+P="$(take_pick sess-m sess-k)"
 as sess-m takeover --prompt "$P"
 check "0 sess-m" "$CODE $(driver_of "$RUN")"
 ENTRY="$(last_entry "$RUN" taken_over)"

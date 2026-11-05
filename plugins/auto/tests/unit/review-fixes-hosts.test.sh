@@ -7,7 +7,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 PASS=0
@@ -195,14 +195,16 @@ PYEOF
 pick() {
   ( cd "$NOREPO" && AUTO_TEST_HOST=stub "$PY" - "$AUTO_ROOT" "$WORK" "$CASE_TAKER" "$1" <<'PYEOF'
 import json, os, pathlib, re, subprocess, sys, uuid
-root, work, sid, answer = sys.argv[1:5]
+root, work, sid, driver = sys.argv[1:5]
+sys.path.insert(0, root + "/lib")
+from _bootstrap import load_lib_module
+offers = load_lib_module("programme_offers")
 rows = [json.loads(line) for line in (pathlib.Path(root) / "tests/fixtures/askuser_transcript.jsonl").read_text().splitlines()]
 asked, result = rows[0], rows[1]
-question = "Who should drive the programme?"
+tool_input = offers.takeover_input(driver)
+question = tool_input["questions"][0]["question"]
+answer = offers.takeover_label(driver)
 tool_use_id = "toolu_" + uuid.uuid4().hex[:12]
-tool_input = {"questions": [{"question": question, "header": "PM", "multiSelect": False,
-                             "options": [{"label": answer, "description": "Move the lease here."},
-                                         {"label": "Keep the current PM", "description": "Change nothing."}]}]}
 asked["sessionId"] = sid
 asked["message"]["content"][0].update(id=tool_use_id, input=tool_input)
 response = {"questions": [{"question": question}], "answers": {question: answer}, "annotations": {}}
@@ -236,9 +238,9 @@ has "cannot identify this session's stub terminal pane" "$OUT"
 
 fresh_case
 typed '/auto:programme-takeover'
-PROMPT="$(pick "Approve takeover --replace $CASE_PM")"
+PROMPT="$(pick "$CASE_PM")"
 printf 'present\npresent\npresent\n' > "$SEQ"
-it "the exact-label pick from a taker with no pane is refused too"
+it "a pick of the takeover picker from a taker with no pane is refused too"
 takeover_as --run "$CASE_RUN" --prompt "$PROMPT"
 check "1 $CASE_PM" "$CODE $(driver)"
 it "the pick refusal names the missing pane"

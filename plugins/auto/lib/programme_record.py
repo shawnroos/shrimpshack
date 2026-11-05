@@ -474,7 +474,7 @@ def _h_set_waiting(host, argv):
         held = (item.get("waiting_on") or {}).get("permission")
         if held:
             raise RecordError(f"item {key!r} waits on permission proposal {held}; a new wait would drop that "
-                              "link. Shawn's typed answer or settle-permissions moves it; --clear releases it")
+                              "link. Shawn's answer or settle-permissions moves it; --clear releases it")
         spec = _wait_spec(opts, watcher, blocker)
         if watcher is not None:
             _upsert_watcher(programme, watcher, ids, item=key)
@@ -511,7 +511,7 @@ def _h_watcher_beat(host, argv):
             entry["prompt"] = cron_prompt
         return {"watcher": watcher_id, "last_beat_at": entry["last_beat_at"]}
 
-    return host._write(opts, change, "watcher_beat", compact_exempt=True, journal=False, names_change=False)
+    return host._write(opts, change, "watcher_beat", compact_exempt=True, journal=False)
 
 
 def _run_tool(argv):

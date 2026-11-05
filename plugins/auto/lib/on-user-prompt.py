@@ -103,7 +103,7 @@ def _append(run, session_id, text, origin, source):
 def _held_text(held) -> str:
     return (f"auto did not journal this prompt: programme {held['run']}'s authority is "
             f"{held['outcome']} ({held['detail']}). Nothing typed here can approve a change "
-            "until it is repaired; once it is, ask Shawn to type it again.")
+            "until it is repaired; once it is, run `programme.sh offer` and ask him with the picker it prints.")
 
 
 def _held_context(held) -> dict:

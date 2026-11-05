@@ -114,7 +114,7 @@ repo-specific rule here that the rules block does not hold.
 
 A session that reports expired external auth (for example AWS `ExpiredToken` on
 an MFA profile) cannot fix it. Do not work around it. Tell Shawn in one line,
-with the exact `! <command>` to type in that session's pane.
+with the `! <command>` for that session's pane.
 
 ## 6. Sweep and report
 

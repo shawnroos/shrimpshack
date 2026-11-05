@@ -92,7 +92,7 @@ Every personal or project rule, Authority entry and check needs an `adoption` ob
   - `adopt-rule <rule-id>` adopts a proposed rule (`entry: "rule"`). A rule carries no level, so it takes no `--widening`.
   - `adopt-autonomy <decision kind> <level> [--widening]` sets one Authority entry (`entry: "autonomy"`). A level wider than the plugin default needs `--widening`, which also writes `"widening": true`. A protected kind is refused (section 5).
   - `adopt-check <repo> <check> <argv-json>` sets one command of a repo's checks block (`entry: "check"`). The checker uses a repo's commands only when both `verified.lookup` and `verified.deployed_sha` load, so adopt both.
-- The cited prompt must name what it approves: for `adopt-rule`, the rule id; for `adopt-autonomy`, the decision kind and the level; for `adopt-check`, the repo and the check key (for example `verified.lookup`). With `--widening`, the text must also contain `widen`, `widening` or `widened`. Each name must appear in the redacted text as whole words, case ignored: a run of words that, with `_` and `-` dropped, spells the name. So `merge_pr`, `merge-pr`, `merge pr` and `MergePR` all name `merge_pr`, while `AI-801` does not name `AI-80`, `1800` does not name `180`, `actually` does not name `act`, and `auto-merge-docs-only` does not name `auto-merge`. Levels are read longest first, so `act and tell` names `act_and_tell` and never `act`. An occurrence right after `not`, `never`, `no` or a `n't` word (`don't`, `do not widen`, `never act`) does not count. A prompt that does not name them is refused, and the refusal lists the words it lacks. The check stops a prompt about something else from being cited; it does not prove intent, and other negations (`without widening`, `rather than act`) are not detected.
+- The cited prompt must answer an open offer of that exact command. Auto writes the option from the command, so Shawn sees the rule, the decision kind and level or the repo and check key. `--widening` is an authority move: only a pick approves it.
 - Each verb writes the entry and its adoption record in one atomic rename, then journals `rule_adopted` with `entry`, `target`, `hash`, `prompt_id`, `quote` and `cites: [prompt_id]`. Until that journal entry exists, the entry does not load. A project-layer entry is committed by hand, so on this machine it loads only when a `rule_adopted` entry for its target and hash is journaled.
 
 ## 5. Merge and Authority width
@@ -159,7 +159,7 @@ A proposed rule lives in the programme record at `programme.proposed_rules`, nev
 
 An item link satisfies only the `no_rule_proposed` stop check for that item. A wait still needs a named reporter or live watcher. A proposed rule never changes a match result, deliverables, autonomy, or completion. `summary(protocol, record)` checks the rule fields without `items` and lists it with status `proposed`.
 
-`adopt-rule` removes `items` before rule validation, adoption hashing, and writing personal policy. Item links never become policy fields. Adoption still requires a typed prompt, a verified pick or an accepted suggestion naming the rule, plus explicit widening approval where required.
+`adopt-rule` removes `items` before rule validation, adoption hashing, and writing personal policy. Item links never become policy fields. Adoption still requires Shawn's answer to the offer of that rule, plus explicit widening approval where required.
 
 ## 8. Loader interface
 

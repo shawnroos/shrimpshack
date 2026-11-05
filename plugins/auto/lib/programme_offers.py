@@ -20,6 +20,8 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_journal = load_lib_module("programme_journal")
 programme_pick_source = load_lib_module("programme_pick_source")
 programme_sanitize = load_lib_module("programme_sanitize")
+programme_fixes = load_lib_module("programme_fixes")
+programme_home = load_lib_module("programme_home")
 
 OFFERED = "approval_offered"
 DECLINED = "approval_declined"
@@ -76,9 +78,6 @@ def bound_argv(argv) -> list:
         arg = args.pop(0)
         if arg in _NOT_BOUND:
             args = args[1:]
-        elif arg == "--terms" and kept[:1] == ["accept-agreement"]:
-            # The offer's subject is the digest, so the flag adds nothing to what was approved.
-            args = args[1:]
         else:
             kept.append(arg)
     return kept
@@ -132,9 +131,9 @@ def _label(text) -> str:
     return _shown(str(text).replace(", ", " and "), LABEL_CAP)
 
 
-def _rendered(label, description="", facts=None, authority=False, named=None, content=None, cap=TEXT_CAP) -> dict:
+def _rendered(label, description="", facts=None, authority=False, content=None, cap=TEXT_CAP) -> dict:
     return {"label": _label(label), "description": _shown(description, cap), "facts": facts, "authority": authority,
-            "named": named, "content": content}
+            "content": content}
 
 
 def _item(programme, ident) -> tuple:
@@ -165,7 +164,7 @@ def _reopen(cmd, programme) -> dict:
 def _handed(cmd, programme) -> dict:
     key, item, facts = _item(programme, cmd.first("<id> --choice ship|decline"))
     choice = cmd.one_of("choice", ("ship", "decline"))
-    return _rendered(f"{choice.capitalize()} item {key}", _about(key, item), facts, named=f"{choice} {key}")
+    return _rendered(f"{choice.capitalize()} item {key}", _about(key, item), facts)
 
 
 def _swap(cmd, programme) -> dict:
@@ -286,7 +285,7 @@ def _draft(text) -> str:
     return programme_journal.redact(cleaned)
 
 
-# What the named-word checks once forced into view: Shawn sees each thing a widening adds, drops or extends.
+# Shawn sees each thing a widening adds, drops or extends.
 def _ruling_words(content, delta) -> str:
     targets = " and ".join(content.get("applies_to") or []) or "no items yet"
     words = [f"{content.get('effect')} {content.get('kind')} on {targets}."]
@@ -466,8 +465,7 @@ def _remit(_cmd, programme, doc=None) -> dict:
     shown = "; ".join(f"{how} {part}: {name}" for (part, how, _entry), name in zip(changes, names))
     digest = content_hash(doc)[len("sha256:"):][:6]
     return _rendered(f"{'Widen' if wider else 'Change'} the remit, change {digest}",
-                     shown or "No change.", authority=wider,
-                     named=" ".join(["Approve set-remit", *[str(name) for name in names]]))
+                     shown or "No change.", authority=wider)
 
 
 # Default-deny: a verb with no entry here cannot be offered. A test pins the keys to PICK_VERBS.
@@ -504,21 +502,17 @@ RENDERERS = {
 }
 RENDERERS.update(load_lib_module("programme_offers_stores").RENDERERS)
 _CONTENT_VERBS = ("set-remit",)
-# No named-word check stands behind these, so words that reach no offer must refuse here.
-OFFER_ONLY = frozenset(("answer-handed", "drop-item", "override-focus", "reopen-item", "swap-item"))
-OFFER_FIX = ("run `programme.sh offer <question-key> --command '<verb> <args>'`, ask with the input it prints, then "
-             "rerun citing his answer with --prompt <id>")
+# These also run after `end`, so their offer must too.
+_AFTER_END = frozenset(("carry-rulings", "dispose-action"))
 
 
 def render(argv, programme, doc=None) -> dict:
     kept = bound_argv(argv)
     verb = kept[0] if kept else None
     if verb not in RENDERERS:
-        raise OfferError(f"{verb} needs a typed prompt; a pick cannot approve it")
+        raise OfferError(f"{verb} takes no approval, so nothing can offer it")
     cmd = _Command(kept)
     rendered = RENDERERS[verb](cmd, programme, doc) if verb in _CONTENT_VERBS else RENDERERS[verb](cmd, programme)
-    if not rendered["named"]:
-        rendered["named"] = "Approve " + shlex.join(kept)
     return rendered
 
 
@@ -550,7 +544,7 @@ def _options(host, parsed, programme, doc) -> list:
             rendered = render(argv, programme, doc if argv[0] in _CONTENT_VERBS else None)
         except Exception as exc:
             raise host.ProgrammeError(f"cannot offer {shlex.join(argv)}: {exc}",
-                                      fix=host.programme_approval.approval_fix(argv[0], argv)) from None
+                                      fix=programme_fixes.fix_for("offer")) from None
         tail = " < the same JSON" if argv[0] in _CONTENT_VERBS else ""
         option = {"label": rendered["label"], "description": rendered["description"], "argv_hash": argv_hash(argv),
                   "subject": subject(rendered), "authority": rendered["authority"],
@@ -609,13 +603,16 @@ def _h_offer(host, argv):
     doc = _read_doc(parsed)
 
     def change(programme, _prompt, _rec):
+        if programme_home.sealed(programme):
+            raise host.ProgrammeError("the programme is archived; nothing more can be asked or approved in it")
         options = _options(host, parsed, programme, doc)
         picker = _picker(key, options)
         return {"offer_id": "offer-" + uuid.uuid4().hex[:12], "question_key": key, "input": picker, "decline": DECLINE,
                 "asked_hash": asked_hash(picker["questions"]),
                 "options": [_decline_option(), *options]}
 
-    return host._write(opts, change, OFFERED, verb="offer", target=key, beat=False, names_change=False)
+    return host._write(opts, change, OFFERED, verb="offer", target=key, beat=False,
+                       after_end=all(argv[0] in _AFTER_END for argv in parsed))
 
 
 def offer_for(rows, row):
@@ -670,8 +667,8 @@ def bind(offer, answer, argv, record, programme, error) -> dict:
         raise _picked_decline(error)
     if option["argv_hash"] != argv_hash(argv):
         raise error(f"this pick approved a different command: {option.get('command')}", fix=redo)
-    return {"answer": shown, "named": _rendered_now(option, argv, programme, error, redo)["named"],
-            "quote": option.get("content") or option["label"],
+    _rendered_now(option, argv, programme, error, redo)
+    return {"answer": shown, "quote": option.get("content") or option["label"],
             "reading": {"wording": programme_journal.PM_DRAFT, "offer_id": payload.get("offer_id")}}
 
 
@@ -696,7 +693,7 @@ def _own_words(rows, row, offer, why, words, reading, argv, record, programme, e
         raise error(f"{why}, so the PM states what it read them as: rerun with --reads-as {label!r}",
                     fix=f"read his words first. If they decline or ask something, run nothing. If they approve, add "
                         f"--reads-as {shlex.quote(label)}")
-    rendered = _rendered_now(option, argv, programme, error, redo)
+    _rendered_now(option, argv, programme, error, redo)
     newer = load_lib_module("programme_rulings").newer_words(rows, row["prompt_id"])
     if newer:
         raise error(f"prompt {row['prompt_id']!r} is older than {newer!r}, which nothing has cited yet; own words bind "
@@ -709,7 +706,7 @@ def _own_words(rows, row, offer, why, words, reading, argv, record, programme, e
                     fix="relay this to Shawn and ask him for a shorter text, or split it into two Rulings")
     read_back = (f"Recorded your words as the text of: {label}. Say so if that is wrong." if is_draft
                  else f"Read your message as: {label}. Say so if that is wrong.")
-    return {"quote": shown, "named": rendered["named"],
+    return {"quote": shown,
             "reading": {"read_as": label, "read_by": "pm", "offer_id": payload.get("offer_id"),
                         "wording": programme_journal.SHAWN, "read_back": read_back}}
 
@@ -746,21 +743,16 @@ def _open_offer(rows, row):
 
 
 def _spent(rows, prompt_id) -> bool:
-    return any(r.get("kind") not in ("prompt", "approval_refused")
+    return any(r.get("kind") not in ("prompt", "approval_refused") and not (r.get("payload") or {}).get("unchanged")
                and prompt_id in {*(r.get("cites") or []), (r.get("payload") or {}).get("prompt_id")} for r in rows)
 
 
-def _no_offer(argv, prompt_id, error) -> dict:
-    verb = argv[0] if argv else None
-    if verb in OFFER_ONLY:
-        raise error(f"no open offer of this command asks the question prompt {prompt_id!r} would answer, so it "
-                    f"approves nothing", fix=OFFER_FIX)
-    return {}
+def _no_offer(argv, prompt_id, error):
+    return error(f"no open offer of this command asks the question prompt {prompt_id!r} would answer, so it approves "
+                 "nothing", fix=programme_fixes.fix_for(argv[0] if argv else "offer"))
 
 
 def bind_words(rows, row, origin, reading, argv, record, programme, error) -> dict:
-    """What a typed, queued or suggested message adds to an approval; an empty dict leaves it on the older checks,
-    which stay until the verbs move to offers."""
     prompt_id = row["prompt_id"]
     at = rows.index(row)
     if any(_holding(r.get("payload") or {}, argv) for r in rows[at + 1:] if r.get("kind") == OFFERED):
@@ -768,17 +760,10 @@ def bind_words(rows, row, origin, reading, argv, record, programme, error) -> di
                     fix="ask again, or wait for his answer to the picker")
     offer = _open_offer(rows, row)
     if origin == "suggested":
-        if offer is not None or reading is not None:
-            raise error(f"prompt {prompt_id!r} is an accepted suggestion: the model wrote it, so it approves no offer",
-                        fix="ask with the picker and wait for his pick or his own words")
-        return _no_offer(argv, prompt_id, error)
-    if offer is None:
-        if reading is not None:
-            raise error(f"no open offer asks the question prompt {prompt_id!r} would answer, so it approves nothing",
-                        fix="run `programme.sh offer`, ask with the input it prints, and wait for his answer")
-        return _no_offer(argv, prompt_id, error)
-    if reading is None and _holding(offer["payload"], argv) is None:
-        return _no_offer(argv, prompt_id, error)
+        raise error(f"prompt {prompt_id!r} is an accepted suggestion: the model wrote it, so it approves nothing",
+                    fix="ask with the picker and wait for his pick or his own words")
+    if offer is None or (reading is None and _holding(offer["payload"], argv) is None):
+        raise _no_offer(argv, prompt_id, error)
     if _spent(rows, prompt_id):
         raise error(f"prompt {prompt_id!r} already approved a change; one message approves one change",
                     fix="ask Shawn about this one")

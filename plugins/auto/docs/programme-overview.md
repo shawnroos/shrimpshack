@@ -60,7 +60,7 @@ Programme starts with proposed terms and a remit. The human approves these befor
 
 Setup runs as a walkthrough. `/auto:programme` opens the Programme pane, which shows the draft agreement and what is in and out of scope. The chat asks one question per step, with the PM's recommendation first. The first question offers to take every recommendation at once.
 
-Before acceptance, a picker answer sets a per-programme setting. The programme checks the answer against the session transcript before it counts. A picker answer approves the accept itself only when its answer is the accept's terms-bound label, `Approve accept-agreement --terms <digest>`, and the digest still matches the terms shown. A picker answer never approves a shared setting, a ruling or a reserved area; those need a typed reply. After acceptance, only typed replies approve.
+Before acceptance, a picker answer sets a per-programme setting. The programme checks the answer against the session transcript before it counts. Every approval is Shawn's answer to a picker Auto wrote with `programme.sh offer`. A pick approves the command its option holds. His own words approve too, except on the accept and other authority moves, where the PM relays them and asks again. Typed `/auto:programme-end`, `-handover` and `-takeover` requests stay valid. No step needs exact words.
 
 The remit separates three types of scope:
 
@@ -222,7 +222,7 @@ Priority instructions put consent and safety first. They then address blockers o
 
 The PM records dependencies through queued actions and watched waits. Programme has no built-in dependency graph or automatic upstream gate.
 
-When an item needs a human decision, the PM records a question against that item. The answer cites a typed prompt.
+When an item needs a human decision, the PM records a question against that item. The answer cites his reply to the offer of `answer-handed`.
 
 Approval checks also require the relevant target. A valid human prompt does not approve every later action.
 
@@ -244,7 +244,7 @@ This prevents an automated event from borrowing an older human prompt with the s
 
 The fix uses local transcript evidence. It does not protect against an actor who rewrites all trusted local records.
 
-Synthetic approval tests pass. In live checks, a typed approval succeeded, and SDK prompts and background notifications were refused. An accepted prompt suggestion does not count as typed input.
+Synthetic approval tests pass. In live checks, an approval from Shawn succeeded, and SDK prompts and background notifications were refused. An accepted prompt suggestion approves nothing.
 
 A picker answer is a separate origin, `picked`. It counts only for setup choices before acceptance, and only when the transcript shows Shawn answered a question the PM asked without pre-filled answers.
 

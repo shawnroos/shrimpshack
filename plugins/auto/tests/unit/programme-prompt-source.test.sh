@@ -229,14 +229,8 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
     secret_label = 'Approve adopt-rule password=hunter2hunter2'
     masked = pick_row({'Adopt?': [secret_label, 'No']}, {'Adopt?': secret_label})
     check('the journal holds the masked answer', secret_label in json.dumps(masked['payload']['source']['answers']), False)
-    def refused_with_fix(message, fix=None):
-        return ValueError(message)
-
-    label_result = []
-    label_refusal = refusal(lambda: label_result.append(approval._picked_answer(
-        pj.read(run), masked, ['adopt-rule', 'password=hunter2hunter2'], masked['prompt_id'], refused_with_fix)))
-    check('a label is compared with the raw answer from the transcript', label_refusal, None)
-    check('the approval keeps the masked answer', label_result, [pj.redact(secret_label)])
+    check('the pick is read raw from the transcript', pick_answer_of(masked), secret_label)
+    check('its masked form differs, and is what an approval stores', pj.redact(secret_label) != secret_label, True)
 
     def queued_prompt(text, *later, hook_prompt_id=None, sid='source-pm'):
         queued_payload, _, queued_path, _ = fixture(text, sid)

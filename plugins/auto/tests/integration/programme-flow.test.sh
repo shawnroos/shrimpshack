@@ -4,7 +4,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 PASS=0
@@ -240,7 +240,7 @@ EOF
 check "herdr:w2/p31 linear:AI-753" "$ITEMS"
 
 it "F1: the journal holds the start entries in order"
-check "programme_started agreement_proposed prompt agreement_accepted item_added item_added" "$(kinds "$RUN")"
+check "programme_started agreement_proposed prompt approval_offered prompt agreement_accepted item_added item_added" "$(kinds "$RUN")"
 
 as sess-pm set-waiting linear:AI-753 --who team-x
 

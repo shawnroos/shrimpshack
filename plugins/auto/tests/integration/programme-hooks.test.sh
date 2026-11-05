@@ -251,13 +251,18 @@ it "the same correction text journaled as cron records no Ruling"
 set_cadence_prompt "that didn't need me"
 prompt_hook sess-pm "that didn't need me" >/dev/null
 OUT="$(verb_pm record-ruling r-crop --effect grant --scope "crop approach is the PM's" --replies-to "$ASK" --prompt "$(latest_prompt)" --run "$RUN")"
-check "False is not typed" "$(programme_field '"r-crop" in ((prog.get("context") or {}).get("decisions") or {})') $(printf '%s' "$OUT" | grep -o 'is not typed' | head -1)"
+check "False is not Shawn" "$(programme_field '"r-crop" in ((prog.get("context") or {}).get("decisions") or {})') $(printf '%s' "$OUT" | grep -o 'is not Shawn' | head -1)"
 set_cadence_prompt "sweep the programme now"
 
-it "a typed prompt fed through the prompt hook lets a correcting Ruling hand the kind to the PM"
+it "a typed prompt fed through the prompt hook with no open offer records no Ruling"
 prompt_hook sess-pm "that didn't need me" >/dev/null
-verb_pm record-ruling r-crop --effect grant --scope "crop approach is the PM's" --replies-to "$ASK" --prompt "$(latest_prompt)" --run "$RUN" >/dev/null
-check "technical_approach grant accepted that didn't need me" \
+OUT="$(verb_pm record-ruling r-crop --effect grant --scope "crop approach is the PM's" --replies-to "$ASK" --prompt "$(latest_prompt)" --run "$RUN")"
+check "False no open offer" "$(programme_field '"r-crop" in ((prog.get("context") or {}).get("decisions") or {})') $(printf '%s' "$OUT" | grep -o 'no open offer' | head -1)"
+
+it "a pick of the offered Ruling hands the kind to the PM, quoting the option"
+P_CROP="$(CLAUDE_CODE_SESSION_ID=sess-pm "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$RUN" "record-ruling r-crop --effect grant --scope \"crop approach is the PM's\" --replies-to $ASK")"
+verb_pm record-ruling r-crop --effect grant --scope "crop approach is the PM's" --replies-to "$ASK" --prompt "$P_CROP" --run "$RUN" >/dev/null
+check "technical_approach grant accepted crop approach is the PM's" \
   "$(programme_field '" ".join(str(prog["context"]["decisions"]["r-crop"][-1][k]) for k in ("kind", "effect", "state", "quote"))')"
 
 it "/auto:programme-takeover typed in a new session in w2 is journaled as a takeover request in w2's home"
@@ -966,11 +971,7 @@ EOF
 )"
 it "with nothing to act on and no Ruling, the Stop hook lets the PM stop"
 check "" "$(stop_hook sess-carry)"
-prompt_hook sess-carry "pw: worker coordination across the programme is yours" >/dev/null
-P_CARRY="$(run_py "$CARRY_RUN" <<'EOF'
-print([x for x in pj.read(args[0]) if x["kind"] == "prompt"][-1]["prompt_id"])
-EOF
-)"
+P_CARRY="$(CLAUDE_CODE_SESSION_ID=sess-carry "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$CARRY_RUN" "record-ruling pw --kind worker_coordination --effect grant --scope \"PM coordinates workers\"")"
 CLAUDE_CODE_SESSION_ID=sess-carry run_py record-ruling pw --kind worker_coordination --effect grant \
   --scope "PM coordinates workers" --prompt "$P_CARRY" --run "$CARRY_RUN" <<'EOF' >/dev/null
 sys.exit(load_lib_module("programme")._cli(args))

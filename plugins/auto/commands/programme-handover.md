@@ -6,8 +6,7 @@ allowed-tools: Bash, CronDelete, TaskStop, AskUserQuestion
 
 Shawn typed this, or asked in any words, to move the PM to another session. A typed
 `/auto:programme-handover <session-id>` in the driving session is journaled by the
-prompt hook. Otherwise ask him with the handover picker; never tell him to type this
-command.
+prompt hook. Otherwise ask him with the handover picker.
 
 If Shawn typed the command, run the dispatch line below:
 

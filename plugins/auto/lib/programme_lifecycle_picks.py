@@ -13,7 +13,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 programme_journal = load_lib_module("programme_journal")
-programme_offers = load_lib_module("programme_offers")
 session_registry = load_lib_module("session_registry")
 
 
@@ -22,7 +21,7 @@ def approve(run, sid, argv, prompt_id, status, refused) -> dict:
     offer_fix = load_lib_module("programme_fixes").fix_for(verb)
 
     def error(reason, fix=None):
-        return refused(reason, status, fix=offer_fix if fix is None or "approval-label" in fix else fix)
+        return refused(reason, status, fix=fix or offer_fix)
 
     record = programme_home._read_record(run) or {}
     if not session_registry.caller_drives(record, sid):
@@ -31,13 +30,7 @@ def approve(run, sid, argv, prompt_id, status, refused) -> dict:
     row = programme_journal.find_prompt(run, prompt_id, rows)
     if row is not None and rows.index(row) <= load_lib_module("programme_lifecycle")._last_driver_change(rows):
         raise error(f"prompt {prompt_id!r} was given before the current PM took the programme")
-    if row is not None and programme_journal.prompt_origin(row) == "picked" \
-            and programme_offers.offer_for(rows, row) is None:
-        raise error(f"pick {prompt_id!r} answers a picker no offer printed, so it approves nothing")
     approval = load_lib_module("programme_approval")
     found = approval.prompt(run, record, prompt_id, verb, error, approval.text_hash, argv)
-    # Only an offer binds the command: the older checks stand a typed message with no named words, and these verbs have none.
-    if not found.get("named"):
-        raise error(f"prompt {prompt_id!r} answers no offer of this command, so it approves nothing")
     return {"request": None, "prompt_id": prompt_id, "quote": found["quote"], **found.get("reading", {}),
             "approval": {key: found[key] for key in ("origin", "answer") if key in found}}

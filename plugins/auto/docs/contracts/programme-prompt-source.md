@@ -17,7 +17,7 @@ Programme approvals require a verified human source, not a journal label alone.
 5. Existing session, target, lease, and request-consumption checks still apply.
 
 The journal captures unmatched prompts as `unknown`. Registered cron prompts remain `cron`.
-A prompt typed in a session that does not drive the programme is not journaled, apart from a typed `/auto:programme-takeover`, `-handover` or `-end` request. Typed text and accepted suggestions never approve `takeover --prompt`: that verb takes only a pick of its exact label, whatever state the PM is in.
+A prompt typed in a session that does not drive the programme is not journaled, apart from a typed `/auto:programme-takeover`, `-handover` or `-end` request. His own words and accepted suggestions never approve `takeover --prompt`: that verb takes only a pick of its option on the picker `become-pm` prints, whatever state the PM is in.
 A verified human row resolves `unknown` to `typed` at authorization time.
 An older human row cannot authorize a later event that reuses its prompt ID, even when their text matches.
 
@@ -39,7 +39,7 @@ Words sent while a turn runs, observed in Claude Code 2.1.318:
 
 ## Picker answers
 
-A picker (AskUserQuestion) answer is a pick, not a typed prompt.
+A picker (AskUserQuestion) answer is a pick, with origin `picked`.
 `UserPromptSubmit` does not fire for it.
 
 The hooks find the programme through the same lease lookup that journals takeover requests (`request_lease` in `lib/on-user-prompt.py`): the lease this session drives, else the lease of this session's space. A session in a space with no lease is not journaled and not denied.
@@ -72,9 +72,9 @@ A `driving: false` pick verifies the same way, but it serves only the takeover. 
 
 A newer word from Shawn voids an older prompt for a Ruling change (`check_newest` in `lib/programme_rulings.py`). A later `typed` prompt, including queued words, or a later verified pick from the driving session counts, unless something has cited or spent it.
 
-A verified pick, or a `suggested` prompt, also approves the `--prompt` verbs on the pick list (`PICK_VERBS` in `lib/programme_approval.py`). Every verb on that list checks that the approval names its target. `accept-agreement` is on the list for a pick only: the pick must answer its terms-bound label and the verb must pass the same `--terms` digest, and an accepted suggestion never approves it. Any other verb, including `edit-project-term`, `record-ruling`, `close-ruling`, `carry-rulings`, `record-behaviour` and `define-requirement`, needs a typed prompt. A Ruling binds only on a typed prompt: `accept-context` takes a pick or a suggestion for a requirement, and refuses one for a Ruling. The list is default-deny: a new verb refuses picks until it is added.
+An approval verb (`PICK_VERBS` in `lib/programme_approval.py`, the same set as the offer renderers) binds only to Shawn's answer to an open offer of that command. A message or pick with no such offer approves nothing, whatever it says, and the refusal's fix says to run `programme.sh offer`. A `suggested` prompt approves nothing: the model wrote it. The list is default-deny: a new verb has no approval until it has a renderer.
 
-A pick cited this way must hold exactly one question, and its answer must equal the approval label of the command being run: "Approve " followed by the shell-quoted verb and arguments, without `--prompt` and `--run`. `programme.sh approval-label <verb> <args>` prints it. A trailing " (Recommended)" is ignored. `set-remit` takes its change on stdin, which no label can show, so a pick never approves it; a typed prompt or an accepted suggestion does. An option value that starts with `--` is refused, so a label cannot hide `--run` inside another option. Any other answer approves nothing, so a decline cannot be misread as approval whatever its wording. Earlier free-text checks on the answer leaked three review rounds running ("No", "Skip r1", "Keep item-x" approving drop-item). Naming checks still read only the answer. An accepted suggestion containing a negation word (including "never") approves nothing; type it instead. One pick approves one change: a pick that any earlier row cites, under any prompt id journaled for the same picker answer, is refused. The approval records `origin: picked` or `origin: suggested`.
+A pick cited this way must hold exactly one question on the exact picker `offer` printed, and its answer must be one of that offer's options. A trailing " (Recommended)" is ignored. The option holds the hash of its command, so a pick approves no other command, and the facts it showed, so a change to them forces a new offer. `set-remit` gives the offer the same JSON on stdin that the verb reads. A pick with a note, Other text and a message in the session count as Shawn's own words: on an authority move they are refused, and on any other verb they need `--reads-as <the option's text>`, recorded and shown back. Earlier free-text checks on the answer leaked three review rounds running ("No", "Skip r1", "Keep item-x" approving drop-item). One pick approves one change: a pick that any earlier row cites, under any prompt id journaled for the same picker answer, is refused. The approval records `origin: picked` or `origin: typed`, and how the PM read it.
 
 A pick of a picker that `programme.sh offer` printed binds by stored offer, not by label: `agent-tool-surface.md` gives the rule. The label comparison stays only for a picker with no matching offer, as an alias until the instructions move to `offer`.
 

@@ -7,7 +7,7 @@ requirement revisions are append-only: a change adds a revision, and acceptance 
 moves the lifecycle marks (``state``, ``accepted``, ``superseded_by``).
 
 Context is not authority. A revision records where it came from, but a copy, a
-packet or a restored record never approves anything; acceptance needs a typed prompt
+packet or a restored record never approves anything; acceptance needs Shawn's answer
 through the host's approval check.
 
 This module stays pure over the programme block because the predicate loads it on
@@ -45,7 +45,7 @@ JOURNAL_KINDS = ("decision_recorded", "requirement_defined", "context_accepted",
                  "blocker_raised", "blocker_cleared", "pause_raised", "pause_lifted", "denial_recorded",
                  "ruling_recorded", "ruling_closed")
 AUTHORITY_NOTE = ("context, not approval: decisions and requirements here are retained records; "
-                  "only a typed prompt through an approval verb accepts a change")
+                  "only Shawn's answer to an offer, through an approval verb, accepts a change")
 CHECK_RESULTS = ("confirmed", "refuted", "unknown", "not_run", "stale", "missing")
 _ID_RE = re.compile(r"[a-z][a-z0-9-]{0,63}")
 _ACTION_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
@@ -226,7 +226,7 @@ def unsafe_reason(programme, item_id, action):
     for pause in active_pauses(ctx):
         if not pause.get("items") or item_id in pause["items"]:
             return (f"safety pause {pause['id']} ({pause.get('risk')}: {pause.get('reason')}) holds "
-                    f"{item_id}; it lifts only through lift-pause with a typed prompt")
+                    f"{item_id}; it lifts only through lift-pause on Shawn's answer to its offer")
     for denial in ctx["denials"]:
         denial = _dict(denial)
         if denial.get("action") == action and denial.get("item") in (None, item_id):
@@ -421,8 +421,6 @@ def _record_requirement(host, cid, content, delta, prompt, programme):
     current = in_force(revisions)
     if current is not None and _content(current, REQUIREMENT_KEYS) == content:
         return {"requirement_id": cid, "rev": current["rev"], "state": "accepted", "unchanged": True}
-    if prompt:
-        host.require_named(prompt, cid)
     revision = _append(revisions, content, prompt, accept=bool(prompt), delta=delta)
     return {"requirement_id": cid, "rev": revision["rev"], "state": revision["state"], "unchanged": False,
             "delta": delta, "source": revision["source"]}
@@ -580,7 +578,6 @@ def _h_lift_pause(host, record, argv):
         entry = _guarded(record, _mutable, programme)["pauses"].get(positional[0])
         if _dict(entry).get("state") != "active":
             raise record.RecordError(f"no active pause {positional[0]!r}")
-        host.require_named(prompt, positional[0])
         entry["state"] = "lifted"
         entry["lifted"] = {"at": _now(), "prompt_id": prompt["prompt_id"], "origin_verified": _verified(prompt)}
         return {"pause": positional[0], "state": "lifted"}
@@ -676,8 +673,7 @@ def _guarded(record, fn, *args):
 SPECS = (
     ("define-requirement", _h_define_requirement,
      "<id> --text <text> --check <item-id>=<deliverable>... [--decision-id <id>] [--prompt <id>] [--run <id>]",
-     "a check on a deliverable the protocol does not require of the item; an unknown item or decision; a "
-     "prompt that is not typed or does not name the id. Without a prompt the revision waits for accept-context."),
+     "a check on a deliverable the protocol does not require of the item; an unknown item or decision; a prompt that answers no open offer of this command. Without a prompt the revision waits for accept-context."),
     ("assign-item", _h_assign_item, "<item-id> --decision-id <id> [--run <id>]",
      "an item outside the scope of the decision's revision in force (compared by canonical id, so a merge "
      "never widens it); a target only a pending revision adds."),
@@ -691,7 +687,7 @@ SPECS = (
      "an unknown risk; no --reason; a pause already active. With no --item it holds the whole programme. "
      "It refuses start-worker and prompt-item on what it holds, holds the stop, and notifies Shawn."),
     ("lift-pause", _h_lift_pause, "<id> --prompt <id> [--run <id>]",
-     "a pause that is not active; a prompt that is not typed or does not name the pause id."),
+     "a pause that is not active; a prompt that answers no open offer of this command."),
     ("record-denial", _h_record_denial,
      "--tool <name> --action <lower_snake> --reason <text> [--item <id>] [--run <id>]",
      "a tool name with spaces; an action that is not lower_snake. The denial binds: the same action on that "

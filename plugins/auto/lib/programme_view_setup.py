@@ -158,8 +158,7 @@ def build(block, protocol=None) -> dict | None:
     terms = _dict(agreement.get("terms"))
     steps = [_term_step(key, _dict(terms[key]), kept) for key in programme_view_work._ordered_terms(terms)]
     accept = _step(ACCEPT, "accept", ACCEPT, False, "not accepted", "accept the agreement", None)
-    digest = programme_approval.terms_digest(block)
-    accept.update(terms_digest=digest, label=programme_approval.accept_label(block, digest))
+    accept.update(terms_digest=programme_approval.terms_digest(block))
     steps += [_rulings_step(block, kept), _shared_step(block, kept, protocol), _items_step(seen, block, kept), accept]
     unfinished = [s["key"] for s in steps if not s["done"]]
     current = setup.get("step") if setup.get("step") in unfinished else unfinished[0]

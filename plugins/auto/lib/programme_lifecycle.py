@@ -557,9 +557,7 @@ def _become_step(host, out, sid, space):
     # A former PM stands down only for a live successor; once that one stops, Shawn may want this session back.
     if _drove(run, sid) and not _stopped(status, presence):
         return dict(out, step="stand-down")
-    approval = load_lib_module("programme_approval")
-    return dict(out, step="ask-shawn", label=approval.takeover_label(driver),
-                input=approval.programme_offers.takeover_input(driver),
+    return dict(out, step="ask-shawn", input=load_lib_module("programme_offers").takeover_input(driver),
                 command="programme.sh takeover --prompt <pick id>")
 
 
@@ -909,9 +907,6 @@ def _h_set_remit(host, argv):
         if accepted and prompt is None:
             raise host.ProgrammeError("the agreement is accepted; set-remit needs --prompt <id> of his answer to `programme.sh offer`")
         gone = programme_remit_owned.stale_paths(before["repos"])
-        if accepted:
-            host.require_named(prompt, *[_names(part, entry)
-                                         for part, entry in programme_remit_owned.unnamed_removals(changes, gone)])
         moves = _lease_moves(rec["run_id"], changes)
         programme["remit"] = dict(before, **after)
         term = programme["agreement"]["terms"]["remit"]
@@ -975,8 +970,8 @@ _SPECS = (
     ("set-remit", _h_set_remit, "[--prompt <id>] [--run <id>] < JSON {spaces, repos, tracker}",
      "input that is not a JSON object; a repo path that is not an absolute directory; a github "
      "name that is not owner/name; a team key that is not an issue prefix; a list over its cap; no "
-     "space; a space another programme holds. Once the agreement is accepted it needs a typed "
-     "--prompt that names each space, repo, team, project or initiative added or removed. A "
+     "space; a space another programme holds. Once the agreement is accepted it needs --prompt of "
+     "his answer to the offer, which lists each space, repo, team, project or initiative added or removed. A "
      "part left out keeps its value. Adding a space takes its lease; removing one releases it. Before "
      "acceptance it can carry Rulings in, so on a home still on its old JSON files it first moves the home to "
      "programme.db, and refuses, changing nothing, when that move cannot run."),

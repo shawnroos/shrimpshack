@@ -4,7 +4,9 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+REAL_PROG="${AUTO_ROOT}/lib/programme.py"
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 
 PASS=0
 FAIL=0
@@ -94,7 +96,7 @@ prog() {
 it "describe lists exactly the programme verbs"
 DESC="$("$PY" "$PROG" describe 2>/dev/null)"
 VERBS="$("$PY" -c 'import json,sys; print(" ".join(sorted(json.load(sys.stdin)["verbs"])))' <<< "$DESC" 2>&1)"
-check "accept-agreement accept-context ack-protocol add-item adopt-autonomy adopt-behaviour-file adopt-check adopt-ritual-file adopt-rule alias-item amend-term answer-domain-behaviour answer-handed answer-permission answer-worker-question approval-label archive ask-relayed ask-shown assign-item beat become-pm carry-rulings check-archive check-behaviour check-deliverable check-mergeable claim clear-blocker clear-proposal close-gone-pane close-ruling collect-result context contract-status copy-default create-successor decline-ritual-file define-requirement describe dispose-action dispose-item drop-item edit-project-term end escalate-worker-questions expire fail-ritual focus-note focus-recheck goal-status hand-item handover handover-contract host inbox keep-behaviours keep-rituals lift-pause log-decision mark-read merge-item move-behaviour move-ritual note-term offer offer-rituals open-worker-questions override-focus pause pick-term preserve-code promote prompt-item propose-agreement propose-behaviour propose-permission propose-ritual propose-rule propose-term queue raise-blocker recommendations-shown reconcile-leases reconcile-operations record-behaviour record-denial record-hook-patch record-issues record-ritual record-ruling record-tested-build record-trajectories recover register-run release-resources remind-behaviour reopen-item request-reread retire-behaviour retire-ritual rules run-ritual run-ritual-checks set-contract set-now set-remit set-source set-waiting settle-default-update settle-permissions setup-keep setup-seen setup-step size-item skip-behaviour skip-ritual start start-ritual start-worker status swap-item sweep sweep-inputs take-recommendations takeover tracker-synced update-ask validate watcher-beat write-goal" "$VERBS"
+check "accept-agreement accept-context ack-protocol add-item adopt-autonomy adopt-behaviour-file adopt-check adopt-ritual-file adopt-rule alias-item amend-term answer-domain-behaviour answer-handed answer-permission answer-worker-question archive ask-relayed ask-shown assign-item beat become-pm carry-rulings check-archive check-behaviour check-deliverable check-mergeable claim clear-blocker clear-proposal close-gone-pane close-ruling collect-result context contract-status copy-default create-successor decline-ritual-file define-requirement describe dispose-action dispose-item drop-item edit-project-term end escalate-worker-questions expire fail-ritual focus-note focus-recheck goal-status hand-item handover handover-contract host inbox keep-behaviours keep-rituals lift-pause log-decision mark-read merge-item move-behaviour move-ritual note-term offer offer-rituals open-worker-questions override-focus pause pick-term preserve-code promote prompt-item propose-agreement propose-behaviour propose-permission propose-ritual propose-rule propose-term queue raise-blocker recommendations-shown reconcile-leases reconcile-operations record-behaviour record-denial record-hook-patch record-issues record-ritual record-ruling record-tested-build record-trajectories recover register-run release-resources remind-behaviour reopen-item request-reread retire-behaviour retire-ritual rules run-ritual run-ritual-checks set-contract set-now set-remit set-source set-waiting settle-default-update settle-permissions setup-keep setup-seen setup-step size-item skip-behaviour skip-ritual start start-ritual start-worker status swap-item sweep sweep-inputs take-recommendations takeover tracker-synced update-ask validate watcher-beat write-goal" "$VERBS"
 
 
 # _VERBS.update lets a later module silently replace a verb another module registered under the same name.
@@ -119,7 +121,7 @@ lacks term_amended "$(journal_kinds)"
 it "amend-term citing a cron prompt is refused"
 prog amend-term stop_rule only_when_done --prompt "$P_CRON"
 check 1 "$CODE"
-has "typed" "$OUT"
+has "is not Shawn's words or a verified pick" "$OUT"
 
 P_OTHER="$(run_py "$RUN" <<'EOF'
 print(fixture_prompt(args[0], "sess-other", "stop only when done", "typed")["prompt_id"])
@@ -141,34 +143,30 @@ check 1 "$CODE"
 it "the refused callers left the term unchanged"
 check '"nothing_it_can_act_on"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["value"]')"
 
-it "amend-term citing a typed prompt that does not name the new value is refused"
-P_VAGUE="$(prompt typed 'change the stop rule')"
-prog amend-term stop_rule only_when_done --prompt "$P_VAGUE"
+it "amend-term citing typed words with no open offer is refused, even naming the value and the term"
+PROG="$REAL_PROG" prog amend-term stop_rule only_when_done --prompt "$P_TYPED"
 check 1 "$CODE"
-has "only_when_done" "$OUT"
-it "amend-term citing a typed prompt that does not name the term is refused"
-prog amend-term stop_rule only_when_done --prompt "$(prompt typed 'only when done please')"
-check 1 "$CODE"
-has "stop_rule" "$OUT"
+has "no open offer" "$OUT"
 check '"nothing_it_can_act_on"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["value"]')"
 
-it "amend-term with a typed prompt changes the term"
-prog amend-term stop_rule only_when_done --prompt "$P_TYPED" --why "the argument wording"
+it "amend-term with a pick of its offer changes the term"
+P_PICK="$(opick "$RUN" "amend-term stop_rule only_when_done --why 'the argument wording'")"
+PROG="$REAL_PROG" prog amend-term stop_rule only_when_done --prompt "$P_PICK" --why "the argument wording"
 check 0 "$CODE"
 check '"only_when_done"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["value"]')"
 it "the term records the quote from the journal, not the argument"
-check '"stop rule: only when done, stop only when everything is done"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["quote"]')"
+check '"Set stop_rule to only_when_done"' "$(field 'prog["agreement"]["terms"]["stop_rule"]["quote"]')"
 it "the journal entry quotes the prompt and cites it"
-GOT="$(run_py "$RUN" "$P_TYPED" <<'EOF'
+GOT="$(run_py "$RUN" "$P_PICK" <<'EOF'
 run, pid = args
 row = [r for r in pj.read(run) if r["kind"] == "term_amended"][-1]
 print(row["payload"]["quote"] + "|" + ",".join(row.get("cites") or []))
 EOF
 )"
-check "stop rule: only when done, stop only when everything is done|${P_TYPED}" "$GOT"
+check "Set stop_rule to only_when_done|${P_PICK}" "$GOT"
 
 it "the cited prompt survives pruning while the uncited cron prompt goes"
-GOT="$(run_py "$RUN" "$P_TYPED" "$P_CRON" <<'EOF'
+GOT="$(run_py "$RUN" "$P_PICK" "$P_CRON" <<'EOF'
 import datetime
 run, typed, cron = args
 pj.prune_uncited_prompts(run, now=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=8))
@@ -269,12 +267,13 @@ it "propose-agreement refuses a value outside the term's options"
 prog propose-agreement --term stop_rule=whenever
 check 1 "$CODE"
 
-P_ACCEPT="$(prompt typed 'yes, I accept the agreement')"
-it "accept-agreement with a typed prompt records the acceptance"
-prog accept-agreement --prompt "$P_ACCEPT"
+P_ACCEPT="$(opick "$RUN" accept-agreement)"
+TERMS_DIGEST="$(field 'load_lib_module("programme_approval").terms_digest(prog)' | tr -d '"')"
+it "accept-agreement with a pick of its offer records the acceptance"
+PROG="$REAL_PROG" prog accept-agreement --prompt "$P_ACCEPT"
 check 0 "$CODE"
 check "\"${P_ACCEPT}\"" "$(field 'prog["agreement"]["accepted"]["prompt_id"]')"
-check '"yes, I accept the agreement"' "$(field 'prog["agreement"]["accepted"]["quote"]')"
+check "\"Accept the agreement with terms ${TERMS_DIGEST}\"" "$(field 'prog["agreement"]["accepted"]["quote"]')"
 
 it "propose-agreement is refused once the agreement is accepted"
 prog propose-agreement --term cadence=on_change
@@ -322,15 +321,15 @@ prog adopt-rule docs-verified --prompt "$P_CRON"
 check 1 "$CODE"
 check no "$([ -e "$CLAUDE_AUTO_PERSONAL_PROTOCOL" ] && echo yes || echo no)"
 
-it "adopt-rule citing a typed prompt that does not name the rule is refused"
-prog adopt-rule docs-verified --prompt "$(prompt typed 'yes, adopt that rule')"
+it "adopt-rule citing typed words with no open offer is refused and writes no personal file"
+PROG="$REAL_PROG" prog adopt-rule docs-verified --prompt "$(prompt typed 'yes, adopt docs-verified')"
 check 1 "$CODE"
-has "docs-verified" "$OUT"
+has "no open offer" "$OUT"
 check no "$([ -e "$CLAUDE_AUTO_PERSONAL_PROTOCOL" ] && echo yes || echo no)"
 
-P_ADOPT="$(prompt typed 'yes adopt docs-verified, token hunter2secretvalue')"
-it "adopt-rule with a typed prompt writes the personal file"
-prog adopt-rule docs-verified --prompt "$P_ADOPT"
+P_ADOPT="$(opick "$RUN" --other 'yes adopt docs-verified, token hunter2secretvalue' "adopt-rule docs-verified")"
+it "adopt-rule with his own words on its offer writes the personal file"
+PROG="$REAL_PROG" prog adopt-rule docs-verified --prompt "$P_ADOPT" --reads-as "Adopt rule docs-verified"
 check 0 "$CODE"
 check yes "$([ -f "$CLAUDE_AUTO_PERSONAL_PROTOCOL" ] && echo yes || echo no)"
 
@@ -415,16 +414,16 @@ check "1" "$CODE"
 prog adopt-autonomy 'Bad Action' never --prompt "$P_AUTO"
 check "1" "$CODE"
 
-it "adopt-autonomy citing a typed prompt that does not name the action and level is refused"
-prog adopt-autonomy prod_off_flag never --prompt "$(prompt typed 'yes, never flag prod')"
+it "adopt-autonomy citing typed words with no open offer is refused and writes nothing"
+AUTONOMY_BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+PROG="$REAL_PROG" prog adopt-autonomy prod_off_flag never --prompt "$(prompt typed 'yes, set prod_off_flag to never')"
 check 1 "$CODE"
-has "prod_off_flag" "$OUT"
-prog adopt-autonomy prod_off_flag never --prompt "$(prompt typed 'yes, prod_off_flag')"
-check 1 "$CODE"
-has "never" "$OUT"
+has "no open offer" "$OUT"
+check "$AUTONOMY_BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
 it "adopt-autonomy narrowing a level loads from the personal layer"
-prog adopt-autonomy prod_off_flag never --prompt "$P_AUTO"
+P_AUTO_PICK="$(opick "$RUN" "adopt-autonomy prod_off_flag never")"
+PROG="$REAL_PROG" prog adopt-autonomy prod_off_flag never --prompt "$P_AUTO_PICK"
 check "0" "$CODE"
 check '["never", "personal", []]' "$(load_personal '[loaded["autonomy"]["prod_off_flag"]["level"], loaded["autonomy"]["prod_off_flag"]["layer"], [r["id"] for r in loaded["rejected"]]]')"
 
@@ -436,7 +435,7 @@ has "protected_kind" "$OUT"
 check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
 it "adopt-autonomy journals an approval record with entry kind and hash"
-GOT="$(run_py "$RUN" "$P_AUTO" <<'EOF'
+GOT="$(run_py "$RUN" "$P_AUTO_PICK" <<'EOF'
 run, pid = args
 pp = load_lib_module("programme_protocol")
 row = [r for r in pj.read(run) if r["kind"] == "rule_adopted"][-1]
@@ -455,10 +454,16 @@ check "1" "$CODE"
 has "--widening" "$OUT"
 check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
-it "adopt-autonomy --widening citing a prompt without the word widen is refused"
-prog adopt-autonomy fix_other_team_code act --widening --prompt "$(prompt typed 'fix other team code: act')"
+it "adopt-autonomy --widening refuses typed words with no open offer, and own words on its offer"
+BEFORE="$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
+PROG="$REAL_PROG" prog adopt-autonomy fix_other_team_code act --widening --prompt "$(prompt typed 'yes, widen fix_other_team_code to act')"
 check 1 "$CODE"
-has "widen" "$OUT"
+has "no open offer" "$OUT"
+P_OWN="$(opick "$RUN" --other 'yes, widen it to act' "adopt-autonomy fix_other_team_code act --widening")"
+PROG="$REAL_PROG" prog adopt-autonomy fix_other_team_code act --widening --prompt "$P_OWN" --reads-as "Widen autonomy for fix_other_team_code to act"
+check 1 "$CODE"
+has "moves authority" "$OUT"
+check "$BEFORE" "$(cat "$CLAUDE_AUTO_PERSONAL_PROTOCOL")"
 
 it "adopt-autonomy widening with --widening loads"
 prog adopt-autonomy fix_other_team_code act --widening --prompt "$(prompt typed 'yes, widen fix_other_team_code to act')"
@@ -494,22 +499,20 @@ check "1" "$CODE"
 prog adopt-check acme/web verified.lookup 'not json' --prompt "$P_CHECK"
 check "1" "$CODE"
 
-it "adopt-check citing a typed prompt that does not name the check or the repo is refused"
-prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$(prompt typed 'yes, adopt the trace lookup for acme/web')"
+it "adopt-check citing typed words with no open offer is refused and adds no check"
+PROG="$REAL_PROG" prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$(prompt typed 'yes, adopt verified.lookup for acme/web')"
 check 1 "$CODE"
-has "verified.lookup" "$OUT"
-prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$(prompt typed 'yes, adopt verified.lookup')"
-check 1 "$CODE"
-has "acme/web" "$OUT"
+has "no open offer" "$OUT"
 check '[]' "$(load_personal 'sorted(loaded["checks"])')"
 
 it "adopt-check writes the check under its repo and it loads"
-prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$P_CHECK"
+P_CHECK_PICK="$(opick "$RUN" "adopt-check acme/web verified.lookup '$LOOKUP_ARGV'")"
+PROG="$REAL_PROG" prog adopt-check acme/web verified.lookup "$LOOKUP_ARGV" --prompt "$P_CHECK_PICK"
 check "0" "$CODE"
 check '[["trace-cli", "show", "{id}"], "personal", []]' "$(load_personal '[loaded["checks"]["acme/web"]["verified.lookup"][k] for k in ("argv", "layer")] + [[r["id"] for r in loaded["rejected"]]]')"
 
 it "adopt-check journals an approval record with entry kind, repo, check and hash"
-GOT="$(run_py "$RUN" "$P_CHECK" <<'EOF'
+GOT="$(run_py "$RUN" "$P_CHECK_PICK" <<'EOF'
 run, pid = args
 row = [r for r in pj.read(run) if r["kind"] == "rule_adopted"][-1]
 doc = json.load(open(os.environ["CLAUDE_AUTO_PERSONAL_PROTOCOL"]))
@@ -585,7 +588,7 @@ GOT="$(run_py "$RUN" "$P_CRON" <<'EOF'
 run, pid = args
 rows = [r["payload"] for r in pj.read(run) if r["kind"] == "approval_refused"]
 p = rows[-1]
-print("|".join([p["verb"], p["target"], p["refused_prompt_id"], str("typed" in p["reason"])]))
+print("|".join([p["verb"], p["target"], p["refused_prompt_id"], str("is not Shawn's words or a verified pick" in p["reason"])]))
 EOF
 )"
 check "amend-term|cadence|${P_CRON}|True" "$GOT"

@@ -42,7 +42,6 @@ def _h_adopt(host, argv):
     ref = positional[0]
 
     def change(programme, prompt, rec):
-        programme_offers_stores.require_bound(prompt, RitualError)
         rows = [r for r in file_rows(programme, ref, host.prompt_lookup) if r["state"] in ("proposed", "changed")]
         if not rows:
             raise RitualError(f"no proposed ritual file {ref!r}; it may be rejected, declined, already adopted "
@@ -67,7 +66,6 @@ def _h_decline(host, argv):
     ref = positional[0]
 
     def change(programme, prompt, rec):
-        programme_offers_stores.require_bound(prompt, RitualError)
         rows = file_rows(programme, ref, host.prompt_lookup)
         current = [r for r in rows if r["state"] in ("proposed", "changed", "declined")] or rows
         if not current:

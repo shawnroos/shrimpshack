@@ -69,9 +69,8 @@ check("each term step carries its group", all(step(p, k)["group"] == k for k in 
 check("no step carries a reply or a typed flag", all("needs_typed" not in s and "reply" not in s for s in p["steps"]),
       p["steps"])
 check("the walkthrough has no autonomy step", "autonomy" not in keys(p), keys(p))
-check("the accept is offered as a pick of its terms-bound label",
-      step(p, "accept")["label"] == "Approve accept-agreement --terms " + step(p, "accept")["terms_digest"]
-      and len(step(p, "accept")["terms_digest"]) == 8, step(p, "accept"))
+check("the accept step shows the digest of the terms, and no option text to copy",
+      step(p, "accept")["label"] == "accept" and len(step(p, "accept")["terms_digest"]) == 8, step(p, "accept"))
 
 b = fresh()
 b["agreement"]["terms"]["remit"]["set_by"] = "shawn"

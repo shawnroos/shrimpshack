@@ -85,7 +85,7 @@ $(cat)
 PYEOF
 }
 
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 OUT=""
 CODE=0
 prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
@@ -291,9 +291,9 @@ fi
 it "F5: adopt-ritual-file needs a pick of its offer, not typed words, and puts it in force"
 H1="$(fh "$RUN1")"
 P_TYPED="$(tprompt "$RUN1" "adopt plugin-versions ${H1} with the versions bumped check")"
-prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_TYPED" --run "$RUN1"
+PROG="${AUTO_ROOT}/lib/programme.py" prog adopt-ritual-file acme/r1/plugin-versions --prompt "$P_TYPED" --run "$RUN1"
 check 1 "$CODE"
-has "offer" "$OUT"
+has "no open offer" "$OUT"
 OFFERED="$("$PY" "$PROG" offer adopt-file --command "adopt-ritual-file acme/r1/plugin-versions" --command "decline-ritual-file acme/r1/plugin-versions" --run "$RUN1" 2>&1)"
 it "F5a: adopt and decline are two options of one picker, showing the hash and the check"
 has "Adopt ritual file plugin-versions (content ${H1})" "$OFFERED"

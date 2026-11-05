@@ -100,7 +100,7 @@ if [ -f "$RULINGS" ]; then pass; else fail "missing ${RULINGS}"; fi
 has "[references/rulings.md](references/rulings.md)" "$S"
 it "rulings.md keeps the rule that a prompt approving a Ruling change is fresh and used once"
 R="$(tr -s ' \n' ' ' < "$RULINGS" 2>/dev/null)"
-has "must also be typed after the proposal and used once" "$R"
+has "must also come after the proposal and be used once" "$R"
 has "never one that already approved another Ruling change" "$R"
 it "the always-loaded skill is no larger than main's copy"
 SIZE="$(wc -c < "$SWEEP" | tr -d ' ')"

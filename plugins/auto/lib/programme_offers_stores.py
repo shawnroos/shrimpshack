@@ -16,19 +16,10 @@ def _offers():
     return load_lib_module("programme_offers")
 
 
-def require_bound(prompt, error) -> None:
-    # Only an approval bound to an offer carries `named`: whoever removes that key must keep this refusal working.
-    if not prompt.get("named"):
-        raise error(f"prompt {prompt['prompt_id']!r} does not answer an offer of this command, so it approves nothing; "
-                    "run `programme.sh offer`, ask with the input it prints, then cite his answer")
-
-
 def source_of(prompt) -> dict:
     journal = load_lib_module("programme_journal")
-    # An old-label pick carries no reading, and the PM wrote the words it picked.
-    unbound_pick = prompt.get("origin") == "picked" and not prompt.get("reading")
     return {"prompt_id": prompt["prompt_id"], "quote": journal.redact(prompt["quote"]),
-            "wording": journal.PM_DRAFT if unbound_pick else journal.wording_of(prompt)}
+            "wording": journal.wording_of(prompt)}
 
 
 def _short(digest) -> str:

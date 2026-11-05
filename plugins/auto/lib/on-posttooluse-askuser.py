@@ -27,9 +27,8 @@ DATA_TAG = on_user_prompt.DATA_TAG
 
 
 _DRIVING_NOTE = ("auto journaled this picker answer. Cite its prompt_id with --pick in setup verbs, or with "
-                 "--prompt in an approval verb on the pick list when the answer is an option `programme.sh offer` "
-                 "printed for that command or the command's `approval-label`; it counts only once the transcript "
-                 "shows Shawn picked it.")
+                 "--prompt in an approval verb when the answer is an option `programme.sh offer` printed for that "
+                 "command; it counts only once the transcript shows Shawn picked it.")
 _TAKEOVER_NOTE = ("auto journaled this picker answer against the programme leased in this session's herdr "
                   "space. This session does not drive it, so the pick can serve only a takeover; no other "
                   "approval or setup verb accepts it, even after this session takes over. It counts only once "

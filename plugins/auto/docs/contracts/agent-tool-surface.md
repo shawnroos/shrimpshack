@@ -143,8 +143,8 @@ session.
   and all, in programme.db. A verb its own checks refuse leaves the home on its
   JSON files, untouched. If the import cannot run (a held or locked home, a
   secrets-file value, inputs that change while it runs, or any other failure), the
-  verb refuses, says why, and changes nothing. A prompt typed before the move
-  approves nothing, so Shawn types it again. `accept-context` on a requirement, and
+  verb refuses, says why, and changes nothing. An answer given before the move
+  approves nothing, so the PM offers again. `accept-context` on a requirement, and
   a `set-remit` that carries nothing in, keep the JSON files. Any write verb on a
   home whose move was cut off finishes that move first.
   Adoptions approved on the JSON files (behaviours, protocol rules, carried
@@ -162,7 +162,7 @@ session.
   value must be one of that term's options. Wording that fits no option is a
   Ruling. The tools_of_record term holds the sweep sources that stay on: a comma
   list of tracker, tasks and plans (default all three), or none. Its amend needs
-  a typed prompt that names each source it turns on or off ("no plans" counts).
+  Shawn's answer to the offer, which lists the sources it turns on or off.
   A source turned off is never read by the sweep, never watched, and never holds
   the stop. A record from older code reads its old name for this term as
   `tools_of_record`.
@@ -178,8 +178,8 @@ session.
 - **Setup picks**: before acceptance, `pick-term` (`<key> <value> --pick <id>`) sets one
   per-programme agreement term from a picker answer Shawn gave in the driving session.
   It takes `--pick`, not `--prompt`: the cited prompt must resolve to origin picked,
-  exactly one of its questions must name the term (and no other term), and that
-  answer must name the value (for a list term, exactly the value's options and no
+  exactly one of its questions must hold the term's name (and no other term's), and that
+  answer must hold the value (for a list term, exactly the value's options and no
   other). `take-recommendations` (`--pick <id>`) needs a pick whose answer names
   "take all recommendations" without a negation; it sets every per-programme term to its
   pending proposal, else its current value, in one write. Both record `set_by` shawn,
@@ -230,7 +230,7 @@ session.
   answer, releases the stop. `end` repeats the Ruling part of the offer in its
   output and its `programme_ended` line; behaviours are not in it, because
   `keep-behaviours` refuses an ended programme. `carry-rulings --prompt <id> <ruling-id>...` stores
-  Shawn's pick; the typed prompt must name each id and come after an offer that
+  Shawn's answer to the offer of that set of ids; it must come after a carry-over offer that
   listed them, at the revision each Ruling still has (the offer records each
   Ruling's revision, and a Ruling changed since needs a fresh offer); the prompt
   must not have approved any other Ruling change, and it still runs after `end`. The carry-over store is one JSON
@@ -240,9 +240,8 @@ session.
   protocol's and one `rule_adopted` approval record. When `set-remit` stores
   repos on an agreement that is not yet accepted, each verified entry arrives as
   a pending Ruling under its own id with no items, keeping its kind, effect,
-  scope, limits, end date and Shawn's old words. It binds only when a typed
-  prompt names the id and each item it now applies to, through `record-ruling`
-  or `accept-context`. An entry whose adoption does not verify on this machine,
+  scope, limits, end date and Shawn's old words. It binds only on his answer to an offer of
+  `record-ruling` or `accept-context` that lists each item it now applies to. An entry whose adoption does not verify on this machine,
   or whose id is taken, is dropped with a notice naming it. An accepted
   programme never reads the store, and no project term is carried over.
 - **Protocol changes**: the rules block compares the protocol it reads now with
@@ -260,7 +259,7 @@ session.
   instructions, and each reads as a kind-less legacy Ruling with the effect
   decided, under the instruction's id. A Ruling already stored under that id wins.
   The gate never reads a kind-less Ruling, `record-ruling` refuses to revise one,
-  and `close-ruling` closes one with a typed prompt naming it.
+  and `close-ruling` closes one on his answer to its offer.
 - **Rituals**: named workflows the PM runs when a calendar rule or a programme moment fires
   (programme-rituals-format.md). `record-ritual` (`--prompt <id> --when <text>`, one of
   `--trigger start|takeover|handover|end|resume|quiet` or `--schedule 'daily HH:MM'|'weekly mon HH:MM'|
@@ -268,17 +267,16 @@ session.
   this programme's clock and journals `ritual_recorded`; a step that names a protected escalation is
   refused. `propose-ritual` stores a proposal with no prompt, and `record-ritual --from-proposal <id>
   --prompt <id>` applies it. `move-ritual`, `retire-ritual` and `keep-rituals` follow the Behaviours verbs of the
-  same name (typed prompt naming the id and the layer; the store write and one `rule_adopted` record run after
+  same name (his answer to the offer; the store write and one `rule_adopted` record run after
   the commit; `CLAUDE_AUTO_RITUALS_STORE` overrides the path). A due ritual runs as `start-ritual <id>`, the
   steps, then `run-ritual <id> [--outcome <text>]`; `fail-ritual <id> --why <line>` ends a run that did not
   finish. A missed ritual is never run silently late: `offer-rituals <id>...` records that the PM put it to Shawn
   once, and his answer then goes to `start-ritual`, `run-ritual`, `skip-ritual` or `retire-ritual`, one
-  call per ritual, each prompt naming that ritual's id. `skip-ritual` needs a typed prompt in every state, so an
-  unprompted skip cannot satisfy a gate. Those four, `move-ritual` and `keep-rituals` also accept a pick of the
-  exact label `approval-label` prints; `record-ritual` and `propose-ritual` do not. `run-ritual`, `skip-ritual` and `retire-ritual` move the programme's next-due time past
+  offer per ritual. `skip-ritual` needs his answer in every state, so an
+  unprompted skip cannot satisfy a gate. `run-ritual`, `skip-ritual` and `retire-ritual` move the programme's next-due time past
   now. `handover` and `end` refuse while a ritual for their trigger is unanswered in the tenure that is
   ending; `--without-rituals` goes ahead and leaves it missed. The ritual verbs, in the order a run uses them:
-  `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`. `adopt-ritual-file` and `decline-ritual-file` (each `<repo key>/<id> --prompt <id>`) put a repo's ritual file in force for this programme or take it out: the prompt must name the ritual id and the content hash of the file as it stands now (and the check, to adopt a file that carries one), and a prompt that names an earlier hash is refused. `run-ritual-checks` (with `--ritual <id>` to re-run one) runs the named check of each due or missed calendar ritual that carries one and has not been checked for its slot, outside the programme lock: a pass moves the clock and journals `ritual_checked`, a fail or error journals it and leaves the ritual due. It is chained in the sweep's step 1 and writes only when the caller drives the programme; otherwise the ritual stays due and is listed as `not_recorded`.
+  `start-ritual`, `run-ritual`, `fail-ritual`, `skip-ritual`, `offer-rituals`. `adopt-ritual-file` and `decline-ritual-file` (each `<repo key>/<id> --prompt <id>`) put a repo's ritual file in force for this programme or take it out: the offer binds the content hash of the file as it stands now, and a pick of an offer of an earlier hash is refused. `run-ritual-checks` (with `--ritual <id>` to re-run one) runs the named check of each due or missed calendar ritual that carries one and has not been checked for its slot, outside the programme lock: a pass moves the clock and journals `ritual_checked`, a fail or error journals it and leaves the ritual due. It is chained in the sweep's step 1 and writes only when the caller drives the programme; otherwise the ritual stays due and is listed as `not_recorded`.
 - **Behaviours**: standing guidance on how the PM and its workers do the work. A
   behaviour carries no authority and no done bar. `record-behaviour` (`--prompt <id>
   --when <text>`) with `--do` or `--dont` lines (plus optional `--trigger claim|merge|block|start`, `--pm-check`,
@@ -300,11 +298,8 @@ session.
   applies nothing; `--from-term <term-id>` drafts one from a project term's area and
   value and leaves the term unchanged. `--edit-of <id>` plus the fields to change proposes an edit of an
   active programme behaviour; applying it replaces the target in place. It journals `behaviour_proposed`.
-  `record-behaviour --from-proposal <id> --prompt <id>` applies a proposal; the
-  prompt must name the proposal id. `move-behaviour` (`<id> --to programme|repo|personal
-  --prompt <id>`) needs a prompt that names the id and the layer ("programme",
-  "repo", or "personal", "global" or "all projects" for the personal layer) with no
-  negation word anywhere before the layer word. `--to repo` takes the remit's repo
+  `record-behaviour --from-proposal <id> --prompt <id>` applies a proposal on his answer to its offer. `move-behaviour` (`<id> --to programme|repo|personal
+  --prompt <id>`) needs his answer to the offer of that move. `--to repo` takes the remit's repo
   key when the remit has one repo, and needs `--repo <key>` naming one when it has
   several. The verb reads `behaviours.json` before it commits and refuses when the
   file is unreadable. A move out of the programme marks the programme entry as
@@ -314,7 +309,7 @@ session.
   verified copy. It journals `behaviour_moved`. `retire-behaviour` (`<id> --as
   retired|undone --prompt <id>`) retires the entry on every layer that holds it; the
   entry stays visible as retired, and a stored entry is adopted again with the new
-  state. It journals `behaviour_retired`. All three need a typed prompt from the
+  state. It journals `behaviour_retired`. All three need his answer to an offer, from the
   driving session, and a refused one journals `approval_refused`. The store is one
   JSON file per machine beside the personal protocol
   (`CLAUDE_AUTO_BEHAVIOURS_STORE` overrides the path).
@@ -339,32 +334,30 @@ session.
   behaviour without sending it: it records a delivery with reason skipped (the behaviour does
   not apply to the item) or, with `--applied`, reason applied_by_pm (the PM applied a
   PM-only behaviour itself), journals `behaviour_skipped` and sends nothing to the
-  worker. It needs no typed prompt, because it records the PM's judgment and
+  worker. It needs no approval, because it records the PM's judgment and
   approves nothing. It refuses a missing `--why` and a behaviour not in force for
   the item.
   `keep-behaviours` (`<id>... --to repo|personal --prompt <id>`, `--repo <key>`
   for a remit of several repos) stores the programme-layer behaviours Shawn
-  keeps from the one carry-over offer that `carry-rulings` makes. The prompt must name the layer with no negation
-  before it; ids the prompt does not name are left out and listed as
-  not_named. Kept entries are adopted into `behaviours.json`, replacing any
+  keeps from the one carry-over offer that `carry-rulings` makes. The answer covers the whole set the option names; to keep another set,
+  offer that set. Kept entries are adopted into `behaviours.json`, replacing any
   entry with the same id, so a second run adds nothing; the programme copy is
   marked moved. It journals `behaviours_kept` and is refused once the programme
   has ended.
   Three verbs write the personal behaviours folder, and are the only sanctioned
   writers of it. `adopt-behaviour-file` (`<id> --file <path> --prompt <id>`; `--file -`
   reads stdin) validates the drafted file with the behaviour file loader and writes
-  `<id>.md` only when Shawn's typed prompt names the id and carries the hash of exactly
-  that content (or an approval row keyed to `behaviour-file:<id>@<hash>` cites the
-  prompt); a refusal prints the hash. It refuses an id that already has a personal
+  `<id>.md` only on his answer to an offer bound to the hash of exactly
+  that content. It refuses an id that already has a personal
   file, and an id outside lowercase letters, digits, `-` and `_`.
   `copy-default` (`<id> --prompt <id>`) copies a shipped file into the personal folder
-  under a typed prompt that names the id, and records the seen hash in `behaviours-seen.json`
+  on his answer to its offer, and records the seen hash in `behaviours-seen.json`
   beside `behaviours.json`. `settle-default-update` (`<id> --as shown|keep|take|merge`)
   answers a shipped default that changed after a copy: mode shown records the displayed
   shipped hash as the shown hash with no prompt; keep records the seen hash; take removes the
   personal file and records the seen hash; merge (`--file <path>`) writes content under the
   same hash approval as `adopt-behaviour-file` and records the seen hash. Keep, take and
-  merge need a typed prompt naming the id and the mode. Each approved write
+  merge need his answer to the offer of that mode. Each approved write
   journals `rule_adopted` (how file); shown journals nothing.
 - **Rules**: `propose-rule` stores a rule in the protocol rule format as a
   proposal. Repeated `--item <id>` options link it to known programme items;
@@ -408,28 +401,26 @@ session.
   numbered revisions in the same store, with a decision kind, an effect
   (decided is Shawn's own call, grant hands the kind to the PM for the named
   items, restrict pulls it back to Shawn), limits, an optional `--until` end
-  date and Shawn's words. A typed `--prompt` that names the id makes it active;
+  date and Shawn's words. `--prompt` citing his answer to the offer makes it active;
   without one it waits for `accept-context`. A revision that gives the PM more
   power (a grant that adds items, drops a limit or ends later; a restrict that
-  loses items, drops a limit or ends sooner) waits for an `accept-context`
-  prompt naming each item it adds (for a grant, also each limit it drops and its
-  new end date as YYYY-MM-DD, or "no end date"), while the prior revision stays
-  in force. A
+  loses items, drops a limit or ends sooner) takes a pick: its option lists each
+  item it adds, each limit it drops and its new end date, and the prior revision
+  stays in force until that pick. A
   grant records the Authority level for its kind when it becomes active, and a
   narrowing revision keeps it. A grant or decided Ruling of a protected kind is
-  refused. Changing a decided Ruling needs a typed prompt naming it.
+  refused. Changing a decided Ruling needs his answer to an offer.
   `--replies-to <ask-or-decision-id>` records a casual correction: the anchor
-  gives the item and kind, the typed prompt must come after the anchor, and the
+  gives the item and kind, his answer must come after the anchor, and the
   Ruling applies at once with a one-line notice. A Ruling past its end date
   reads as expired, and `start-worker --decision` refuses to cite it. `close-ruling` closes one: as fulfilled it needs `--why`;
-  as withdrawn, or closing a restrict or decided Ruling, needs a typed prompt
-  naming it. Every prompt that approves a Ruling change (a `record-ruling`
+  as withdrawn, or closing a restrict or decided Ruling, needs his answer to
+  its offer. Every prompt that approves a Ruling change (a `record-ruling`
   that binds, `accept-context` on a Ruling, `close-ruling` with a prompt,
-  `carry-rulings`) is typed after the proposal, used once, and names what it
-  approves: the journal must hold it after the latest change to that Ruling
-  (for a new Ruling, no typed prompt that nothing has cited may follow it), and
-  no earlier Ruling approval may cite it. Naming is checked as well, never
-  instead. `accept-context` refuses a pending wider grant recorded before its
+  `carry-rulings`) comes after the proposal and is used once:
+  the journal must hold it after the latest change to that Ruling
+  (for a new Ruling, no message that nothing has cited may follow it), and
+  no earlier Ruling approval may cite it. `accept-context` refuses a pending wider grant recorded before its
   dropped limits and end date were kept for naming; re-record it. Accepting a
   narrowing grant revision keeps the prior baseline, so an open Ruling
   conflict stays open.
@@ -445,10 +436,10 @@ session.
   apply; `skills/programme-sweep/references/checks.md` states both routes.
 - **Item size**: `size-item` (`<item> <size>`) sets an item's size from the agreement's `focus_budget` scale; `add-item --size <name>` does the same. A name outside the scale is refused and the refusal lists the valid names.
 - **Focus limits**: `amend-term focus_budget limited --points <n> --agents <n> --prompt <id>` sets the limits; either may be left out, and the word none clears one. The value unlimited clears both. The option --scale small=1,medium=3,large=5 replaces the point scale. The verbs propose-term and pick-term take the same options. A programme has no limit until one is set, and setup does not wait on it.
-- **Focus gate**: with a `focus_budget` limit set, `start-worker` holds an item that would pass the point limit, pass the agent limit, lacks a size (point limit only), or cannot be counted because herdr is unreadable. The hold records a reason and a held-at time on the item, and the start refuses with the next step. `--despite focus` starts it anyway only after Shawn's pick: without an approved `override-focus` on the item it is refused and the item is held (the refusal names `approval-label override-focus <item>` and the steps). With the approval it passes the gate once, uses the approval up and journals the override. The old-worker hold is never overridden. `focus-recheck` releases each held item that now fits, in held order, counting the room each released item takes.
+- **Focus gate**: with a `focus_budget` limit set, `start-worker` holds an item that would pass the point limit, pass the agent limit, lacks a size (point limit only), or cannot be counted because herdr is unreadable. The hold records a reason and a held-at time on the item, and the start refuses with the next step. `--despite focus` starts it anyway only after Shawn's pick: without an approved `override-focus` on the item it is refused and the item is held (the refusal names `offer` and the steps). With the approval it passes the gate once, uses the approval up and journals the override. The old-worker hold is never overridden. `focus-recheck` releases each held item that now fits, in held order, counting the room each released item takes.
 - **Focus usage**: `focus-note` (`--agents <n>`) records how many subagents the PM is running with. `status` shows a Focus row (points and agents in play against the limits, no limit for an unset limit, unavailable when herdr cannot be read, and the noted subagent count) and, while a limit is set or an item is parked, a Waiting for a slot list of held items in held order with size and reason.
-- **Override**: `override-focus` (`<item> --prompt <pick id>`) records one approval on `<item>` (`focus_override`, the pick's prompt id). Only a pick whose answer is exactly the `approval-label override-focus <item>` text approves it; typed or suggested text and another verb's or item's label approve nothing, and a pick is used once. It refuses a finished item and an item that is not held (the pick is not spent). The approval is bound to the hold text it approved: the next `start-worker <item> --despite focus` consumes it only if the item's hold still reads the same, checked and cleared in one locked write, so two racing starts cannot both use it. A different hold text (a bigger overrun), a start that fits, `focus-recheck` clearing the hold, `size-item` changing the size and `drop-item` all withdraw it; the next override then needs a fresh pick. `size-item` is not gated and still lowers an item's counted points.
-- **Swap**: `swap-item` (`<out> <in> --prompt <pick id>`) parks `<out>` so `<in>` can start. Only a pick whose answer is exactly the `approval-label swap-item <out> <in>` text approves it; typed or suggested text and the decline option approve nothing. It refuses an `<out>` no live worker holds and an `<in>` that parking `<out>` would still not fit (naming the missing points). A parked item is held with its old pane recorded and can resume only through `start-worker` and the normal gate, which refuses while that pane still holds a live worker. `--despite focus` does not bypass that check. The swap is recorded as a `work_sequencing` decision naming both items.
+- **Override**: `override-focus` (`<item> --prompt <pick id>`) records one approval on `<item>` (`focus_override`, the pick's prompt id). Only his answer to an offer of `override-focus <item>` approves it; a suggestion or another item's option approves nothing, and a pick is used once. It refuses a finished item and an item that is not held (the pick is not spent). The approval is bound to the hold text it approved: the next `start-worker <item> --despite focus` consumes it only if the item's hold still reads the same, checked and cleared in one locked write, so two racing starts cannot both use it. A different hold text (a bigger overrun), a start that fits, `focus-recheck` clearing the hold, `size-item` changing the size and `drop-item` all withdraw it; the next override then needs a fresh pick. `size-item` is not gated and still lowers an item's counted points.
+- **Swap**: `swap-item` (`<out> <in> --prompt <pick id>`) parks `<out>` so `<in>` can start. Only his answer to an offer of `swap-item <out> <in>` approves it; a suggestion and the decline option approve nothing. It refuses an `<out>` no live worker holds and an `<in>` that parking `<out>` would still not fit (naming the missing points). A parked item is held with its old pane recorded and can resume only through `start-worker` and the normal gate, which refuses while that pane still holds a live worker. `--despite focus` does not bypass that check. The swap is recorded as a `work_sequencing` decision naming both items.
 - **Waits and watchers**: `set-waiting` sets who an item waits on, with an
   optional named reporter, a watcher (process or task id), the blocker kind and a
   trace or job id; `--clear` returns the item to open. `--blocker` needs
@@ -709,8 +700,8 @@ session.
   or unreadable one stays unconfirmed. `dispose-item` records how unfinished work
   stopped (`stopped_unfinished` or `handed_over`) and confirms no requirement.
   `dispose-action --attempt <id>|--resource <id>` records a human's acceptance of
-  an uncertainty from a typed prompt that names it (`origin_verified` true only
-  when the transcript shows Shawn typed it; any other prompt is refused); the
+  an uncertainty from his answer to its offer, which also runs after end (`origin_verified` true only
+  when the transcript shows it is his; any other prompt is refused); the
   action is never recorded as completed. After end the prompt hook still journals
   prompts typed in the closing session into each unsealed programme it closes.
   `check-archive` (read-only) lists the named checks with their remedies, or the
@@ -851,8 +842,8 @@ session.
   the tracker scope (team keys, projects, initiatives, each with name and id).
   It reads JSON on stdin, refuses a bad shape or a list over its cap, keeps a
   part it was not given, and journals remit_set. Before the agreement is
-  accepted it needs no prompt; after, it needs a typed prompt that names each
-  space, repo, team, project or initiative added or removed. Adding a space
+  accepted it needs no prompt; after, it needs his answer to the offer, which
+  lists each space, repo, team, project or initiative added or removed. Adding a space
   takes its lease under the leases lock; removing one releases it; a space
   another programme holds is refused. Code never discovers or resolves remit
   names. An empty part sets no limit. The sweep skips a worker pane whose repo
@@ -886,13 +877,11 @@ session.
     present): the prompt is a verified pick from this session, unused, journaled
     after the last start, takeover or handover, with one question. Its answer,
     less a trailing ` (Recommended)`, is the takeover option on the exact picker
-    `become-pm` prints. The old label form
-    `programme.sh approval-label takeover --replace <driver session id>` stays an
-    alias until the instructions finish moving to pickers. The
+    `become-pm` prints. The
     named session must still be the driver. The journaled reason is replaced.
   - **Stopped route** (an orphaned lease that herdr does not show present, or a
     live lease whose driver herdr shows gone): the same pick as the pick route,
-    of the same label. A typed prompt or an accepted suggestion never counts,
+    of the same option. His own words or an accepted suggestion never count,
     because any instruction Shawn gives a worker would otherwise hand it the PM
     role. The caller also has a session-registry row in a space the run
     leases; HERDR_* env alone is not proof. The status comes from a readable run
@@ -930,9 +919,9 @@ session.
   lease; on an expired lease it needs none and ends the programme as `expire` does.
   Both are authority moves: only a pick of the option answers, the decline comes
   first, and own words refuse. The option binds the target, `--why` and
-  `--without-rituals`, and a typed message that answers no offer approves nothing. The
-  row then has `request: null`, the approval and the quote, and cites the prompt. Auto never tells
-  Shawn to type these commands. Takeover and handover rewrite every
+  `--without-rituals`, and a message that answers no offer approves nothing. The
+  row then has `request: null`, the approval and the quote, and cites the prompt. Auto offers
+  these commands by picker. Takeover and handover rewrite every
   lease of the run and the record's `driving_session_id` together (leases lock,
   then run-record lock), stamp the driver beat, and journal both session ids.
   Takeover prints the rules in force and the waits and watchers to re-arm. `end`
@@ -1008,36 +997,14 @@ prompt that the prompt hook journaled as typed in the driving session. The verb
 copies the quote from the journal, never from its own arguments, and its journal
 entry cites the prompt so pruning keeps it.
 
-The cited prompt must also name what it approves. Each name must appear in the
-redacted prompt text as whole words, case ignored, and not right after "not",
-"never", "no" or a "n't" word; "merge pr" names merge_pr, but "AI-801" does not
-name AI-80 and "act and tell" does not name the level act (programme-protocol-format.md
-gives the full rule). The text must contain: for `amend-term`, the term key and the new value; for `adopt-rule`,
-the rule id; for `adopt-autonomy`, the decision kind and the level; for `adopt-check`,
-the repo and the check key (for example `verified.lookup`); for `answer-handed`,
-`drop-item` and `reopen-item`, the item id or its key (for example `AI-753`).
-For `record-ruling` and a `close-ruling` that needs a prompt, the Ruling id; for `accept-context`, the Ruling or requirement id, every item a Ruling gives the PM and, for a grant revision, each limit it drops and its new end date; for `carry-rulings`, each Ruling id. A Ruling approval prompt must also be typed after the proposal and used once (see Rulings above). With `--widening` on `adopt-autonomy`, the text must also contain "widen", "widening" or "widened". A prompt that does not
-name them is refused, and the refusal lists the missing words.
-For `edit-project-term` after acceptance, the text must contain the term's area and
-its new text. `accept-agreement` accepts any typed prompt, because the quote is what it records; `accept-agreement`
-also needs the prompt to come after the last proposal, pick, term amend or project-term edit. A pick of
-its terms-bound label (`approval-label accept-agreement`) also approves it, with `--terms <digest>`; an
-accepted suggestion never does.
-The verbs on the pick list also accept a verified pick or an accepted suggestion;
-every other verb needs a typed prompt. Rulings stay typed-only: `record-ruling`,
-`close-ruling` and `carry-rulings` are not on the list, and `accept-context`
-refuses a pick or a suggestion for a Ruling. A pick approves only when its answer is the
-exact label `approval-label <verb> <args>` prints for the command being run
-(programme-prompt-source.md gives the list and the full rule). `approval-label`
-needs no prompt, writes nothing, and refuses a verb a pick cannot approve.
+An approval verb takes `--prompt <id>` of Shawn's answer to an open offer of that exact command; no named-word check reads his text. A message with no open offer of the command approves nothing, and the fix says to run `offer`. `accept-agreement` also needs the pick to come after the last proposal, pick, term amend or project-term edit, and only a pick approves it. An accepted suggestion approves nothing. A Ruling approval must also come after the proposal and be used once (see Rulings above). programme-prompt-source.md gives the full rule.
 
-`offer` (`<question-key> --command '<verb> <args>' [--command ...]`) is the stored form of the same
-approval, and `approval-label` stays as an alias for now. Only the driving session may run it. It takes
+`offer` (`<question-key> --command '<verb> <args>' [--command ...]`) is how a command is asked. Only the driving session may run it. It takes
 1 to 3 commands, writes one `approval_offered` row, and prints the exact AskUserQuestion input in its input field.
 Auto writes the question, the header and every option from the command. Each question carries a decline option, named
 in the decline field, which has no command; on an authority move (`accept-agreement`, `adopt-autonomy
 --widening`, a remit widening, `answer-permission <id> applied`, a wider `accept-context`) the decline comes first. A
-`set-remit` offer takes on stdin the JSON the verb will read. Every verb on the pick list has a renderer, a verb with
+`set-remit` offer takes on stdin the JSON the verb will read. Every approval verb has a renderer, a verb with
 no renderer is refused, and a label holds no flag and no `, `. Takeover cannot be offered: this session does not drive
 yet. `become-pm` prints its picker in its input field, written from the driver's session id, and `takeover` compares a pick of
 it to the current driver under the leases lock.
@@ -1045,8 +1012,7 @@ it to the current driver under the leases lock.
 A pick binds to an offer only when the whole questions array in the transcript hashes to that offer's
 `asked_hash`, and the offer's session still drives. The answer must be one of its options, the running command must
 hash to that option's `argv_hash`, stdin must hash to its `content_hash` when set, and the facts the option showed
-must render the same now. Any miss refuses and names a new offer. A picker with no matching offer falls back to the
-`approval-label` comparison. The PostToolUse hook adds an `offer` hint to `<auto-data>`: the command to run, or, on
+must render the same now. Any miss refuses and names a new offer. A picker with no matching offer approves nothing. The PostToolUse hook adds an `offer` hint to `<auto-data>`: the command to run, or, on
 a decline, that nothing runs. It also journals `approval_declined` citing the pick, which spends it. The hint is not
 evidence; the check above reads the transcript.
 

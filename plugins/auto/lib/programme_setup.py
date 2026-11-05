@@ -92,7 +92,7 @@ def _answer_for(host, pick, key, value, options=()) -> tuple:
              if not programme_naming.missing(q, [key]) and all(programme_naming.missing(q, [o]) for o in others)]
     if len(asked) != 1:
         raise host.ProgrammeError(f"pick {pick['prompt_id']!r} does not answer the {key!r} step: exactly one "
-                                  f"of its questions must name {key!r} and no other term")
+                                  f"of its questions must hold {key!r} and no other term")
     question, answer = asked[0]
     missing = _named(value, answer)
     if missing:

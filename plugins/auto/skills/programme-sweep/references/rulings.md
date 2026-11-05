@@ -17,30 +17,13 @@ You draft the Ruling. Auto writes the picker and Shawn approves the draft. He ne
 | The same, on an authority option | Refused. Relay his words and ask again by pick | Nothing |
 | Declines, or asks something | Run nothing | Nothing |
 
-An authority option is a new or wider grant, a restrict that loosens, closing a restrict, or a wider `accept-context`. Its label says it widens, the decline comes first, and a pick binds it at once. Only his rewrite counts as content: if his words only say yes, ask him to pick the option, or his "yes" becomes the text. His text is capped at 500 characters. Auto refuses a longer one rather than cut it, so ask him for a shorter one. Show him `read_back` word for word.
+An authority option is a new or wider grant, a restrict that loosens, closing a restrict, or a wider `accept-context`. Its label says it widens, the decline comes first, and a pick binds it at once. Only his rewrite counts as content: if his words only say yes, ask him to pick the option, or his "yes" becomes the text. His text is capped at 500 characters. Auto refuses a longer one rather than cut it, so ask him for a shorter one. Show him `read_back` unchanged.
 
-## What a cited message must name when no offer is open
+## When a message approves
 
-Always ask with `P offer` for a verb it takes. A typed message that answers no offer
-must name what it approves, or the verb refuses it and
-lists the missing words: the item id or key (`AI-753`) for the item rows, the
-Ruling id for `carry-rulings`, the behaviour id and the layer word
-("programme", "repo", or "personal", "global" or "all projects") with no
-negation before it for `move-behaviour`, the proposal id for
-`record-behaviour --from-proposal`, the proposal id
-(`perm-1`) and exactly one answer word for `answer-permission`: "applied" or
-"apply" for applied, "not now", "later" or "postpone" for not-now, "reject" or
-"decline" for no. Shawn types, for example, "applied perm-1". A `--widening`
-needs the word "widen" in his message too. When his message does not name the
-target, do not run the verb: ask him to confirm in words that name it, for
-example "adopt eval_waiver at act_and_tell, widen it", and cite that reply.
-A prompt that approves a Ruling change (`record-ruling` that binds,
-`accept-context` on a Ruling, `close-ruling` with a prompt, `carry-rulings`)
-must also be typed after the proposal and used once: after the latest change
-to that Ruling (for a new Ruling, his newest message that no verb has cited
-yet), and never one that already approved another Ruling change. An old
-message that happens to name the right words is refused; ask him again and
-cite the new reply.
+A message approves only as the answer to an open offer of that command. With no offer it approves nothing, whatever it says, and you need not ask him to reword it: run `P offer` and ask with the input it prints.
+
+An answer that approves a Ruling change (`record-ruling` that binds, `accept-context` on a Ruling, `close-ruling` with a prompt, `carry-rulings`) must also come after the proposal and be used once: after the latest change to that Ruling, and never one that already approved another Ruling change. An old answer is refused; offer again and cite the new one.
 
 ## Corrections
 

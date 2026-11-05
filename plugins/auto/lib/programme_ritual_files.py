@@ -3,7 +3,7 @@
 
 A file is only ever *proposed*. It is read from the committed tree of the remote default branch
 (``origin/HEAD``), never from the working folder, so a change takes effect only after the repo's own
-review and merge. It is in force for a programme only after Shawn's typed words name the ritual and
+review and merge. It is in force for a programme only after Shawn answers its offer, which binds the ritual and
 the content hash; a changed file proposes again and the adopted snapshot stays in force until he
 adopts or declines the new content. A file carries no power a stored ritual lacks: the same validator
 runs, a step that names a protected action is refused, and ``check`` names come from the fixed list.

@@ -206,7 +206,6 @@ def _h_adopt(host, argv):
     programme_offers.note_content(text)
 
     def change(programme, prompt, rec):
-        programme_offers_stores.require_bound(prompt, BehaviourError)
         # The stored entry would shadow the file at load, so the file is refused up front.
         if any(isinstance(e, dict) and e.get("id") == bid for e in programme_behaviours.read_store()["personal"]):
             raise BehaviourError(f"a stored personal behaviour {bid!r} already exists; a file with this id "
@@ -226,7 +225,6 @@ def _h_copy(host, argv):
     bid = programme_behaviours.check_id(positional[0])
 
     def change(programme, prompt, rec):
-        programme_offers_stores.require_bound(prompt, BehaviourError)
         text, digest = _shipped_read(bid)
         used = _use_key(prompt, "copy-default", bid, "copy", digest)
         path = _personal_path(bid)
@@ -251,7 +249,6 @@ def _settle(prompt, bid, mode, text) -> dict:
         return {"behaviour": bid, "as": mode, "shipped_hash": digest}
     if not os.path.isfile(_personal_path(bid)):
         raise BehaviourError(f"no personal copy of {bid!r} to settle")
-    programme_offers_stores.require_bound(prompt, BehaviourError)
     written = draft_hash(text, bid) if mode == "merge" else digest
     used = _use_key(prompt, "settle-default-update", bid, mode, written)
 
