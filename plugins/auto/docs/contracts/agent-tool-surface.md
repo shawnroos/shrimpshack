@@ -430,7 +430,7 @@ session.
   prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
   item then refuses, and requirements stay unchanged.
 - **Check settings**: `set-check` (`<name> on|off [--item <id> | --own] [--prompt <id>]`) turns a named check on or off for the programme or one item, and is driver-only. Turning a check off needs no prompt. The table in `skills/programme-sweep/references/checks.md` names the checks whose turning on needs Shawn's pick of `offer`. That moves authority, so the picker lists the decline first and his own words are refused. `--own` sets the Stop block for the PM's own run, which the PM may turn on alone. The pre-filled answer refusal and the Linear done, cancelled and root-cause rule have no off setting. It journals `check_set`, and `status` and `rules` list the settings. A setting stays outside the agreed terms, so `terms_digest` does not move. A contract's `--limit` and a behaviour file's `limit:` only record a name: `status` lists it as not on, with the offer to run.
-- **Limited sessions**: while a limit is on for a session's item, the PreToolUse hook refuses its Bash by default once a command names the programme's files, the installed plugin, `CLAUDE_AUTO_DATA_DIR`, `set-check` or a hook switch: it passes only as a plain read (cat, grep, jq and the like) or as a run of the plugin's scripts with a literal verb. `programme.sh` runs only with `status`, `rules` (not `--ack`), `describe`, `context`, `inbox`, `contract-status`, `open-worker-questions`, `claim` or `register-run`, with no `$` or backtick in its arguments. Any command naming `SESSION_ID` is refused. `skills/programme-sweep/references/checks.md` lists the gaps a text check leaves.
+- **Limited sessions**: while a limit is on for a session's item, the PreToolUse hook refuses its Bash by default once a command names the programme's files, the installed plugin, `CLAUDE_AUTO_DATA_DIR`, `set-check` or a hook switch: it passes only as a plain read (cat, grep, jq and the like) or as a run of the plugin's scripts. `programme.sh` runs only with `status`, `rules` (not `--ack`), `describe`, `context`, `inbox`, `contract-status`, `open-worker-questions`, `claim` or `register-run`, with every argument written out: no `$` or backtick. Any command naming `SESSION_ID` in capitals is refused. A limit stops an honest worker's mistakes, not a session set on getting round it: a name, path or verb built at run time, a glob, or a script written and then run gets past it. `skills/programme-sweep/references/checks.md` lists the gaps a text check leaves.
 - **Hook code**: `record-hook-patch` (`<file> --why <line> --pr <url or number>`) records that the PM changed
   hook code. It journals `hook_patched`, sends Shawn the notice through the terminal host and prints it for
   the PM to post. The notice names the protected rules the file holds. It needs no prompt, because it records what
@@ -1092,12 +1092,15 @@ Under the settings-writes limit that call is a write to any `settings.json` or `
 `.claude` folder or the user config folder, or to the behaviours files; a Bash call that only reads them passes.
 
 For a session with at least one limit on, the hook denies a Write, Edit, MultiEdit or Bash write to the
-programme's folder or the installed plugin cache, a Bash call that sets
-`CLAUDE_AUTO_DATA_DIR` or `CLAUDE_CODE_SESSION_ID` or runs `set-check`, and a write of
+programme's folder or the installed plugin cache, a Bash call that names `CLAUDE_CODE_SESSION_ID`,
+one that names `CLAUDE_AUTO_DATA_DIR` or `set-check` other than as a plain read, and a write of
 `disableAllHooks` or `allowManagedHooksOnly` to a `settings.json` or `settings.local.json`.
 It journals `limit_refused` and pauses nothing. File tools match by real path. A Bash call
-that names one of these passes only if it only reads, or runs the plugin's own scripts with a
-verb other than `set-check`; the match is by text, so it is best effort. A session with no limit on is not checked. `start-worker` adds the
+that names one of these passes only if every part is a plain read, or runs the plugin's own scripts,
+with `programme.sh` limited to the verbs listed under Limited sessions and every argument written out.
+A limit stops an honest worker's mistakes; it is not a boundary against a session set on getting round
+it. A worker that builds a name, path or verb at run time, globs a path, or writes a script and runs it
+can get round it, so do not use a limit to contain a session you do not trust. A session with no limit on is not checked. `start-worker` adds the
 limits in force to the brief. Its output lists them, and says when no `--handoff`
 carried them to the worker.
 

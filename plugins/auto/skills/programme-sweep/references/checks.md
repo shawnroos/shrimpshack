@@ -49,7 +49,7 @@ After a `set-check` on an item with a running worker, run `P prompt-item <item> 
 
 `no-settings-writes` covers every `settings.json` and `settings.local.json` in a `.claude` folder or the user config folder, and the behaviours files. A Bash call that only reads them passes.
 
-While any limit is on, the session also cannot write:
+While any limit is on, Auto also refuses the session's writes to:
 
 - the programme's files, or set `CLAUDE_AUTO_DATA_DIR`
 - the installed plugin cache
@@ -57,9 +57,9 @@ While any limit is on, the session also cannot write:
 
 Each of those would let the worker switch off the hook that enforces its limit. A session with no limit on has none of these checks.
 
-Text cannot prove who a Bash call acts as, so a limited session's Bash is refused by default. A command that names one of those places passes only when every part is a plain read (`cat`, `head`, `tail`, `grep`, `wc`, `ls`, `stat`, `diff`, `jq` and a few like them; `sed`, `sort`, `less` and `tree` are not reads), or runs the plugin's scripts with a literal verb. `programme.sh` runs only with `status`, `rules`, `describe`, `context`, `inbox`, `contract-status`, `open-worker-questions`, `claim` or `register-run`, with no `$` or backtick in its arguments. Any command that names `SESSION_ID`, substitutes a command, or is too long to examine in full is refused, because `programme.sh` knows its caller only by `CLAUDE_CODE_SESSION_ID`.
+Under a limit, a Bash command that names one of those places passes only when every part is a plain read (`cat`, `head`, `tail`, `grep`, `wc`, `ls`, `stat`, `diff`, `jq` and a few like them; `sed`, `sort`, `less` and `tree` are not reads), or runs the plugin's scripts. `programme.sh` runs only with `status`, `rules`, `describe`, `context`, `inbox`, `contract-status`, `open-worker-questions`, `claim` or `register-run`, with every argument written out: no `$` or backtick. Such a command that substitutes a command, or is too long to examine in full, is refused. Any command that names `SESSION_ID` in capitals is refused, because `programme.sh` knows its caller only by `CLAUDE_CODE_SESSION_ID`.
 
-A limit is a best-effort text and path check. A file tool is matched by real path, and a Bash command by its text. A script written first and run later, any spelling that reaches `programme.sh` through a file, a path built at run time, a glob, a symlink into these folders, a settings file copied from one made earlier, or a key spelled with a JSON unicode escape can get past it. Do not use a limit to contain a session you do not trust.
+A limit stops an honest worker's mistakes. It is not a boundary against a session set on getting round it, and no text check can be one: a session running as Shawn's user can pose as another. A file tool is matched by real path and a Bash command by its text, so a worker that builds a name, path or verb at run time, globs a path, writes a script and runs it, follows a symlink into these folders, copies a settings file made earlier, or spells a key with a JSON unicode escape can get round it. Do not use a limit to contain a session you do not trust.
 
 ## Code by PR and publish
 

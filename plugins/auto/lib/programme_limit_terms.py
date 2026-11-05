@@ -28,7 +28,8 @@ def brief_lines(programme, key) -> list:
             "While a limit is on, Auto also refuses your writes to the programme's files, to the installed plugin "
             "and of `disableAllHooks` or `allowManagedHooksOnly` in a settings file, and any command that names "
             "`SESSION_ID`. A command that names those places passes only as a plain read (`cat`, `grep`, `jq` and "
-            f"the like) or as `programme.sh` with one of: {verbs}. A refusal "
+            f"the like) or as `programme.sh` with one of: {verbs}, with every argument written out (no `$` or "
+            "backtick). These checks read command text to catch mistakes; do not look for a way round one. A refusal "
             "stops only that call and is journaled. Keep working on the rest; the PM sees the refusal "
             "and lifts the limit when the work needs it."]
 

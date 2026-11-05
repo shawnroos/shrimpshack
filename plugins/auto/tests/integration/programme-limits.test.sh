@@ -197,7 +197,6 @@ EOF"
   "cat ${HOME_FILE} | grep \$(rm ${HOME_FILE})"
   "echo \$CLAUDE_CODE_SESSION_ID"
   "grep -rn CLAUDE_CODE_SESSION_ID lib"
-  "grep -rn session_id lib"
   "sed -n 1,5p ${CACHE_HOOK}"
   "sed -e 1p ${HOME_FILE}"
   "sed -n '/open/p' ${HOME_FILE}"
@@ -327,6 +326,16 @@ ALLOWED_BASH=(
   "tail -3 ${HOME_FILE} | wc -l"
   "jq .items ${HOME_FILE}"
   "printf '%s' x; cat ${HOME_FILE}"
+  "grep -rn session_id src/"
+  "grep -rn session_id lib"
+  "jq .session_id x.json"
+  "pytest -k test_session_identifier"
+  "git commit -m \"fix preset-checks loader\""
+  "npm run asset-checker"
+  "bash ${CACHE}/lib/programme.sh claim linear:AI-1 pr https://example.com/pr/1"
+  "bash ${CACHE}/lib/programme.sh register-run --run x --item linear:AI-1 --auto-run y --repo /tmp/r"
+  "bash ${CACHE}/lib/pulse.sh \"\$RUN\""
+  "git push origin feature/x"
 )
 it "a limited worker's reads and its runs of the plugin's own scripts are not refused"
 BAD=""
@@ -334,6 +343,20 @@ for c in "${ALLOWED_BASH[@]}"; do
   [ "$(sh_verdict sess-lim "$c")" = allow ] || BAD="${BAD}[${c}] "
 done
 check "" "$BAD"
+
+it "a long heredoc that mentions the plugin system and names no protected place is not refused"
+check "allow" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+the plugin system works, and the programme says so
+EOF")"
+
+it "a programme.sh run of a verb it may run, with an argument built at run time, says to write the argument out"
+OUT="$(call sess-lim Bash "$(bash_input "bash ${CACHE}/lib/programme.sh claim linear:AI-1 pr \"\$PR_URL\"")")"
+has '"permissionDecision": "deny"' "$OUT"
+has "write each argument out literally" "$OUT"
+
+it "a run of programme.sh whose verb is built at run time is still refused"
+check "deny" "$(sh_verdict sess-lim "bash ${CACHE}/lib/programme.sh \"\$V\" x")"
 
 it "the Read tool on those files is not refused"
 check "allow allow" "$(verdict sess-lim Read "{\"file_path\": \"${HOME_FILE}\"}") $(verdict sess-lim Read "{\"file_path\": \"${CACHE_HOOK}\"}")"

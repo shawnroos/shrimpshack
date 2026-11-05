@@ -2,11 +2,12 @@
 """Refuse each write a limit covers: the programme's files, the installed plugin and the two hook switches
 under any limit, and every settings or behaviours file under `no-settings-writes`.
 
-A session with no limit on is never refused here. Best effort: a file tool is matched by real path and
-Bash by text. Text cannot prove what a Bash call does, so under a limit a command that names a protected
-place passes only when every part of it is a plain read, or a run of the plugin's scripts with a literal
-verb (for `programme.sh`, one of RUN_VERBS). Any command naming `SESSION_ID` is refused. A script written
-first and run later, or a path built at run time, still gets through.
+A session with no limit on is never refused here. A limit stops an honest worker's mistakes; it is no
+boundary against a session set on getting round it. A file tool is matched by real path and Bash by text.
+Under a limit a command that names a protected place passes only when every part of it is a plain read, or
+a run of the plugin's scripts (for `programme.sh`, one of RUN_VERBS with every argument written out). Any
+command naming `SESSION_ID` is refused. A name, path or verb built at run time, a glob, or a script written
+first and run later gets through.
 """
 
 from __future__ import annotations
@@ -200,13 +201,15 @@ def _script_run(words, saved, bases):
 def _refused_run(script, args):
     """Why this run of a plugin script is refused under a limit; None when it may run."""
     name, verb = os.path.basename(script), args[0] if args else ""
-    if _expands(verb):
-        return f"a run of `{name}` whose verb is built at run time"
     if name not in PROGRAMME_SCRIPTS:
         return None
-    if verb not in RUN_VERBS or any(map(_expands, args)) \
-            or any(word.startswith(w) for word in args for w in _VERB_WRITES.get(verb, ())):
+    if _expands(verb):
+        return f"a run of `{name}` whose verb is built at run time"
+    if verb not in RUN_VERBS or any(word.startswith(w) for word in args for w in _VERB_WRITES.get(verb, ())):
         return f"a run of `{name} {verb}`".rstrip()
+    if any(map(_expands, args)):
+        return (f"a run of `{name} {verb}` with an argument built at run time; write each argument out "
+                "literally, with no `$` or backtick")
     return None
 
 
@@ -228,13 +231,16 @@ def _env_refs(text):
 
 
 def _bash_target(command, cwd, dirs):
-    if SESSION_WORD.casefold() in _joined(command):
+    # Case-sensitive: an environment name is, and a lower-case session_id is ordinary code to read.
+    if SESSION_WORD in _JOINERS.sub("", command):
         return f"`{SESSION_ENV}`, the variable `programme.sh` knows its caller by"
     if _too_long(command):
-        return _TOO_LONG
+        # Spaces kept, so prose such as "the plugin system" does not join into a trigger word.
+        plain = guard_text.HIDING_CHARS.sub("", command).casefold()
+        return _TOO_LONG if any(w.casefold() in plain for w in (*NAMED_WORDS, _PLUGIN_ROOT)) else None
     parsed = _parsed(command, _env_refs)
     segments, text = parsed.segments, parsed.text
-    if any(LIFT_VERB in " ".join(s.words) and not (parsed.readable and _only_reads(s)) for s in segments):
+    if any(LIFT_VERB in " ".join(s.words).split() and not (parsed.readable and _only_reads(s)) for s in segments):
         return f"a check setting with `{LIFT_VERB}`"
     bases = _bases(segments, cwd)
     saved = _saved_scripts(segments, bases)
@@ -371,10 +377,11 @@ def _protected_target(tool_name, tool_input, cwd):
 
 def _refused_write(names, target) -> str:
     others = f". These limits are all on, and each must be lifted: {', '.join(names)}" if len(names) > 1 else ""
-    return (f"would write {target}. While a limit is on, this session cannot write the programme's files or the "
-            "installed plugin, set `CLAUDE_AUTO_DATA_DIR`, name `CLAUDE_CODE_SESSION_ID`, run `programme.sh` with a "
-            f"verb other than {', '.join(RUN_VERBS)}, or write `disableAllHooks` or `allowManagedHooksOnly` to a "
-            f"settings file, and a command that names one of them must be a plain read{others}")
+    return (f"would write {target}. While a limit is on, Auto refuses this session's writes to the programme's "
+            "files or the installed plugin, setting `CLAUDE_AUTO_DATA_DIR`, naming `CLAUDE_CODE_SESSION_ID`, a run "
+            f"of `programme.sh` with a verb other than {', '.join(RUN_VERBS)} or with an argument not written out, "
+            "and a write of `disableAllHooks` or `allowManagedHooksOnly` to a settings file; a command that names "
+            f"one of them must be a plain read{others}")
 
 
 def decision(stdin_raw: str):
