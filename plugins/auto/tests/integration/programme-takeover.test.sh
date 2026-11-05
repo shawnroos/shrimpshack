@@ -394,9 +394,12 @@ response = {"questions": [{"question": question}], "answers": {question: answer}
             "annotations": {question: {"notes": os.environ["PICK_NOTE"]}} if os.environ.get("PICK_NOTE") else {}}
 result.update(sessionId=sid, toolUseResult=response)
 result["message"]["content"][0]["tool_use_id"] = tool_use_id
-path = pathlib.Path(work) / "picks" / uuid.uuid4().hex / (sid + ".jsonl")
-path.parent.mkdir(parents=True)
-path.write_text(json.dumps(asked) + "\n")
+sys.path[:0] = [os.path.join(root, "lib"), os.path.join(root, "tests", "fixtures")]
+from registered_transcript import register
+path = register(sid, pathlib.Path(work) / "picks" / (sid + ".jsonl"))
+path.parent.mkdir(parents=True, exist_ok=True)
+with path.open("a") as stream:
+    stream.write(json.dumps(asked) + "\n")
 payload = {"session_id": sid, "transcript_path": str(path), "cwd": os.getcwd(), "hook_event_name": "PostToolUse",
            "tool_name": "AskUserQuestion", "tool_use_id": tool_use_id, "tool_input": tool_input,
            "tool_response": response}

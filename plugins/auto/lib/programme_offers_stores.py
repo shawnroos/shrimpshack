@@ -44,25 +44,37 @@ def _ritual_text(entry) -> str:
 
 
 def _behaviour_fields(cmd) -> dict:
-    return {"when": cmd.opt("when"), "do": cmd.opts.get("do"), "dont": cmd.opts.get("dont")}
+    return {"when": cmd.opt("when"), "do": cmd.many("do"), "dont": cmd.many("dont")}
 
 
 def _ritual_fields(cmd) -> dict:
-    return {"when": cmd.opt("when"), "steps": cmd.opts.get("step"), "offers": cmd.opts.get("offer"),
+    return {"when": cmd.opt("when"), "steps": cmd.many("step"), "offers": cmd.many("offer"),
             "check": {"name": cmd.opt("check")} if cmd.opt("check") else None}
 
 
-def _recorder(noun, module_name, text_of, fields_of):
+def _behaviour_multi() -> tuple:
+    return load_lib_module("programme_behaviours").RECORD_MULTI
+
+
+def _no_multi() -> tuple:
+    return ()
+
+
+def _recorder(noun, module_name, text_of, fields_of, shown=(), multi_of=_no_multi):
     def render(cmd, programme) -> dict:
         ident = cmd.opt("from-proposal")
         if ident:
             entry = load_lib_module(module_name)._programme_entry(programme, ident)
             if entry is None or entry.get("state") != "proposed":
                 raise OfferError(f"no proposed {noun} {ident!r}")
-            return _rendered(f"Apply drafted {noun} {ident}", text_of(entry), entry)
+            return _rendered(f"Apply drafted {noun} {ident}", f"{text_of(entry)} {cmd.extras('from-proposal', multi=multi_of())}",
+                             entry)
         if not cmd.opt("when"):
             raise OfferError(f"usage: record-{noun} --when <text> ... or --from-proposal <id>")
-        return _rendered(f"Record {noun}: {cmd.opt('when')}", text_of(fields_of(cmd)))
+        text = f"{text_of(fields_of(cmd))} {cmd.extras(*shown, multi=multi_of())}"
+        digest = programme_offer_rendering.programme_journal.canonical_sha(text)[len("sha256:"):][:6]
+        return _rendered(programme_offer_rendering.fitting(f"Record {noun}: {cmd.opt('when')}", f"Record {noun} {digest}"),
+                         text)
     return render
 
 
@@ -78,11 +90,12 @@ def _retire_behaviour(cmd, programme) -> dict:
 
 def _draft(cmd, bid) -> tuple:
     files = load_lib_module("programme_behaviour_file_verbs")
+    path = cmd.opt("file")
     text = programme_offer_rendering.noted_content()
     if text is None:
-        if cmd.opt("file") == "-":
+        if path == "-":
             raise OfferError("an offer needs the draft in a file it can read again; give --file <path>")
-        text = files._draft_text({"file": cmd.opt("file")})
+        text = files._draft_text({"file": path})
     return text, files.draft_hash(text, bid)
 
 
@@ -90,7 +103,8 @@ def _adopt_file(cmd, _programme) -> dict:
     bid = cmd.first("<id> --file <path>")
     _text, digest = _draft(cmd, bid)
     return _rendered(f"Adopt behaviour file {bid} (content {_short(digest)})",
-                            "Writes the draft shown in chat to your personal behaviours folder.", {"hash": digest})
+                     f"Writes the draft shown in chat, from {cmd.opt('file')}, to your personal behaviours folder.",
+                     {"hash": digest})
 
 
 def _copy_default(cmd, _programme) -> dict:
@@ -113,7 +127,7 @@ def _settle_default(cmd, _programme) -> dict:
                                 {"shipped": shipped})
     _text, digest = _draft(cmd, bid)
     return _rendered(f"Merge default {bid} (content {_short(digest)})",
-                            "Replaces your copy with the merged draft shown in chat.",
+                     f"Replaces your copy with the merged draft shown in chat, from {cmd.opt('file')}.",
                             {"shipped": shipped, "hash": digest})
 
 
@@ -158,8 +172,10 @@ RENDERERS = {
     "carry-rulings": _carry,
     "copy-default": _copy_default,
     "decline-ritual-file": _decline_ritual_file,
-    "record-behaviour": _recorder("behaviour", "programme_behaviours", _behaviour_text, _behaviour_fields),
-    "record-ritual": _recorder("ritual", "programme_rituals", _ritual_text, _ritual_fields),
+    "record-behaviour": _recorder("behaviour", "programme_behaviours", _behaviour_text, _behaviour_fields,
+                                  ("when", "do", "dont"), _behaviour_multi),
+    "record-ritual": _recorder("ritual", "programme_rituals", _ritual_text, _ritual_fields,
+                               ("when", "step", "offer", "check")),
     "retire-behaviour": _retire_behaviour,
     "settle-default-update": _settle_default,
 }

@@ -184,7 +184,8 @@ if answer.startswith("Approve "):
         q = questions[0]["question"]
         answer = next(o["label"] for o in questions[0]["options"] if o["label"] != printed["decline"])
 answers = {q: answer}
-path = pathlib.Path(folder) / (sid + ".jsonl")
+from registered_transcript import register
+path = register(sid, pathlib.Path(folder) / (sid + ".jsonl"))
 ask = copy.deepcopy(ASK); ask.update(uuid="a-" + tid, sessionId=sid)
 ask["message"]["content"][0].update(id=tid, input={"questions": questions})
 res = copy.deepcopy(ANSWER)

@@ -37,13 +37,15 @@ os.chdir(sys.argv[1])
 GLOBS = ("skills/**/*.md", "commands/*.md", "agents/*.md", "CONCEPTS.md", "README.md", "docs/programme-overview.md",
          "docs/concepts/programme/*.md", "docs/contracts/programme-*.md", "docs/contracts/agent-tool-surface.md",
          "lib/programme*.py", "lib/on-*.py", "mods/programme-view/*.ts", "mods/programme-view/*.tsx")
+# A phrase list stays incomplete by design: it catches the asks already seen, and new wording needs a new phrase.
 # These skills use "typed" for typed criteria and fields of a run, not for anything Shawn enters.
 SKIP = ("skills/auto-design/", "skills/auto-launch/", "skills/auto-driver/", "skills/auto-author-")
 FORBIDDEN = re.compile(
     r"type this|exact text to type|exact reply|\bto type\b|ask shawn to type|\bhe types\b|shawn types"
     r"|typed (prompt|line|reply|answer|approval|words|message|confirmation|adoption|pick|text)"
     r"|needs typed|needs_typed|\btype (applied|it\b|one\b|the approval|/auto)|approval-label|approval_label"
-    r"|must name|names? the id|carries the (content )?hash|\"reply\"|word for word", re.I)
+    r"|must name|names? the id|carries the (content )?hash|\"reply\"|word for word"
+    r"|\btype the\b|\bI will type\b|ask him to (quote|reword|retype|shorten)", re.I)
 ALLOWED = (
     ("skills/programme-sweep/SKILL.md", "reuse its stored title word for word", "stored title, PM to tracker"),
     ("lib/programme_import.py", "conflicting_approval_label", "a gap kind already stored in imported journals"),
@@ -52,6 +54,7 @@ ALLOWED = (
     ("docs/contracts/agent-tool-surface.md", "decision id must name a decision-log entry", "a flag's value, not Shawn's words"),
     ("docs/contracts/programme-protocol-format.md", "Each target must name an existing item", "a flag's value, not Shawn's words"),
     ("lib/programme_sources.py", "a blind resend would type it twice", "text resent to a worker's pane"),
+    ("skills/programme-sweep/references/rulings.md", "you need not ask him to reword", "says not to ask"),
 )
 hits = []
 for pattern in GLOBS:
@@ -78,6 +81,14 @@ mkdir -p "$COPY"
 printf 'Tell Shawn the exact text to type.\n' > "${COPY}/commands/programme-seeded.md"
 OUT="$("$PY" "$SCAN" "$COPY" 2>&1)"; AFTER=$?
 if [ "$BEFORE" -eq 0 ] && [ "$AFTER" -ne 0 ] && [[ "$OUT" == *programme-seeded.md* ]]; then pass; else fail "before=$BEFORE after=$AFTER: $OUT"; fi
+
+it "the scan fails on each ask a review found live: type the repos, and ask him to quote"
+SEEDED=""
+for line in 'Add some (I will type the repos)' 'Show Shawn the line and ask him to quote the reason.'; do
+  printf '%s\n' "$line" > "${COPY}/commands/programme-seeded.md"
+  "$PY" "$SCAN" "$COPY" >/dev/null 2>&1 || SEEDED="${SEEDED}x"
+done
+if [ "$SEEDED" = "xx" ]; then pass; else fail "caught ${#SEEDED} of 2"; fi
 
 it "the sweep skill carries the rule, and stays in the PM's every-activation text"
 if grep -qiF 'never ask shawn for exact words' "${AUTO_ROOT}/skills/programme-sweep/SKILL.md"; then pass; else fail "the rule is gone from SKILL.md"; fi

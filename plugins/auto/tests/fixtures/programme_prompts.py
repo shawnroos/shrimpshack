@@ -7,12 +7,16 @@ import tempfile
 import uuid
 
 
-def fixture(text, sid, prompt_source='typed'):
+def fixture(text, sid, prompt_source='typed', path=None):
     from _bootstrap import load_lib_module
-    parent = pathlib.Path(os.environ['CLAUDE_AUTO_DATA_DIR']).parent / 'prompt-fixtures'
-    parent.mkdir(parents=True, exist_ok=True)
-    path = pathlib.Path(tempfile.mkdtemp(dir=parent)) / (sid + '.jsonl')
-    path.write_text('')
+    from registered_transcript import register
+    if path is None:
+        parent = pathlib.Path(os.environ['CLAUDE_AUTO_DATA_DIR']).parent / 'prompt-fixtures'
+        parent.mkdir(parents=True, exist_ok=True)
+        path = register(sid, pathlib.Path(tempfile.mkdtemp(dir=parent)) / (sid + '.jsonl'))
+        path.write_text('')
+    else:
+        path.touch()
     payload = {'session_id': sid, 'prompt': text, 'prompt_id': str(uuid.uuid4()),
                'transcript_path': str(path), 'hook_event_name': 'UserPromptSubmit'}
     source = load_lib_module('programme_prompt_source').capture(payload)
@@ -66,18 +70,21 @@ def queued_attachment_row(sid, text, kind='human', human_turn=True, command_mode
 
 def append_prompt(run, sid, text, origin='typed', now=None, prompt_source='typed'):
     from _bootstrap import load_lib_module
+    from registered_transcript import transcript
     pj = load_lib_module('programme_journal')
     if origin != 'typed':
         return pj.append_prompt(run, sid, text, origin, now=now)
-    _, source, path, row = fixture(text, sid, prompt_source)
+    _, source, path, row = fixture(text, sid, prompt_source, path=transcript(sid))
     result = pj.append_prompt(run, sid, text, origin, now=now, source=source)
-    path.write_text(json.dumps(row) + '\n')
+    with path.open('a') as stream:
+        stream.write(json.dumps(row) + '\n')
     return result
 
 
 def offered_pick(run, sid, commands, key='ask', choose=0):
     """Run `offer` and journal a verified pick of its choose-th command, on the exact picker it printed."""
     from _bootstrap import load_lib_module
+    from registered_transcript import transcript
     ps = load_lib_module('programme_pick_source')
     pj = load_lib_module('programme_journal')
     programme = pathlib.Path(load_lib_module('programme_home').__file__).with_name('programme.py')
@@ -92,9 +99,7 @@ def offered_pick(run, sid, commands, key='ask', choose=0):
     labels = [o['label'] for o in questions[0]['options'] if o['label'] != printed['decline']]
     answers = {questions[0]['question']: labels[choose]}
     tool_use_id = 'toolu_' + uuid.uuid4().hex[:10]
-    folder = pathlib.Path(os.environ['CLAUDE_AUTO_DATA_DIR']).parent / 'offered-picks'
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / (sid + '.jsonl')
+    path = transcript(sid)
     ask, answer = pick_rows(sid, tool_use_id, {}, answers)
     ask['message']['content'][0]['input'] = {'questions': questions}
     answer['toolUseResult']['questions'] = questions
@@ -108,10 +113,17 @@ def offered_pick(run, sid, commands, key='ask', choose=0):
 if __name__ == '__main__':
     root, sid, text = sys.argv[1:]
     sys.path.insert(0, str(pathlib.Path(root) / 'lib'))
-    payload, _, path, row = fixture(text, sid)
+    from registered_transcript import transcript
+    try:
+        path = transcript(sid)
+    except OSError:
+        # A test can break the data dir on purpose to see the hook survive it, and then no path can be registered.
+        path = pathlib.Path(tempfile.mkdtemp(dir=pathlib.Path(os.environ['CLAUDE_AUTO_DATA_DIR']).parent)) / (sid + '.jsonl')
+    payload, _, path, row = fixture(text, sid, path=path)
     result = subprocess.run(['bash', str(pathlib.Path(root) / '.claude/hooks/on-user-prompt.sh')],
                             input=json.dumps(payload), text=True, capture_output=True)
-    path.write_text(json.dumps(row) + '\n')
+    with path.open('a') as stream:
+        stream.write(json.dumps(row) + '\n')
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
     sys.exit(result.returncode)

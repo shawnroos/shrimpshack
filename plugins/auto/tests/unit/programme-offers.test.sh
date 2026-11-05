@@ -21,6 +21,7 @@ sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
 from programme_prompts import append_prompt as typed_prompt, queued_attachment_row, queued_user_row
+from registered_transcript import register
 
 PROG = str(root / 'lib/programme.py')
 PROG_OFFERED = str(root / 'tests/fixtures/prog_offered.py')
@@ -107,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     def pick(sid, run, questions, answer, annotations=None, hook=False, driving=True):
         counter[0] += 1
         tool_use_id = f'toolu_{counter[0]}'
-        path = transcripts / (sid + '.jsonl')
+        path = register(sid, transcripts / (sid + '.jsonl'))
         question = questions[0]['question']
         answers = {question: answer}
         ask = {'type': 'assistant', 'uuid': 'a-' + tool_use_id, 'sessionId': sid, 'isSidechain': False,
@@ -325,11 +326,22 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     result = verb(sid, run, 'set-remit', '--prompt', prompt, stdin=json.dumps(wide))
     check('stdin that matches the offered remit change is approved',
           ok(result) and str(extra) in json.dumps(record(run)['programme']['remit']), said(result))
+    def another_repo(rec):
+        rec['programme']['remit']['repos'].append({'path': str(other_repo), 'github': None})
+    edit(run, another_repo)
     narrow = copy.deepcopy(record(run)['programme']['remit'])
     narrow['repos'] = [r for r in narrow['repos'] if r['path'] != str(extra)]
     printed = offer(sid, run, 'remit-less', 'set-remit', stdin=json.dumps(narrow))
     check('a remit narrowing does not claim to widen, and the decline comes last',
           'iden' not in command_label(printed) and options(printed)[-1]['label'] == printed['decline'], printed['input'])
+
+    # ---- The wrapper: an offer that fails is not a refusal ----
+    add_item(sid, run, 'mem:wrapped')
+    typed = typed_prompt(run, sid, 'drop it')['prompt_id']
+    result = offered_verb(sid, run, 'drop-item', 'mem:wrapped', '--reason', 'one', '--reason', 'two', '--prompt', typed)
+    check('prog_offered exits 97 with the offer failure when the offer fails',
+          result.returncode == 97 and 'offer failed' in result.stderr and '--reason' in result.stderr
+          and state(run, 'mem:wrapped') == 'open', (result.returncode, said(result)))
 
     # ---- Session restart and new driver ----
     add_item(sid, run, 'mem:restart')

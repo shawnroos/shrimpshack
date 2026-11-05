@@ -87,5 +87,12 @@ has "Relay his words and ask again" "$OWN"
 has "An accepted suggestion approves no offer" "$OWN"
 has "Show the \`read_back\` line to Shawn" "$OWN"
 
+it "the PM is told to offer permission allow, and the fix lines name it"
+has "--command 'answer-permission <perm-id> allow'" "$S"
+has "answer-permission <perm-id> allow\\|not-now\\|no --prompt <id>" "$S"
+SETTLE="$(cat "${AUTO_ROOT}/lib/programme_permission_settle.py")"
+has "offer answer-permission {proposal['id']} allow again" "$SETTLE"
+has "offer answer-permission {proposal['id']} allow to arm" "$SETTLE"
+
 echo "programme-sweep-skill.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

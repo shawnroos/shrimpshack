@@ -302,6 +302,7 @@ print(len({e["ruling"] for e in json.load(open(sys.argv[1]))["keys"]["shawn/pick
 it "carry by pick: a pick already spent carries nothing more"
 prog carry-rulings c09 c10 c11 c12 --prompt "$LAST_PICK" --run "$RUN_PICK"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "already" "$OUT"
 
 it "carry by pick: a set no option offered is refused, so the PM asks again"
 it_ruling c13

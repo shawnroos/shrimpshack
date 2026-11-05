@@ -61,7 +61,7 @@ same picker.
 
 - Exit 1: show Shawn the refusal line and stop. The refusal is journaled.
 - Exit 2: the arguments did not parse (for example, an unquoted `--why` of
-  several words). Show Shawn the line and ask him to quote the reason.
+  several words). Fix the quoting yourself and offer the fixed command again.
 - Success: the leases are released and the run shows "ended" (apart from done).
   Ended is not archived: no new work starts, and the home keeps everything.
   1. Run each `CronDelete <task id>` line it prints, then record it with

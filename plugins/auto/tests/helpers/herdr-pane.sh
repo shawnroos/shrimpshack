@@ -15,7 +15,8 @@ register_session() { # register_session <session> [workspace]: the SessionStart 
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
-sys.exit(0 if load_lib_module("session_registry").lookup(sys.argv[2], include_headless=True) else 1)
+row = load_lib_module("session_registry").lookup(sys.argv[2], include_headless=True)
+sys.exit(0 if row and row.get("workspace") != "fixture-transcripts" else 1)
 PYEOF
   local pf="${WORK}/.panefake"
   if [ ! -x "${pf}/herdr" ]; then

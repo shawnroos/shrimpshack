@@ -404,9 +404,10 @@ def prompt_origin(row) -> str:
 # Reads a prompt as the JSON home did before the import stamped it, so an adoption Shawn approved there stays
 # verified after the move. Only past approvals read this; a new approval reads prompt_origin and refuses it.
 def adopted_origin(row) -> str:
-    if isinstance(row, dict) and row.get("provenance") == _authority().LEGACY:
-        return programme_prompt_source.origin(row)
-    return prompt_origin(row)
+    provenance = row.get("provenance") if isinstance(row, dict) else None
+    if provenance in _authority().UNVERIFIED and provenance != _authority().LEGACY:
+        return "unknown"
+    return programme_prompt_source.origin(row, pinned=False)
 
 
 def read_path(path: str) -> list:

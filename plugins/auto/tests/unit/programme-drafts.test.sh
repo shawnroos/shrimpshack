@@ -20,6 +20,7 @@ root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import register
 
 PROG = str(root / 'lib/programme.py')
 passed = failed = 0
@@ -53,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-drafts-') as work:
     SID = 'draft-pm'
     os.environ['CLAUDE_CODE_SESSION_ID'] = SID
     RUN = ph.create_programme(['drafts'], SID)['run']
-    path = transcripts / (SID + '.jsonl')
+    path = register(SID, transcripts / (SID + '.jsonl'))
 
     def check(name, condition, detail=''):
         global passed, failed
@@ -481,6 +482,37 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-drafts-') as work:
     check('a remit widening by pick applies and is marked as a draft',
           ok(result) and len(programme()['remit']['tracker']['teams']) == 2
           and programme()['agreement']['terms']['remit'].get('wording') == 'pm_draft', said(result))
+
+    # ---- Emptying a list that limited scope ----
+    def seed_scope(rec):
+        scope = rec['programme']['remit']
+        scope['repos'] = [{'path': '/Users/x/projects/a/main', 'github': 'o/a'},
+                          {'path': '/Users/x/projects/b/main', 'github': None}]
+        scope['tracker']['projects'] = [{'name': 'Cue jobs', 'id': 'p-1'}]
+    edit(seed_scope)
+    scope = programme()['remit']
+    raw = json.dumps({'repos': []})
+    printed = offer('no-repos', 'set-remit', stdin=raw)
+    check('emptying the repos list takes a pick', authority(printed) and 'iden' in label_of(printed), printed['input'])
+    check('emptying the repos list says it removes the limit', 'removes the limit' in text_of(printed), text_of(printed))
+    check('a repo shows by its github slug, or by its path when it has none',
+          'o/a' in text_of(printed) and '/Users/x/projects/b/main' in text_of(printed)
+          and 'repos: main' not in text_of(printed), text_of(printed))
+    result = verb('set-remit', '--prompt', said_after(printed, 'fine'), *reads(printed), stdin=raw)
+    check('emptying the repos list by own words is refused',
+          refused(result, 'relay') and len(programme()['remit']['repos']) == 2, said(result))
+    for part, doc in (('teams', {'tracker': {'teams': []}}), ('projects', {'tracker': {'projects': []}})):
+        printed = offer('no-' + part, 'set-remit', stdin=json.dumps(doc))
+        check(f'emptying tracker {part} takes a pick and says it removes the limit',
+              authority(printed) and 'removes the limit' in text_of(printed), printed['input'])
+    both = {'tracker': {'projects': [], 'initiatives': [{'name': 'Keeps a filter'}]}}
+    printed = offer('swap-filter', 'set-remit', stdin=json.dumps(both))
+    check('swapping a project for an initiative keeps a filter, so it lifts no limit',
+          'removes the limit' not in text_of(printed), text_of(printed))
+    keep_one = {'repos': [scope['repos'][0]]}
+    printed = offer('fewer-repos', 'set-remit', stdin=json.dumps(keep_one))
+    check('removing some repos is still no widening', not authority(printed) and 'removes the limit' not in text_of(printed),
+          printed['input'])
 
     # ---- A pick's why uses the option text ----
     assert ok(verb('add-item', 'mem:h', '--title', 'Handed'))

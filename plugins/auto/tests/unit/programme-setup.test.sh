@@ -20,6 +20,7 @@ root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import transcript
 from programme_prompts import append_prompt as typed_prompt, offered_pick
 
 FIXTURE = [json.loads(line) for line in (root / 'tests/fixtures/askuser_transcript.jsonl').read_text().splitlines()]
@@ -100,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
         if tool_use_id is None:
             counter[0] += 1
             tool_use_id = f'toolu_{counter[0]}'
-        path = transcripts / (sid + '.jsonl')
+        path = transcript(sid)
         ask = copy.deepcopy(ASK)
         ask.update(uuid='a-' + tool_use_id, sessionId=sid)
         ask['message']['content'][0].update(id=tool_use_id, input={'questions': [

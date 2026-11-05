@@ -52,6 +52,9 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
     check('legacy typed labels cannot authorize', pj.prompt_origin(legacy), 'unknown')
     check('persisted legacy adoption lookup is unverified', host.prompt_lookup(run, legacy['prompt_id'])['origin'], 'unknown')
 
+    forged_copy = pathlib.Path(work) / 'forged' / 'source-pm.jsonl'
+    forged_copy.parent.mkdir()
+    forged_copy.write_bytes(path.read_bytes())
     for name, changes in [
         ('different source session', {'session_id': 'someone-else'}),
         ('different runtime prompt', {'prompt_id': 'another-prompt'}),
@@ -66,6 +69,7 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
         ('boolean version', {'version': True}),
         ('relative path', {'path': 'source-pm.jsonl'}),
         ('wrong session filename', {'path': str(path.with_name('another-session.jsonl'))}),
+        ('a copy in a folder the registry does not name', {'path': str(forged_copy)}),
     ]:
         altered = copy.deepcopy(row)
         altered['payload']['source'].update(changes)

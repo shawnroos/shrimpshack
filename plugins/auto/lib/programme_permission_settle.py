@@ -187,7 +187,7 @@ def apply_answer(programme, proposal, choice, prompt, live, written=None, note=N
     if target == state.RETRYING and reservation is None:
         target = state.RETRY_UNOBSERVED
         check["notes"].append("covered, but no linked item's owner pane has a live agent, so nothing was "
-                              f"retried; offer answer-permission {proposal['id']} applied again once a worker is "
+                              f"retried; offer answer-permission {proposal['id']} allow again once a worker is "
                               "running")
     out = state.record_answer(proposal, choice, prompt, target)
     proposal.update(explanation=explain(check), reservation=reservation, pending_answer=None,
@@ -306,7 +306,7 @@ def _observe_retry(programme, proposal, journal, snap) -> dict:
     if status in ("idle", "gone"):
         return dict(base, state=state.RETRY_UNOBSERVED, unconfirmed=unconfirmed,
                     detail=f"the retry was sent, the owner pane is {status}, and its transcript shows no run; "
-                           f"offer answer-permission {proposal['id']} applied to arm one more attempt")
+                           f"offer answer-permission {proposal['id']} allow to arm one more attempt")
     return dict(base, pending=f"owner pane {pane} is {status}", unconfirmed=unconfirmed)
 
 

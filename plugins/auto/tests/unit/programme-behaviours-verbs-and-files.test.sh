@@ -140,7 +140,7 @@ core._with_locked_run_record(ph.home_path(args[0]), args[0], end)
 EOF
 PK="$(tprompt "$RUN" "keep ${B1} for the repo")"
 it "after end, keep-behaviours is refused"
-prog keep-behaviours "$B1" --to repo --prompt "$PK" --run "$RUN"
+PROG="$REAL_PROG" prog keep-behaviours "$B1" --to repo --prompt "$PK" --run "$RUN"
 check 1 "$CODE"
 has "ended" "$OUT"
 

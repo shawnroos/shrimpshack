@@ -168,7 +168,7 @@ re-arming. Next sweep reads the changes.
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
    | Swap a running item out for a newcomer | `P swap-item <out> <in> --prompt <pick id>` on a pick of its offer, then send the returned `stop_prompt` with `P prompt-item <out>` |
-   | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
+   | Answer a permission proposal | Offer it (step 9), then `P answer-permission <perm-id> allow\|not-now\|no --prompt <id>` |
    | He corrects who decides a kind of choice ("that didn't need me") | `P record-ruling <id> --effect grant\|restrict --scope <text> --replies-to <ask-or-decision-id> --prompt <id>`, then see "Naming and Rulings" below |
    | He corrects a preferred tool, in passing | `P record-behaviour --prompt <id> --when "<the kind of job>" --tool <name> --do "use <name> for <the job>"`, then see "Behaviours" below |
    | Keep a behaviour where it is | Nothing to run |
@@ -294,7 +294,11 @@ re-arming. Next sweep reads the changes.
      proposals that need Shawn are under Decisions for Shawn. When an
      explanation names something only Shawn can change (a deny rule, a hook,
      managed settings), tell him in one line.
-   - When `P answer-permission ... applied` in step 3 returned a `retry_text`,
+   - To ask Shawn about a proposal, run `P offer <key> --command 'answer-permission <perm-id> allow'
+     --command 'answer-permission <perm-id> not-now' --command 'answer-permission <perm-id> no'`, ask with the
+     `input` it prints, unchanged, and run the picked command with `--prompt <pick id>`. On allow, Auto writes the
+     rule. Offer `applied` only when he says he added the rule by hand.
+   - When `P answer-permission` in step 3 returned a `retry_text`,
      send it once, exactly as returned: `P prompt-item <retry_item> "<retry_text>"`.
      The same text is in that answer's `permission_verified` line. Never send it
      twice or write your own.

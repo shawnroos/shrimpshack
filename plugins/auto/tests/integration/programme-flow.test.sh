@@ -816,6 +816,9 @@ WORDS_DIR="$(mktemp -d)"
 WORDS_ID="$("$PY" - "$OUT" "${WORDS_DIR}/sess-links.jsonl" "$AUTO_ROOT" <<'PYEOF'
 import json, os, subprocess, sys
 printed, path, root = sys.argv[1:]
+sys.path[:0] = [root + "/lib", root + "/tests/fixtures"]
+from registered_transcript import register
+register("sess-links", path)
 questions = json.loads(printed)["input"]["questions"]
 def wrote(row):
     with open(path, "a") as stream:

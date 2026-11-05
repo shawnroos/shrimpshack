@@ -14,12 +14,8 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'lib'))
 from _bootstrap import load_lib_module  # noqa: E402
-
-
-def transcript(sid):
-    folder = pathlib.Path(os.environ['CLAUDE_AUTO_DATA_DIR']).parent / 'pick-transcripts'
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder / (sid + '.jsonl')
+sys.path.insert(0, str(ROOT / 'tests' / 'fixtures'))
+from registered_transcript import transcript  # noqa: E402
 
 
 def answer_picker(run, sid, questions, answer):

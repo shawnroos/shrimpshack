@@ -279,11 +279,13 @@ askuser_hook() {
   local hook="$1" sid="$2" tool_use_id="$3" prefill="${4:-}"
   local payload
   payload="$("$PY" - "$AUTO_ROOT" "$WORK" "$sid" "$tool_use_id" "$prefill" <<'PYEOF'
-import json, pathlib, sys
+import json, os, pathlib, sys
 root, work, sid, tool_use_id, prefill = sys.argv[1:]
+sys.path[:0] = [os.path.join(root, "lib"), os.path.join(root, "tests", "fixtures")]
+from registered_transcript import register
 ask = json.loads((pathlib.Path(root) / "tests/fixtures/askuser_transcript.jsonl").read_text().splitlines()[0])
 ask["message"]["content"][0]["id"] = tool_use_id
-path = pathlib.Path(work) / (sid + ".jsonl")
+path = register(sid, pathlib.Path(work) / (sid + ".jsonl"))
 with path.open("a") as stream:
     stream.write(json.dumps(dict(ask, sessionId=sid)) + "\n")
 asked = ask["message"]["content"][0]["input"]

@@ -20,6 +20,7 @@ root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import register
 from programme_prompts import append_prompt as typed_prompt, queued_attachment_row, queued_user_row
 
 PROG = str(root / 'lib/programme.py')
@@ -107,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     def pick(sid, run, questions, answer, annotations=None, hook=False, driving=True):
         counter[0] += 1
         tool_use_id = f'toolu_{counter[0]}'
-        path = transcripts / (sid + '.jsonl')
+        path = register(sid, transcripts / (sid + '.jsonl'))
         question = questions[0]['question']
         answers = {question: answer}
         ask = {'type': 'assistant', 'uuid': 'a-' + tool_use_id, 'sessionId': sid, 'isSidechain': False,
@@ -172,7 +173,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     w_sid = 'offer-words'
     w_run = programme(w_sid, 'offer-words')
     prompt_source = load_lib_module('programme_prompt_source')
-    w_transcript = transcripts / (w_sid + '.jsonl')
+    w_transcript = register(w_sid, transcripts / (w_sid + '.jsonl'))
 
     def wrote(row):
         with w_transcript.open('a') as stream:

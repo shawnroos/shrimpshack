@@ -14,7 +14,9 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
+sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import register
 
 passed = failed = 0
 NOT_HUMAN = "is not Shawn's words or a verified pick"
@@ -70,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-origin-') as work:
             action = ('drop-item', 'mem:w1', '--reason', 'gone')
             reads_as = ['--reads-as', label]
         before_programme = core.read_run_record(ph.home_path(run), run)['programme']
-        transcript = work / (sid + '.jsonl')
+        transcript = register(sid, work / (sid + '.jsonl'))
         transcript.write_text(''.join(json.dumps(dict(row, sessionId=sid)) + '\n' for row in rows))
         payload = {'session_id': sid, 'transcript_path': str(transcript),
                    'prompt_id': 'runtime-prompt', 'cwd': str(work),

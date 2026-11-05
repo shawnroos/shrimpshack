@@ -26,10 +26,20 @@ def _hash(value):
     return hashlib.sha256(value).hexdigest()
 
 
+def registered(path, sid) -> bool:
+    return isinstance(path, str) and path == load_lib_module("permission_transcript").path_for(sid)
+
+
+# The registry keeps 50 rows per pane, so an approval given long ago outlives its session's row. Its path was checked
+# at capture and when it approved, so a later read of that past approval checks only the file's name.
+def named_for(path, sid) -> bool:
+    return isinstance(path, str) and os.path.isabs(path) and os.path.basename(path) == sid + ".jsonl"
+
+
 def read_window(path, sid, needle=None):
     """The part of the transcript a later check must find unchanged: from the line holding `needle` (a pick's
     asking row) to the end, or the last _WINDOW_BYTES when there is no needle. Returns (start, bytes) or None."""
-    if not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl":
+    if not registered(path, sid):
         return None
     try:
         with open(path, "rb") as stream:
@@ -181,7 +191,7 @@ def _rows(path, source, tool_use_id):
     return rows
 
 
-def _verified(row):
+def _verified(row, pinned=True):
     """The asking block and result the transcript holds for this pick, or None unless it shows a human answer."""
     source = (row.get("payload") or {}).get("source")
     sid = row.get("session_id")
@@ -191,7 +201,7 @@ def _verified(row):
     tool_use_id = source.get("tool_use_id")
     if (source.get("kind") != "pick" or source.get("session_id") != sid or not isinstance(sid, str)
             or not isinstance(tool_use_id, str) or not tool_use_id
-            or not isinstance(path, str) or not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl"):
+            or not (registered if pinned else named_for)(path, sid)):
         return None
     try:
         rows = _rows(path, source, tool_use_id)
@@ -211,8 +221,8 @@ def _verified(row):
         return None
 
 
-def verify(row) -> str:
-    return "picked" if _verified(row) is not None else "unknown"
+def verify(row, pinned=True) -> str:
+    return "picked" if _verified(row, pinned) is not None else "unknown"
 
 
 def _has_note(result) -> bool:
@@ -252,7 +262,7 @@ def question_before(row):
     The hook fires at send time, so the row's offset holds that position wherever the words are delivered later."""
     source = (row.get("payload") or {}).get("source")
     sid = row.get("session_id")
-    if not isinstance(source, dict) or not isinstance(source.get("path"), str) or source.get("session_id") != sid:
+    if not isinstance(source, dict) or source.get("session_id") != sid or not registered(source.get("path"), sid):
         return None
     try:
         checked = read_checked(source["path"], source)

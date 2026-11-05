@@ -3,13 +3,15 @@
 
 Tests that set up state cite a typed prompt, and a typed message with no open offer approves nothing. This runs the
 real `offer`, answers the printed picker in a transcript the transcript check reads, and runs the verb on that pick.
-Anything else goes to programme.py unchanged, so a refusal stays that verb's refusal. Tests of what typed words do
-call lib/programme.py directly. It lives in tests/ and reads no setting: no PM can reach it.
+A verb's own refusal stays that verb's refusal. An `offer` that fails exits EXIT_OFFER_FAILED, which no verb returns, so
+a broken renderer cannot pass as a refusal in a test that only asserts non-zero. Tests of what typed words do call
+lib/programme.py directly.
 """
 
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 
@@ -17,6 +19,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 REAL = str(ROOT / 'lib/programme.py')
 sys.path.insert(0, str(ROOT / 'lib'))
 sys.path.insert(0, str(ROOT / 'tests/fixtures'))
+EXIT_OFFER_FAILED = 97
 
 
 def passthrough():
@@ -27,28 +30,17 @@ def _value(argv, flag):
     return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else None
 
 
-def _without(argv, *flags):
-    out, args = [], list(argv)
-    while args:
-        arg = args.pop(0)
-        if arg in flags:
-            args = args[1:]
-        else:
-            out.append(arg)
-    return out
-
-
-def _typed_with_no_offer(argv):
+def _typed_with_no_offer(argv, offers):
     from _bootstrap import load_lib_module
-    verb = _without(argv, '--op')[0] if _without(argv, '--op') else None
+    bound = offers.bound_argv(argv)
     prompt_id = _value(argv, '--prompt')
-    offers = load_lib_module('programme_offers')
-    if not prompt_id or verb not in offers.RENDERERS or '--reads-as' in argv or not os.environ.get('CLAUDE_AUTO_DATA_DIR'):
+    if not prompt_id or not bound or bound[0] not in offers.RENDERERS or '--reads-as' in argv \
+            or not os.environ.get('CLAUDE_AUTO_DATA_DIR'):
         return None
     programme = load_lib_module('programme')
     try:
         run = programme._locate({'run': _value(argv, '--run')})[0]
-    except Exception:
+    except programme._ERRORS:
         return None
     journal = load_lib_module('programme_journal')
     rows = journal.read(run)
@@ -60,24 +52,21 @@ def _typed_with_no_offer(argv):
 
 
 def main():
+    from _bootstrap import load_lib_module
     argv = sys.argv[1:]
-    try:
-        run = _typed_with_no_offer(argv)
-    except Exception:
-        run = None
+    offers = load_lib_module('programme_offers')
+    run = _typed_with_no_offer(argv, offers)
     if run is None:
         passthrough()
-    import shlex
     import offer_pick
-    command = shlex.join(_without(argv, '--op', '--prompt', '--run'))
-    stdin = sys.stdin.read() if not sys.stdin.isatty() and command.split()[0] == 'set-remit' else ''
-    offered = subprocess.run([sys.executable, REAL, 'offer', 'pick', '--command', command, '--run', run],
+    bound = offers.bound_argv(argv)
+    reads_stdin = bound[0] in offers._CONTENT_VERBS and not sys.stdin.isatty()
+    stdin = sys.stdin.read() if reads_stdin else ''
+    offered = subprocess.run([sys.executable, REAL, 'offer', 'pick', '--command', shlex.join(bound), '--run', run],
                              input=stdin, text=True, capture_output=True)
     if offered.returncode != 0:
-        result = subprocess.run([sys.executable, REAL, *argv], input=stdin, text=True, capture_output=True)
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
-        return result.returncode
+        sys.stderr.write(f'prog_offered: offer failed for {shlex.join(bound)}:\n{offered.stdout}{offered.stderr}')
+        return EXIT_OFFER_FAILED
     printed = json.loads(offered.stdout)
     questions = printed['input']['questions']
     answer = next(o['label'] for o in questions[0]['options'] if o['label'] != printed['decline'])

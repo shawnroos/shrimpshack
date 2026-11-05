@@ -1003,9 +1003,11 @@ An approval verb takes `--prompt <id>` of Shawn's answer to an open offer of tha
 1 to 3 commands, writes one `approval_offered` row, and prints the exact AskUserQuestion input in its input field.
 Auto writes the question, the header and every option from the command. Each question carries a decline option, named
 in the decline field, which has no command; on an authority move (`accept-agreement`, `adopt-autonomy
---widening`, a remit widening, `answer-permission <id> applied`, a wider `accept-context`) the decline comes first. A
-`set-remit` offer takes on stdin the JSON the verb will read. Every approval verb has a renderer, a verb with
-no renderer is refused, and a label holds no flag and no `, `. Takeover cannot be offered: this session does not drive
+--widening`, a remit widening, `answer-permission <id> allow`, a wider `accept-context`) the decline comes first. A
+remit widening includes emptying a list that limited scope. A `set-remit` offer takes on stdin the JSON the verb will
+read. Every approval verb has a renderer, a verb with no renderer is refused, and a label holds no flag and no `, `. A
+command that carries an option its renderer did not read, or a repeated option the verb keeps once, is refused, so a
+hidden flag cannot be offered. Text too long for its option is refused with a message to split it, and is never cut. Takeover cannot be offered: this session does not drive
 yet. `become-pm` prints its picker in its input field, written from the driver's session id, and `takeover` compares a pick of
 it to the current driver under the leases lock.
 
@@ -1032,8 +1034,8 @@ before Shawn saw the question never bind, wherever they are delivered; no pick a
 render the same; nothing newer from Shawn is uncited (`newer_words`); the message approved nothing else. An Other or
 noted pick binds through `asked_hash` and spends the pick, and a noted decline stays a decline. An authority option
 takes only a pick: own words refuse, and the fix says relay and ask again. An accepted suggestion never binds an offer. A
-message from before an offer of the same command refuses even with no `--reads-as`. A message with no open offer and no
-`--reads-as` stays on the older named-word checks until its verb moves. The hook's `offer` hint on an Other or noted pick
+message from before an offer of the same command refuses even with no `--reads-as`. A message with no open offer approves
+nothing. The hook's `offer` hint on an Other or noted pick
 is `own_words: true` and names no command to run.
 
 The action hook refuses a literal send into a driver's pane, and journals

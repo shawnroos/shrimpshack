@@ -43,8 +43,6 @@ _PICK_PLACE = f"--prompt {_PICK_ID}"
 MAX_COMMANDS = 3
 # The AskUserQuestion schema caps a header at 12 characters.
 HEADER_CAP = 12
-# Room for a whole draft at the verbs' cap plus the facts around it: Shawn approves what he can read.
-DRAFT_TEXT_CAP = 900
 _KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 _NOT_BOUND = ("--prompt", "--run", "--op", "--reads-as")
 STDIN_CAP = 256 * 1024
@@ -99,7 +97,10 @@ def _reopen(cmd, programme) -> dict:
 def _handed(cmd, programme) -> dict:
     key, item, facts = _item(programme, cmd.first("<id> --choice ship|decline"))
     choice = cmd.one_of("choice", ("ship", "decline"))
-    return _rendered(f"{choice.capitalize()} item {key}", _about(key, item), facts)
+    kinds = cmd.many("kind")
+    shown = f" Change kinds become: {' and '.join(kinds)}." if kinds else ""
+    repo = f" Rules from repo {cmd.opt('repo')}." if cmd.opt("repo") else ""
+    return _rendered(f"{choice.capitalize()} item {key}", f"{_about(key, item)}{shown}{repo}", facts)
 
 
 def _swap(cmd, programme) -> dict:
@@ -121,14 +122,17 @@ def _adopt_rule(cmd, programme) -> dict:
     hits = [r for r in programme.get("proposed_rules") or [] if isinstance(r, dict) and r.get("id") == rule_id]
     if not hits:
         raise OfferError(f"no proposed rule {rule_id!r}")
-    return _rendered(f"Adopt rule {rule_id}", hits[0].get("why") or "", hits[0])
+    rule = hits[0]
+    return _rendered(f"Adopt rule {rule_id}",
+                     f"{rule.get('why') or ''} Requires: {' and '.join(rule.get('requires') or []) or 'nothing'}. "
+                     f"Applies when: {json.dumps(rule.get('applies_when'), sort_keys=True)}.", rule)
 
 
 def _adopt_autonomy(cmd, _programme) -> dict:
     if len(cmd.pos) != 2:
         raise OfferError("usage: adopt-autonomy <action> <level> [--widening]")
     action, level = cmd.pos
-    if cmd.opts.get("widening"):
+    if cmd.flag("widening"):
         return _rendered(f"Widen autonomy for {action} to {level}",
                          "This widens what the PM may do without asking.", authority=True)
     return _rendered(f"Set autonomy for {action} to {level}")
@@ -146,10 +150,8 @@ def _amend_term(cmd, programme) -> dict:
         raise OfferError("usage: amend-term <key> <value>")
     key, value = cmd.pos
     term = ((programme.get("agreement") or {}).get("terms") or {}).get(key) or {}
-    limits = " ".join(f"{name} {cmd.opt(name)}" for name in cmd.opts if name != "why")
-    label = f"Set {key} to {value}" + (f" ({limits})" if limits else "")
-    why = f" Why: {cmd.opt('why')}." if cmd.opt("why") else ""
-    return _rendered(label, f"Now: {term.get('value')}.{why}", term.get("value"))
+    label = programme_offer_rendering.fitting(f"Set {key} to {value}", f"Change term {key}")
+    return _rendered(label, f"New: {value}. Now: {term.get('value')}. {cmd.extras()}", term.get("value"))
 
 
 def _layer_words(cmd) -> str:
@@ -215,7 +217,7 @@ def _ruling_words(content, delta) -> str:
     if content.get("limits"):
         words.append(f"Limits: {'; '.join(content['limits'])}.")
     if content.get("until"):
-        words.append(f"Ends {content['until'][:10]}.")
+        words.append(f"Ends {content['until']}.")
     if delta:
         if delta.get("added"):
             words.append(f"Adds {' and '.join(delta['added'])}.")
@@ -241,7 +243,7 @@ def _accept_ruling(context, ident, revisions) -> dict:
     wider = _widens(revision.get("effect"), context.in_force(revisions), delta)
     verb = "Widen by accepting" if wider else "Accept"
     return _rendered(f"{verb} Ruling {ident}", f"{revision.get('scope')} ({_ruling_words(revision, delta)})",
-                     revision, authority=wider, cap=DRAFT_TEXT_CAP)
+                     revision, authority=wider)
 
 
 def _record_ruling(cmd, programme) -> dict:
@@ -257,19 +259,23 @@ def _record_ruling(cmd, programme) -> dict:
         kind = cmd.opt("kind")
         if not kind:
             raise OfferError("record-ruling needs --kind <decision-kind> or --replies-to <ask-or-decision-id>")
-        targets = context._scope(load_lib_module("programme_record"), programme, cmd.opts.get("applies-to"))
+        targets = context._scope(load_lib_module("programme_record"), programme, cmd.many("applies-to") or None)
     rulings._check_protected(kind, effect)
     scope = _draft(cmd.opt("scope"))
     content = {"kind": kind, "effect": effect, "applies_to": targets, "until": cmd.opt("until") or None,
-               "limits": sorted({programme_sanitize.clean(v) for v in cmd.opts.get("limit") or []})}
+               "limits": sorted({_draft(v) for v in cmd.many("limit")})}
     current = context.in_force(revisions)
     delta = context.ruling_delta(current, content)
     wider = _widens(effect, current, delta)
     label = f"Widen with a {kind} grant in Ruling {ident}" if wider and effect == "grant" else (
         f"Widen by loosening restrict Ruling {ident}" if wider else f"Record {effect} Ruling {ident} on {kind}")
     why = f" Why: {cmd.opt('reason')}." if cmd.opt("reason") else ""
-    return _rendered(label, f"{scope} ({_ruling_words(content, delta)}){why}", {"revisions": revisions, "draft": scope},
-                     authority=wider, content=scope, cap=DRAFT_TEXT_CAP)
+    needs = cmd.many("requirement")
+    linked = f" Requirements: {' and '.join(needs)}." if needs else ""
+    replies = f" Replies to {cmd.opt('replies-to')}." if cmd.opt("replies-to") else ""
+    return _rendered(label, f"{scope} ({_ruling_words(content, delta)}){why}{linked}{replies}",
+                     {"revisions": revisions, "draft": scope},
+                     authority=wider, content=scope)
 
 
 def _close_ruling(cmd, programme) -> dict:
@@ -286,15 +292,16 @@ def _close_ruling(cmd, programme) -> dict:
     back = f" This hands {current.get('kind')} back to the PM." if restrict else ""
     return _rendered(label, f"{current.get('scope')} ({current.get('effect')} {current.get('kind')}).{back} "
                             f"Closed as {ending}. Why: {why or 'none given'}.",
-                     {"revisions": revisions, "draft": why}, authority=restrict, content=why, cap=DRAFT_TEXT_CAP)
+                     {"revisions": revisions, "draft": why}, authority=restrict, content=why)
 
 
 def _define_requirement(cmd, programme) -> dict:
     ident = cmd.first("<id> --text <text> --check <item-id>=<deliverable>...")
     existing = load_lib_module("programme_context").block(programme)["requirements"].get(ident)
     text = _draft(cmd.opt("text"))
-    return _rendered(f"Set requirement {ident}", f"{text} Checks: {cmd.opt('check')}.", {"revisions": existing, "draft": text},
-                     cap=DRAFT_TEXT_CAP)
+    decision = f" Decision: {cmd.opt('decision-id')}." if cmd.opt("decision-id") else ""
+    return _rendered(f"Set requirement {ident}", f"{text} Checks: {' and '.join(cmd.many('check'))}.{decision}",
+                     {"revisions": existing, "draft": text})
 
 
 def _edit_term(cmd, programme) -> dict:
@@ -302,8 +309,9 @@ def _edit_term(cmd, programme) -> dict:
         raise OfferError("usage: edit-project-term <term-id> <text>")
     entry = load_lib_module("programme_terms")._find(programme, cmd.pos[0])
     text = _draft(cmd.pos[1])
-    return _rendered(f"Change preferred tool {entry.get('area')}", f"New: {text} Now: {entry.get('value')}",
-                     {"value": entry.get("value"), "draft": text}, content=text, cap=DRAFT_TEXT_CAP)
+    source = f" Source: {cmd.opt('source')}." if cmd.opt("source") else ""
+    return _rendered(f"Change preferred tool {entry.get('area')}", f"New: {text} Now: {entry.get('value')}{source}",
+                     {"value": entry.get("value"), "draft": text}, content=text)
 
 
 def _lift_pause(cmd, programme) -> dict:
@@ -358,15 +366,15 @@ def _end(cmd, programme) -> dict:
     unfinished = sorted(key for key, item in (programme.get("items") or {}).items()
                         if (item or {}).get("state") in load_lib_module("programme_archive").UNFINISHED)
     left = f"Not finished: {' '.join(unfinished)}." if unfinished else "No item is unfinished."
-    skip = " without its rituals" if cmd.opts.get("without-rituals") else ""
+    skip = " without its rituals" if cmd.flag("without-rituals") else ""
     return _rendered(f"End this programme{skip}", f"No new work starts. {left} {cmd.extras('without-rituals')}",
                      {"unfinished": unfinished}, authority=True)
 
 
 def _handover(cmd, _programme) -> dict:
     target = cmd.first("<session-id> [--without-rituals]")
-    # The label cap is 80, and a session id is 36: a longer sentence would cut off the rituals it skips.
-    skip = " without its rituals" if cmd.opts.get("without-rituals") else ""
+    # The label cap is 80, and a session id is 36: a longer sentence would refuse a handover that skips the rituals.
+    skip = " without its rituals" if cmd.flag("without-rituals") else ""
     return _rendered(f"Hand the PM to session {target}{skip}",
                      "This session stops being the PM. Nothing from this chat carries over.", {"target": target},
                      authority=True)
@@ -378,14 +386,37 @@ def _accept(_cmd, programme) -> dict:
                      "These are the terms status shows now. Accepting gives the PM its authority.", authority=True)
 
 
+def _remit_name(lifecycle, part, entry) -> str:
+    # Checkouts tend to end in the same folder name, so a basename cannot tell Shawn which repo this is.
+    return (entry.get("github") or entry["path"]) if part == "repos" else lifecycle._names(part, entry)[0]
+
+
+# An empty list means no limit, so emptying one widens the remit. programme_sources.scope_miss reads projects and
+# initiatives as one filter.
+def _limits_lifted(before, after) -> list:
+    was, now = before["tracker"], after["tracker"]
+    lifted = []
+    if before["repos"] and not after["repos"]:
+        lifted.append("repos")
+    if was["teams"] and not now["teams"]:
+        lifted.append("tracker teams")
+    if (was["projects"] or was["initiatives"]) and not (now["projects"] or now["initiatives"]):
+        lifted.append("tracker projects and initiatives")
+    return lifted
+
+
 def _remit(_cmd, programme, doc) -> dict:
     if doc is None:
         raise OfferError("set-remit reads the remit as a JSON object on stdin")
     lifecycle = load_lib_module("programme_lifecycle")
-    changes = lifecycle.remit_changes(programme["remit"], lifecycle.parse_remit(doc, programme["remit"]))
-    names = [lifecycle._names(part, entry)[0] for part, _how, entry in changes]
-    wider = any(how == "added" for _part, how, _entry in changes)
-    shown = "; ".join(f"{how} {part}: {name}" for (part, how, _entry), name in zip(changes, names))
+    before = programme["remit"]
+    after = lifecycle.parse_remit(doc, before)
+    changes = lifecycle.remit_changes(before, after)
+    lifted = _limits_lifted(before, after)
+    wider = bool(lifted) or any(how == "added" for _part, how, _entry in changes)
+    shown = "; ".join(f"{how} {part}: {_remit_name(lifecycle, part, entry)}" for part, how, entry in changes)
+    if lifted:
+        shown += f". This removes the limit on {' and on '.join(lifted)}: an empty list means every one is in scope"
     digest = content_hash(doc)[len("sha256:"):][:6]
     return _rendered(f"{'Widen' if wider else 'Change'} the remit, change {digest}",
                      shown or "No change.", authority=wider)
@@ -435,7 +466,12 @@ def render(argv, programme, doc=None) -> dict:
     if verb not in RENDERERS:
         raise OfferError(f"{verb} takes no approval, so nothing can offer it")
     cmd = programme_offer_rendering.Command(kept)
-    return RENDERERS[verb](cmd, programme, doc) if verb in _CONTENT_VERBS else RENDERERS[verb](cmd, programme)
+    rendered = RENDERERS[verb](cmd, programme, doc) if verb in _CONTENT_VERBS else RENDERERS[verb](cmd, programme)
+    hidden = cmd.unread()
+    if hidden:
+        raise OfferError(f"the picker for {verb} cannot show {' and '.join('--' + name for name in hidden)}, and Shawn "
+                         "approves what he can read; offer the command without them")
+    return rendered
 
 
 def subject(rendered) -> str:

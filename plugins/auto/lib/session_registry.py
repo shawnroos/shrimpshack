@@ -207,6 +207,12 @@ def lookup(session_id, server=None, workspace=None, *, include_headless=False, h
     return max(found, key=lambda r: r.get("at") or "")
 
 
+def transcript_path(session_id):
+    # record_proven_pane writes a row with no path, and that row must not hide the one SessionStart wrote.
+    held = [r for r in _all_rows() if r.get("session_id") == session_id and r.get("transcript_path")]
+    return max(held, key=lambda r: r.get("at") or "")["transcript_path"] if held else None
+
+
 def latest_rows(*, include_headless=False) -> dict:
     latest = {}
     for row in _all_rows():

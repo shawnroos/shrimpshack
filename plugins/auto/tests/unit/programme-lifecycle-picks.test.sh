@@ -19,6 +19,7 @@ root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import register
 from programme_prompts import append_prompt as typed_prompt
 
 PROG = str(root / 'lib/programme.py')
@@ -105,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix='auto-lifecycle-picks-') as work:
     def pick(sid, run, questions, answer, annotations=None):
         counter[0] += 1
         tool_use_id = f'toolu_{counter[0]}'
-        path = transcripts / (sid + '.jsonl')
+        path = register(sid, transcripts / (sid + '.jsonl'))
         answers = {questions[0]['question']: answer}
         result = {'type': 'user', 'uuid': 'u-' + tool_use_id, 'sessionId': sid, 'isSidechain': False,
                   'sourceToolAssistantUUID': 'a-' + tool_use_id,
@@ -133,7 +134,7 @@ with tempfile.TemporaryDirectory(prefix='auto-lifecycle-picks-') as work:
 
     def words(sid, run, text, source_name='typed'):
         counter[0] += 1
-        path = transcripts / (sid + '.jsonl')
+        path = register(sid, transcripts / (sid + '.jsonl'))
         prompt_row = f'turn-{counter[0]}'
         source = prompt_source.capture({'session_id': sid, 'prompt': text, 'prompt_id': prompt_row,
                                         'transcript_path': str(path)})

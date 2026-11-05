@@ -284,7 +284,8 @@ has "dropped_stale" "$OUT"
 
 remit_in "{\"repos\":[{\"path\":\"${REPO_A}\",\"github\":null},{\"path\":\"${WORK}/never/existed\",\"github\":null}]}" --prompt "$(prompt "add repo existed to the remit")"
 it "a brand-new path that does not exist is still rejected"
-check 1 "$CODE"
+check 97 "$CODE"
+has "repo path must be an absolute directory" "$OUT"
 
 # A list of only stale paths keeps those paths and honours the typed removals instead of emptying the list.
 WT5="$(mkrepo "${WORK}/wt/w5" https://github.com/acme/w5.git)"

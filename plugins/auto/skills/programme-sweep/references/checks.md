@@ -28,3 +28,7 @@ The installed copy is `~/.claude/plugins/cache/shrimpshack/auto/<version>/`, the
 4. Post the `text` line from its output in chat, unchanged. When the file holds a protected rule, the notice names that rule.
 
 A sub-agent cannot run this verb. Run it in your own Bash tool.
+
+## What a pick proves
+
+A pick or a message counts only from the transcript the session registry holds for that session, at capture and at every later check. A PM with a shell can still edit its real transcript or the journal. Picks stop mistakes, not a hostile session.

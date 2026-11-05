@@ -80,21 +80,20 @@ def _human_text(row):
     return None
 
 
-def origin(row):
+def origin(row, pinned=True):
     payload = row.get('payload') or {}
     claimed = payload.get('origin')
     if claimed not in ('typed', 'unknown', 'picked', 'suggested'):
         return claimed
     source = payload.get('source')
     if isinstance(source, dict) and source.get('kind') == 'pick':
-        return programme_pick_source.verify(row)
+        return programme_pick_source.verify(row, pinned)
     if not isinstance(source, dict) or type(source.get('version')) is not int or source.get('version') not in (1, 2):
         return 'unknown'
     sid = row.get('session_id')
     path = source.get('path')
-    if (source.get('session_id') != sid or not isinstance(sid, str)
-            or not isinstance(path, str) or not os.path.isabs(path)
-            or os.path.basename(path) != sid + '.jsonl'):
+    path_ok = programme_pick_source.registered if pinned else programme_pick_source.named_for
+    if source.get('session_id') != sid or not isinstance(sid, str) or not path_ok(path, sid):
         return 'unknown'
     try:
         checked = programme_pick_source.read_checked(path, source)

@@ -441,6 +441,7 @@ _LIST_OPTS = (("do", "do"), ("dont", "dont"), ("skill", "skills"), ("tool", "too
               ("format", "formats"), ("comm", "comms"))
 _FIELD_VALUES = ("when", "trigger", "applies-to", "evidence", "stop", "why", "good", "bad")
 _FIELD_MULTI = ("pm-check", "agent-check") + tuple(opt for opt, _ in _LIST_OPTS)
+RECORD_MULTI = _FIELD_MULTI + ("conflicts-with", "relates-to", "unrelated")
 _FIELDS_DOC = ("--when <text> [--trigger claim|merge|block|start] [--pm-check <text>]... [--agent-check <text>]... "
                "[--applies-to pm|workers|both] "
                "[--do <line>]... [--dont <line>]... [--skill <name>]... [--tool <name>]... [--agent <name>]... "
@@ -617,8 +618,7 @@ def _h_check(host, argv):
 
 
 def _h_record(host, argv):
-    positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal") + _FIELD_VALUES,
-                                   multi=_FIELD_MULTI + ("conflicts-with", "relates-to", "unrelated"))
+    positional, opts = host._parse(argv, values=("run", "prompt", "from-proposal") + _FIELD_VALUES, multi=RECORD_MULTI)
     proposal = opts.get("from-proposal")
     if positional or (proposal and _has_fields(opts)):
         raise ValueError("usage: record-behaviour --prompt <id> " + _FIELDS_DOC + " [--conflicts-with <id>]... "

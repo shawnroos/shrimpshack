@@ -474,8 +474,9 @@ CODES=""
 "$PY" "$PROGPY" status --json >/dev/null 2>&1; CODES="${CODES}$?"
 check "00000 ['accepted', 'terms']" "${CODES} $(old_agreement_keys)"
 it "the old accepted record refuses a project-term edit and gains nothing"
-"$PY" "$PROGPY" edit-project-term t000000 "anything" --prompt "$(old_prompt 'anything')" >/dev/null 2>&1
-check "1 ['accepted', 'terms']" "$? $(old_agreement_keys)"
+OUT="$("$PY" "$PROGPY" edit-project-term t000000 "anything" --prompt "$(old_prompt 'anything')" 2>&1)"
+check "97 ['accepted', 'terms']" "$? $(old_agreement_keys)"
+has "no project term" "$OUT"
 
 it "no shipped code reads a retired programme key outside normalize_programme"
 retired_leaks() {

@@ -5,6 +5,8 @@ import uuid
 
 def pick(run, sid, transcript, questions, answer, annotations=None):
     from _bootstrap import load_lib_module
+    from registered_transcript import register
+    register(sid, transcript)
     ps = load_lib_module('programme_pick_source')
     pj = load_lib_module('programme_journal')
     tool_use_id = 'toolu_' + uuid.uuid4().hex[:12]

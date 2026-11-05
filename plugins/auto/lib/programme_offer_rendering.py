@@ -15,9 +15,10 @@ programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
 
 LABEL_CAP = 80
-TEXT_CAP = 300
+# Room for a whole draft at the verbs' cap plus the facts around it: Shawn approves what he can read.
+TEXT_CAP = 900
 _FLAGS = ("ran-now", "widening", "without-rituals")
-# What one option can show in full: the label and the 300-character description hold about this many ids and scopes.
+# What one option's label can name in full.
 MAX_SET = 4
 _CONTENT = {"doc": None}
 
@@ -37,22 +38,33 @@ def noted_content():
 class Command:
     def __init__(self, argv):
         self.verb = argv[0]
-        self.pos, self.opts = [], {}
+        self.pos, self._given, self._read = [], {}, set()
         args = list(argv[1:])
         while args:
             arg = args.pop(0)
             if not arg.startswith("--"):
                 self.pos.append(arg)
             elif arg[2:] in _FLAGS:
-                self.opts[arg[2:]] = True
-            elif args:
-                self.opts.setdefault(arg[2:], []).append(args.pop(0))
+                self._given[arg[2:]] = True
+            elif args and not args[0].startswith("--"):
+                self._given.setdefault(arg[2:], []).append(args.pop(0))
             else:
-                raise OfferError(f"{arg} needs a value")
+                raise OfferError(f"{arg} needs a value that does not start with --")
 
     def opt(self, name, default=""):
-        value = self.opts.get(name)
-        return " and ".join(value) if isinstance(value, list) else (value if value is not None else default)
+        self._read.add(name)
+        value = self._given.get(name)
+        if isinstance(value, list) and len(value) > 1:
+            raise OfferError(f"--{name} is given {len(value)} times; the verb keeps only the last, so give it once")
+        return value[0] if isinstance(value, list) else (value if value is not None else default)
+
+    def many(self, name) -> list:
+        self._read.add(name)
+        return list(self._given.get(name) or [])
+
+    def flag(self, name) -> bool:
+        self._read.add(name)
+        return name in self._given
 
     def first(self, verb_usage) -> str:
         if not self.pos:
@@ -65,22 +77,39 @@ class Command:
             raise OfferError(f"{self.verb} needs --{name} {'|'.join(allowed)}")
         return value
 
-    def extras(self, *used) -> str:
-        return " ".join(f"{name.replace('-', ' ')}: {self.opt(name)}." for name in self.opts if name not in used)
+    def extras(self, *used, multi=()) -> str:
+        words = []
+        for name in self._given:
+            if name in used:
+                continue
+            value = " and ".join(self.many(name)) if name in multi else self.opt(name)
+            words.append(f"{name.replace('-', ' ')}: {value}.")
+        return " ".join(words)
+
+    def unread(self) -> list:
+        return sorted(set(self._given) - self._read)
 
 
-def _shown(text, cap=TEXT_CAP) -> str:
-    return programme_journal.redact(programme_sanitize.clean(text, cap))
+def _whole(text, cap, what) -> str:
+    shown = programme_journal.redact(programme_sanitize.clean(text, cap=0))
+    if len(shown) > cap:
+        raise OfferError(f"the {what} is {len(shown)} characters and an option shows {cap}, and Shawn approves what he "
+                         "can read, so it is never cut; split it across pickers, or shorten it")
+    return shown
 
 
 # Multi-select joins labels with ", ", so a label holding that text reads as two answers.
 def _label(text) -> str:
-    return _shown(str(text).replace(", ", " and "), LABEL_CAP)
+    return _whole(str(text).replace(", ", " and "), LABEL_CAP, "label")
+
+
+def fitting(label, shorter) -> str:
+    return label if len(programme_sanitize.clean(label, cap=0)) <= LABEL_CAP else shorter
 
 
 def rendered(label, description="", facts=None, authority=False, content=None, cap=TEXT_CAP) -> dict:
-    return {"label": _label(label), "description": _shown(description, cap), "facts": facts, "authority": authority,
-            "content": content}
+    return {"label": _label(label), "description": _whole(description, cap, "description"), "facts": facts,
+            "authority": authority, "content": content}
 
 
 def layered(module_name, programme, ident):

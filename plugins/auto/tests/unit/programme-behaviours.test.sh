@@ -583,7 +583,7 @@ core._with_locked_run_record(ph.home_path(args[0]), args[0], end)
 EOF
 P1="$(tprompt "$RUN" "always reproduce a reported bug before planning")"
 it "a behaviour write on an ended programme is refused"
-prog record-behaviour --run "$RUN" --prompt "$P1" --when "a bug is reported" --do "reproduce it"
+PROG="$REAL_PROG" prog record-behaviour --run "$RUN" --prompt "$P1" --when "a bug is reported" --do "reproduce it"
 check 1 "$CODE"
 has "ended" "$OUT"
 
