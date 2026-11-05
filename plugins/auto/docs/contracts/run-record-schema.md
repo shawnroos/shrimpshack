@@ -699,6 +699,7 @@ keys and keeps unknown ones.
 | `pm_worktree` | `null \| {path, repo, created_at}`. A programme worktree recorded by auto 0.16.2 and earlier: a detached git worktree at `<repo>/worktrees/programme-<run>`, where `repo` is the main checkout. auto no longer writes it; a recorded value is kept so end can release it. A record without it reads as `null`. Mechanics: `lib/programme_worktree.py` |
 | `inbox_offset` | int — how many `claims.jsonl` lines the PM has read (`mark-read`) |
 | `ended` | `null \| {at, reason}` |
+| `check_settings` | object, default `{}`. A check name from `programme_checks.CHECKS` maps to `{state: "on" \| "off", ...}`: the programme-wide setting for that check. It stays outside `agreement.terms`, so a change does not touch `terms_digest`. Hooks read it raw, so `programme_checks.session_checks` treats any other shape as no setting and journals `checks_unreadable` once. An `off` on `tracker-proof` or `prefilled-answers` has no effect |
 
 Item (`ITEM_FIELDS` plus the fields verbs add):
 
@@ -731,6 +732,7 @@ Item (`ITEM_FIELDS` plus the fields verbs add):
 | `size` | a name in `agreement.terms.focus_budget.scale`, or `null`. Written by `size-item` and `add-item --size`; the gate reads its points from the scale |
 | `held`, `held_at` | `null`, or a reason string and the `<iso>` time it was first held. The focus gate sets them on a refused start; `focus-recheck` and a start that now fits clear them. A held item is not in play, is left out of the predicate's actionable reasons, and is listed in held order by the status view. `swap-item` sets `held` to `parked: swapped out for <item>` |
 | `focus_override` | `null`, or `{prompt_id, hold}`: the pick that approved one `start-worker --despite focus` for this item, and the `held` text it approved. `override-focus` sets it and only while the item is held. The start that uses it clears it, checked and cleared in one locked write. Anything that clears `held`, a hold with different text, a size change and `drop-item` also clear it, so a bigger overrun needs a fresh pick |
+| `check_settings` | `null`, or the programme's `check_settings` shape for this item alone. It beats the programme setting for this item's sessions, and it stops applying when the item finishes |
 | `parked_pane` | the pane id of the worker `swap-item` parked, or `null`. While that pane holds a live worker the item cannot start again; clearing `held` clears it |
 | `history[]` | `{at, kind, …}`; kinds include `sized` (`size`), `parked` (`for`, `prompt_id`), `waiting`, `wait_cleared`, `handed`, `decision_recorded`, `tested_build`, `tracker_synced`, `trajectory_changed`, `started`, `start_failed`, `reopened` |
 
@@ -893,6 +895,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 - A verb's row approved through an offer carries `wording` and `offer_id`. `wording` is `pm_draft` on a pick, where `quote` holds the draft or the option text, and `shawn` on his own words. A Ruling revision, its `closed` block, a project term, the remit term and a Shawn decision carry the same `wording`, and the first three also carry `approved: {prompt_id, origin, offer_id, read_by}`. A row with no `wording` reads as `shawn`. A carried Ruling keeps its mark. `RULING_KEYS` leaves these fields out, so they never make a Ruling look changed.
 - A verb's row approved by Shawn's own words on an offer also carries `read_as` (the option text), `read_by: "pm"`, `offer_id` and `read_back` (the line the PM shows him). `quote` holds his words.
 - `hook_patched` is the row of `record-hook-patch`: `{file, why, pr, protects, text}`. `protects` lists the protected rules the file holds and `text` is the notice to Shawn. It carries no prompt id, because it records what the PM did and approves nothing.
+- `checks_unreadable` is written by `programme_checks.session_checks`: `{since, outcome, detail}`. `outcome` is the hold (`unavailable`, `corrupt`, `unsupported`), `unreadable`, or `bad_shape` with `detail` naming where the setting sits and not its value. One row covers one episode. A hold leaves `.checks-unreadable.json` in the home, because the journal needs the store the hold blocks, and the first read after the store frees writes the row. While the settings cannot be read, each check uses its default.
 - `behaviour_reminded` is the `prompt_sent` row of `remind-behaviour`: it carries every `prompt_sent`
   field (the send writes no separate `prompt_sent` row) plus `{behaviour, reason, trigger, trigger_at,
   timing, sent_back_count, already_reminded}`. `trigger_at` is the item's first claim (claims store),

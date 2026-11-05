@@ -92,6 +92,8 @@ REQUIRED=(
   "RUN_KINDS"
   "PROGRAMME_FORMAT"
   "KINDS"
+  "check_settings"
+  "checks_unreadable"
   "inbox_offset"
   "claims.jsonl"
   "journal.jsonl"

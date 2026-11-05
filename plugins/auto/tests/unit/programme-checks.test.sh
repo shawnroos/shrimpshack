@@ -258,5 +258,353 @@ lacks "a blocked command" "$CLAUSE"
 has "Claude Code's normal handling" "$CLAUSE"
 lacks "bypass" "$CLAUSE"
 
+new_run() {
+  run_py "$@" <<'EOF'
+print(ph.create_programme(args[1:], args[0])["run"])
+EOF
+}
+
+edit_run() {
+  run_py "$1" "$2" <<'EOF' >/dev/null
+core = load_lib_module("run_record_core")
+def mutate(rec):
+    exec(args[1], {"prog": rec["programme"], "rec": rec})
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+}
+
+states() {
+  run_py "$@" <<'EOF'
+checks = load_lib_module("programme_checks")
+got = checks.session_checks(args[0])["states"]
+print(" ".join("on" if got[name] else "off" for name in args[1:]))
+EOF
+}
+
+check_rows() {
+  run_py "$1" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "checks_unreadable"))
+EOF
+}
+
+ITEM_A='{"id": "linear:AI-1", "title": "a", "state": "open", "owner": {"session_id": "sess-a", "pane": "w30:p1"}}'
+ITEM_B='{"id": "linear:AI-2", "title": "b", "state": "waiting", "owner": {"session_id": "sess-b0", "pane": "w30:p2"}, "sessions": [{"session_id": "sess-b"}]}'
+ON='{"state": "on"}'
+OFF='{"state": "off"}'
+LIMIT="no-destructive-commands"
+SEND="literal-send"
+
+it "the registry holds one row per check, with its default, its off rule and who may turn it on"
+OUT="$(run_py <<'EOF'
+checks = load_lib_module("programme_checks")
+for name in sorted(checks.CHECKS):
+    row = checks.CHECKS[name]
+    print(name, row.default, row.can_turn_off, checks.turning_on_needs(name), checks.turning_on_needs(name, own_run=True), row.limit)
+EOF
+)"
+check "advisor-redirect True True shawn shawn False
+literal-send True True shawn shawn False
+no-destructive-commands False True shawn shawn True
+no-settings-writes False True shawn shawn True
+pm-settings-writes True True pm pm False
+prefilled-answers True False None None False
+stop-block True True shawn pm False
+subagent-refusals True True pm pm False
+tracker-outside-remit True True pm pm False
+tracker-proof True False None None False" "$OUT"
+
+R30="$(new_run sess-pm30 w30)"
+edit_run "$R30" "prog['items'] = {'linear:AI-1': $ITEM_A, 'linear:AI-2': $ITEM_B}"
+
+ALL="no-destructive-commands no-settings-writes pm-settings-writes literal-send tracker-outside-remit advisor-redirect subagent-refusals stop-block tracker-proof prefilled-answers"
+DEFAULTS="off off on on on on on on on on"
+
+it "a record with no check_settings field reads as the table's defaults"
+edit_run "$R30" "prog.pop('check_settings', None)"
+check "$DEFAULTS" "$(states sess-a $ALL)"
+
+it "a session in no programme reads as the defaults, with no match"
+OUT="$(run_py <<'EOF'
+checks = load_lib_module("programme_checks")
+got = checks.session_checks("sess-nobody")
+print(got["matches"], got["unreadable"], got["decided_by"], sorted(got["states"]) == sorted(checks.CHECKS))
+EOF
+)"
+check "[] [] {} True" "$OUT"
+
+it "an empty or missing session id matches nothing, even an item with no session"
+edit_run "$R30" "prog['check_settings'] = {'$LIMIT': $ON}; prog['items']['linear:AI-9'] = {'id': 'linear:AI-9', 'state': 'open', 'owner': {'session_id': ''}}"
+OUT="$(run_py <<'EOF'
+checks = load_lib_module("programme_checks")
+print(checks.session_checks("")["states"]["no-destructive-commands"], checks.session_checks(None)["states"]["no-destructive-commands"])
+EOF
+)"
+check "False False" "$OUT"
+edit_run "$R30" "prog['items'].pop('linear:AI-9')"
+
+it "programme setting on, item setting off: off for that item's sessions only"
+edit_run "$R30" "prog['check_settings'] = {'$LIMIT': $ON}; prog['items']['linear:AI-1']['check_settings'] = {'$LIMIT': $OFF}"
+check "off on" "$(states sess-a $LIMIT) $(states sess-b $LIMIT)"
+
+it "programme setting off, item setting on: on for that item's sessions only"
+edit_run "$R30" "prog['check_settings'] = {'$SEND': $OFF}; prog['items']['linear:AI-1']['check_settings'] = {'$SEND': $ON}"
+check "on off" "$(states sess-a $SEND) $(states sess-b $SEND)"
+
+it "a session listed on an item, not its owner, counts as attached (a takeover session keeps the limit)"
+edit_run "$R30" "prog['check_settings'] = {'$LIMIT': $ON}; prog['items']['linear:AI-1'].pop('check_settings', None)"
+check "on on" "$(states sess-b $LIMIT) $(states sess-b0 $LIMIT)"
+
+it "the result names the run and item behind a setting, for the refusal to journal"
+OUT="$(run_py "$R30" "$LIMIT" <<'EOF'
+checks = load_lib_module("programme_checks")
+got = checks.session_checks("sess-b")
+print(got["decided_by"][args[1]] == {"run": args[0], "item": "linear:AI-2", "scope": "programme"},
+      got["matches"] == [{"run": args[0], "item": "linear:AI-2", "role": "worker"}])
+EOF
+)"
+check "True True" "$OUT"
+
+it "a session on two items takes the limit either one has on"
+edit_run "$R30" "prog['items']['linear:AI-1']['check_settings'] = {'$LIMIT': $OFF}; prog['items']['linear:AI-2']['check_settings'] = {'$LIMIT': $ON}; prog['items']['linear:AI-1']['sessions'] = [{'session_id': 'sess-two'}]; prog['items']['linear:AI-2']['sessions'] = [{'session_id': 'sess-two'}]"
+check "on" "$(states sess-two $LIMIT)"
+edit_run "$R30" "prog['items'] = {'linear:AI-1': $ITEM_A, 'linear:AI-2': $ITEM_B}; prog['check_settings'] = {}"
+
+it "a worker in another space is found through the programme's lease"
+R31="$(new_run sess-pm31 w31)"
+edit_run "$R31" "prog['check_settings'] = {'$LIMIT': $ON}; prog['items'] = {'linear:AI-5': {'id': 'linear:AI-5', 'state': 'open', 'owner': {'session_id': 'sess-far', 'pane': 'w99:p1'}}}"
+check "on" "$(states sess-far $LIMIT)"
+
+it "the PM takes a programme setting, but a limit binds only a session on an item"
+edit_run "$R31" "prog['check_settings'] = {'$LIMIT': $ON, '$SEND': $OFF}"
+check "off off" "$(states sess-pm31 $LIMIT $SEND)"
+OUT="$(run_py "$R31" <<'EOF'
+checks = load_lib_module("programme_checks")
+print(checks.session_checks("sess-pm31")["matches"] == [{"run": args[0], "item": None, "role": "pm"}])
+EOF
+)"
+check "True" "$OUT"
+
+it "a PM that is also on an item takes the limit"
+edit_run "$R31" "prog['items']['linear:AI-5']['sessions'] = [{'session_id': 'sess-pm31'}]"
+check "on" "$(states sess-pm31 $LIMIT)"
+
+it "after a takeover the new driver is the PM and the old one is not"
+edit_run "$R31" "rec['driving_session_id'] = 'sess-new-pm'; prog['items']['linear:AI-5']['sessions'] = []"
+check "off on" "$(states sess-new-pm $SEND) $(states sess-pm31 $SEND)"
+
+for finished in done handed dropped decided; do
+  it "an item in state ${finished} stops applying its settings and the programme's"
+  edit_run "$R31" "prog['items'] = {'linear:AI-5': {'id': 'linear:AI-5', 'state': '$finished', 'owner': {'session_id': 'sess-far'}, 'check_settings': {'$LIMIT': $ON}}}"
+  check "off" "$(states sess-far $LIMIT)"
+done
+
+it "a session with a finished item and a live one keeps the live item's limit"
+edit_run "$R31" "prog['items'] = {'linear:AI-5': {'id': 'linear:AI-5', 'state': 'done', 'owner': {'session_id': 'sess-far'}}, 'linear:AI-6': {'id': 'linear:AI-6', 'state': 'open', 'owner': {'session_id': 'sess-far'}}}"
+check "on" "$(states sess-far $LIMIT)"
+
+it "an ended programme stops applying"
+run_py "$R31" <<'EOF' >/dev/null
+ph.end_programme(args[0], "test")
+EOF
+check "off" "$(states sess-far $LIMIT)"
+
+R32="$(new_run sess-pm32 w32)"
+BASE32="prog['items'] = {'linear:AI-7': {'id': 'linear:AI-7', 'state': 'open', 'owner': {'session_id': 'sess-shape'}}};"
+for bad in "'on'" "['$LIMIT']" "7" "True"; do
+  it "a check_settings value of ${bad} is treated as the default"
+  edit_run "$R32" "$BASE32 prog['check_settings'] = $bad"
+  check "off on" "$(states sess-shape $LIMIT $SEND)"
+done
+for bad in "'on'" "True" "1" "{'state': 'maybe'}" "{'state': ['on']}" "{'state': True}" "{}" "None"; do
+  it "a setting of ${bad} is treated as the default"
+  edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': $bad, '$SEND': $bad}"
+  check "off on" "$(states sess-shape $LIMIT $SEND)"
+done
+
+it "a bad item setting falls through to the programme setting"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': $ON}; prog['items']['linear:AI-7']['check_settings'] = 'off'"
+check "on" "$(states sess-shape $LIMIT)"
+
+it "an unknown check name in a record is ignored"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'no-such-check': $ON}"
+check "$DEFAULTS" "$(states sess-shape $ALL)"
+
+it "the two checks with no off setting stay on, even when a record says off"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'prefilled-answers': $OFF, 'tracker-proof': $OFF}"
+check "on on" "$(states sess-shape prefilled-answers tracker-proof)"
+
+for bad in "prog['items']['linear:AI-7']['owner'] = 'sess-shape'" "prog['items']['linear:AI-7']['sessions'] = 7" "prog['items']['linear:AI-7'] = 'x'" "prog['items'] = ['x']"; do
+  it "a malformed record does not raise, and reads as the defaults: ${bad}"
+  edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': $ON}; ${bad}"
+  check "off on" "$(states sess-shape $LIMIT $SEND)"
+done
+
+it "a programme of the wrong shape reads as the defaults and does not hide the next programme's worker"
+R34="$(new_run sess-pm34 w34)"
+edit_run "$R34" "prog['check_settings'] = {'$LIMIT': $ON}; prog['items'] = {'linear:AI-4': {'id': 'linear:AI-4', 'state': 'open', 'owner': {'session_id': 'sess-next'}}}"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': $ON}; rec['saved'] = prog; rec['programme'] = 'x'"
+check "off on" "$(states sess-shape $LIMIT) $(states sess-next $LIMIT)"
+edit_run "$R32" "rec['programme'] = rec.pop('saved')"
+
+it "a wrong-shape setting journals one row across many calls, and a new one after it was fixed"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {}"
+states sess-shape $LIMIT >/dev/null
+BEFORE="$(check_rows "$R32")"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': 'on'}"
+for _ in 1 2 3; do states sess-shape $LIMIT >/dev/null; done
+A="$(check_rows "$R32")"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {}"
+states sess-shape $LIMIT >/dev/null
+B="$(check_rows "$R32")"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': 'on'}"
+states sess-shape $LIMIT >/dev/null
+check "$((BEFORE + 1)) $((BEFORE + 1)) $((BEFORE + 2))" "$A $B $(check_rows "$R32")"
+
+it "the wrong-shape row names where the setting is, and not its value"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {}"
+states sess-shape $LIMIT >/dev/null
+edit_run "$R32" "$BASE32 prog['check_settings'] = {}; prog['items']['linear:AI-7']['check_settings'] = {'$LIMIT': 'hunter-value'}"
+states sess-shape $LIMIT >/dev/null
+ROW="$(run_py "$R32" <<'EOF'
+print(json.dumps([r for r in pj.read(args[0]) if r["kind"] == "checks_unreadable"][-1]["payload"], sort_keys=True))
+EOF
+)"
+has "bad_shape" "$ROW"
+has "linear:AI-7" "$ROW"
+lacks "hunter-value" "$ROW"
+
+it "no environment variable changes a result"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': $ON}"
+PLAIN="$(states sess-shape $ALL)"
+OPENED="$(CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK=1 CLAUDE_AUTO_CHECKS=off CLAUDE_AUTO_CHECK_SETTINGS='{}' \
+  CLAUDE_AUTO_NO_DESTRUCTIVE_COMMANDS=off NO_DESTRUCTIVE_COMMANDS=off CLAUDE_CODE_SESSION_ID=sess-other HERDR_PANE_ID=w32:p1 CLAUDE_CODE_SUBAGENT=1 \
+  states sess-shape $ALL)"
+check "$PLAIN" "$OPENED"
+
+it "the session comes only from the caller, never from the environment"
+check "off" "$(CLAUDE_CODE_SESSION_ID=sess-shape states sess-nobody $LIMIT)"
+
+it "the checks module reads no environment at all"
+OUT="$(grep -nE 'environ|getenv|test_hatch|_hatch\(' "${AUTO_ROOT}/lib/programme_checks.py")"
+check "" "$OUT"
+
+it "a programme home that cannot be read gives the defaults and raises nothing"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'$LIMIT': $ON}"
+chmod 000 "${CLAUDE_AUTO_DATA_DIR}/programmes/${R32}"
+OUT="$(states sess-shape $LIMIT $SEND)"
+chmod 700 "${CLAUDE_AUTO_DATA_DIR}/programmes/${R32}"
+check "off on" "$OUT"
+
+it "an unusable data directory gives the defaults and raises nothing"
+check "$DEFAULTS" "$(CLAUDE_AUTO_DATA_DIR=relative/path states sess-shape $ALL)"
+
+start_store_lock() {
+  LOCKER_OUT="${WORK}/locker.out"
+  : > "$LOCKER_OUT"
+  "$PY" - "${CLAUDE_AUTO_DATA_DIR}/programmes/$1/programme.db" > "$LOCKER_OUT" 2>&1 <<'EOF' &
+import sqlite3, sys, time
+conn = sqlite3.connect(sys.argv[1], isolation_level=None)
+conn.execute("BEGIN EXCLUSIVE")
+print("locked", flush=True)
+time.sleep(60)
+EOF
+  LOCKER_PID=$!
+  for _ in $(seq 1 100); do grep -q '^locked' "$LOCKER_OUT" && return 0; "$PY" -c 'import time; time.sleep(0.1)'; done
+  return 1
+}
+stop_store_lock() { kill "$LOCKER_PID" 2>/dev/null; wait "$LOCKER_PID" 2>/dev/null; }
+
+timed_read() {
+  run_py "$@" <<'EOF'
+import time
+checks = load_lib_module("programme_checks")
+start = time.monotonic()
+got = checks.session_checks(args[0])
+print(got["states"][args[1]], got["unreadable"], time.monotonic() - start < 3)
+EOF
+}
+
+R33="$(run_py <<'EOF'
+print(ph.create_programme([f"w{n}" for n in range(40, 56)], "sess-pm33")["run"])
+EOF
+)"
+edit_run "$R33" "prog['check_settings'] = {'$LIMIT': $ON, '$SEND': $OFF}; prog['items'] = {'linear:AI-8': {'id': 'linear:AI-8', 'state': 'open', 'owner': {'session_id': 'sess-held'}}}"
+OUT="$(run_py "$R33" <<'EOF'
+print(load_lib_module("programme_import").promote(args[0])["status"])
+print(load_lib_module("programme_authority").promoted(ph.home_path(args[0]), args[0]))
+EOF
+)"
+has "True" "$OUT"
+
+it "with the store free, a promoted programme's setting is in force"
+check "on off" "$(states sess-held $LIMIT $SEND)"
+
+it "a programme over 16 spaces with its store held gives the defaults within 3 s, on every call, with no row yet"
+start_store_lock "$R33" || fail "the store was never locked: $(head -c 200 "$LOCKER_OUT")"
+OUT=""
+for _ in 1 2 3 4 5; do OUT="${OUT}$(timed_read sess-held $LIMIT)
+"; done
+EXPECT="False ['${R33}'] True"
+check "$(printf '%s\n%s\n%s\n%s\n%s' "$EXPECT" "$EXPECT" "$EXPECT" "$EXPECT" "$EXPECT")" "$(printf '%s' "$OUT")"
+it "under the hold a check that defaults on is on, whatever the record says"
+check "on" "$(states sess-held $SEND)"
+stop_store_lock
+
+it "many calls over one held episode leave one row once the store frees"
+OUT=""
+for _ in 1 2 3; do OUT="${OUT} $(states sess-held $LIMIT)"; done
+check " on on on 1" "${OUT} $(check_rows "$R33")"
+
+it "the row says when the episode began and why, and is not repeated"
+ROW="$(run_py "$R33" <<'EOF'
+row = [r for r in pj.read(args[0]) if r["kind"] == "checks_unreadable"][-1]["payload"]
+print(sorted(row), row["outcome"])
+EOF
+)"
+has "'detail', 'outcome', 'since'" "$ROW"
+has "unavailable" "$ROW"
+
+it "a second hold is a second episode, with one more row"
+start_store_lock "$R33" || fail "the store was never locked"
+states sess-held $LIMIT >/dev/null
+states sess-other-session $LIMIT >/dev/null
+stop_store_lock
+states sess-held $LIMIT >/dev/null
+states sess-held $LIMIT >/dev/null
+check "2" "$(check_rows "$R33")"
+
+it "parallel hooks reading after a hold still write one row"
+start_store_lock "$R33" || fail "the store was never locked"
+states sess-held $LIMIT >/dev/null
+stop_store_lock
+for _ in 1 2 3 4 5 6 7 8; do states sess-held $LIMIT >/dev/null & PIDS="${PIDS:-} $!"; done
+for pid in $PIDS; do wait "$pid"; done
+check "3" "$(check_rows "$R33")"
+
+it "a failed write of the row leaves it owed, and the next read writes it"
+start_store_lock "$R33" || fail "the store was never locked"
+states sess-held $LIMIT >/dev/null
+stop_store_lock
+OUT="$(run_py "$R33" <<'EOF'
+checks = load_lib_module("programme_checks")
+real = pj.append
+def boom(*a, **k):
+    raise OSError("no room")
+pj.append = boom
+print(checks.session_checks("sess-held")["states"]["no-destructive-commands"])
+pj.append = real
+EOF
+)"
+check "True 3" "${OUT} $(check_rows "$R33")"
+states sess-held $LIMIT >/dev/null
+check "4" "$(check_rows "$R33")"
+
+it "a held programme does not change a session that another programme decides"
+start_store_lock "$R33" || fail "the store was never locked"
+edit_run "$R32" "$BASE32 prog['check_settings'] = {'$SEND': $OFF}"
+OUT="$(states sess-shape $SEND)"
+stop_store_lock
+check "off" "$OUT"
+
 echo "programme-checks.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
