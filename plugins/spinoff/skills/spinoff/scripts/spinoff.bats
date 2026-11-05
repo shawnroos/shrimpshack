@@ -878,6 +878,7 @@ run_unresolvable() {
   # no herdr, so PATH resolution genuinely cannot succeed here; only the override can.
   LOUD_STUBS=
   run_unresolvable HERDR_ENV=1 CMUX_WORKSPACE_ID= HERDR_STUB_LIVE=1 \
+                   HERDR_WORKSPACE_ID=wS HERDR_PANE_ID=wS:p1 \
                    HERDR_BIN="$STUBDIR/herdr"
 
   [ "$status" -eq 0 ]
