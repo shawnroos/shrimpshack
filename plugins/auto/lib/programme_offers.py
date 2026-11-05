@@ -424,7 +424,7 @@ def _set_check(cmd, programme) -> dict:
     if not checks.needs_pick(name, state, own):
         raise OfferError(f"set-check {name} {state} needs no pick: the PM runs it alone")
     scope, key, block = checks.place(programme, ident)
-    was = checks.stored_state(block, name, scope)
+    was = checks.stored_state(block, name)
     if was == state:
         raise OfferError(f"{name} is already {state} for {checks.where_text(scope, key)}")
     text, facts = checks.CHECKS[name].text, {"check": name, "was": was}

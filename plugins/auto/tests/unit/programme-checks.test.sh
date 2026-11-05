@@ -888,14 +888,14 @@ sc stop-block on --prompt "$P"
 check "0" "$CODE"
 sc stop-block on --own
 check "0" "$CODE"
-check '["shawn", "pm"]' "$(stored "[prog['check_settings']['stop-block']['set_by'], prog['check_settings']['stop-block']['own_set_by']]")"
+check '["shawn", "pm"]' "$(stored "[prog['check_settings']['stop-block']['set_by'], prog['pm_run']['check_settings']['stop-block']['set_by']]")"
 has "check stop-block: on for the programme (by shawn" "$(status_text)"
 has "check stop-block: on for the PM's own run (by pm" "$(status_text)"
 sc stop-block off
 sc stop-block off --own
 
-it "a Stop block entry holding only the PM's own setting is a good shape: no fault row"
-edit_run "$SR" "prog['check_settings']['stop-block'].pop('state', None)"
+it "a PM's own Stop block setting with no programme entry is a good shape: no fault row"
+edit_run "$SR" "prog['check_settings'].pop('stop-block', None)"
 BEFORE="$(check_rows "$SR")"
 states sess-ps stop-block >/dev/null
 check "$BEFORE" "$(check_rows "$SR")"
@@ -918,10 +918,11 @@ checks = load_lib_module("programme_checks")
 prog = {"check_settings": {"no-destructive-commands": {"state": "on"}},
         "items": {"a": {"state": "active", "check_settings": {"no-destructive-commands": {"state": "off"}}}}}
 rows = [{"kind": "contract_set", "payload": {"item": "a", "limits": ["no-destructive-commands"]}}]
-asks = checks.limit_asks(prog, "a", ["no-destructive-commands"])
-print(checks.item_limits(prog, "a"), ["ask" for _ in asks], [r["check"] for r in checks.named_limits(prog, rows, [])],
-      checks._limit_is_on(prog, prog["items"]["a"], "no-destructive-commands"),
-      checks._limit_is_on(prog, {"state": "active"}, "no-destructive-commands"))
+terms = load_lib_module("programme_limit_terms")
+asks = terms.limit_asks(prog, "a", ["no-destructive-commands"])
+print(terms.item_limits(prog, "a"), ["ask" for _ in asks], [r["check"] for r in terms.named_limits(prog, rows, [])],
+      checks.effective("no-destructive-commands", prog["items"]["a"], prog),
+      checks.effective("no-destructive-commands", {"state": "active"}, prog))
 EOF
 )"
 

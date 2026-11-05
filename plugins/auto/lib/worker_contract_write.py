@@ -274,7 +274,7 @@ def _h_set_contract(host, argv):
     host.refresh_view(run_id, home)
     if out.get("limits"):
         programme = programme_home.normalize_programme(_record.get("programme") or {})
-        out["limit_asks"] = load_lib_module("programme_checks").limit_asks(programme, out["item"], out["limits"])
+        out["limit_asks"] = load_lib_module("programme_limit_terms").limit_asks(programme, out["item"], out["limits"])
     host._emit(dict(out, ok=True, run=run_id, kind=SET_KIND))
     return 0
 

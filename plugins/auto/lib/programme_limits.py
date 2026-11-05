@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Refuse a limited session's write to the programme's files, the installed plugin and the two hook switches.
+"""Refuse each write a limit covers: the programme's files, the installed plugin and the two hook switches
+under any limit, and every settings or behaviours file under `no-settings-writes`.
 
 A session with no limit on is never refused here. Best effort: a file tool is matched by real path and
 Bash by text. A command that names a protected place passes only when all it does is read, or run the
@@ -23,6 +24,7 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
+guard_text = load_lib_module("programme_guard_text")
 settings_guard = load_lib_module("programme_settings_guard")
 behaviour_guard = load_lib_module("programme_behaviour_guard")
 
@@ -31,6 +33,7 @@ ROOT_ENV = "CLAUDE_PLUGIN_ROOT"
 # programme.sh knows its caller only by this variable, so a session that sets it can act as the PM.
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 LIFT_VERB = "set-check"
+WRITES_LIMIT = "no-settings-writes"
 HOOK_KEYS = ("disableAllHooks", "allowManagedHooksOnly")
 # The shim's __cd_protected must list the same words; tests/integration/check-settings.test.sh compares them.
 NAMED_WORDS = ("programmes", "plugins", DATA_ENV, ROOT_ENV, SESSION_ENV, LIFT_VERB, *HOOK_KEYS)
@@ -115,14 +118,14 @@ def _fragments(word):
 def _protected_path(word, bases, dirs):
     for fragment in _fragments(word):
         for base in bases:
-            path = settings_guard._resolved(fragment, base)
+            path = guard_text.resolved(fragment, base)
             if _under(path, dirs):
                 return path
     return None
 
 
 def _named(word, bases, dirs):
-    plain = settings_guard._HIDING_CHARS.sub("", word)
+    plain = guard_text.HIDING_CHARS.sub("", word)
     return _protected_path(word, bases, dirs) or next((env for env in (DATA_ENV, SESSION_ENV) if env in plain), None)
 
 
@@ -180,12 +183,12 @@ def _settings_word(words):
 
 
 def _bases(segments, cwd) -> list:
-    return [cwd] + [settings_guard._resolved(s.words[1], cwd) for s in segments
+    return [cwd] + [guard_text.resolved(s.words[1], cwd) for s in segments
                     if len(s.words) > 1 and s.words[0] == "cd"]
 
 
 def _bash_target(command, cwd, dirs):
-    text = behaviour_guard._examined(command)
+    text = guard_text.examined(command)
     text = _ENV_REFS.sub(lambda m: _PLUGIN_ROOT if ROOT_ENV in m.group(0) else programme_home.data_dir(), text)
     try:
         segments, readable = _segments(text), True
@@ -201,7 +204,7 @@ def _bash_target(command, cwd, dirs):
             hit = _named(word, bases, dirs)
             if hit:
                 return hit
-    sets_key = any(key in settings_guard._HIDING_CHARS.sub("", text) for key in HOOK_KEYS)
+    sets_key = any(key in guard_text.HIDING_CHARS.sub("", text) for key in HOOK_KEYS)
     if sets_key:
         hit = _settings_word(t for s in segments for t in s.targets)
         if hit:
@@ -218,13 +221,13 @@ def _settings_file(path: str) -> bool:
     parent = os.path.dirname(path)
     config = os.environ.get("CLAUDE_CONFIG_DIR")
     return _is_settings_name(path) and (os.path.basename(parent).casefold() == ".claude" or bool(config) and (
-        parent.casefold() == settings_guard._resolved(config, "/").casefold()))
+        parent.casefold() == guard_text.resolved(config, "/").casefold()))
 
 
 def _settings_hit(raw, base):
-    path = settings_guard._resolved(raw, base)
+    path = guard_text.resolved(raw, base)
     # As written too: a symlinked .claude folder resolves to a path without its name.
-    written = os.path.normpath(os.path.join(base, settings_guard._expanded(raw)))
+    written = os.path.normpath(os.path.join(base, guard_text.expanded(raw)))
     return path if _settings_file(path) or _settings_file(written) else None
 
 
@@ -236,11 +239,11 @@ def settings_target(tool_name, tool_input, cwd):
     command = tool_input.get("command")
     if not isinstance(command, str):
         return None
-    text = behaviour_guard._examined(command)
+    text = guard_text.examined(command)
     try:
         segments, readable = _segments(text), True
     except ValueError:
-        segments, readable = [Segment(settings_guard._HIDING_CHARS.sub("", text).split(), [])], False
+        segments, readable = [Segment(guard_text.HIDING_CHARS.sub("", text).split(), [])], False
     bases = _bases(segments, cwd)
 
     def hit(word):
@@ -257,7 +260,7 @@ def settings_target(tool_name, tool_input, cwd):
 def only_reads(command, names_target) -> bool:
     """True when each part of a Bash command only reads and no redirect writes a word that names_target accepts."""
     try:
-        segments = _segments(behaviour_guard._examined(command))
+        segments = _segments(guard_text.examined(command))
     except ValueError:
         return False
     return all(map(_only_reads, segments)) and not any(names_target(t) for s in segments for t in s.targets)
@@ -276,7 +279,7 @@ def _file_target(tool_name, tool_input, cwd, dirs):
     raw = tool_input.get("file_path")
     if not isinstance(raw, str) or not raw:
         return None
-    path = settings_guard._resolved(raw, cwd)
+    path = guard_text.resolved(raw, cwd)
     if _under(path, dirs):
         return path
     # As written too: a symlinked settings file resolves to a path without the settings name.
@@ -287,8 +290,32 @@ def _file_target(tool_name, tool_input, cwd, dirs):
 
 
 def _may_name_target(tool_input) -> bool:
-    text = settings_guard._HIDING_CHARS.sub("", json.dumps(tool_input)).casefold()
+    text = guard_text.HIDING_CHARS.sub("", json.dumps(tool_input)).casefold()
     return any(word.casefold() in text for word in (*NAMED_WORDS, _PLUGIN_ROOT))
+
+
+def _file_hits(tool_name, tool_input, cwd):
+    """(target, kind) for each settings or behaviours file this call would write."""
+    if settings_guard.names_settings(tool_input):
+        found = settings_target(tool_name, tool_input, cwd)
+        if found:
+            yield found, "a settings file"
+    if behaviour_guard.names_any(tool_input):
+        command = tool_input.get("command")
+        reads = tool_name == "Bash" and isinstance(command, str) and only_reads(command, behaviour_guard.names_file)
+        found = None if reads else behaviour_guard.target(tool_name, tool_input, cwd)
+        if found:
+            yield found, "a behaviours file"
+
+
+def _protected_target(tool_name, tool_input, cwd):
+    if not _may_name_target(tool_input):
+        return None
+    dirs = _protected()
+    if tool_name != "Bash":
+        return _file_target(tool_name, tool_input, cwd, dirs)
+    command = tool_input.get("command")
+    return _bash_target(command, cwd, dirs) if isinstance(command, str) else None
 
 
 def _refused_write(names, target) -> str:
@@ -306,24 +333,25 @@ def decision(stdin_raw: str):
         return None
     tool_name = data["tool_name"]
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    if not _may_name_target(tool_input):
-        return None
+    session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
     cwd = data.get("cwd")
     cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
-    dirs = _protected()
-    if tool_name == "Bash":
-        command = tool_input.get("command")
-        target = _bash_target(command, cwd, dirs) if isinstance(command, str) else None
-    else:
-        target = _file_target(tool_name, tool_input, cwd, dirs)
+    if settings_guard.names_settings(tool_input) or behaviour_guard.names_any(tool_input):
+        # States first: the settings and behaviours guards read them for this call anyway, and finding a
+        # behaviours target loads modules that only a limit on needs.
+        checks = load_lib_module("programme_checks")
+        if checks.hook_checks(session_id)["states"][WRITES_LIMIT]:
+            for target, kind in _file_hits(tool_name, tool_input, cwd):
+                return checks.limit_refusal(WRITES_LIMIT, session_id, tool_name, f"would write {target}, {kind}",
+                                            **settings_guard.written(tool_name, tool_input, target))
+    target = _protected_target(tool_name, tool_input, cwd)
     if target is None:
         return None
     # Read only after a hit: this walks every held lease, and most calls name nothing protected.
-    checks_module = load_lib_module("programme_checks")
-    session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    states = checks_module.hook_checks(session_id)["states"]
-    names = [name for name in checks_module.limit_names() if states.get(name)]
+    checks = load_lib_module("programme_checks")
+    states = checks.hook_checks(session_id)["states"]
+    names = [name for name in checks.limit_names() if states.get(name)]
     if not names:
         return None
-    return checks_module.limit_refusal(names[0], session_id, tool_name, _refused_write(names, target), limits=names,
-                                       **settings_guard.written(tool_name, tool_input, target))
+    return checks.limit_refusal(names[0], session_id, tool_name, _refused_write(names, target), limits=names,
+                                **settings_guard.written(tool_name, tool_input, target))

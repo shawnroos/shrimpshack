@@ -89,5 +89,5 @@ def brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(), 
         lines += [f"- {r['text']} (source: {r['source']})" for r in restrictions]
     lines += programme_behaviours.brief_lines(behaviours, fills)
     if limits or (limits is None and rulings):
-        lines += load_lib_module("programme_checks").brief_lines(programme, key)
+        lines += load_lib_module("programme_limit_terms").brief_lines(programme, key)
     return "\n\n" + "\n".join(lines) if lines else ""

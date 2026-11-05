@@ -397,7 +397,7 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "rules_in_force": _rules(block, rules),
         "items": items,
     }
-    model["limits_named"] = load_lib_module("programme_checks").named_limits(
+    model["limits_named"] = load_lib_module("programme_limit_terms").named_limits(
         block, journal_entries, model["rules_in_force"].get("behaviours"))
     model["agreement"] = programme_view_agreement.build(block, journal_entries, model["rules_in_force"], protocol, now)
     model["agreement"]["behaviours"] = model["rules_in_force"].get("behaviours") or []

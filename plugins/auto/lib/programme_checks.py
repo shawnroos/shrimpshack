@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import collections
 import functools
-import json
 import os
 import sys
 
@@ -18,6 +17,7 @@ programme_home = load_lib_module("programme_home")
 run_record_core = load_lib_module("run_record_core")
 programme_sanitize = load_lib_module("programme_sanitize")
 programme_store = load_lib_module("programme_store")
+health = load_lib_module("programme_check_health")
 
 PATCHED = "hook_patched"
 WHY_CAP = 300
@@ -83,14 +83,12 @@ def _h_record(host, argv):
 SHAWN = "shawn"
 PM = "pm"
 SETTINGS_KEY = "check_settings"
-UNREADABLE = "checks_unreadable"
 SET_KIND = "check_set"
 LIMIT_REFUSED = "limit_refused"
 AUTO_RUN = "auto_run"
 OWN = "own"
+OWN_BLOCK = "pm_run"
 STATES = ("on", "off")
-JOURNAL_LOCK_WAIT = 0.5
-DETAIL_CAP = 300
 
 Check = collections.namedtuple("Check", "text default can_turn_off on_needs own_run_on_needs limit")
 
@@ -122,28 +120,6 @@ def limit_names() -> list:
     return [name for name, row in CHECKS.items() if row.limit]
 
 
-def item_limits(programme, key) -> list:
-    match = {"run": None, "item": key, "_blocks": (_items(programme).get(key), programme)}
-    return [name for name in limit_names() if _decide(name, [match])[0]]
-
-
-def brief_lines(programme, key) -> list:
-    names = item_limits(programme, key)
-    if not names:
-        return []
-    return ["Limits on this work:", *(f"- `{name}`: {CHECKS[name].text}" for name in names),
-            "While a limit is on, Auto also refuses your writes to the programme's files, to the installed plugin "
-            "and of `disableAllHooks` or `allowManagedHooksOnly` in a settings file, and refuses `set-check` and "
-            "setting `CLAUDE_CODE_SESSION_ID`. Reads stay open. A refusal "
-            "stops only that call and is journaled. Keep working on the rest; the PM sees the refusal "
-            "and lifts the limit when the work needs it."]
-
-
-def start_fields(programme, key, briefed) -> dict:
-    names = item_limits(programme, key)
-    return {} if not names else {"limits": names} if briefed else {"limits": names, "limits_not_briefed": names}
-
-
 def _has_own_run(name) -> bool:
     return CHECKS[name].own_run_on_needs != CHECKS[name].on_needs
 
@@ -161,47 +137,50 @@ def _setting(block, name):
     return False if state == "off" and CHECKS[name].can_turn_off else None
 
 
-def _layered(name, item, programme) -> tuple:
-    """(setting, scope): an item setting beats the programme setting. None when neither holds one."""
-    for block, scope in ((item, "item"), (programme, "programme")):
+def _layered(name, blocks) -> tuple:
+    """(setting, scope): the first block holding a setting wins. None when none holds one."""
+    for block, scope in blocks:
+        if scope == OWN and not _has_own_run(name):
+            continue
         setting = _setting(block, name)
         if setting is not None:
             return setting, scope
     return None, "programme"
 
 
-def _effective(name, item, programme) -> bool:
-    setting = _layered(name, item, programme)[0]
+def effective(name, item, programme) -> bool:
+    setting = _layered(name, ((item, "item"), (programme, "programme")))[0]
     return CHECKS[name].default if setting is None else setting
 
 
-def _own_setting(programme, name):
-    own = _entry(programme, name).get(OWN) if _has_own_run(name) else None
-    return {"on": True, "off": False}.get(own) if isinstance(own, str) else None
+def _own_block(programme):
+    block = programme.get(OWN_BLOCK) if isinstance(programme, dict) else None
+    return block if isinstance(block, dict) else None
 
 
-def _live_item(item) -> bool:
+def live_item(item) -> bool:
     return isinstance(item, dict) and item.get("state") not in programme_home.FINISHED_ITEM_STATES
 
 
 def _attached(item, session_id) -> bool:
     try:
-        return _live_item(item) and session_id in programme_home.session_ids(item)
+        return live_item(item) and session_id in programme_home.session_ids(item)
     except (AttributeError, TypeError):
         return False
 
 
-def _items(programme) -> dict:
-    items = programme.get("items") if isinstance(programme, dict) else None
-    return items if isinstance(items, dict) else {}
+def items(programme) -> dict:
+    found = programme.get("items") if isinstance(programme, dict) else None
+    return found if isinstance(found, dict) else {}
 
 
 def _matches(run, record, lease_session, session_id) -> list:
     programme = record.get("programme")
-    found = [{"run": run, "item": item_id, "role": "worker", "_blocks": (item, programme)}
-             for item_id, item in sorted(_items(programme).items()) if _attached(item, session_id)]
+    found = [{"run": run, "item": item_id, "role": "worker", "_blocks": ((item, "item"), (programme, "programme"))}
+             for item_id, item in sorted(items(programme).items()) if _attached(item, session_id)]
     if (record.get("driving_session_id") or lease_session) == session_id:
-        found.append({"run": run, "item": None, "role": "pm", "_blocks": (None, programme)})
+        found.append({"run": run, "item": None, "role": "pm",
+                      "_blocks": ((_own_block(programme), OWN), (programme, "programme"))})
     return found
 
 
@@ -211,9 +190,7 @@ def _decide(name, matches) -> tuple:
     for match in matches:
         if row.limit and match["item"] is None:
             continue
-        item, programme = match["_blocks"]
-        own = _own_setting(programme, name) if match["item"] is None else None
-        setting, scope = (own, OWN) if own is not None else _layered(name, item, programme)
+        setting, scope = _layered(name, match["_blocks"])
         votes.append((row.default if setting is None else setting, setting, scope, match))
     # Across matches, on wins: a session on two items carries a limit either item has.
     state = any(vote[0] for vote in votes) if votes else row.default
@@ -222,55 +199,12 @@ def _decide(name, matches) -> tuple:
     return state, source
 
 
-def _marker(run) -> str:
-    return os.path.join(programme_home.home_path(run), ".checks-unreadable.json")
-
-
-def _create_new(path, text="") -> bool:
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except OSError:
-        return False
-    try:
-        os.write(fd, text.encode("utf-8"))
-    finally:
-        os.close(fd)
-    return True
-
-
-def _mark_episode(run, outcome, detail) -> None:
-    payload = {"since": run_record_core.now_iso(), "outcome": outcome,
-               "detail": programme_sanitize.clean(detail or "", DETAIL_CAP)}
-    _create_new(_marker(run), json.dumps(payload))
-
-
-def _journal_episode(run) -> None:
-    # The store a hold blocks is the store the journal writes to, so a hold leaves only the marker
-    # file and the first read after it writes the one row. The rename lets one of many hooks win.
-    marker = _marker(run)
-    claim = f"{marker}.{os.getpid()}"
-    try:
-        os.rename(marker, claim)
-    except OSError:
-        return
-    try:
-        try:
-            with open(claim, encoding="utf-8") as fh:
-                payload = json.load(fh)
-        except ValueError:
-            payload = {"since": None, "outcome": "unknown", "detail": ""}
-        load_lib_module("programme_journal").append(run, UNREADABLE, None, payload, lock_timeout=JOURNAL_LOCK_WAIT)
-    except Exception:
-        os.replace(claim, marker)
-    else:
-        os.unlink(claim)
-
-
 def _faults(programme) -> list:
     if not isinstance(programme, dict):
         return ["programme"]
-    found = [] if isinstance(programme.get("items"), (dict, type(None))) else ["items"]
-    blocks = [("programme", programme)] + sorted((k, v) for k, v in _items(programme).items() if _live_item(v))
+    found = [where for where in ("items", OWN_BLOCK) if not isinstance(programme.get(where), (dict, type(None)))]
+    blocks = [("programme", programme), (OWN_BLOCK, _own_block(programme) or {})]
+    blocks += sorted((k, v) for k, v in items(programme).items() if live_item(v))
     for where, block in blocks:
         settings = block.get(SETTINGS_KEY)
         if settings is None:
@@ -281,23 +215,9 @@ def _faults(programme) -> list:
         for name, entry in sorted(settings.items()):
             state = entry.get("state") if isinstance(entry, dict) else None
             frozen = name in CHECKS and not CHECKS[name].can_turn_off and state == "off"
-            only_own = state is None and name in CHECKS and _own_setting(block, name) is not None
-            if frozen or (state not in STATES and not only_own):
+            if frozen or state not in STATES:
                 found.append(f"{where} {name}")
     return found
-
-
-def _settle_faults(run, programme) -> None:
-    seen = _marker(run) + ".bad-shape"
-    faults = _faults(programme)
-    if not faults:
-        try:
-            os.unlink(seen)
-        except OSError:
-            pass
-    elif _create_new(seen):
-        _mark_episode(run, "bad_shape", ", ".join(faults))
-        _journal_episode(run)
 
 
 def _held_runs(now):
@@ -325,10 +245,10 @@ def session_checks(session_id, now=None) -> dict:
             try:
                 if not isinstance(record, dict):
                     unreadable.append(run)
-                    _mark_episode(run, (hold or {}).get("outcome") or "unreadable", (hold or {}).get("detail"))
+                    health.mark_episode(run, (hold or {}).get("outcome") or "unreadable", (hold or {}).get("detail"))
                     continue
-                _journal_episode(run)
-                _settle_faults(run, record.get("programme"))
+                health.journal_episode(run)
+                health.settle_faults(run, _faults(record.get("programme")))
                 if isinstance(session_id, str) and session_id:
                     matches += _matches(run, record, lease_session, session_id)
             except Exception:
@@ -356,7 +276,7 @@ def run_state(name, run, session_id) -> bool:
     if states:
         return states[name]
     record, _hold = programme_home.read_programme(run)
-    return _effective(name, None, record.get("programme") if isinstance(record, dict) else None)
+    return effective(name, None, record.get("programme") if isinstance(record, dict) else None)
 
 
 def _bound_to(item, run_id, repo_root) -> bool:
@@ -374,9 +294,9 @@ def task_run_state(name, run_id, repo_root) -> bool:
         programme_store.bound_waits(programme_store.HOOK_WAIT_MS)
         for _run, _session, record, _hold in _held_runs(None):
             programme = record.get("programme") if isinstance(record, dict) else None
-            for item in _items(programme).values():
-                if _live_item(item) and _bound_to(item, run_id, repo_root):
-                    return _effective(name, item, programme)
+            for item in items(programme).values():
+                if live_item(item) and _bound_to(item, run_id, repo_root):
+                    return effective(name, item, programme)
     except Exception:
         pass
     return CHECKS[name].default
@@ -392,7 +312,7 @@ def limit_refusal(name, session_id, tool, what, **detail) -> tuple:
               f"journal and lifts the limit when the work needs it (`programme.sh set-check {name} off{lift}`). "
               f"This attempt is journaled.")
     payload = {"check": name, "item": item, "scope": source.get("scope"), "tool": tool, **detail}
-    deny = load_lib_module("programme_settings_guard")._deny(reason)
+    deny = load_lib_module("programme_guard_text").deny(reason)
     return deny, (source.get("run"), LIMIT_REFUSED, session_id, payload)
 
 
@@ -416,12 +336,12 @@ def needs_pick(name, state, own=False) -> bool:
 
 def place(programme, ident, own=False) -> tuple:
     if own:
-        return OWN, None, programme
+        return OWN, None, _own_block(programme) or {}
     if not ident:
         return "programme", None, programme
     record = _record()
     key = record._resolve(programme, record.check_item_id(ident))
-    if not _live_item(programme["items"][key]):
+    if not live_item(programme["items"][key]):
         raise record.RecordError(f"item {key!r} is finished, and a finished item's settings never apply")
     return "item", key, programme["items"][key]
 
@@ -430,47 +350,8 @@ def where_text(scope, key) -> str:
     return {OWN: "the PM's own run", "programme": "the programme"}.get(scope) or f"item {key}"
 
 
-def stored_state(block, name, scope):
-    return _entry(block, name).get(OWN if scope == OWN else "state")
-
-
-def _limit_is_on(programme, item, name) -> bool:
-    return _effective(name, item, programme)
-
-
-def _limit_ask(name, key) -> str:
-    scope = f" --item {key}" if key else ""
-    return f"programme.sh offer limit-{name} --command 'set-check {name} on{scope}'"
-
-
-def limit_asks(programme, key, names) -> list:
-    item = _items(programme).get(key) if key else None
-    return [_limit_ask(name, key) for name in names if not _limit_is_on(programme, item, name)]
-
-
-def _contract_limits(rows, key, item) -> list:
-    set_rows = [r for r in rows if r.get("kind") == "contract_set" and (r.get("payload") or {}).get("item") == key
-                and "limits" in r["payload"]]
-    if set_rows:
-        return set_rows[-1]["payload"]["limits"]
-    run = item.get(AUTO_RUN)
-    seed = run.get("contract") if isinstance(run, dict) else None
-    return seed.get("limits") or [] if isinstance(seed, dict) else []
-
-
-def _still_off(programme, item, name) -> bool:
-    return name in CHECKS and CHECKS[name].limit and not _limit_is_on(programme, item, name)
-
-
-def named_limits(programme, rows, behaviours) -> list:
-    out = [{"check": b["limit"], "via": f"behaviour {b.get('id')}", "ask": _limit_ask(b["limit"], None)}
-           for b in behaviours or [] if b.get("limit") and b.get("in_force") and _still_off(programme, None, b["limit"])]
-    for key, item in sorted(_items(programme).items()):
-        if not _live_item(item):
-            continue
-        out += [{"check": name, "via": f"the contract of item {key}", "ask": _limit_ask(name, key)}
-                for name in _contract_limits(rows or [], key, item) if _still_off(programme, item, name)]
-    return out
+def stored_state(block, name):
+    return _entry(block, name).get("state")
 
 
 def setting_rows(programme) -> list:
@@ -485,11 +366,12 @@ def setting_rows(programme) -> list:
         else:
             out.append(dict(base, state=entry["state"], scope="programme", set_at=entry.get("set_at"),
                             set_by=entry.get("set_by")))
-        if _own_setting(programme, name) is not None:
-            out.append(dict(base, state=entry[OWN], scope=OWN, set_at=entry.get("own_set_at"),
-                            set_by=entry.get("own_set_by")))
-        for key, item in sorted(_items(programme).items()):
-            if _live_item(item) and _setting(item, name) is not None:
+        own = _own_block(programme)
+        if _has_own_run(name) and _setting(own, name) is not None:
+            held = _entry(own, name)
+            out.append(dict(base, state=held["state"], scope=OWN, set_at=held.get("set_at"), set_by=held.get("set_by")))
+        for key, item in sorted(items(programme).items()):
+            if live_item(item) and _setting(item, name) is not None:
                 held = _entry(item, name)
                 out.append(dict(base, state=held["state"], scope="item", item=key, set_at=held.get("set_at"),
                                 set_by=held.get("set_by")))
@@ -497,8 +379,8 @@ def setting_rows(programme) -> list:
 
 
 def _differ(programme, name, state) -> list:
-    return [key for key, item in sorted(_items(programme).items())
-            if _live_item(item) and _entry(item, name).get("state") not in (None, state)]
+    return [key for key, item in sorted(items(programme).items())
+            if live_item(item) and _entry(item, name).get("state") not in (None, state)]
 
 
 _SET_USAGE = "usage: set-check <name> on|off [--item <id> | --own] [--prompt <id>] [--run <id>]"
@@ -522,14 +404,15 @@ def _h_set_check(host, argv):
     def change(programme, prompt, _rec):
         scope, key, block = place(programme, ident, own)
         where = where_text(scope, key)
-        if stored_state(block, name, scope) == state:
+        if stored_state(block, name) == state:
             raise host.ProgrammeError(f"{name} is already {state} for {where}; nothing changed", fix=_SEE_CHECKS)
+        if scope == OWN:
+            programme[OWN_BLOCK] = block
         settings = block.get(SETTINGS_KEY)
         settings = block[SETTINGS_KEY] = dict(settings) if isinstance(settings, dict) else {}
         by = SHAWN if prompt else PM
         stamp = run_record_core.now_iso()
-        settings[name] = dict(_entry(block, name), **({OWN: state, "own_set_at": stamp, "own_set_by": by} if own
-                                                      else {"state": state, "set_at": stamp, "set_by": by}))
+        settings[name] = {"state": state, "set_at": stamp, "set_by": by}
         payload = {"check": name, "state": state, "scope": scope, "set_by": by, "text": f"{name} {state} for {where}"}
         if key:
             payload["item"] = key

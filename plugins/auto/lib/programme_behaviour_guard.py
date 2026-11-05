@@ -2,10 +2,9 @@
 """Refuse the PM's direct write to the personal behaviours folder or behaviours.json.
 
 Best effort, in the same scope as the settings guard: the driving session is refused Write,
-Edit, MultiEdit or Bash calls that name either target, and so is a session on an item under
-`no-settings-writes`, except for a Bash call that only reads; other workers are not checked.
-The PM's way to change them is a programme.py verb that Shawn approves, and
-`pm-settings-writes` off lifts the driver's refusal.
+Edit, MultiEdit or Bash calls that name either target. The PM's way to change them is a
+programme.py verb that Shawn approves, and `pm-settings-writes` off lifts the driver's refusal.
+A limited worker's writes are programme_limits' job.
 """
 
 from __future__ import annotations
@@ -21,13 +20,11 @@ if _LIB_DIR not in sys.path:
 from _bootstrap import load_lib_module  # noqa: E402
 
 settings_guard = load_lib_module("programme_settings_guard")
+guard_text = load_lib_module("programme_guard_text")
 
 _TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
 _TOKEN = re.compile(r"[^\s;&|<>()`]*(?:behaviours|behaviour-files)[^\s;&|<>()`]*", re.IGNORECASE)
 _ENV_REDIRECT = re.compile(r"CLAUDE_AUTO_(?:SHIPPED_)?BEHAVIOURS_(?:DIR|STORE)", re.IGNORECASE)
-# A separator-free blob this long is not a command Shawn's session typed; bounding it keeps the
-# token regex from stalling every PreToolUse call.
-_MAX_COMMAND = 20000
 
 
 def _guard() -> tuple:
@@ -49,23 +46,17 @@ def _hit(path: str, folder: str, files) -> bool:
     return folded in files or folded == folder or folded.startswith(folder + os.sep)
 
 
-def _examined(command: str) -> str:
-    if len(command) <= _MAX_COMMAND:
-        return command
-    # Head and tail, so padding in front of the target cannot push it out of view.
-    return command[:_MAX_COMMAND] + " " + command[-_MAX_COMMAND:]
-
-
-def _target(tool_name, tool_input, cwd):
+def target(tool_name, tool_input, cwd):
+    """The behaviours file or folder a call names, or the redirect variable it sets; None when it names none."""
     folder, files = _guard()
     if tool_name != "Bash":
         raw = tool_input.get("file_path")
-        path = settings_guard._resolved(raw, cwd) if isinstance(raw, str) else None
+        path = guard_text.resolved(raw, cwd) if isinstance(raw, str) else None
         return path if path and _hit(path, folder, files) else None
     command = tool_input.get("command")
     if not isinstance(command, str):
         return None
-    text = _examined(settings_guard._HIDING_CHARS.sub("", command))
+    text = guard_text.examined(guard_text.HIDING_CHARS.sub("", command))
     # Setting these redirects what counts as Shawn's files, so naming one is refused outright.
     redirect = _ENV_REDIRECT.search(text)
     if redirect:
@@ -74,22 +65,22 @@ def _target(tool_name, tool_input, cwd):
         bases = [cwd]
         # A bare word such as `grep -rn behaviours lib` names no file; only a path or a dotted
         # name is worth resolving against the folders a cd could have left behind.
-        if (os.sep in token or "." in token) and not os.path.isabs(settings_guard._expanded(token)):
+        if (os.sep in token or "." in token) and not os.path.isabs(guard_text.expanded(token)):
             bases += [os.path.dirname(folder), *(os.path.dirname(f) for f in files)]
         for base in bases:
-            path = settings_guard._resolved(token, base)
+            path = guard_text.resolved(token, base)
             if _hit(path, folder, files):
                 return path
     return None
 
 
-def _reads(tool_name, tool_input) -> bool:
-    command = tool_input.get("command")
-    if tool_name != "Bash" or not isinstance(command, str):
-        return False
-    # Loaded here: programme_limits loads this module at its top.
-    limits = load_lib_module("programme_limits")
-    return limits.only_reads(command, lambda word: bool(_TOKEN.search(word) or _ENV_REDIRECT.search(word)))
+def names_file(word) -> bool:
+    return bool(_TOKEN.search(word) or _ENV_REDIRECT.search(word))
+
+
+def names_any(tool_input) -> bool:
+    named = json.dumps(tool_input).casefold()
+    return "behaviours" in named or "behaviour-files" in named
 
 
 def decision(stdin_raw: str):
@@ -99,29 +90,22 @@ def decision(stdin_raw: str):
         return None
     tool_name = data["tool_name"]
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    named = json.dumps(tool_input).casefold()
-    if "behaviours" not in named and "behaviour-files" not in named:
+    if not names_any(tool_input):
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    checks = load_lib_module("programme_checks")
-    states = checks.hook_checks(session_id)["states"]
-    limited = states[settings_guard.WRITES_LIMIT] and not _reads(tool_name, tool_input)
+    states = load_lib_module("programme_checks").hook_checks(session_id)["states"]
     found = settings_guard.scope(session_id) if states[settings_guard.PM_CHECK] else None
-    if found is None and not limited:
+    if found is None:
         return None
     cwd = data.get("cwd")
     cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
-    target = _target(tool_name, tool_input, cwd)
-    if target is None:
+    named = target(tool_name, tool_input, cwd)
+    if named is None:
         return None
-    written = settings_guard.written(tool_name, tool_input, target)
-    if limited:
-        return checks.limit_refusal(settings_guard.WRITES_LIMIT, session_id, tool_name,
-                                    f"would write {target}, a behaviours file", **written)
     run_id, _programme = found
-    payload = {"tool": tool_name, **written}
-    return settings_guard._deny(
-        f"auto: this call names {target}, a behaviours file of the personal protocol. "
+    payload = {"tool": tool_name, **settings_guard.written(tool_name, tool_input, named)}
+    return guard_text.deny(
+        f"auto: this call names {named}, a behaviours file of the personal protocol. "
         "Only Shawn changes behaviours; use the programme verbs that ask him to approve, "
         "and continue the work that does not need this. The attempt is journaled once "
         "the programme is free."), (run_id, "blocked_behaviours_write", session_id, payload)

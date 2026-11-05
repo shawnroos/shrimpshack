@@ -720,7 +720,7 @@ def _h_start_worker(host, argv):
     programme_recovery.pause(run_id, "after_invoke")
     payload = dict(item=key, started=started["ok"], decision_ids=decision_ids, restrictions=restrictions,
                    behaviour_ids=behaviour_ids, behaviours_held_back=held_back,
-                   **load_lib_module("programme_checks").start_fields(programme, key, has_handoff),
+                   **load_lib_module("programme_limit_terms").start_fields(programme, key, has_handoff),
                    **{k: v for k, v in started.items() if k != "ok"})
     assign = _launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids, payload, not_briefed)
     if start:
