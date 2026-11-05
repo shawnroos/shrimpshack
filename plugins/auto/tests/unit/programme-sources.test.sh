@@ -702,6 +702,19 @@ it "a worker with no limit in force gets no limits section, and an item off beat
 check 0 "$CODE"
 case "$COPY" in *"Limits on this work"*) fail "limits section in: $COPY" ;; *) pass ;; esac
 
+run_py "$RUN" <<'EOF2' >/dev/null
+def mutate(rec):
+    rec["programme"]["items"]["herdr:w2/p31"]["check_settings"] = {"no-destructive-commands": {"state": "on"}}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF2
+write_snapshot base
+: > "$CALLS"
+prog prompt-item herdr:w2/p31 "the limit is now on"
+it "a plain prompt-item to an item with a limit on carries the limit lines"
+check 0 "$CODE"
+has "Limits on this work:" "$(calls)"
+has "no-destructive-commands" "$(calls)"
+
 it "no command crashed with a traceback"
 # programme-sources-behaviours.test.sh counts this check's pass; here a crash still fails the file.
 [ -z "$CRASHES" ] || fail "expected [] got [$CRASHES]"

@@ -12,7 +12,7 @@ You control Auto's hooks, even when shrimpshack is outside your remit. This cove
 
 ## Check settings
 
-`P set-check <name> on|off [--item <id>]` changes a check for the programme or one item. An item setting beats the programme setting. A sub-agent cannot run this verb.
+`P set-check <name> on|off [--item <id> | --own] [--prompt <id>]` changes a check for the programme, one item or your own run. An item setting beats the programme setting, so `--item <id> off` frees one item; a programme `off` frees every item. A sub-agent cannot run this verb.
 
 | Check | Default | Turning it off | Turning it on |
 |---|---|---|---|
@@ -41,7 +41,13 @@ A contract's `--limit <check>` and a behaviour file's `limit: <check>` name a li
 
 A limit that is on binds every session attached to the item, its sub-agents and takeover sessions, until the item finishes or the programme ends. A launched session that is attached to no item has no limit: run `P add-item` or attach it if it must carry one. Your own session takes a limit only when it is attached to an item.
 
-A refusal stops one call, journals it as `limit_refused`, and pauses nothing. It names the limit, and the worker asks you to lift it. While any limit is on, the session also cannot write:
+A refusal stops one call, journals it as `limit_refused`, and pauses nothing. It names the limit and the item. The worker keeps working on the rest, and you see the refusal in the journal and the worker's transcript. `P propose-permission` can list it as a hook refusal; a limit refusal comes here, not to Shawn.
+
+Lift a limit when the refused call is needed for the item's next product check and the reason Shawn gave for the limit does not cover that call. Otherwise keep it: the worker goes on without the call. Lift with `--item <id>` unless every item needs the call. When Shawn turned the limit on, tell him in one line which limit you lifted, on which item, and why.
+
+After a `set-check` on an item with a running worker, run `P prompt-item <item> "<what changed>"`. While a limit is on, the prompt carries the limit lines by itself. After a lift, say in the text which limit is off.
+
+While any limit is on, the session also cannot write:
 
 - the programme's files, or set `CLAUDE_AUTO_DATA_DIR`
 - the installed plugin cache

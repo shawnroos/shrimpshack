@@ -132,7 +132,9 @@
 #   programme_sources    → run_record_core, programme_home, programme_journal,
 #                          programme_sanitize, programme_record, programme_context, programme_exec,
 #                          programme_tracker, programme_tasks, programme_plans,
-#                          programme_recovery, session_registry; driver_session [lazy]
+#                          programme_recovery, session_registry, programme_brief; driver_session [lazy]
+#   programme_brief      → run_record_core, programme_context, programme_behaviours;
+#                          programme_checks [lazy]. It never loads programme_sources.
 #   programme_archive    → run_record_core, programme_home, programme_journal;
 #                          programme_authority, programme_artifacts, programme_store,
 #                          programme_context, programme_recovery, programme_preserve,
@@ -548,7 +550,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_recovery.py programme_archive.py programme_resume.py \
            programme_terms.py programme_proposals.py programme_trajectory.py programme_view_work.py \
            programme_naming.py programme_rulings.py programme_protocol_changes.py programme_carryover.py \
-           programme_view_agreement.py; do
+           programme_view_agreement.py programme_brief.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -585,6 +587,13 @@ if loads_sibling "programme_resume.py" "programme_sources" \
    || loads_sibling "programme_resume.py" "programme_record" \
    || loads_sibling "programme_resume.py" "programme_archive"; then
   fail "programme_resume.py must not load a verb module — programme loads it before its verb table"
+else
+  pass
+fi
+
+it "programme_brief.py does NOT load programme_sources (programme_sources loads it at module top)"
+if loads_sibling "programme_brief.py" "programme_sources"; then
+  fail "programme_brief.py loading programme_sources closes a cycle"
 else
   pass
 fi

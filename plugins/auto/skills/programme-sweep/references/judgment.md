@@ -74,6 +74,8 @@ and refuse a restriction without a valid source.
 | Your own choice when you assigned the work | `pm_choice` | Lift it yourself when it gets in the way of the next product check. |
 | An assumption a worker made | `worker_assumption` | Check it. Correct the worker if it is wrong. |
 
+A check limit is not a restriction: it follows [checks.md](checks.md), and you can lift it alone.
+
 A restriction you wrote yourself is not a runtime ban. For example, "source
 only" in your own brief does not stop compilation when the next product check
 needs a build. To lift it, record the choice with
