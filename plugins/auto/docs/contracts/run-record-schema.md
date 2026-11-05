@@ -776,7 +776,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `operation_settled`, `operation_uncertain`, `resources_reconciled`, `item_disposed`,
 `uncertainty_accepted`, `archive_check_failed`, `programme_archived`, `successor_created`,
 `permission_proposed`, `permission_answered`, `permission_verified`, `permission_settled`,
-`blocked_settings_write`, `blocked_behaviours_write`.
+`blocked_settings_write`, `blocked_behaviours_write`, `blocked_limit_write`.
 
 - `item_held {item, reason}` is journaled by `start-worker` each time the focus gate refuses a start (one row per refusal).
   `focus_override_approved {item, next, prompt_id, quote}` is journaled by `override-focus`.
@@ -789,7 +789,8 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   (a list of decision ids) and `restrictions` (a list of `{text, source}`). `worker_started` and
   `worker_start_failed` also add `behaviour_ids` (the behaviours in the brief) and
   `behaviours_held_back` (worker behaviours gated only by PM checks that the PM did not name with
-  `--behaviour`); the launch's recovery request carries `behaviour_ids` too.
+  `--behaviour`); the launch's recovery request carries `behaviour_ids` too. When a limit is in force on the
+  item they add `limits`, and `limits_not_briefed` when no `--handoff` carried them to the worker.
 - Lifecycle payloads: `programme_started {home, leases, session}`;
   `taken_over` and `handed_over {from_session, to_session, leases, request}`; `taken_over` adds
   `reason: orphaned|driver_gone|replaced` and, for the last two, `evidence {state, session_id,
@@ -928,6 +929,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   - `blocked_settings_write {tool, path, command?}`, written by the
     PreToolUse hook when it refuses a driving session's call that names a
     proposal's `.claude/settings.local.json`. Older rows also carry `item_ids`.
+  - `blocked_limit_write {tool, path, limits, item, command?}`, written by the
+    PreToolUse hook when it refuses a write to a protected place from a session
+    with a limit on. `path` is the real path, or `CLAUDE_AUTO_DATA_DIR`.
   - `blocked_behaviours_write {tool, path, command?}`, written by the
     PreToolUse hook when it refuses a driving session's call that names the
     personal behaviours folder or the stored `behaviours.json`. Older rows also

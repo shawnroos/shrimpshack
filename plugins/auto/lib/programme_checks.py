@@ -118,6 +118,26 @@ def limit_names() -> list:
     return [name for name, row in CHECKS.items() if row.limit]
 
 
+def item_limits(programme, key) -> list:
+    match = {"run": None, "item": key, "_blocks": (_items(programme).get(key), programme)}
+    return [name for name in limit_names() if _decide(name, [match])[0]]
+
+
+def brief_lines(programme, key) -> list:
+    names = item_limits(programme, key)
+    if not names:
+        return []
+    return ["Limits on this work:", *(f"- `{name}`: {CHECKS[name].text}" for name in names),
+            "While a limit is on, Auto also refuses your writes to the programme's files, to the installed plugin "
+            "and of `disableAllHooks` or `allowManagedHooksOnly` in a settings file. Reads stay open. A refusal "
+            "stops only that call and is journaled. To lift a limit, ask the PM."]
+
+
+def start_fields(programme, key, briefed) -> dict:
+    names = item_limits(programme, key)
+    return {} if not names else {"limits": names} if briefed else {"limits": names, "limits_not_briefed": names}
+
+
 def _has_own_run(name) -> bool:
     return CHECKS[name].own_run_on_needs != CHECKS[name].on_needs
 

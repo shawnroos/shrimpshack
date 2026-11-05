@@ -1086,6 +1086,16 @@ journals `blocked_behaviours_write`. The Bash check is a text match; a neighbour
 as `behaviours.json.bak` is not checked. A programme verb that Shawn approves is the
 PM's only way to change those files. Workers may write them.
 
+For a session with at least one limit on, the hook denies a Write, Edit, MultiEdit or Bash write to the
+programme's folder or the installed plugin cache, a Bash call that sets
+`CLAUDE_AUTO_DATA_DIR`, and a write of `disableAllHooks` or `allowManagedHooksOnly` to a
+`settings.json` or `settings.local.json`. It journals `blocked_limit_write` and
+pauses nothing. File tools match by real path. A Bash call that names one of these
+passes only if it only reads, or runs the plugin's own scripts; the match is by text, so
+it is best effort. A session with no limit on is not checked. `start-worker` adds the
+limits in force to the brief. Its output lists them, and says when no `--handoff`
+carried them to the worker.
+
 The pane guard and the prompt binding stop accidents and casual misuse. A
 determined process running as the same user can still append journal rows or
 type into the pane by means the hook cannot see. The text check does not see:

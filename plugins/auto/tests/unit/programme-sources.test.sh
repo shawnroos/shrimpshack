@@ -664,6 +664,44 @@ rm -f "${PERS_DIR}/pmdocs.md" "${SHIP_DIR}/shipui.md"
 export CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR="$EMPTY_SHIPPED"
 export CLAUDE_AUTO_BEHAVIOURS_DIR="$EMPTY_PERSONAL"
 
+prog add-item linear:AI-800 --title "limited"
+prog add-item linear:AI-801 --title "limited, no handoff"
+prog add-item linear:AI-802 --title "free"
+run_py "$RUN" <<'EOF' >/dev/null
+def mutate(rec):
+    prog = rec["programme"]
+    on = {"no-destructive-commands": {"state": "on"}}
+    prog["items"]["linear:AI-800"]["check_settings"] = prog["items"]["linear:AI-801"]["check_settings"] = on
+    prog["items"]["linear:AI-802"]["check_settings"] = {"no-settings-writes": {"state": "off"}}
+    prog["check_settings"] = {"no-settings-writes": {"state": "on"}}
+core._with_locked_run_record(ph.home_path(args[0]), args[0], mutate)
+EOF
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-800 -- --name limited --handoff "$BRIEF"
+it "a worker started with a limit: the start succeeds"
+check 0 "$CODE"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | tail -1 | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+it "the brief names each limit in force, from the item and from the programme, and says how to lift it"
+has "Limits on this work:" "$COPY"
+has "no-destructive-commands" "$COPY"
+has "no-settings-writes" "$COPY"
+has "ask the PM" "$COPY"
+it "the journal row names the same limits"
+has "no-destructive-commands" "$(journal_last worker_started)"
+has "no-settings-writes" "$(journal_last worker_started)"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-801 -- --name limited2 --target tab
+it "a start with no handoff is not refused for a limit, and its output tells the PM the limits went unbriefed"
+check 0 "$CODE"
+has "no-destructive-commands" "$(journal_last worker_started)"
+has "limits_not_briefed" "$OUT"
+: > "$CALLS"
+FAKE_SPINOFF_AGENT=1 prog start-worker linear:AI-802 -- --name free --handoff "$BRIEF"
+COPY="$(cat "$(grep '^spinoff ' "$CALLS" | tail -1 | sed -E 's/.*--handoff ([^ ]+).*/\1/')" 2>/dev/null)"
+it "a worker with no limit in force gets no limits section, and an item off beats the programme on"
+check 0 "$CODE"
+case "$COPY" in *"Limits on this work"*) fail "limits section in: $COPY" ;; *) pass ;; esac
+
 it "no command crashed with a traceback"
 # programme-sources-behaviours.test.sh counts this check's pass; here a crash still fails the file.
 [ -z "$CRASHES" ] || fail "expected [] got [$CRASHES]"

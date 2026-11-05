@@ -633,7 +633,7 @@ def _brief_tail(host, programme, key, decision_ids, restrictions, behaviours=(),
     if restrictions:
         lines.append("Restrictions on this work:")
         lines += [f"- {r['text']} (source: {r['source']})" for r in restrictions]
-    lines += programme_behaviours.brief_lines(behaviours, fills)
+    lines += programme_behaviours.brief_lines(behaviours, fills) + (load_lib_module("programme_checks").brief_lines(programme, key) if rulings else [])
     return "\n\n" + "\n".join(lines) if lines else ""
 
 
@@ -789,7 +789,7 @@ def _h_start_worker(host, argv):
     started = launch_worker(spinoff, extra, op["target"]["session_id"])
     programme_recovery.pause(run_id, "after_invoke")
     payload = dict(item=key, started=started["ok"], decision_ids=decision_ids, restrictions=restrictions,
-                   behaviour_ids=behaviour_ids, behaviours_held_back=held_back, **{k: v for k, v in started.items() if k != "ok"})
+                   behaviour_ids=behaviour_ids, behaviours_held_back=held_back, **load_lib_module("programme_checks").start_fields(programme, key, has_handoff), **{k: v for k, v in started.items() if k != "ok"})
     assign = _launch_assign(started, opts.get("session-name"), restrictions, behaviour_ids, payload, not_briefed)
     if start:
         assign = worker_register.after_launch(assign, key, start)

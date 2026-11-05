@@ -777,6 +777,8 @@ def _cli(argv) -> int:
     behaviours_denial, behaviours_row = _guarded(
         lambda raw: load_lib_module("programme_behaviour_guard").decision(raw), stdin_raw)
     driver_denial, driver_row = _guarded(driver_send_denial, stdin_raw)
+    limits_denial, limits_row = _guarded(
+        lambda raw: load_lib_module("programme_limits").decision(raw), stdin_raw)
     try:
         decision = decide(repo_root, stdin_raw) if repo_root and _destructive_check_on() else None
     except Exception:
@@ -784,12 +786,13 @@ def _cli(argv) -> int:
         # to a confirmed destructive match on a confirmed run, handled inside
         # decide(); an unrelated internal error must not brick the tool flow.
     if decision is None:
-        decision = settings_denial or behaviours_denial or driver_denial
+        decision = settings_denial or behaviours_denial or driver_denial or limits_denial
     if decision is not None:
         _emit(decision)
     _journal(settings_row)
     _journal(behaviours_row)
     _journal(driver_row)
+    _journal(limits_row)
     return 0
 
 

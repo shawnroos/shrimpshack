@@ -51,7 +51,8 @@ if [ ! -t 0 ]; then
 fi
 
 # Python's live checks are the send check on Bash, the tracker guard on Linear
-# MCP calls and the settings and behaviours guards. Any other call starts no Python.
+# MCP calls, the settings and behaviours guards and the writes a limit protects.
+# Any other call starts no Python.
 __cd_settings=0
 # Case-insensitive: the macOS file system treats Settings.local.json as the same file.
 shopt -s nocasematch
@@ -61,10 +62,16 @@ fi
 if [[ $__cd_stdin_json == *behaviours* || $__cd_stdin_json == *behaviour-files* ]]; then
   __cd_settings=1
 fi
+# What a limited session may not write. Python decides; this only keeps other Edits from starting it.
+if [[ $__cd_stdin_json == *programmes* || $__cd_stdin_json == *plugins/cache* \
+   || $__cd_stdin_json == *"$CLAUDE_PLUGIN_ROOT"* \
+   || $__cd_stdin_json == *disableAllHooks* || $__cd_stdin_json == *allowManagedHooksOnly* ]]; then
+  __cd_settings=1
+fi
 shopt -u nocasematch
 [[ $__cd_stdin_json == *'"Bash"'* || $__cd_stdin_json == *'"mcp__'*[Ll]inear* ]] \
   || [ "$__cd_settings" = 1 ] || exit 0
-# Edit and MultiEdit are matched only for the settings guard.
+# Edit and MultiEdit are matched only for the guards named above.
 __cd_edit='"tool_name"[[:space:]]*:[[:space:]]*"(Multi)?Edit"'
 if [ "$__cd_settings" = 0 ] && [[ $__cd_stdin_json =~ $__cd_edit ]]; then
   exit 0

@@ -47,6 +47,7 @@ KINDS = (
     "handover_request",
     "end_request",
     "blocked_driver_send",
+    "blocked_limit_write",
     "blocked_tracker_write",
     "tracker_synced",
     "issues_recorded",
