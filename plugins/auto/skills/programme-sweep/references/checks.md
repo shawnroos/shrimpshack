@@ -41,7 +41,7 @@ A contract's `--limit <check>` and a behaviour file's `limit: <check>` name a li
 
 A limit that is on binds every session attached to the item, its sub-agents and takeover sessions, until the item finishes or the programme ends. A launched session that is attached to no item has no limit: run `P add-item` or attach it if it must carry one. Your own session takes a limit only when it is attached to an item.
 
-A refusal stops one call, journals it and pauses nothing. It names the limit, and the worker asks you to lift it. While any limit is on, the session also cannot write:
+A refusal stops one call, journals it as `limit_refused` or `blocked_limit_write`, and pauses nothing. It names the limit, and the worker asks you to lift it. While any limit is on, the session also cannot write:
 
 - the programme's files, or set `CLAUDE_AUTO_DATA_DIR`
 - the installed plugin cache
@@ -49,7 +49,7 @@ A refusal stops one call, journals it and pauses nothing. It names the limit, an
 
 Each of those would let the worker switch off the hook that enforces its limit. Reads stay open, and so do runs of the plugin's own scripts. A session with no limit on has none of these checks.
 
-A limit is a best-effort text and path check. A file tool is matched by real path, and a Bash command by its text. A path built at run time, a script written first and run later, or a symlink into these folders can get past it. Do not use a limit to contain a session you do not trust.
+A limit is a best-effort text and path check. A file tool is matched by real path, and a Bash command by its text. A path built at run time, a script written first and run later, a glob, a symlink into these folders, a settings file copied from one made earlier, or a key spelled with a JSON unicode escape can get past it. Do not use a limit to contain a session you do not trust.
 
 ## Code by PR and publish
 
