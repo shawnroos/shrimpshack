@@ -158,13 +158,9 @@ def apply_pause(repo_root, run_id, reason, *, backstop_latched=False):
     WITHOUT marking the loop done — the run stays resumable. The two callers
     differ ONLY by ``backstop_latched``:
 
-      * the destructive-action backstop (on-pretooluse-action.py::_pause_run)
-        passes ``True`` — the pause LATCHES the fail-closed gate so it keeps
-        firing on a second destructive command in the same autonomous turn
-        (no self-disarm);
-      * the operator CLI (auto-resume.py::_cmd_pause) uses the default
-        ``False`` — the operator now owns the session and runs their own
-        cleanup, so the gate must not re-fire on it.
+      * the destructive-action backstop, removed from the hook, passed ``True``.
+        A run it paused before that keeps the latch until `auto-resume continue`;
+      * the operator CLI (auto-resume.py::_cmd_pause) uses the default ``False``.
 
     ``backstop_latched`` rides the SAME atomic set_loop write as
     ``driver="manual"`` (P3-b) => the latch exists iff the backstop pause does.

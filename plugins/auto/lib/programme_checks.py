@@ -82,6 +82,8 @@ PM = "pm"
 SETTINGS_KEY = "check_settings"
 UNREADABLE = "checks_unreadable"
 SET_KIND = "check_set"
+LIMIT_REFUSED = "limit_refused"
+AUTO_RUN = "auto_run"
 OWN = "own"
 STATES = ("on", "off")
 STORE_WAIT_MS = 250
@@ -323,8 +325,64 @@ def session_checks(session_id, now=None) -> dict:
         states[name], source = _decide(name, matches)
         if source is not None:
             decided_by[name] = source
-    return {"states": states, "decided_by": decided_by, "unreadable": unreadable,
+    by_run = {m["run"]: {name: _decide(name, [o for o in matches if o["run"] == m["run"]])[0] for name in CHECKS}
+              for m in matches}
+    return {"states": states, "decided_by": decided_by, "unreadable": unreadable, "by_run": by_run,
             "matches": [{k: m[k] for k in ("run", "item", "role")} for m in matches]}
+
+
+# One read per session per hook process: up to five guards ask, and each would walk every lease.
+hook_checks = functools.lru_cache(maxsize=8)(session_checks)
+
+
+def run_state(name, run, session_id) -> bool:
+    """A check for this session in this programme. A session with no place in it gets the programme's setting."""
+    states = hook_checks(session_id)["by_run"].get(run)
+    if states:
+        return states[name]
+    record, _hold = programme_home.read_programme(run)
+    setting = _setting(record.get("programme") if isinstance(record, dict) else None, name)
+    return CHECKS[name].default if setting is None else setting
+
+
+def _bound_to(item, run_id, repo_root) -> bool:
+    bound = item.get(AUTO_RUN)
+    if not isinstance(bound, dict) or bound.get("run_id") != run_id:
+        return False
+    path = bound.get("path")
+    # Run ids repeat across repositories, and a standalone run must keep its default.
+    return not (isinstance(path, str) and repo_root) or os.path.realpath(path) == os.path.realpath(repo_root)
+
+
+def task_run_state(name, run_id, repo_root) -> bool:
+    """A check for a task run. Only a run bound to a live item has a setting; a standalone run gets the default."""
+    try:
+        programme_store.bound_waits(STORE_WAIT_MS)
+        for _run, _session, record, _hold in _held_runs(None):
+            programme = record.get("programme") if isinstance(record, dict) else None
+            for item in _items(programme).values():
+                if _live_item(item) and _bound_to(item, run_id, repo_root):
+                    settings = [_setting(block, name) for block in (item, programme)]
+                    return next((s for s in settings if s is not None), CHECKS[name].default)
+    except Exception:
+        pass
+    return CHECKS[name].default
+
+
+def limit_refusal(name, session_id, tool, what, **detail) -> tuple:
+    """(deny, journal_row) for one call under a limit. Nothing pauses: the worker keeps its turn."""
+    source = hook_checks(session_id)["decided_by"].get(name) or {}
+    item = source.get("item")
+    where, lift = (f"item {item}", f" --item {item}") if item else ("this programme", "")
+    reason = (f"auto: the agreed limit `{name}` ({CHECKS[name].text}) on {where} refuses this call: it {what}. "
+              f"Nothing is paused. Continue the work that does not need this, or ask the PM: "
+              f"`programme.sh set-check {name} off{lift}` lifts it. This attempt is journaled.")
+    payload = {"check": name, "item": item, "scope": source.get("scope"), "tool": tool, **detail}
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}, (source.get("run"), LIMIT_REFUSED, session_id, payload)
 
 
 def refusal(name, state, own=False, item=None):

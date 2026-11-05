@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Refuse the PM's write to a settings file a permission proposal targets.
+"""Refuse the PM's write to a settings file a permission proposal targets, and a limited worker's write to any.
 
 Best effort: the driving session is refused Write, Edit, MultiEdit or Bash calls that name
-that settings.local.json. Only `answer-permission <id> allow` writes it, after Shawn's pick;
-workers are not checked. While the programme's record cannot be read, the driver is refused any
+that settings.local.json. Only `answer-permission <id> allow` writes it, after Shawn's pick.
+While the programme's record cannot be read, the driver is refused any
 .claude/settings.local.json: which one a proposal targets cannot be known.
+Under `no-settings-writes` a session on an item is refused any .claude/settings.local.json;
+other workers are not checked. `pm-settings-writes` off lifts the driver's refusal.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ SETTINGS_FILE = rules.DESTINATION_FILE
 _TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
 _TOKEN = re.compile(r"[^\s;&|<>()`]*\.claude/settings\.local\.json(?![\w.-])", re.IGNORECASE)
 _HIDING_CHARS = re.compile(r"[\"'\\\\]")
+WRITES_LIMIT = "no-settings-writes"
+PM_CHECK = "pm-settings-writes"
 _ONLY_THE_VERB = "Only `programme.sh answer-permission <perm-id> allow` writes this file, after Shawn's pick."
 
 
@@ -104,6 +108,10 @@ def _target(tool_name, tool_input, cwd, destinations):
     return None
 
 
+def written(tool_name, tool_input, target) -> dict:
+    return {"path": target, **({"command": tool_input.get("command")} if tool_name == "Bash" else {})}
+
+
 def decision(stdin_raw: str):
     """(deny, journal_row) or None. The caller emits the deny before it journals the row."""
     data = json.loads(stdin_raw) if stdin_raw else None
@@ -114,7 +122,17 @@ def decision(stdin_raw: str):
     if "settings.local.json" not in json.dumps(tool_input).casefold():
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    found = scope(session_id)
+    cwd = data.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
+    # Loaded here, not at the top: only a call naming the file needs the checks.
+    checks = load_lib_module("programme_checks")
+    states = checks.hook_checks(session_id)["states"]
+    if states[WRITES_LIMIT]:
+        target = _target(tool_name, tool_input, cwd, None)
+        if target is not None:
+            return checks.limit_refusal(WRITES_LIMIT, session_id, tool_name, f"names {target}, a settings file",
+                                        **written(tool_name, tool_input, target))
+    found = scope(session_id) if states[PM_CHECK] else None
     if found is None:
         return None
     run_id, programme = found
@@ -123,8 +141,6 @@ def decision(stdin_raw: str):
         if isinstance(p, dict) and isinstance(p.get("destination"), str) and os.path.isabs(p["destination"])]
     if destinations == []:
         return None
-    cwd = data.get("cwd")
-    cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
     target = _target(tool_name, tool_input, cwd, destinations)
     if target is None:
         return None
@@ -133,14 +149,11 @@ def decision(stdin_raw: str):
             f"auto: this call names {target}, and the record of programme {run_id!r} cannot be read "
             f"right now, so no settings file can be cleared. {_ONLY_THE_VERB} "
             "Retry once the programme is readable, or continue the work that does not need this."), None
-    payload = {"tool": tool_name, "path": target}
-    if tool_name == "Bash":
-        payload["command"] = tool_input.get("command")
     return _deny(
         f"auto: this call names {target}, the settings file a permission proposal of "
         f"programme {run_id!r} targets. {_ONLY_THE_VERB} Offer that answer and wait for his pick, or continue the "
         "work that does not need this. The attempt is journaled once the programme is free."), \
-        (run_id, "blocked_settings_write", session_id, payload)
+        (run_id, "blocked_settings_write", session_id, {"tool": tool_name, **written(tool_name, tool_input, target)})
 
 
 def _deny(reason: str) -> dict:

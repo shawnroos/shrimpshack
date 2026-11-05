@@ -567,6 +567,20 @@ def _driven_programmes(session_id, now) -> list:
     return found
 
 
+def _held_by_setting(holds, session_id) -> list:
+    if not holds:
+        return []
+    checks = load_lib_module("programme_checks")
+    return [h for h in holds if checks.run_state(STOP_CHECK, h["run"], session_id)]
+
+
+def _blocking_by_setting(blocking, repo_root) -> list:
+    if not blocking:
+        return []
+    checks = load_lib_module("programme_checks")
+    return [b for b in blocking if checks.task_run_state(STOP_CHECK, b[0], repo_root)]
+
+
 def _rules_suffix(hold) -> str:
     flag = os.path.join(hold["home"], load_lib_module("programme_home").COMPACT_FLAG)
     if not os.path.exists(flag):
@@ -617,6 +631,11 @@ def _journal_stopped_unwatched(session_id, now) -> None:
             continue
 
 
+STOP_CHECK = "stop-block"
+# The hook is killed at its 10 s timeout, so a held programme store costs a short wait, as in the PreToolUse guards.
+STORE_WAIT_MS = 250
+
+
 def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
     """Return the decision dict to print, or None to allow stop silently.
 
@@ -639,8 +658,8 @@ def decide(repo_root: str, stdin_raw: str, now=None) -> dict | None:
         _journal_stopped_unwatched(session_id, now)
         return None
 
-    fresh, quiet = _split_programmes(_driven_programmes(session_id, now), session_id)
-    blocking = _blocking_runs(repo_root, now=now, session_id=session_id)
+    fresh, quiet = _split_programmes(_held_by_setting(_driven_programmes(session_id, now), session_id), session_id)
+    blocking = _blocking_by_setting(_blocking_runs(repo_root, now=now, session_id=session_id), repo_root)
     if blocking:
         return _task_block(repo_root, blocking, fresh, session_id)
     _clear_nag(_nag_dir(repo_root), session_id)
@@ -678,6 +697,11 @@ def _cli(argv) -> int:
             stdin_raw = sys.stdin.read()
         except Exception:
             stdin_raw = ""
+    try:
+        load_lib_module("programme_store").bound_waits(STORE_WAIT_MS)
+        load_lib_module("programme_home").cache_reads()
+    except Exception:
+        pass
     try:
         decision = decide(repo_root, stdin_raw)
     except Exception:

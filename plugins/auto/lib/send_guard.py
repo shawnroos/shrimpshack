@@ -592,6 +592,7 @@ def denial(session_id, command):
     workspace = _sender_workspace(session_id)
     for driver in drivers:
         for host, verb, target in sends:
-            if _targets_pane(target, driver, workspace) and session_registry.in_programme(driver, session_id):
+            if (_targets_pane(target, driver, workspace) and session_registry.in_programme(driver, session_id)
+                    and load_lib_module("programme_checks").run_state("literal-send", driver["run"], session_id)):
                 return _refusal(session_id, command, driver, host, verb, target)
     return None

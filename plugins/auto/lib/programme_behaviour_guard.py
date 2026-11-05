@@ -2,8 +2,9 @@
 """Refuse the PM's direct write to the personal behaviours folder or behaviours.json.
 
 Best effort, in the same scope as the settings guard: the driving session is refused Write,
-Edit, MultiEdit or Bash calls that name either target; workers are not checked. The PM's way
-to change them is a programme.py verb that Shawn approves.
+Edit, MultiEdit or Bash calls that name either target, and so is a session on an item under
+`no-settings-writes`; other workers are not checked. The PM's way to change them is a
+programme.py verb that Shawn approves, and `pm-settings-writes` off lifts the driver's refusal.
 """
 
 from __future__ import annotations
@@ -92,18 +93,23 @@ def decision(stdin_raw: str):
     if "behaviours" not in named and "behaviour-files" not in named:
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    found = settings_guard.scope(session_id)
-    if found is None:
+    checks = load_lib_module("programme_checks")
+    states = checks.hook_checks(session_id)["states"]
+    limited = states[settings_guard.WRITES_LIMIT]
+    found = settings_guard.scope(session_id) if states[settings_guard.PM_CHECK] else None
+    if found is None and not limited:
         return None
-    run_id, _programme = found
     cwd = data.get("cwd")
     cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
     target = _target(tool_name, tool_input, cwd)
     if target is None:
         return None
-    payload = {"tool": tool_name, "path": target}
-    if tool_name == "Bash":
-        payload["command"] = tool_input.get("command")
+    written = settings_guard.written(tool_name, tool_input, target)
+    if limited:
+        return checks.limit_refusal(settings_guard.WRITES_LIMIT, session_id, tool_name,
+                                    f"names {target}, a behaviours file", **written)
+    run_id, _programme = found
+    payload = {"tool": tool_name, **written}
     return settings_guard._deny(
         f"auto: this call names {target}, a behaviours file of the personal protocol. "
         "Only Shawn changes behaviours; use the programme verbs that ask him to approve, "

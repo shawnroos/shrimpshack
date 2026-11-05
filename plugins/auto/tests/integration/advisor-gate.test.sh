@@ -18,19 +18,10 @@
 #     - live run + MISMATCHED session_id (standalone) -> allow (KTD-5)
 #     - no run-record / phase==done / driver==manual / stale (>3900s) -> allow
 #     - malformed run-record -> allow + exit 0 (rel-001)
-#   action hook, default:
+#   action hook, no limit set:
 #     - destructive on a live owned run -> no deny, driver stays self, no audit row
-#     - the check's hatch needs CLAUDE_AUTO_TEST_HARNESS too
-#     - repo with .claude/auto and no lease: the shim starts no Python
 #     - a run the backstop paused before the upgrade stays paused until continue
-#   action hook, dormant check under its hatch (same ownership gate):
-#     - destructive (push --force / rm -rf / reset --hard / branch -D) on a
-#       live owned run -> deny + the run is PAUSED (driver=manual, blocked_on)
-#     - benign (ls / git status) -> allow, run-record untouched
-#     - fail-CLOSED: deny-unsupported hatch -> systemMessage (NOT empty) AND the
-#       run is still PAUSED on the run-record
-#     - mismatched session_id + destructive -> allow, run-record untouched (scope)
-#   .sh shim: malformed run-record -> exit 0
+#   The limit that refuses these commands is in check-settings.test.sh.
 
 set -uo pipefail
 
@@ -39,7 +30,6 @@ AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 ASKUSER_SH="${AUTO_ROOT}/.claude/hooks/on-pretooluse-askuser.sh"
 ASKUSER_PY="${AUTO_ROOT}/lib/on-pretooluse-askuser.py"
-ACTION_SH="${AUTO_ROOT}/.claude/hooks/on-pretooluse-action.sh"
 ACTION_PY="${AUTO_ROOT}/lib/on-pretooluse-action.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
@@ -285,53 +275,12 @@ PYEOF
 for cmd in 'git push --force origin main' 'rm -rf build/' 'gh repo delete owner/repo --yes'; do
   it "action off: '$cmd' on a live owned run -> no deny"
   REPO="$(mk_live_owned "off-$(echo "$cmd" | tr -dc 'a-z')" actrun sess-AAA)"
-  out="$(EVENT sess-AAA Bash "$cmd" | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
+  out="$(EVENT sess-AAA Bash "$cmd" | "$PY" "$ACTION_PY" "$REPO")"
   assert_empty "$out"
   it "action off: '$cmd' leaves driver==self"
   assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
   it "action off: '$cmd' records no audit row"
   assert_eq "0" "$(rd_audit "$REPO" actrun count)"
-done
-
-it "action off: the check's hatch without the harness sentinel stays off"
-REPO="$(mk_live_owned off-fence actrun sess-AAA)"
-out="$(EVENT sess-AAA Bash 'git push --force' | env -u CLAUDE_AUTO_TEST_HARNESS CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK=1 "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "action off: the harness sentinel without the check's hatch stays off"
-out="$(EVENT sess-AAA Bash 'git push --force' | env -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK CLAUDE_AUTO_TEST_HARNESS=1 "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "action off: the fence cases leave driver==self"
-assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
-
-MARKER_PY="${SANDBOX}/marker-python"
-cat > "$MARKER_PY" <<EOF
-#!/usr/bin/env bash
-touch "${SANDBOX}/python-ran"
-exit 0
-EOF
-chmod +x "$MARKER_PY"
-EMPTY_DATA="${SANDBOX}/no-leases"
-LEASED_DATA="${SANDBOX}/one-lease"
-mkdir -p "${EMPTY_DATA}" "${LEASED_DATA}/programmes/leases"
-printf '{}' > "${LEASED_DATA}/programmes/leases/w1.json"
-
-it "action.sh off: a repo with .claude/auto and no lease starts no Python"
-REPO="$(mk_live_owned off-nolease actrun sess-AAA)"
-rm -f "${SANDBOX}/python-ran"
-( cd "$REPO" && EVENT sess-AAA Bash 'git push --force' | CLAUDE_AUTO_DATA_DIR="$EMPTY_DATA" CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "$ACTION_SH" )
-if [ -e "${SANDBOX}/python-ran" ]; then fail "python ran"; else pass; fi
-
-it "action.sh off: a repo with a lease still starts Python"
-rm -f "${SANDBOX}/python-ran"
-( cd "$REPO" && EVENT sess-AAA Bash 'git push --force' | CLAUDE_AUTO_DATA_DIR="$LEASED_DATA" CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "$ACTION_SH" )
-if [ -e "${SANDBOX}/python-ran" ]; then pass; else fail "python did not run"; fi
-
-for data in "$EMPTY_DATA" "$LEASED_DATA"; do
-  it "action.sh off: git push --force from a live run proceeds ($(basename "$data"))"
-  out="$( cd "$REPO" && EVENT sess-AAA Bash 'git push --force origin main' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK CLAUDE_AUTO_DATA_DIR="$data" bash "$ACTION_SH" )"
-  assert_empty "$out"
-  it "action.sh off: that push leaves driver==self ($(basename "$data"))"
-  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 done
 
 it "action off: a run the backstop paused before the upgrade allows the command"
@@ -342,7 +291,7 @@ repo, run, run_record_py = sys.argv[1], sys.argv[2], sys.argv[3]
 s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
 L.apply_pause(repo, run, "auto destructive-action backstop: blocked `rm -rf`", backstop_latched=True)
 PYEOF
-out="$(EVENT sess-AAA Bash 'rm -rf build/' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
+out="$(EVENT sess-AAA Bash 'rm -rf build/' | "$PY" "$ACTION_PY" "$REPO")"
 assert_empty "$out"
 it "action off: that run stays paused"
 assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
@@ -353,356 +302,7 @@ assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 it "action off: /auto-resume continue clears that run's latch"
 assert_eq "None" "$(rd_loop "$REPO" actrun backstop_latched)"
 
-# ─── Every case below exercises the dormant check through its fenced hatch ────
-export CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK=1
-
-# ─── action: destructive commands on a live owned run -> deny + PAUSE ──────────
-# Force-push is covered in EVERY flag position (fix-round-5 P1): the canonical
-# flag-last spellings `git push origin main --force`/`-f`/`--force-with-lease`
-# were silently bypassing the prior `push\s+--force`-adjacency classifier. The
-# irreversible `gh` subcommands (fix-round-5 P2) run through the same gated Bash
-# channel and are equivalent-destruction, so they deny+pause too.
-for cmd in \
-  'git push --force origin main' \
-  'git push origin main --force' \
-  'git push origin main -f' \
-  'git push origin main --force-with-lease' \
-  'rm -rf build/' \
-  'git reset --hard HEAD~1' \
-  'git branch -D feature/x' \
-  'git checkout -- .' \
-  'git restore -- .' \
-  'gh repo delete owner/repo --yes' \
-  'gh release delete v1.0 --yes' \
-  'gh pr merge 42 --admin --squash'; do
-  it "action: destructive '$cmd' on live owned run -> deny"
-  REPO="$(mk_live_owned "action-$(echo "$cmd" | tr -dc 'a-z')" actrun sess-AAA)"
-  ev="$(EVENT sess-AAA Bash "$cmd")"
-  out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-  assert_eq "deny" "$(perm_decision "$out")"
-  it "action: destructive '$cmd' -> run PAUSED (driver=manual)"
-  assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
-  it "action: destructive '$cmd' -> blocked_on recorded"
-  case "$(rd_loop "$REPO" actrun blocked_on)" in
-    *destructive*) pass ;;
-    *) fail "blocked_on not recorded: $(rd_loop "$REPO" actrun blocked_on)" ;;
-  esac
-done
-
-# ─── action: benign command -> allow, run-record untouched ────────────────────────
-it "action: benign 'git status' on a live owned run -> allow"
-REPO="$(mk_live_owned action-benign actrun sess-AAA)"
-ev="$(EVENT sess-AAA Bash 'git status')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "action: benign command leaves driver==self (run untouched)"
-assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
-
-# ─── action: benign pushes with dashed/short-flag-ish branch names -> allow ────
-# The ordering-based force-push regex (fix-round-5 P1) must NOT false-positive on
-# ordinary pushes whose branch name contains dashes or where an unrelated short
-# flag (`-u`) appears — only a literal `--force`/`--force-with-lease`/`-f` flag is
-# destructive. Regression guard for the round-5 widening.
-for benign in 'git push origin my-feature' 'git push origin bugfix/foo' 'git push -u origin main' 'gh pr merge 42 --squash'; do
-  it "action: benign '$benign' on a live owned run -> allow (no false-positive)"
-  REPO="$(mk_live_owned "action-benignpush-$(echo "$benign" | tr -dc 'a-z')" actrun sess-AAA)"
-  ev="$(EVENT sess-AAA Bash "$benign")"
-  out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-  assert_empty "$out"
-  it "action: benign '$benign' leaves driver==self (no pause)"
-  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
-done
-
-# ─── action: rm -rf of an EPHEMERAL LITERAL temp path -> allow (path-scoping) ──
-# The destructive backstop is path-aware for the rm family: a deletion whose
-# targets ALL resolve to a real child under a known-ephemeral root (/tmp,
-# /private/tmp, /var/folders, /private/var/folders) is benign teardown (fan-out
-# agents' scratch, operator finalize cleanup) and must NOT pause the run.
-# Everything not provably ephemeral still fails closed (the GATE block below).
-for eph in \
-  'rm -rf /tmp/auto-test.XXXX' \
-  'rm -rf /private/tmp/auto.XXXX' \
-  'rm -rf /var/folders/xx/yy/T/auto.XXXX' \
-  'rm -rf /private/var/folders/xx/yy/T/auto.XXXX' \
-  'rm -fr /tmp/scratch' \
-  'rm -rf -- /tmp/a /tmp/b'; do
-  it "action: ephemeral '$eph' on live owned run -> allow (path-scoped)"
-  REPO="$(mk_live_owned "action-eph-$(echo "$eph" | tr -dc 'a-z')" actrun sess-AAA)"
-  ev="$(EVENT sess-AAA Bash "$eph")"
-  out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-  assert_empty "$out"
-  it "action: ephemeral '$eph' leaves driver==self (no pause)"
-  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
-  it "action: ephemeral '$eph' appends NO advisor_audit record"
-  assert_eq "0" "$(rd_audit "$REPO" actrun count)"
-done
-
-# ─── action: $TMPDIR teardown with a RESOLVABLE TMPDIR -> allow ────────────────
-# The field false-positives were `rm -rf "$TMPDIR/..."`. The hook resolves
-# $TMPDIR from its own env: pin it under an ephemeral root so the resolve is
-# deterministic (CI/Linux often leave TMPDIR unset — see the GATE case below).
-PINNED_TMPDIR="/private/var/folders/zz/T"
-for eph in \
-  'rm -rf $TMPDIR/scratch' \
-  'rm -rf "$TMPDIR/scratch"' \
-  'rm -rf ${TMPDIR}/scratch'; do
-  it "action: ephemeral '$eph' (TMPDIR set) on live owned run -> allow"
-  REPO="$(mk_live_owned "action-tmpdir-$(echo "$eph" | tr -dc 'a-z')" actrun sess-AAA)"
-  ev="$(EVENT sess-AAA Bash "$eph")"
-  out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
-  assert_empty "$out"
-  it "action: ephemeral '$eph' (TMPDIR set) leaves driver==self (no pause)"
-  assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
-done
-
-# ─── action: rm -rf of a NON-ephemeral path -> deny + PAUSE (fail-closed) ──────
-# Repo-relative paths (resolve under cwd = repo root), $HOME paths, parent-dir
-# escapes, traversal evasions, the temp ROOT itself (bare OR trailing-slash),
-# globs/command-substitution/brace targets whose runtime expansion is unknowable,
-# and any unresolved $-variable are NOT auto-exempted — the allowlist is
-# conservative and anything not provably under an ephemeral root still gates.
-for danger in \
-  'rm -rf build/' \
-  'rm -rf /tmp' \
-  'rm -rf /tmp/' \
-  'rm -rf /var/folders/' \
-  'rm -rf "$HOME/important"' \
-  'rm -rf ../sibling' \
-  'rm -rf /tmp/../etc' \
-  'rm -rf src /tmp/ok' \
-  'rm -rf /tmp/*' \
-  'rm -rf /tmp/{a,b}' \
-  'rm -rf /tmp/$VAR' \
-  'rm -rf "/tmp/$(echo ..)/etc"'; do
-  it "action: non-ephemeral '$danger' on live owned run -> deny (fail-closed)"
-  REPO="$(mk_live_owned "action-dang-$(echo "$danger" | tr -dc 'a-z')" actrun sess-AAA)"
-  ev="$(EVENT sess-AAA Bash "$danger")"
-  out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
-  assert_eq "deny" "$(perm_decision "$out")"
-  it "action: non-ephemeral '$danger' -> run PAUSED (driver=manual)"
-  assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
-done
-
-# ─── action: $TMPDIR that can't be SAFELY resolved -> deny (fail-closed) ───────
-# The regression guard for the `rm -rf "$TMPDIR/"` -> `rm -rf /` hole: with
-# TMPDIR UNSET (the hook-subprocess / CI default), `$TMPDIR/x` expands to `/x`,
-# so the exemption must gate. And a `$TMPDIR/../x` remainder (traversal) must
-# gate even when TMPDIR IS set.
-it "action: 'rm -rf \$TMPDIR/x' with TMPDIR UNSET -> deny (would expand to /x)"
-REPO="$(mk_live_owned action-tmpdirunset actrun sess-AAA)"
-ev="$(EVENT sess-AAA Bash 'rm -rf $TMPDIR/x')"
-out="$(printf '%s' "$ev" | env -u TMPDIR "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-
-it "action: 'rm -rf \$TMPDIR/' (bare temp root) -> deny"
-REPO="$(mk_live_owned action-tmpdirroot actrun sess-AAA)"
-ev="$(EVENT sess-AAA Bash 'rm -rf $TMPDIR/')"
-out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-
-it "action: 'rm -rf \$TMPDIR/../x' (traversal, TMPDIR set) -> deny"
-REPO="$(mk_live_owned action-tmpdirtrav actrun sess-AAA)"
-ev="$(EVENT sess-AAA Bash 'rm -rf $TMPDIR/../x')"
-out="$(printf '%s' "$ev" | TMPDIR="$PINNED_TMPDIR" "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-
-# ─── action: destructive but MISMATCHED session_id -> allow, untouched (scope) ─
-it "action: destructive command but mismatched session_id -> allow (scope: not our run)"
-REPO="$(mk_live_owned action-mismatch actrun sess-AAA)"
-ev="$(EVENT sess-OTHER Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "action: mismatched-session destructive leaves driver==self (no pause)"
-assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
-
-# ─── action: a fired backstop appends a kind="action" audit record (KTD-5) ────
-# driver-reference.md §Audit / SKILL.md §4.5 / run-record-schema §2.1 assert the
-# action backstop appends its OWN advisor_audit record when it pauses — without
-# it a fired backstop is invisible in the exit report (round-1 P1).
-it "action: a destructive command on a live owned run appends ONE advisor_audit record"
-REPO="$(mk_live_owned action-audit actrun sess-AAA)"
-ev="$(EVENT sess-AAA Bash 'git push --force origin main')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-it "action audit: exactly one record appended"
-assert_eq "1" "$(rd_audit "$REPO" actrun count)"
-it "action audit: record kind == action"
-assert_eq "action" "$(rd_audit "$REPO" actrun kind)"
-it "action audit: classification is the destructive-pattern label"
-case "$(rd_audit "$REPO" actrun classification)" in
-  *push*) pass ;;
-  *) fail "classification not the destructive label: $(rd_audit "$REPO" actrun classification)" ;;
-esac
-
-# ─── action: the backstop STAYS armed across a pause it caused (round-1 P0) ────
-# A denied tool call does NOT end the agent's turn. The FIRST destructive
-# command denies + flips the owned run to driver=manual; the SECOND from the
-# same driving session MUST still be denied — the action gate must NOT couple to
-# driver=="self" (it would self-disarm after firing once, then allow unlimited
-# rm -rf / force-push). NO staleness workaround needed: round-2 P2 dropped the
-# staleness conjunct from the ACTION hook entirely, so the freshly-init'd run is
-# owned regardless of beat freshness (the stale-owned case is its own scenario
-# below).
-it "action: SECOND destructive command after a backstop-induced pause -> STILL deny"
-REPO="$(mk_live_owned action-stayarmed actrun sess-AAA)"
-ev1="$(EVENT sess-AAA Bash 'rm -rf build/')"
-out1="$(printf '%s' "$ev1" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out1")"
-it "action: first command DID pause the run (driver=manual)"
-assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
-it "action: SECOND destructive command on the now-paused owned run -> STILL deny (no self-disarm)"
-ev2="$(EVENT sess-AAA Bash 'git push --force origin main')"
-out2="$(printf '%s' "$ev2" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out2")"
-it "action: the backstop-induced pause armed loop.backstop_latched=True (P3-b mechanism)"
-assert_eq "True" "$(rd_loop "$REPO" actrun backstop_latched)"
-
-# ─── action P3-a: the PRODUCTION deny ALSO emits a loud operator systemMessage ─
-# Parity with the deny-unsupported path: a normal (deny-supported) destructive
-# match must surface a top-level `systemMessage` (a transcript-visible operator
-# signal) ALONGSIDE the deny — confirmed against the CC hooks contract that
-# systemMessage is not suppressed by a permissionDecision. Without it the deny
-# only surfaced the agent-facing reason + a run-record pause (silent to an operator
-# not watching the run-record — the P3-a finding).
-it "action P3-a: production destructive deny emits a top-level systemMessage"
-REPO="$(mk_live_owned action-sysmsg actrun sess-AAA)"
-ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-it "action P3-a: the systemMessage coexists with the deny and says RUN PAUSED"
-case "$out" in *systemMessage*RUN\ PAUSED*) pass ;; *) fail "no loud systemMessage alongside deny: $out" ;; esac
-
-# ═══════════════════════════════════════════════════════════════════════════
-# action P3-b: the latch distinguishes a BACKSTOP pause from an OPERATOR pause
-# ═══════════════════════════════════════════════════════════════════════════
-# A backstop pause sets driver=manual + backstop_latched (sticky); an OPERATOR
-# pause (auto-resume.py pause) sets driver=manual WITHOUT the latch. The action
-# gate EXEMPTS the latter (the operator's own cleanup) but keeps firing on the
-# former (no self-disarm) — and the latch is sticky even across an agent-run
-# `auto-resume pause`, which is the door a text-only marker would have left open.
 RESUME_PY="${AUTO_ROOT}/lib/auto-resume.py"
-
-# (1) Operator pauses a HEALTHY run (no prior backstop fire) -> destructive ALLOWED.
-it "action P3-b: operator pause of a healthy run -> driver=manual, NOT latched"
-REPO="$(mk_live_owned action-oppause actrun sess-AAA)"
-CLAUDE_AUTO_REPO="$REPO" "$PY" "$RESUME_PY" pause actrun "operator cleanup" >/dev/null 2>&1
-assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
-it "action P3-b: operator pause did NOT arm the backstop latch"
-assert_eq "None" "$(rd_loop "$REPO" actrun backstop_latched)"
-it "action P3-b: destructive cmd during an OPERATOR pause -> ALLOW (operator's own cleanup)"
-ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-
-# (2) Backstop fires -> agent runs `auto-resume pause` -> destructive STILL denied.
-it "action P3-b: agent-run \`auto-resume pause\` after a backstop fire keeps the latch"
-REPO="$(mk_live_owned action-stickylatch actrun sess-AAA)"
-ev1="$(EVENT sess-AAA Bash 'rm -rf build/')"
-printf '%s' "$ev1" | "$PY" "$ACTION_PY" "$REPO" >/dev/null
-CLAUDE_AUTO_REPO="$REPO" "$PY" "$RESUME_PY" pause actrun "sneaky disarm attempt" >/dev/null 2>&1
-assert_eq "True" "$(rd_loop "$REPO" actrun backstop_latched)"
-it "action P3-b: destructive cmd after that pause -> STILL deny (latch closed the self-disarm door)"
-ev2="$(EVENT sess-AAA Bash 'git push --force origin main')"
-out2="$(printf '%s' "$ev2" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out2")"
-
-# (3) A clean `auto-resume continue` clears the latch (forgiveness) so a LATER
-# operator pause on the same run again allows the operator's own cleanup.
-it "action P3-b: a clean \`auto-resume continue\` clears the latch"
-CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-AAA" CLAUDE_CODE_CHILD_SESSION="" \
-  "$PY" "$RESUME_PY" continue actrun >/dev/null 2>&1
-assert_eq "None" "$(rd_loop "$REPO" actrun backstop_latched)"
-
-# ─── action: a STALE owned run + destructive -> STILL deny+pause (round-2 P2) ──
-# The fail-CLOSED invariant: the action hook must NOT couple to last_beat_at
-# freshness. _pause_run does NOT re-stamp last_beat_at (set_loop without
-# beat=True), so a run paused-by-backstop goes stale while the operator
-# deliberates; if the action hook read stale->allow, a SECOND rm -rf would slip
-# through. This primes the IDENTICAL stale run-record the askuser hook ALLOWS (lines
-# ~228-246) but asserts the OPPOSITE: the action hook still DENIES + PAUSES. That
-# contrast (same stale run-record: askuser allows / action denies) is the invariant.
-# NO NO_STALENESS workaround — staleness is genuinely irrelevant to this hook now.
-REPO="$(mkrepo action-stale)"
-"$PY" - "$REPO" "$RUN_RECORD_PY" <<'PYEOF'
-import sys, importlib.util, json, datetime
-repo, run_record_py = sys.argv[1], sys.argv[2]
-s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-L.init_run_record(repo,"staleact",backend="ce",loop_phase="work",steps=[{"id":"U1","state":"pending"}])
-old = (datetime.datetime.now(datetime.timezone.utc)
-       - datetime.timedelta(seconds=L.DRIVER_SELF_STALE_SECONDS + 120)).strftime("%Y-%m-%dT%H:%M:%SZ")
-p = L.run_record_path(repo,"staleact")
-with open(p) as f: led = json.load(f)
-led["loop"]["last_beat_at"] = old
-led["loop"]["driver"] = "self"
-led["driving_session_id"] = "sess-AAA"
-with open(p,"w") as f: json.dump(led,f)
-PYEOF
-# Contrast control FIRST (before the action hook mutates the run-record): the
-# askuser hook on this SAME stale self-driven run-record ALLOWS (fail-open) —
-# staleness stays in the question hook.
-it "contrast: askuser on the stale self-driven owned run_record -> ALLOW (fail-open; staleness kept here)"
-out_q="$(printf '%s' "$(EVENT sess-AAA AskUserQuestion 'noop')" | "$PY" "$ASKUSER_PY" "$REPO")"
-assert_empty "$out_q"
-# Now the action hook on the IDENTICAL stale run-record DENIES + PAUSES (fail-closed).
-it "action: a STALE self chain (>3900s) + destructive -> STILL deny (fail-closed, no staleness coupling)"
-ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-it "action: the STALE owned run is STILL paused (fail-closed despite stale beat)"
-assert_eq "manual" "$(rd_loop "$REPO" staleact driver)"
-
-# ─── action: FAIL-CLOSED under deny-unsupported -> systemMessage + still PAUSED ─
-it "action FAIL-CLOSED: deny-unsupported hatch -> systemMessage (NOT empty) on destructive"
-REPO="$(mk_live_owned action-failclosed actrun sess-AAA)"
-ev="$(EVENT sess-AAA Bash 'git push --force')"
-out="$(printf '%s' "$ev" | CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_DENY_UNSUPPORTED=1 "$PY" "$ACTION_PY" "$REPO")"
-assert_contains "$out" "systemMessage"
-it "action FAIL-CLOSED: deny-unsupported emits NO permissionDecision (deny contract gone)"
-assert_empty "$(perm_decision "$out")"
-it "action FAIL-CLOSED: the run is STILL paused (fail closed, not allow)"
-assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
-
-# ─── action: malformed run-record -> allow + exit 0 ───────────────────────────────
-it "action: malformed run_record + destructive command -> allow (no crash)"
-REPO="$(mkrepo action-malformed)"
-printf '{ not valid json' > "${REPO}/.claude/auto/broken.json"
-ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "action.sh shim: malformed run_record -> exit 0 (rel-001)"
-( cd "$REPO" && printf '%s' "$ev" | CLAUDE_AUTO_DATA_DIR="$LEASED_DATA" bash "$ACTION_SH" >/dev/null 2>&1 )
-assert_eq "0" "$?"
-
-# ─── action: a sibling NON-DICT run-record does NOT disarm the backstop ───────────
-# load_run_record_safe folds in a dict-guard: a valid-JSON-but-non-dict run-record file
-# (array/scalar) returns None and is SKIPPED by iter_worktree_run_records — it must
-# NOT abort the scan that finds the real owning run-record sitting beside it. If the
-# scan ever propagated a non-dict through to `_owns_session` (AttributeError on
-# `led.get(...)`) or stopped early on it, a single junk file in .claude/auto/
-# would silently disarm the fail-closed destructive backstop. Pins the
-# deliberate dict-guard behavior change at the security-load-bearing site.
-it "action: a sibling non-dict run_record file does NOT disarm the destructive backstop -> still deny"
-REPO="$(mk_live_owned action-nondict actrun sess-AAA)"
-printf '[]' > "${REPO}/.claude/auto/junk.json"   # valid JSON, non-dict
-ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-it "action: non-dict sibling present -> the real owned run is STILL paused"
-assert_eq "manual" "$(rd_loop "$REPO" actrun driver)"
-
-# ─── action: Write content is NOT scanned (round-4 P2) ────────────────────────
-# Write `content` is deliberately NOT classified: a driving-session ce-skill doc
-# Write (a plan/review markdown quoting `rm -rf` as an example — this repo's
-# CLAUDE.md lists the destructive set verbatim) must NOT pause the run. The Bash
-# `command` channel is the load-bearing backstop; Write prose matching was nearly
-# all false-positive cost in auto's own brainstorm/plan domain.
-it "action: a Write whose content carries 'rm -rf' on a live owned run -> ALLOW (content not scanned)"
-REPO="$(mk_live_owned action-write actrun sess-AAA)"
-ev="$("$PY" -c "import json; print(json.dumps({'session_id':'sess-AAA','tool_name':'Write','tool_input':{'file_path':'deploy.sh','content':'#!/bin/sh\nrm -rf /tmp/x\n'}}))")"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "action: the Write content scan leaves driver==self (run untouched)"
-assert_eq "self" "$(rd_loop "$REPO" actrun driver)"
 
 # ════════════════════════════════════════════════════════════════════════════
 # resume re-arm re-records the driving session (fix-round-6 P1)
@@ -747,12 +347,9 @@ it "resume: re-arm flips driving_session_id to the resuming session B"
 CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-BBB" env -u CLAUDE_CODE_CHILD_SESSION \
   "$PY" "$RESUME_PY" continue rrun >/dev/null 2>&1
 assert_eq "sess-BBB" "$(rd_driving "$REPO" rrun)"
-it "resume: a destructive command from the RESUMING session B -> deny (gate now owns it)"
-ev="$(EVENT sess-BBB Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+it "resume: a question from the RESUMING session B -> deny (the gate now owns it)"
+out="$(EVENT sess-BBB AskUserQuestion noop | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_eq "deny" "$(perm_decision "$out")"
-it "resume: the destructive command from session B PAUSES the run (backstop fired)"
-assert_eq "manual" "$(rd_loop "$REPO" rrun driver)"
 
 # ─── handoff->work branch ALSO re-records (different write path) ─────────────────
 # _cmd_continue records the session BEFORE branching, but handoff->work routes
@@ -780,15 +377,13 @@ it "resume: the handoff->work flip still advanced the phase (session re-record d
 assert_eq "work" "$("$PY" -c "import importlib.util as u;s=u.spec_from_file_location('l','$RUN_RECORD_PY');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.read_run_record('$REPO','handoffrun')['loop_phase'])")"
 
 # ─── regression guard: WITHOUT the fix, the stale id would let B through ──────
-# Same destructive command but issued from the STALE arm-time session A: it must
-# NOT match the re-armed run (the gate now owns B, not A), so it ALLOWS. This is
-# the contrapositive proving the gate keyed off the freshly-recorded id.
-it "resume: a command from the STALE arm-time session A -> allow (no longer owns the run)"
+# The same question from the STALE arm-time session A must NOT match the re-armed
+# run (the gate now owns B, not A), so it ALLOWS.
+it "resume: a question from the STALE arm-time session A -> allow (no longer owns the run)"
 REPO="$(mk_paused_owned resume-staleA rrun sess-AAA)"
 CLAUDE_AUTO_REPO="$REPO" CLAUDE_CODE_SESSION_ID="sess-BBB" env -u CLAUDE_CODE_CHILD_SESSION \
   "$PY" "$RESUME_PY" continue rrun >/dev/null 2>&1
-ev="$(EVENT sess-AAA Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
+out="$(EVENT sess-AAA AskUserQuestion noop | "$PY" "$ASKUSER_PY" "$REPO")"
 assert_empty "$out"
 
 # ─── refuse to re-arm when the driving session cannot be determined ───────────

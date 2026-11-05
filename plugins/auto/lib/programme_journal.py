@@ -49,6 +49,7 @@ KINDS = (
     "blocked_driver_send",
     "blocked_limit_write",
     "blocked_tracker_write",
+    "limit_refused",
     "tracker_synced",
     "issues_recorded",
     "trajectory_changed",

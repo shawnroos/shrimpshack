@@ -254,13 +254,10 @@ def set_loop(
                 loop.pop("blocked_on", None)
             else:
                 loop["blocked_on"] = str(blocked_on)
-        # backstop_latched (P3-b): a STICKY marker set ONLY by the destructive-
-        # action backstop when it pauses a run (lib/on-pretooluse-action.py). It
-        # is what lets that hook tell its OWN pause (latched => keep gating, no
-        # self-disarm) apart from an OPERATOR pause (`auto-resume pause`, NOT
-        # latched => allow the operator's own cleanup). Set ATOMICALLY in the same
-        # write as driver="manual" so the latch exists iff the backstop pause does
-        # (no split-brain). UNSET sentinel => leave unchanged; truthy => set True;
+        # backstop_latched (P3-b): a marker the destructive-action backstop set when
+        # it paused a run. The hook no longer pauses; a run it paused keeps the
+        # marker until `auto-resume continue` clears it.
+        # UNSET sentinel => leave unchanged; truthy => set True;
         # falsy => clear (the resume `continue` path clears it on a clean resume).
         # Not part of the predicate — the recompute is a no-op (like blocked_on).
         if backstop_latched is not run_record_core._UNSET:

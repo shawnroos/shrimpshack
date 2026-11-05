@@ -12,10 +12,7 @@
 #   arm time. advisor-gate.test.sh injects matching id strings into BOTH the
 #   stdin payload and the run-record, so it passes BY CONSTRUCTION and proves nothing
 #   about whether the two identifiers share a namespace in the live harness. A
-#   mismatch silently no-ops BOTH gates (question gate never redirects; action
-#   gate's _owning_run_id returns None -> destructive ops proceed). This is NOT
-#   caught by the fail-closed design (which covers only an unavailable `deny`
-#   contract, never "not my run -> allow").
+#   mismatch silently no-ops the gate: the question gate never redirects.
 #
 # HOW TO RUN (the documented §12 blocking step):
 #   1. Start one real `/auto` run. In its worktree the run arms a run-record at

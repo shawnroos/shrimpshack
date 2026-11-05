@@ -25,6 +25,7 @@ _SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PR_MERGE = re.compile(r"\bgh\b.*\bpr\b.*\bmerge\b|/pulls/\d+/merge|mergePullRequest", re.S)
 DIGEST_NAME = "sweep-digest.md"
+STORE_WAIT_MS = 250
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 PACKAGER_TYPE = "programme-sweep-packager"
 # A viewer that runs a command or writes a file is a write verb in disguise.
@@ -195,7 +196,15 @@ def _drives_programme(session_id) -> bool:
     return bool(_driven_homes(session_id)[0])
 
 
-def decide(stdin_raw, drives=_drives_programme, homes=_driven_homes):
+def _refusals_on(session_id) -> bool:
+    lib = os.path.dirname(os.path.abspath(__file__))
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from _bootstrap import load_lib_module
+    return load_lib_module("programme_checks").hook_checks(session_id)["states"]["subagent-refusals"]
+
+
+def decide(stdin_raw, drives=_drives_programme, homes=_driven_homes, refusals_on=_refusals_on):
     try:
         data = json.loads(stdin_raw or "{}")
     except ValueError:
@@ -217,13 +226,27 @@ def decide(stdin_raw, drives=_drives_programme, homes=_driven_homes):
             reason = write_refusal(tool_input, driven, programmes_dir, only_digest=packager) if driven else None
     else:
         return None
-    if reason is None:
+    if reason is None or not refusals_on(data.get("session_id")):
         return None
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": "auto: " + reason}}
 
 
+def _bound_store_waits() -> None:
+    # The hook is killed at its 5 s timeout and a killed hook denies nothing, so a held store costs a short wait.
+    lib = os.path.dirname(os.path.abspath(__file__))
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from _bootstrap import load_lib_module
+    load_lib_module("programme_store").bound_waits(STORE_WAIT_MS)
+    load_lib_module("programme_home").cache_reads()
+
+
 def main() -> int:
+    try:
+        _bound_store_waits()
+    except Exception:  # noqa: BLE001 — rel-001: losing the bound must not lose the guard
+        pass
     try:
         decision = decide(sys.stdin.read())
     except Exception:  # noqa: BLE001 — rel-001: a hook crash must never block the main session's tools

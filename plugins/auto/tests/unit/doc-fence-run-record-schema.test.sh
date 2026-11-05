@@ -95,6 +95,7 @@ REQUIRED=(
   "check_settings"
   "checks_unreadable"
   "check_set"
+  "limit_refused"
   "inbox_offset"
   "claims.jsonl"
   "journal.jsonl"

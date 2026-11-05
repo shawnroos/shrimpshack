@@ -12,31 +12,12 @@
 # Nothing is mocked; the only injection points are the sandbox repo and the
 # PreToolUse event JSON on stdin.
 #
-# THE HAZARD THIS FILE EXISTS TO PIN DOWN (found while reading on-pretooluse-
-# action.py:359-373): the action gate has an OPERATOR-PAUSE EXEMPTION — a run the
-# human paused (driver=="manual" without backstop_latched) ALLOWS destructive
-# commands, because the only actor issuing tool calls then is the operator doing
-# their own cleanup. A naive widening of the identity match would extend that
-# exemption to registered sub-agents, letting an in-flight sub-agent run `rm -rf`
-# during an operator pause. A sub-agent is NEVER the operator. The exemption must
-# stay scoped to the DRIVING session alone. Scenario 5 is the regression.
-#
-# The destructive check is off by default, so the action scenarios run it through
-# its fenced hatch. Scenario 0 pins the default.
+# The action hook no longer reads this set: the limit that refuses destructive commands
+# follows a programme's item, and check-settings.test.sh pins it.
 #
 # Scenarios:
-#   0.      registered sub-agent or driving session + destructive, no hatch -> allow
-#   1. AE7  registered sub-agent + destructive -> deny + run PAUSED (fail-CLOSED)
-#   2.      unregistered session + destructive -> allow, run-record untouched
-#           (no cross-session capture of an unrelated Claude session)
-#   3.      registered sub-agent + benign command -> allow
-#   4.      driving session still gated (no regression of the scalar behaviour)
-#   5. HAZARD operator-pause exemption is scoped to the DRIVING session:
-#           - driving session + destructive during operator pause -> allow
-#           - registered SUB-AGENT + destructive during operator pause -> DENY
 #   6.      question gate widens to the tree (registered sub-agent -> deny+redirect)
 #   7.      question gate still fails OPEN (malformed run-record -> allow, exit 0)
-#   8.      action gate still fails CLOSED (deny-unsupported hatch -> pause anyway)
 #   9.      register_session is idempotent and does not clobber driving_session_id
 
 set -uo pipefail
@@ -45,7 +26,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RUN_RECORD_PY="${AUTO_ROOT}/lib/run_record.py"
 ASKUSER_PY="${AUTO_ROOT}/lib/on-pretooluse-askuser.py"
-ACTION_PY="${AUTO_ROOT}/lib/on-pretooluse-action.py"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 
 PASS=0
@@ -134,86 +114,8 @@ PYEOF
   printf '%s' "$repo"
 }
 
-operator_pause() {  # <repo> <run> — a HUMAN pause: driver=manual, no backstop latch
-  "$PY" - "$1" "$2" "$RUN_RECORD_PY" <<'PYEOF'
-import sys, importlib.util, json
-repo, run, run_record_py = sys.argv[1:4]
-s=importlib.util.spec_from_file_location("run_record",run_record_py);L=importlib.util.module_from_spec(s);s.loader.exec_module(L)
-p = L.run_record_path(repo, run)
-with open(p) as f: led = json.load(f)
-led["loop"]["driver"] = "manual"
-led["loop"].pop("backstop_latched", None)
-with open(p,"w") as f: json.dump(led,f)
-PYEOF
-}
-
 # ════════════════════════════════════════════════════════════════════════════
 echo "tree-ownership.test.sh"
-
-# ─── 0. default: the check is off for the whole tree ─────────────────────────
-it "off by default: registered sub-agent + destructive -> allow"
-REPO="$(mk_live_owned off-kid r0 sess-BOSS)"
-register_session "$REPO" r0 sess-KID
-out="$(EVENT sess-KID Bash 'rm -rf build/' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "off by default: driving session + destructive -> allow"
-out="$(EVENT sess-BOSS Bash 'git push --force' | env -u CLAUDE_AUTO_TEST_HARNESS -u CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "off by default: the run stays self-driven"
-assert_eq "self" "$(rd_loop "$REPO" r0 driver)"
-
-export CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK=1
-
-# ─── 1. AE7: registered sub-agent + destructive -> deny + PAUSE ───────────────
-it "AE7: registered sub-agent + destructive -> deny (fail-CLOSED)"
-REPO="$(mk_live_owned reg-deny r1 sess-BOSS)"
-register_session "$REPO" r1 sess-KID
-ev="$(EVENT sess-KID Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-
-it "AE7: the run is PAUSED by the sub-agent's destructive attempt"
-assert_eq "manual" "$(rd_loop "$REPO" r1 driver)"
-
-# ─── 2. unregistered session -> allow (no cross-session capture) ──────────────
-it "unregistered session + destructive -> allow (no cross-session capture)"
-REPO="$(mk_live_owned unreg r2 sess-BOSS)"
-ev="$(EVENT sess-STRANGER Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-it "unregistered session leaves the run_record untouched (driver still self)"
-assert_eq "self" "$(rd_loop "$REPO" r2 driver)"
-
-# ─── 3. registered sub-agent + benign -> allow ────────────────────────────────
-it "registered sub-agent + benign command -> allow"
-REPO="$(mk_live_owned reg-benign r3 sess-BOSS)"
-register_session "$REPO" r3 sess-KID
-ev="$(EVENT sess-KID Bash 'ls -la')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-
-# ─── 4. driving session still gated (no regression) ──────────────────────────
-it "driving session + destructive -> deny (scalar behaviour preserved)"
-REPO="$(mk_live_owned drv r4 sess-BOSS)"
-ev="$(EVENT sess-BOSS Bash 'git push origin main --force')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
-
-# ─── 5. HAZARD: operator-pause exemption is DRIVING-SESSION-ONLY ──────────────
-# The exemption exists so the operator's own cleanup is not gated during a pause
-# they initiated. A sub-agent is never the operator.
-it "operator pause: the DRIVING session's destructive command is allowed (exemption holds)"
-REPO="$(mk_live_owned exempt-drv r5 sess-BOSS)"
-register_session "$REPO" r5 sess-KID
-operator_pause "$REPO" r5
-ev="$(EVENT sess-BOSS Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_empty "$out"
-
-it "operator pause: a registered SUB-AGENT's destructive command is STILL DENIED"
-ev="$(EVENT sess-KID Bash 'rm -rf build/')"
-out="$(printf '%s' "$ev" | "$PY" "$ACTION_PY" "$REPO")"
-assert_eq "deny" "$(perm_decision "$out")"
 
 # ─── 6. question gate widens to the tree ─────────────────────────────────────
 it "askuser: registered sub-agent -> deny + advisor redirect"
@@ -234,16 +136,6 @@ it "askuser still exits 0 on a malformed run_record (rel-001)"
 printf '%s' "$ev" | "$PY" "$ASKUSER_PY" "$REPO" >/dev/null 2>&1
 assert_eq "0" "$?"
 
-# ─── 8. action gate still fails CLOSED for a registered sub-agent ─────────────
-it "action still fails CLOSED for the tree: deny-unsupported -> systemMessage"
-REPO="$(mk_live_owned failclosed r8 sess-BOSS)"
-register_session "$REPO" r8 sess-KID
-ev="$(EVENT sess-KID Bash 'git push --force')"
-out="$(printf '%s' "$ev" | CLAUDE_AUTO_TEST_HARNESS=1 CLAUDE_AUTO_TEST_DENY_UNSUPPORTED=1 "$PY" "$ACTION_PY" "$REPO")"
-assert_contains "$out" "systemMessage"
-it "action fail-CLOSED: the run is paused even without the deny contract"
-assert_eq "manual" "$(rd_loop "$REPO" r8 driver)"
-
 # ─── 9. register_session hygiene ─────────────────────────────────────────────
 it "register_session is idempotent (no duplicate entries)"
 REPO="$(mk_live_owned idem r9 sess-BOSS)"
@@ -252,7 +144,7 @@ register_session "$REPO" r9 sess-KID
 assert_eq '["sess-KID"]' "$(read_owners "$REPO" r9)"
 
 it "register_session does not clobber driving_session_id"
-assert_eq "deny" "$(perm_decision "$(printf '%s' "$(EVENT sess-BOSS Bash 'rm -rf x/')" | "$PY" "$ACTION_PY" "$REPO")")"
+assert_eq "deny" "$(perm_decision "$(printf '%s' "$(EVENT sess-BOSS AskUserQuestion noop)" | "$PY" "$ASKUSER_PY" "$REPO")")"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
