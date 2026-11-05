@@ -326,6 +326,17 @@ EOF
 check "$BEFORE" "$AFTER"
 check "allow" "$(sh_verdict sess-lim "git status")"
 
+it "two guards refusing one call give one deny from the first in order, and a row from each in order"
+N="$(count_rows limit_refused)"
+OUT="$(call sess-lim Bash "$(bash_input "git reset --hard; rm ${HOME_FILE}")")"
+has '"permissionDecision": "deny"' "$OUT"
+case "$OUT" in *"${HOME_FILE}"*) fail "the protected-place guard answered first: $OUT" ;; *) pass ;; esac
+check "destructive protected" "$(run_py "$RUN" "$N" <<'EOF'
+rows = [r for r in pj.read(args[0]) if r["kind"] == "limit_refused"][int(args[1]):]
+print(" ".join("protected" if "limits" in r["payload"] else "destructive" for r in rows))
+EOF
+)"
+
 it "a read journals no row"
 N="$(count_rows limit_refused)"
 sh_verdict sess-lim "cat ${HOME_FILE}" >/dev/null

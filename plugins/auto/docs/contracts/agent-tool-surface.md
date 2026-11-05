@@ -1086,7 +1086,7 @@ journals `blocked_behaviours_write`. The Bash check is a text match; a neighbour
 as `behaviours.json.bak` is not checked. A programme verb that Shawn approves is the
 PM's only way to change those files. Workers may write them.
 
-A session under `no-destructive-commands` or `no-settings-writes` has the matching call denied, journaled as `limit_refused`, with no pause.
+A session under the agreed limit on destructive commands or on settings writes has the matching call denied, journaled as `limit_refused`, with no pause.
 
 For a session with at least one limit on, the hook denies a Write, Edit, MultiEdit or Bash write to the
 programme's folder or the installed plugin cache, a Bash call that sets

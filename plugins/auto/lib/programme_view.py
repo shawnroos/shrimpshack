@@ -696,7 +696,7 @@ def agreement_lines(block) -> list:
     return [programme_sanitize.clean(text, cap=0) for text in lines]
 
 
-def rule_texts(r) -> list:
+def rule_texts(r, only_set_checks=False) -> list:
     agreement = _dict(r.get("agreement"))
     accepted = _dict(agreement.get("accepted"))
     out = [("agreement: " + (f"accepted {accepted.get('at')}" if accepted else "not accepted"), "text")]
@@ -704,7 +704,10 @@ def rule_texts(r) -> list:
             if not programme_home.opt_in_hidden(key, _dict(term))]
     out += [(_ruling_text(_dict(e)), "text") for e in r.get("rulings") or []]
     out += behaviour_texts(r)
-    out += [(text, "text") for text in check_texts(r.get("checks") or [])]
+    checks = r.get("checks") or []
+    if only_set_checks:
+        checks = [row for row in checks if row["scope"] not in ("default", "fixed")]
+    out += [(text, "text") for text in check_texts(checks)]
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
     out += [(f"authority {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
             for e in r.get("autonomy") or []]
@@ -715,8 +718,8 @@ def rule_texts(r) -> list:
     return [(programme_sanitize.clean(text, cap=0), style) for text, style in out]
 
 
-def rules_texts(r) -> list:
-    out = rule_texts(r)
+def rules_texts(r, only_set_checks=False) -> list:
+    out = rule_texts(r, only_set_checks)
     if r.get("operating_contract"):
         out += [(text, "text") for text in programme_terms.contract_lines(r["operating_contract"])]
     return out + [(programme_sanitize.clean(
