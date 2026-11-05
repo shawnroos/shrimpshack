@@ -458,6 +458,12 @@ START="$("$PY" -c 'import time; print(time.time())')"
 ( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" /bin/bash "$HOOK" < "$BIG" ) >/dev/null
 check "True" "$("$PY" -c "import time; print(time.time() - $START < 5)")"
 
+it "a sed script of many backslashes is judged inside the hook's time limit, and the write after it is refused"
+SLASHES="$(printf '%.0s\\' $(seq 1 60))"
+START="$("$PY" -c 'import time; print(time.time())')"
+V="$(sh_verdict sess-lim "sed 's/${SLASHES}' /tmp/a; rm ${HOME_FILE}")"
+check "deny True" "$V $("$PY" -c "import time; print(time.time() - $START < 2)")"
+
 it "a limited session in a protected folder running a call that names nothing is not refused"
 cwd_verdict() {
   local raw out

@@ -59,7 +59,7 @@ _READER_WRITES = {
 _SHORT_WRITES = {"sed": "iIf", "sort": "o"}
 # What a sed script holds besides its commands: s and y bodies, and /regex/ addresses. An s that ends a label
 # (`ts;w x;s;`) is not a command, so a letter before it keeps the body in view.
-_SED_BODIES = re.compile(r"(?<![A-Za-z])[sy]([^\s\\])(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1|/(?:\\.|[^/\\])*/", re.DOTALL)
+_SED_BODIES = re.compile(r"(?<![A-Za-z])[sy]([^\s\\])(?:\\.|(?!\1)[^\\])*\1(?:\\.|(?!\1)[^\\])*\1|/(?:\\.|[^/\\])*/", re.DOTALL)
 # w and W write a file, e runs a command. A letter in a label or appended text counts too: refusing a read is safe.
 _SED_ACTS = re.compile(r"[wWe]")
 
