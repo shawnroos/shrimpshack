@@ -5,8 +5,9 @@ Best effort: the driving session is refused Write, Edit, MultiEdit or Bash calls
 that settings.local.json. Only `answer-permission <id> allow` writes it, after Shawn's pick.
 While the programme's record cannot be read, the driver is refused any
 .claude/settings.local.json: which one a proposal targets cannot be known.
-Under `no-settings-writes` a session on an item is refused any .claude/settings.local.json;
-other workers are not checked. `pm-settings-writes` off lifts the driver's refusal.
+Under `no-settings-writes` a session on an item is refused a write to any settings.json or
+settings.local.json in a .claude folder or the user config folder, and a Bash call that only reads
+passes; other workers are not checked. `pm-settings-writes` off lifts the driver's refusal.
 """
 
 from __future__ import annotations
@@ -119,7 +120,8 @@ def decision(stdin_raw: str):
         return None
     tool_name = data["tool_name"]
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    if "settings.local.json" not in json.dumps(tool_input).casefold():
+    named = _HIDING_CHARS.sub("", json.dumps(tool_input)).casefold()
+    if "settings.json" not in named and "settings.local.json" not in named:
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
     cwd = data.get("cwd")
@@ -128,9 +130,10 @@ def decision(stdin_raw: str):
     checks = load_lib_module("programme_checks")
     states = checks.hook_checks(session_id)["states"]
     if states[WRITES_LIMIT]:
-        target = _target(tool_name, tool_input, cwd, None)
+        # Loaded here: programme_limits loads this module at its top.
+        target = load_lib_module("programme_limits").settings_target(tool_name, tool_input, cwd)
         if target is not None:
-            return checks.limit_refusal(WRITES_LIMIT, session_id, tool_name, f"names {target}, a settings file",
+            return checks.limit_refusal(WRITES_LIMIT, session_id, tool_name, f"would write {target}, a settings file",
                                         **written(tool_name, tool_input, target))
     found = scope(session_id) if states[PM_CHECK] else None
     if found is None:

@@ -1087,14 +1087,16 @@ as `behaviours.json.bak` is not checked. A programme verb that Shawn approves is
 PM's only way to change those files. Workers may write them.
 
 A session under the agreed limit on destructive commands or on settings writes has the matching call denied, journaled as `limit_refused`, with no pause.
+Under the settings-writes limit that call is a write to any `settings.json` or `settings.local.json` in a
+`.claude` folder or the user config folder, or to the behaviours files; a Bash call that only reads them passes.
 
 For a session with at least one limit on, the hook denies a Write, Edit, MultiEdit or Bash write to the
 programme's folder or the installed plugin cache, a Bash call that sets
-`CLAUDE_AUTO_DATA_DIR`, and a write of `disableAllHooks` or `allowManagedHooksOnly` to a
-`settings.json` or `settings.local.json`. It journals `limit_refused` and
-pauses nothing. File tools match by real path. A Bash call that names one of these
-passes only if it only reads, or runs the plugin's own scripts; the match is by text, so
-it is best effort. A session with no limit on is not checked. `start-worker` adds the
+`CLAUDE_AUTO_DATA_DIR` or `CLAUDE_CODE_SESSION_ID` or runs `set-check`, and a write of
+`disableAllHooks` or `allowManagedHooksOnly` to a `settings.json` or `settings.local.json`.
+It journals `limit_refused` and pauses nothing. File tools match by real path. A Bash call
+that names one of these passes only if it only reads, or runs the plugin's own scripts with a
+verb other than `set-check`; the match is by text, so it is best effort. A session with no limit on is not checked. `start-worker` adds the
 limits in force to the brief. Its output lists them, and says when no `--handoff`
 carried them to the worker.
 

@@ -157,6 +157,29 @@ BLOCKED_BASH=(
   "cat > .claude/settings.local.json <<EOF
 {\"disableAllHooks\": true}
 EOF"
+  "sed -Ei '' s/a/b/ ${HOME_FILE}"
+  "sed -E -i.bak s/a/b/ ${HOME_FILE}"
+  "sed -I '' s/a/b/ ${HOME_FILE}"
+  "sed --in-place=.bak s/a/b/ ${HOME_FILE}"
+  "sed -n 'w ${HOME_FILE}' /tmp/a"
+  "sed 's/a/b/w ${HOME_FILE}' /tmp/a"
+  "sed -e p -e 'W ${HOME_FILE}' /tmp/a"
+  "sed -f /tmp/script ${HOME_FILE}"
+  "sed 's/a/b/e' ${HOME_FILE}"
+  "sort -uo ${HOME_FILE} /tmp/a"
+  "sort -o ${HOME_FILE} /tmp/a"
+  "sort --output=${HOME_FILE} /tmp/a"
+  "tree -o ${HOME_FILE} /tmp"
+  "less -o ${HOME_FILE} /tmp/a"
+  "rg --pre rm x ${PROGRAMMES}"
+  "export CLAUDE_CODE_SESSION_ID=sess-pm; bash ${CACHE}/lib/programme.sh set-check no-destructive-commands off --item linear:AI-1"
+  "CLAUDE_CODE_SESSION_ID=sess-pm bash ${CACHE}/lib/programme.sh set-check no-destructive-commands off --item linear:AI-1"
+  "env CLAUDE_CODE_SESSION_ID=sess-pm bash ${CACHE}/lib/programme.sh set-check no-destructive-commands off --item linear:AI-1"
+  "bash ${CACHE}/lib/programme.sh set-check no-destructive-commands off --item linear:AI-1"
+  "bash \${CLAUDE_PLUGIN_ROOT}/lib/programme.sh set-check no-destructive-commands off"
+  "P=\"bash ${CACHE}/lib/programme.sh\"; \$P set-check no-destructive-commands off"
+  "export CLAUDE_CODE_SESS\"\"ION_ID=sess-pm"
+  "python3 -c \"import os; os.environ['CLAUDE_CODE_SESSION_ID'] = 'sess-pm'\""
 )
 it "a limited worker's Bash write to a protected target is refused, each form through the shell hook"
 BAD=""
@@ -231,6 +254,16 @@ ALLOWED_BASH=(
   "npm test"
   "echo hello > /tmp/out"
   "echo disableAllHooks > notes.txt"
+  "sed -e 1p ${HOME_FILE}"
+  "sed -n '/open/p' ${HOME_FILE}"
+  "sed -nE 's/a/b/gp' ${HOME_FILE}"
+  "sed -n -e '/x/{p;q;}' ${HOME_FILE}"
+  "sort -u ${HOME_FILE}"
+  "sort -t, -k2 ${HOME_FILE}"
+  "echo \$CLAUDE_CODE_SESSION_ID"
+  "grep -rn CLAUDE_CODE_SESSION_ID lib"
+  "grep -rn set-check ${CACHE}/lib"
+  "bash ${CACHE}/lib/programme.sh offer limit-x --command 'set-check no-destructive-commands on --item linear:AI-1'"
 )
 it "a limited worker's reads and its runs of the plugin's own scripts are not refused"
 BAD=""
@@ -397,6 +430,9 @@ cwd_marker_call() {
   ( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "$HOOK" <<< "$raw" )
   [ -e "${WORK}/python-ran" ] && printf 'ran' || printf 'none'
 }
+it "a Bash call naming CLAUDE_CODE_SESSION_ID or set-check starts Python"
+check "ran ran ran" "$(marker_call Bash "{\"command\": \"export CLAUDE_CODE_SESSION_ID=x\"}") $(marker_call Bash "{\"command\": \"export CLAUDE_CODE_SESS\\\"\\\"ION_ID=x\"}") $(marker_call Bash "{\"command\": \"\$P set-check a off\"}")"
+
 it "a Read, an ordinary Edit or an ordinary Bash with cwd inside the plugin root starts no Python"
 check "none none none" "$(cwd_marker_call "$AUTO_ROOT" Read "{\"file_path\": \"${NOREPO}/a.txt\"}") $(cwd_marker_call "$AUTO_ROOT" Edit "{\"file_path\": \"${NOREPO}/a.txt\"}") $(cwd_marker_call "$AUTO_ROOT" Bash "{\"command\": \"git status\"}")"
 

@@ -42,7 +42,7 @@ PROTECTED = {
     "on-pretooluse-askuser": (_PREFILL,),
     "on-pretooluse-action": (_LINEAR,),
     "programme_evidence": (_LINEAR,),
-    "programme_checks": (_PREFILL, _LINEAR),
+    "programme_checks": (_PICK, _PREFILL, _LINEAR),
     "hooks": (_PICKER, _PICK, _PREFILL, _LINEAR),
 }
 
@@ -159,6 +159,20 @@ def _setting(block, name):
     return False if state == "off" and CHECKS[name].can_turn_off else None
 
 
+def _layered(name, item, programme) -> tuple:
+    """(setting, scope): an item setting beats the programme setting. None when neither holds one."""
+    for block, scope in ((item, "item"), (programme, "programme")):
+        setting = _setting(block, name)
+        if setting is not None:
+            return setting, scope
+    return None, "programme"
+
+
+def _effective(name, item, programme) -> bool:
+    setting = _layered(name, item, programme)[0]
+    return CHECKS[name].default if setting is None else setting
+
+
 def _own_setting(programme, name):
     own = _entry(programme, name).get(OWN) if _has_own_run(name) else None
     return {"on": True, "off": False}.get(own) if isinstance(own, str) else None
@@ -196,11 +210,8 @@ def _decide(name, matches) -> tuple:
         if row.limit and match["item"] is None:
             continue
         item, programme = match["_blocks"]
-        setting, scope = _setting(item, name), "item"
-        if setting is None and match["item"] is None:
-            setting, scope = _own_setting(programme, name), OWN
-        if setting is None:
-            setting, scope = _setting(programme, name), "programme"
+        own = _own_setting(programme, name) if match["item"] is None else None
+        setting, scope = (own, OWN) if own is not None else _layered(name, item, programme)
         votes.append((row.default if setting is None else setting, setting, scope, match))
     # Across matches, on wins: a session on two items carries a limit either item has.
     state = any(vote[0] for vote in votes) if votes else row.default
@@ -343,8 +354,7 @@ def run_state(name, run, session_id) -> bool:
     if states:
         return states[name]
     record, _hold = programme_home.read_programme(run)
-    setting = _setting(record.get("programme") if isinstance(record, dict) else None, name)
-    return CHECKS[name].default if setting is None else setting
+    return _effective(name, None, record.get("programme") if isinstance(record, dict) else None)
 
 
 def _bound_to(item, run_id, repo_root) -> bool:
@@ -364,8 +374,7 @@ def task_run_state(name, run_id, repo_root) -> bool:
             programme = record.get("programme") if isinstance(record, dict) else None
             for item in _items(programme).values():
                 if _live_item(item) and _bound_to(item, run_id, repo_root):
-                    settings = [_setting(block, name) for block in (item, programme)]
-                    return next((s for s in settings if s is not None), CHECKS[name].default)
+                    return _effective(name, item, programme)
     except Exception:
         pass
     return CHECKS[name].default
@@ -423,7 +432,7 @@ def stored_state(block, name, scope):
 
 
 def _limit_is_on(programme, item, name) -> bool:
-    return bool(_setting(item, name) or _setting(programme, name))
+    return _effective(name, item, programme)
 
 
 def _limit_ask(name, key) -> str:

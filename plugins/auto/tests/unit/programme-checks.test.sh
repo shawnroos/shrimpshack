@@ -906,10 +906,24 @@ TEXT="$(status_text)"
 has "checks at their default:" "$TEXT"
 has "no off setting: tracker-proof, prefilled-answers" "$TEXT"
 
-it "a patch to the file that holds the registry names the two rules it holds"
+it "a patch to the file that holds the registry names the three rules it holds"
 PATCH_OUT="$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" record-hook-patch "lib/programme_checks.py" --why "w" --pr 1 --run "$SR" 2>&1)"
 has "pre-filled answer refusal" "$PATCH_OUT"
 has "Linear done, cancelled and root-cause rule" "$PATCH_OUT"
+has "approvals that need a pick" "$PATCH_OUT"
+
+it "an item's off beats the programme's on: the limit is not on for that item, so it is asked for and listed"
+check "[] ['ask'] ['no-destructive-commands'] False True" "$(run_py <<'EOF'
+checks = load_lib_module("programme_checks")
+prog = {"check_settings": {"no-destructive-commands": {"state": "on"}},
+        "items": {"a": {"state": "active", "check_settings": {"no-destructive-commands": {"state": "off"}}}}}
+rows = [{"kind": "contract_set", "payload": {"item": "a", "limits": ["no-destructive-commands"]}}]
+asks = checks.limit_asks(prog, "a", ["no-destructive-commands"])
+print(checks.item_limits(prog, "a"), ["ask" for _ in asks], [r["check"] for r in checks.named_limits(prog, rows, [])],
+      checks._limit_is_on(prog, prog["items"]["a"], "no-destructive-commands"),
+      checks._limit_is_on(prog, {"state": "active"}, "no-destructive-commands"))
+EOF
+)"
 
 it "what set-check stores is a shape the hooks' read accepts"
 check "[]" "$(run_py "$SR" <<'EOF'

@@ -393,6 +393,18 @@ LONG="$(printf 'x%.0s' $(seq 1 1600))"
 check "ran" "$(reaches_python sess-worker "$LONG")"
 it "shim: a command naming settings.local.json reaches Python"
 check "ran" "$(reaches_python sess-worker "cat .claude/settings.local.json")"
+it "shim: a command or a Write naming settings.json reaches Python, the name hidden or not"
+rm -f "${WORK}/python-ran"
+( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" \
+  <<< "$(payload sess-worker Write "$NOREPO" "{\"file_path\": \"${DEST}/.claude/settings.json\"}")" )
+A="$([ -e "${WORK}/python-ran" ] && echo ran || echo none)"
+check "ran ran ran" "$A $(reaches_python sess-worker "cat .claude/settings.json") $(reaches_python sess-worker "cat .claude/sett''ings.json")"
+it "shim: the protected words match programme_limits, so a word added to one fails here until the other has it"
+SHIM_WORDS="$(sed -n "s/^__cd_protected='\(.*\)'$/\1/p" "${HOOKS}/on-pretooluse-action.sh" | tr '|' '\n' | LC_ALL=C sort | tr '\n' ' ')"
+check "$SHIM_WORDS" "$(run_py <<'EOF'
+print(" ".join(sorted(w.casefold() for w in load_lib_module("programme_limits").NAMED_WORDS)) + " ")
+EOF
+)"
 it "shim: a command naming behaviours reaches Python"
 check "ran" "$(reaches_python sess-worker "ls behaviours")"
 
@@ -446,9 +458,35 @@ A="$(verdict "$(tool_hook sess-worker Write '{"file_path": "/tmp/x", "content": 
 B="$(verdict "$(bash_hook sess-worker 'echo x > /tmp/x')")"
 C="$(verdict "$(bash_hook sess-worker 'rm -rf /tmp/x')")"
 check "allow allow allow" "$A $B $C"
+it "settings.json in a .claude folder or the user config folder is refused too, by Write and by Bash"
+PERMS="{\\\"permissions\\\": {\\\"allow\\\": [\\\"Bash(*)\\\"]}}"
+A="$(verdict "$(tool_hook sess-worker Write "{\"file_path\": \"${DEST}/.claude/settings.json\", \"content\": \"${PERMS}\"}")")"
+B="$(verdict "$(tool_hook sess-worker Write "{\"file_path\": \"~/.claude/settings.json\", \"content\": \"${PERMS}\"}")")"
+C="$(verdict "$(export CLAUDE_CONFIG_DIR="${WORK}/cfg"; tool_hook sess-worker Write "{\"file_path\": \"${WORK}/cfg/settings.json\", \"content\": \"{}\"}")")"
+D="$(verdict "$(bash_hook sess-worker "echo '{}' > ${DEST}/.claude/settings.json")")"
+E="$(verdict "$(bash_hook sess-worker "cd ${DEST}/.claude && echo '{}' > settings.json")")"
+F="$(verdict "$(bash_hook sess-worker "echo '{}' > ${DEST}/.claude/sett''ings.json")")"
+G="$(verdict "$(bash_hook sess-worker "sed -i '' s/a/b/ ${SETTINGS}")")"
+check "deny deny deny deny deny deny deny" "$A $B $C $D $E $F $G"
 it "the same worker on a look-alike name is allowed"
-LOOKALIKE="{\"file_path\": \"${DEST}/.claude/settings.json\", \"content\": \"{}\"}"
-check "allow" "$(verdict "$(tool_hook sess-worker Write "$LOOKALIKE")")"
+A="$(verdict "$(tool_hook sess-worker Write "{\"file_path\": \"${DEST}/notes/settings.json\", \"content\": \"{}\"}")")"
+B="$(verdict "$(tool_hook sess-worker Write "{\"file_path\": \"${DEST}/.claude/my-settings.json\", \"content\": \"{}\"}")")"
+check "allow allow" "$A $B"
+it "reads of the settings and behaviours files stay open under the limit, and journal nothing"
+BEFORE="$(limit_rows 'len(rows)')"
+OUT=""
+for c in "cat ${SETTINGS}" "grep allow ${DEST}/.claude/settings.json" "jq . ~/.claude/settings.json" \
+  "cat ${SETTINGS} > ${WORK}/copy" "cat ${CLAUDE_AUTO_BEHAVIOURS_STORE}" "ls ${CLAUDE_AUTO_BEHAVIOURS_DIR}" \
+  "echo \$CLAUDE_AUTO_BEHAVIOURS_DIR"; do
+  OUT="${OUT}$(verdict "$(bash_hook sess-worker "$c")") "
+done
+check "allow allow allow allow allow allow allow " "$OUT"
+check "$BEFORE" "$(limit_rows 'len(rows)')"
+it "a Bash write to the behaviours files is still refused under the limit"
+A="$(verdict "$(bash_hook sess-worker "cat ${WORK}/copy > ${CLAUDE_AUTO_BEHAVIOURS_STORE}")")"
+B="$(verdict "$(bash_hook sess-worker "rm ${CLAUDE_AUTO_BEHAVIOURS_DIR}/x.md")")"
+C="$(verdict "$(bash_hook sess-worker "export CLAUDE_AUTO_BEHAVIOURS_DIR=/tmp/x")")"
+check "deny deny deny" "$A $B $C"
 clear_settings
 it "an unlimited worker is allowed"
 A="$(verdict "$(tool_hook sess-worker Write "$SETTINGS_WRITE")")"

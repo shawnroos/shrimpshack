@@ -168,8 +168,8 @@
 #                          programme_record, programme_permission_rules,
 #                          programme_permission_state, permission_transcript,
 #                          programme_permission_settle (never the reverse)
-#   programme_settings_guard → programme_home, programme_permission_rules
-#   programme_behaviour_guard → programme_settings_guard; programme_behaviours [lazy],
+#   programme_settings_guard → programme_home, programme_permission_rules; programme_limits [lazy]
+#   programme_behaviour_guard → programme_settings_guard; programme_limits [lazy], programme_behaviours [lazy],
 #                          programme_behaviour_files [lazy], programme_protocol [lazy]
 #                          (programme_protocol arrives through programme_behaviour_files)
 #   programme_behaviour_files → programme_behaviours, programme_protocol

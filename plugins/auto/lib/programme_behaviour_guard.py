@@ -3,8 +3,9 @@
 
 Best effort, in the same scope as the settings guard: the driving session is refused Write,
 Edit, MultiEdit or Bash calls that name either target, and so is a session on an item under
-`no-settings-writes`; other workers are not checked. The PM's way to change them is a
-programme.py verb that Shawn approves, and `pm-settings-writes` off lifts the driver's refusal.
+`no-settings-writes`, except for a Bash call that only reads; other workers are not checked.
+The PM's way to change them is a programme.py verb that Shawn approves, and
+`pm-settings-writes` off lifts the driver's refusal.
 """
 
 from __future__ import annotations
@@ -82,6 +83,15 @@ def _target(tool_name, tool_input, cwd):
     return None
 
 
+def _reads(tool_name, tool_input) -> bool:
+    command = tool_input.get("command")
+    if tool_name != "Bash" or not isinstance(command, str):
+        return False
+    # Loaded here: programme_limits loads this module at its top.
+    limits = load_lib_module("programme_limits")
+    return limits.only_reads(command, lambda word: bool(_TOKEN.search(word) or _ENV_REDIRECT.search(word)))
+
+
 def decision(stdin_raw: str):
     """(deny, journal_row) or None. The caller emits the deny before it journals the row."""
     data = json.loads(stdin_raw) if stdin_raw else None
@@ -95,7 +105,7 @@ def decision(stdin_raw: str):
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
     checks = load_lib_module("programme_checks")
     states = checks.hook_checks(session_id)["states"]
-    limited = states[settings_guard.WRITES_LIMIT]
+    limited = states[settings_guard.WRITES_LIMIT] and not _reads(tool_name, tool_input)
     found = settings_guard.scope(session_id) if states[settings_guard.PM_CHECK] else None
     if found is None and not limited:
         return None
@@ -107,7 +117,7 @@ def decision(stdin_raw: str):
     written = settings_guard.written(tool_name, tool_input, target)
     if limited:
         return checks.limit_refusal(settings_guard.WRITES_LIMIT, session_id, tool_name,
-                                    f"names {target}, a behaviours file", **written)
+                                    f"would write {target}, a behaviours file", **written)
     run_id, _programme = found
     payload = {"tool": tool_name, **written}
     return settings_guard._deny(

@@ -3,7 +3,8 @@
 
 A session with no limit on is never refused here. Best effort: a file tool is matched by real path and
 Bash by text. A command that names a protected place passes only when all it does is read, or run the
-plugin's own scripts, so a path built at run time or a script written elsewhere still gets through.
+plugin's own scripts with a verb other than `set-check`, so a path built at run time or a script written
+elsewhere still gets through.
 """
 
 from __future__ import annotations
@@ -27,7 +28,12 @@ behaviour_guard = load_lib_module("programme_behaviour_guard")
 
 DATA_ENV = "CLAUDE_AUTO_DATA_DIR"
 ROOT_ENV = "CLAUDE_PLUGIN_ROOT"
+# programme.sh knows its caller only by this variable, so a session that sets it can act as the PM.
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+LIFT_VERB = "set-check"
 HOOK_KEYS = ("disableAllHooks", "allowManagedHooksOnly")
+# The shim's __cd_protected must list the same words; tests/integration/check-settings.test.sh compares them.
+NAMED_WORDS = ("programmes", "plugins", DATA_ENV, ROOT_ENV, SESSION_ENV, LIFT_VERB, *HOOK_KEYS)
 SETTINGS_NAMES = ("settings.json", "settings.local.json")
 _PLUGIN_ROOT = os.path.dirname(_LIB_DIR)
 _FILE_TOOLS = ("Write", "Edit", "MultiEdit")
@@ -39,15 +45,23 @@ _PUNCTUATION = ";&|<>()\n"
 _INTERPRETERS = ("bash", "sh", "zsh", "python", "python3")
 # Default-deny: anything not listed counts as a write once the command names a protected place.
 _READERS = frozenset((
-    "cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "ls", "stat", "wc", "file", "du",
-    "jq", "diff", "cmp", "cut", "tr", "sort", "sed", "find", "tree", "realpath", "readlink", "basename",
+    "cat", "head", "tail", "more", "grep", "egrep", "fgrep", "rg", "ls", "stat", "wc", "file", "du",
+    "jq", "diff", "cmp", "cut", "tr", "sort", "sed", "find", "realpath", "readlink", "basename",
     "dirname", "shasum", "sha256sum", "md5", "md5sum", "echo", "printf", "test", "[", "true", "cd", "pwd",
 ))
 _READER_WRITES = {
-    "sed": ("-i", "--in-place"),
-    "sort": ("-o", "--output"),
+    "sed": ("--in-place", "--file"),
+    "sort": ("--output", "--compress-program"),
     "find": ("-delete", "-exec", "-ok", "-fprint", "-fls"),
+    "rg": ("--pre",),
 }
+# A short-flag cluster holding one of these letters writes or hides the script: `sort -uo`, `sed -Ei`, `sed -f`.
+_SHORT_WRITES = {"sed": "iIf", "sort": "o"}
+# What a sed script holds besides its commands: s and y bodies, and /regex/ addresses. An s that ends a label
+# (`ts;w x;s;`) is not a command, so a letter before it keeps the body in view.
+_SED_BODIES = re.compile(r"(?<![A-Za-z])[sy]([^\s\\])(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1|/(?:\\.|[^/\\])*/", re.DOTALL)
+# w and W write a file, e runs a command. A letter in a label or appended text counts too: refusing a read is safe.
+_SED_ACTS = re.compile(r"[wWe]")
 
 Segment = collections.namedtuple("Segment", "words targets")
 
@@ -108,21 +122,39 @@ def _protected_path(word, bases, dirs):
 
 
 def _named(word, bases, dirs):
-    return _protected_path(word, bases, dirs) or (DATA_ENV if DATA_ENV in word else None)
+    plain = settings_guard._HIDING_CHARS.sub("", word)
+    return _protected_path(word, bases, dirs) or next((env for env in (DATA_ENV, SESSION_ENV) if env in plain), None)
 
 
 def _substitutes(word) -> bool:
     return "$(" in word or "`" in word
 
 
+def _sed_scripts(args) -> list:
+    """The script words of a sed call: each -e argument, or else the first word that is not a flag."""
+    scripts, loose, args = [], [], iter(args)
+    for word in args:
+        if word.startswith("--expression"):
+            scripts.append(word.partition("=")[2] if "=" in word else next(args, ""))
+        elif word.startswith("-") and not word.startswith("--") and "e" in word:
+            scripts.append(word[word.index("e") + 1:] or next(args, ""))
+        elif not word.startswith("-"):
+            loose.append(word)
+    return scripts or loose[:1]
+
+
 def _only_reads(segment) -> bool:
     if not segment.words:
         return True
-    program = os.path.basename(segment.words[0])
+    program, args = os.path.basename(segment.words[0]), segment.words[1:]
     if program not in _READERS or any(map(_substitutes, segment.words)):
         return False
-    writes = _READER_WRITES.get(program, ())
-    return not any(word.startswith(w) for word in segment.words[1:] for w in writes)
+    if any(word.startswith(w) for word in args for w in _READER_WRITES.get(program, ())):
+        return False
+    short = _SHORT_WRITES.get(program, "")
+    if any(word[:1] == "-" and word[1:2] != "-" and set(word[1:]) & set(short) for word in args):
+        return False
+    return program != "sed" or not any(_SED_ACTS.search(_SED_BODIES.sub("", s)) for s in _sed_scripts(args))
 
 
 def _runs_plugin_script(segment, bases, dirs) -> bool:
@@ -147,6 +179,11 @@ def _settings_word(words):
     return None
 
 
+def _bases(segments, cwd) -> list:
+    return [cwd] + [settings_guard._resolved(s.words[1], cwd) for s in segments
+                    if len(s.words) > 1 and s.words[0] == "cd"]
+
+
 def _bash_target(command, cwd, dirs):
     text = behaviour_guard._examined(command)
     text = _ENV_REFS.sub(lambda m: _PLUGIN_ROOT if ROOT_ENV in m.group(0) else programme_home.data_dir(), text)
@@ -155,8 +192,9 @@ def _bash_target(command, cwd, dirs):
     except ValueError:
         # An open quote hides where words end, so nothing can be called a read.
         segments, readable = [Segment(text.split(), [])], False
-    bases = [cwd] + [settings_guard._resolved(s.words[1], cwd) for s in segments
-                     if len(s.words) > 1 and s.words[0] == "cd"]
+    if any(LIFT_VERB in s.words and not _only_reads(s) for s in segments):
+        return f"a check setting with `{LIFT_VERB}`"
+    bases = _bases(segments, cwd)
     kept = [s for s in segments if not _runs_plugin_script(s, bases, dirs)]
     for segment in kept:
         for word in segment.targets:
@@ -174,6 +212,55 @@ def _bash_target(command, cwd, dirs):
     if found is None or (readable and all(map(_only_reads, kept))):
         return None
     return found
+
+
+def _settings_file(path: str) -> bool:
+    parent = os.path.dirname(path)
+    config = os.environ.get("CLAUDE_CONFIG_DIR")
+    return _is_settings_name(path) and (os.path.basename(parent).casefold() == ".claude" or bool(config) and (
+        parent.casefold() == settings_guard._resolved(config, "/").casefold()))
+
+
+def _settings_hit(raw, base):
+    path = settings_guard._resolved(raw, base)
+    # As written too: a symlinked .claude folder resolves to a path without its name.
+    written = os.path.normpath(os.path.join(base, settings_guard._expanded(raw)))
+    return path if _settings_file(path) or _settings_file(written) else None
+
+
+def settings_target(tool_name, tool_input, cwd):
+    """The settings file a call would write, for `no-settings-writes`. A Bash call that only reads names none."""
+    if tool_name != "Bash":
+        raw = tool_input.get("file_path")
+        return _settings_hit(raw, cwd) if isinstance(raw, str) and raw else None
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+        return None
+    text = behaviour_guard._examined(command)
+    try:
+        segments, readable = _segments(text), True
+    except ValueError:
+        segments, readable = [Segment(settings_guard._HIDING_CHARS.sub("", text).split(), [])], False
+    bases = _bases(segments, cwd)
+
+    def hit(word):
+        return next(filter(None, (_settings_hit(f, b) for f in _fragments(word) if _is_settings_name(f)
+                                  for b in bases)), None)
+
+    found = next(filter(None, map(hit, (t for s in segments for t in s.targets))), None)
+    if found:
+        return found
+    found = next(filter(None, map(hit, (w for s in segments for w in s.words))), None)
+    return None if found is None or (readable and all(map(_only_reads, segments))) else found
+
+
+def only_reads(command, names_target) -> bool:
+    """True when each part of a Bash command only reads and no redirect writes a word that names_target accepts."""
+    try:
+        segments = _segments(behaviour_guard._examined(command))
+    except ValueError:
+        return False
+    return all(map(_only_reads, segments)) and not any(names_target(t) for s in segments for t in s.targets)
 
 
 def _new_text(tool_name, tool_input) -> str:
@@ -201,16 +288,15 @@ def _file_target(tool_name, tool_input, cwd, dirs):
 
 def _may_name_target(tool_input) -> bool:
     text = settings_guard._HIDING_CHARS.sub("", json.dumps(tool_input)).casefold()
-    words = ("programmes", "plugins", DATA_ENV.casefold(), ROOT_ENV.casefold(), _PLUGIN_ROOT.casefold(),
-             *(key.casefold() for key in HOOK_KEYS))
-    return any(word in text for word in words)
+    return any(word.casefold() in text for word in (*NAMED_WORDS, _PLUGIN_ROOT))
 
 
 def _refused_write(names, target) -> str:
     others = f". These limits are all on, and each must be lifted: {', '.join(names)}" if len(names) > 1 else ""
     return (f"would write {target}. While a limit is on, this session cannot write the programme's files or the "
-            "installed plugin, set `CLAUDE_AUTO_DATA_DIR`, or write `disableAllHooks` or `allowManagedHooksOnly` to a "
-            f"settings file, and a command that names one of them must only read it{others}")
+            "installed plugin, set `CLAUDE_AUTO_DATA_DIR` or `CLAUDE_CODE_SESSION_ID`, run `set-check`, or write "
+            "`disableAllHooks` or `allowManagedHooksOnly` to a settings file, and a command that names one of them "
+            f"must only read it{others}")
 
 
 def decision(stdin_raw: str):

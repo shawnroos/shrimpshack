@@ -36,7 +36,7 @@ fi
 __cd_file_guard=0
 # Case-insensitive: the macOS file system treats Settings.local.json as the same file.
 shopt -s nocasematch
-if [[ $__cd_stdin_json == *settings.local.json* ]]; then
+if [[ $__cd_stdin_json == *settings.local.json* || $__cd_stdin_json == *settings.json* ]]; then
   __cd_file_guard=1
 fi
 if [[ $__cd_stdin_json == *behaviours* || $__cd_stdin_json == *behaviour-files* ]]; then
@@ -63,15 +63,17 @@ if [ "$__cd_file_guard" = 0 ] && [[ $__cd_stdin_json =~ $__cd_edit ]]; then
   exit 0
 fi
 
-# True when a Bash call's text could match a guard: a loose superset of three tests in Python.
+# True when a Bash call's text could match a guard: a loose superset of four tests in Python.
 #  - send_guard._mentions_host strips what _HIDING_CHARS names and decodes $'..' before it looks for a
 #    host binary, so a hidden name must match here too. Any $'..' goes to Python undecoded.
 #  - on-pretooluse-action._DESTRUCTIVE_PATTERNS, on the decoded text. The JSON here writes a tab or a
 #    newline as \t or \n, so a pattern's words are matched apart, with anything between.
 #  - programme_limits._may_name_target, also after the hiding characters go.
+#  - programme_settings_guard.decision's settings file names, also after the hiding characters go.
 # tests/integration/check-settings.test.sh fails if a host or a pattern is added without this.
 __cd_hosts='herdr|rex|osascript|stubhost'
-__cd_protected='programmes|plugins|claude_auto_data_dir|claude_plugin_root|disableallhooks|allowmanagedhooksonly'
+__cd_protected='programmes|plugins|claude_auto_data_dir|claude_plugin_root|claude_code_session_id|set-check|disableallhooks|allowmanagedhooksonly'
+__cd_settings='settings\.(local\.)?json'
 __cd_destructive='push.*-f|reset.*--hard|(checkout|restore).*\.|clean.*-.*f|branch.*-d|rm.*-(rf|fr)|npm.*publish|gh.*(release.*(create|delete)|repo.*delete|pr.*merge.*--admin)'
 __cd_could_match() {
   # bash 3.2's pattern substitution is quadratic: 2 KB takes 0.5 s, and the hook is killed at 10 s.
@@ -84,7 +86,8 @@ __cd_could_match() {
   plain="${plain//\$\\\"/}"
   plain="${plain//[\"\'\\]/}"
   shopt -s nocasematch
-  if [[ $plain =~ $__cd_hosts || $plain =~ $__cd_protected || $input =~ $__cd_destructive ]]; then status=0; fi
+  if [[ $plain =~ $__cd_hosts || $plain =~ $__cd_protected || $plain =~ $__cd_settings || $input =~ $__cd_destructive ]]
+  then status=0; fi
   shopt -u nocasematch
   return "$status"
 }
