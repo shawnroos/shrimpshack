@@ -47,11 +47,15 @@ Lift a limit when the refused call is needed for the item's next product check a
 
 After a `set-check` on an item with a running worker, run `P prompt-item <item> "<what changed>"`. While a limit is on, the prompt carries the limit lines by itself. After a lift, say in the text which limit is off.
 
+`no-settings-writes` covers every `settings.json` and `settings.local.json` in a `.claude` folder or the user config folder, and the behaviours files. A Bash call that only reads them passes.
+
 While any limit is on, the session also cannot write:
 
 - the programme's files, or set `CLAUDE_AUTO_DATA_DIR`
 - the installed plugin cache
 - `disableAllHooks` or `allowManagedHooksOnly` in a `settings.json` or `settings.local.json`
+
+It is also refused `set-check` and any Bash call that sets `CLAUDE_CODE_SESSION_ID`, because `programme.sh` knows its caller only by that variable.
 
 Each of those would let the worker switch off the hook that enforces its limit. Reads stay open, and so do runs of the plugin's own scripts. A session with no limit on has none of these checks.
 

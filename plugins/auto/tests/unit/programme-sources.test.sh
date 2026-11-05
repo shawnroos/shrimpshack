@@ -685,7 +685,7 @@ it "the brief names each limit in force, from the item and from the programme, a
 has "Limits on this work:" "$COPY"
 has "no-destructive-commands" "$COPY"
 has "no-settings-writes" "$COPY"
-has "ask the PM" "$COPY"
+has "the PM sees the refusal" "$COPY"
 it "the journal row names the same limits"
 has "no-destructive-commands" "$(journal_last worker_started)"
 has "no-settings-writes" "$(journal_last worker_started)"

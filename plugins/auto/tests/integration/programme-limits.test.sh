@@ -303,7 +303,7 @@ it "a refusal names the limit, its item and the route to lift it"
 OUT="$(call sess-lim Edit "{\"file_path\": \"${CACHE_HOOK}\", \"old_string\": \"a\", \"new_string\": \"b\"}")"
 has "no-destructive-commands" "$OUT"
 has "linear:AI-1" "$OUT"
-has "ask the PM" "$OUT"
+has "the PM sees this refusal" "$OUT"
 has "set-check no-destructive-commands off" "$OUT"
 has "$CACHE_HOOK" "$OUT"
 

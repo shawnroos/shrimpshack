@@ -135,7 +135,8 @@ def brief_lines(programme, key) -> list:
             "While a limit is on, Auto also refuses your writes to the programme's files, to the installed plugin "
             "and of `disableAllHooks` or `allowManagedHooksOnly` in a settings file, and refuses `set-check` and "
             "setting `CLAUDE_CODE_SESSION_ID`. Reads stay open. A refusal "
-            "stops only that call and is journaled. To lift a limit, ask the PM."]
+            "stops only that call and is journaled. Keep working on the rest; the PM sees the refusal "
+            "and lifts the limit when the work needs it."]
 
 
 def start_fields(programme, key, briefed) -> dict:
@@ -387,8 +388,9 @@ def limit_refusal(name, session_id, tool, what, **detail) -> tuple:
     item = source.get("item")
     where, lift = (f"item {item}", f" --item {item}") if item else ("this programme", "")
     reason = (f"auto: the agreed limit `{name}` ({CHECKS[name].text}) on {where} refuses this call: it {what}. "
-              f"Nothing is paused. Continue the work that does not need this, or ask the PM: "
-              f"`programme.sh set-check {name} off{lift}` lifts it. This attempt is journaled.")
+              f"Nothing is paused. Keep working on what does not need this; the PM sees this refusal in the "
+              f"journal and lifts the limit when the work needs it (`programme.sh set-check {name} off{lift}`). "
+              f"This attempt is journaled.")
     payload = {"check": name, "item": item, "scope": source.get("scope"), "tool": tool, **detail}
     deny = load_lib_module("programme_settings_guard")._deny(reason)
     return deny, (source.get("run"), LIMIT_REFUSED, session_id, payload)
