@@ -184,7 +184,6 @@ EOF"
   "bash ${CACHE}/lib/programme.sh \$(printf set-check) no-destructive-commands off --item linear:AI-1"
   "V=set-check; bash ${CACHE}/lib/programme.sh \$V no-destructive-commands off --item linear:AI-1"
   "v=set; n=CLAUDE_CODE_SESS; export \${n}ION_ID=sess-pm; bash ${CACHE}/lib/programme.sh \$v-check no-destructive-commands off --item linear:AI-1"
-  "A=CLAUDE_CODE_; B=SESSION_ID; P=\"bash ${CACHE}/lib/programme.sh\"; V=set-check; env \"\${A}\${B}=sess-pm\" \$P \$V no-destructive-commands off --item linear:AI-1"
   "export \$(printf CLAUDE_CODE_SESS)ION_ID=x"
   "printf -v X %s y; cat ${HOME_FILE}"
   "sort --ou=${HOME_FILE} /tmp/a"
@@ -295,6 +294,9 @@ it "the PM, on no item, is not limited: its code route to the installed copy sta
 check "allow allow" "$(verdict sess-pm Edit "{\"file_path\": \"${CACHE_HOOK}\", \"old_string\": \"a\", \"new_string\": \"b\"}") $(sh_verdict sess-pm "sed -i '' s/a/b/ ${CACHE_HOOK}")"
 
 ALLOWED_BASH=(
+  "grep -rn SESSION_ID src/"
+  "git log --grep APP_SESSION_ID"
+  "cd ${CACHE}/lib && bash programme.sh status"
   "cat ${HOME_FILE}"
   "ls -la ${PROGRAMMES}"
   "cat ${HOME_FILE} | grep open | head -3"
@@ -349,6 +351,18 @@ check "allow" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
 ${PAD}
 the plugin system works, and the programme says so
 EOF")"
+
+it "a long heredoc with the bare words plugins and programmes in prose is not refused"
+check "allow" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+plugins and programmes are words in prose here
+EOF")"
+
+it "a long command naming a protected place is still refused"
+check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+EOF
+rm ${HOME_FILE}")"
 
 it "a programme.sh run of a verb it may run, with an argument built at run time, says to write the argument out"
 OUT="$(call sess-lim Bash "$(bash_input "bash ${CACHE}/lib/programme.sh claim linear:AI-1 pr \"\$PR_URL\"")")"

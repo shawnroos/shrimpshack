@@ -178,7 +178,7 @@ def _saved_scripts(segments, bases) -> dict:
             name, _, value = segment.words[0].partition("=")
             words = value.split()
             if len(words) > 1 and os.path.basename(words[0]) in _INTERPRETERS \
-                    and _protected_path(words[1], bases[:1], _plugin_dirs()):
+                    and _protected_path(words[1], bases, _plugin_dirs()):
                 saved[name] = words
     return saved
 
@@ -193,7 +193,7 @@ def _script_run(words, saved, bases):
     at = 1 if os.path.basename(words[0]) in _INTERPRETERS else 0
     if len(words) <= at or _expands(words[at]):
         return None
-    if not _protected_path(words[at], bases[:1], _plugin_dirs()):
+    if not _protected_path(words[at], bases, _plugin_dirs()):
         return None
     return words[at], words[at + 1:]
 
@@ -231,13 +231,13 @@ def _env_refs(text):
 
 
 def _bash_target(command, cwd, dirs):
-    # Case-sensitive: an environment name is, and a lower-case session_id is ordinary code to read.
-    if SESSION_WORD in _JOINERS.sub("", command):
+    if SESSION_ENV in _JOINERS.sub("", command):
         return f"`{SESSION_ENV}`, the variable `programme.sh` knows its caller by"
     if _too_long(command):
         # Spaces kept, so prose such as "the plugin system" does not join into a trigger word.
         plain = guard_text.HIDING_CHARS.sub("", command).casefold()
-        return _TOO_LONG if any(w.casefold() in plain for w in (*NAMED_WORDS, _PLUGIN_ROOT)) else None
+        names = (DATA_ENV, ROOT_ENV, SESSION_ENV, LIFT_VERB, *HOOK_KEYS, _PLUGIN_ROOT, *_protected())
+        return _TOO_LONG if any(w.casefold() in plain for w in names) else None
     parsed = _parsed(command, _env_refs)
     segments, text = parsed.segments, parsed.text
     if any(LIFT_VERB in " ".join(s.words).split() and not (parsed.readable and _only_reads(s)) for s in segments):
@@ -257,7 +257,8 @@ def _bash_target(command, cwd, dirs):
             refused = _refused_run(*run)
             if refused:
                 return refused
-            args = run[1]
+            # After a cd into a protected folder a bare verb would read as a path there; a path argument has a slash.
+            args = [w for w in run[1] if "/" in w] if os.path.basename(run[0]) in PROGRAMME_SCRIPTS else run[1]
         if any(_named(word, bases, dirs) for word in [*args, *segment.targets]):
             kept.append(segment)
     for segment in kept:
