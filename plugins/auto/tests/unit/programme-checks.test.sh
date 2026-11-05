@@ -249,8 +249,8 @@ CLAUSE="$(cat "${AUTO_ROOT}/behaviours/denied-command-stop.md")"
 
 it "the clause covers a refusal of an Auto limit"
 has "an Auto limit (not Claude Code) refuses a command" "$CLAUSE"
-has "Do not run it again and do not try another tool, wrapper or worker for it" "$CLAUSE"
-has "Keep working on the rest; the PM sees the refusal in the journal and your transcript, and lifts the limit when the work needs it." "$CLAUSE"
+has "Do not retry it, or try it through another tool, wrapper or worker" "$CLAUSE"
+has "Keep working on the rest; the PM sees the refusal." "$CLAUSE"
 
 it "the clause no longer tells a worker to stop on any denial, and leaves Claude Code denials to Claude Code"
 lacks "a command is blocked" "$CLAUSE"

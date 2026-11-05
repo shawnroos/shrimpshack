@@ -5,6 +5,6 @@ applies_to: workers
 why: A Claude Code denial stays with Claude Code's normal handling.
 ---
 Do:
-- Keep working on the rest; the PM sees the refusal in the journal and your transcript, and lifts the limit when the work needs it.
+- Keep working on the rest; the PM sees the refusal.
 Don't:
-- Do not run it again and do not try another tool, wrapper or worker for it.
+- Do not retry it, or try it through another tool, wrapper or worker.
