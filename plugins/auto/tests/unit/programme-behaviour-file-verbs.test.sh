@@ -139,14 +139,14 @@ offers = load_lib_module("programme_offers")
 class Host:
     _parse = staticmethod(programme._parse)
     @staticmethod
-    def _write(*_args, **_kwargs):
+    def _write(*_args, **kwargs):
+        seen.append(kwargs.get("content"))
         return 0
 seen = []
 for text, handler, argv in (("text one", fv._h_adopt, ["adopt-behaviour-file", "nb", "--file", args[0]]),
                             ("text two", fv._h_settle, ["settle-default-update", "nb", "--as", "merge", "--file", args[0], "--prompt", "p"])):
     open(args[0], "w").write(text)
     handler(Host, argv)
-    seen.append(offers.noted_content())
 print("|".join(seen))
 EOF
 )"

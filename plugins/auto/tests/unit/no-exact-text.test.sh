@@ -45,7 +45,7 @@ FORBIDDEN = re.compile(
     r"|typed (prompt|line|reply|answer|approval|words|message|confirmation|adoption|pick|text)"
     r"|needs typed|needs_typed|\btype (applied|it\b|one\b|the approval|/auto)|approval-label|approval_label"
     r"|must name|names? the id|carries the (content )?hash|\"reply\"|word for word"
-    r"|\btype the\b|\bI will type\b|ask him to (quote|reword|retype|shorten)", re.I)
+    r"|\btype the\b|\bI will type\b|ask him to (quote|reword|retype|shorten)|ask him for a shorter", re.I)
 ALLOWED = (
     ("skills/programme-sweep/SKILL.md", "reuse its stored title word for word", "stored title, PM to tracker"),
     ("lib/programme_import.py", "conflicting_approval_label", "a gap kind already stored in imported journals"),
@@ -115,7 +115,6 @@ NOT_OFFERED = {"takeover", "watcher-beat"}
 source = "".join(open(p).read() for p in glob.glob(os.path.join(root, "lib", "programme*.py")))
 taking = {name for name, verb in prog._VERBS.items() if "--prompt" in (verb.args or "")}
 print("UNRENDERED", json.dumps(sorted(taking - set(offers.RENDERERS) - NOT_OFFERED)))
-print("PICK_DIFF", json.dumps(sorted(set(offers.RENDERERS) ^ set(approval.PICK_VERBS))))
 print("TAKING_COUNT", len(taking))
 
 PYEOF
@@ -132,9 +131,6 @@ if [ "$LINE" = "[]" ]; then pass; else fail "$LINE"; fi
 it "the check of verbs taking --prompt saw them (anti-vacuity)"
 LINE="$(printf '%s\n' "$RESULTS" | sed -n 's/^TAKING_COUNT //p')"
 if [ "${LINE:-0}" -ge 38 ]; then pass; else fail "saw ${LINE:-none}"; fi
-it "approval verbs and renderers are one set"
-LINE="$(printf '%s\n' "$RESULTS" | sed -n 's/^PICK_DIFF //p')"
-if [ "$LINE" = "[]" ]; then pass; else fail "$LINE"; fi
 
 STATE="$("$PY" - "$AUTO_ROOT" <<'PYEOF' 2>&1
 import json, os, re, subprocess, sys

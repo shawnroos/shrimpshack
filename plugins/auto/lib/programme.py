@@ -40,7 +40,7 @@ PROG = "programme.py"
 RULES_TAG = "auto-rules"
 SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep."
 PERSONAL_LOCK = ".personal-protocol.lock"
-_OPERATION = {"id": None, "verb": None, "argv": None}
+_OPERATION = {"id": None, "verb": None, "argv": None, "reading": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
                "reconcile-operations", "release-resources", "create-successor", "sweep", "become-pm")
@@ -232,9 +232,9 @@ def _guard(home, record, *, compact_exempt=False, after_end=False):
     return sid
 
 
-def _typed_prompt(run_id, record, prompt_id, verb=None) -> dict:
-    return programme_approval.prompt(run_id, record, prompt_id, _OPERATION["verb"] or verb,
-                                     ProgrammeError, text_hash, _OPERATION["argv"])
+def _approval_for(run_id, record, prompt_id, verb=None, content=None) -> dict:
+    asked = programme_approval.Asked(_OPERATION["verb"] or verb, _OPERATION["argv"], _OPERATION["reading"], content)
+    return programme_approval.prompt(run_id, record, prompt_id, asked, ProgrammeError)
 
 
 # promote finishes or discards a half-done move and reports a home another process moved first, so this runs
@@ -269,7 +269,7 @@ AFTER_BEAT = []
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True, promote=True, after_end=False):
+           journal=True, after=None, verb=None, target=None, beat=True, promote=True, after_end=False, content=None):
     run_id, home, _ = _locate(opts, finish_move=promote)
     seen = {}
 
@@ -279,7 +279,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
             loop = rec.setdefault("loop", {})
             seen["previous_beat"] = loop.get("last_beat_at")
             loop["last_beat_at"] = run_record_core.now_iso()
-        prompt = _typed_prompt(run_id, rec, prompt_id, verb) if (needs_prompt or prompt_id) else None
+        prompt = _approval_for(run_id, rec, prompt_id, verb, content) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
         seen["prompt"] = prompt
@@ -931,7 +931,7 @@ def _take_operation(argv) -> list:
 
 def _cli(argv) -> int:
     try:
-        argv = programme_approval.take_reading(_take_operation(argv))
+        argv, _OPERATION["reading"] = programme_approval.take_reading(_take_operation(argv))
     except ValueError as exc:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2

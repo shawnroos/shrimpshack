@@ -250,12 +250,10 @@ with tempfile.TemporaryDirectory(prefix='auto-offers-flags-') as work:
         answer = next(o['label'] for o in questions[0]['options'] if o['label'] != offered['decline'])
         prompt_id = pick(questions, answer)
         rows = pj.read(run)
-        offers.note_content(doc_for(argv))
         try:
-            bound = pa._picked(rows, pj.find_prompt(run, prompt_id, rows), record(), argv, prompt_id, Refused)
+            bound = pa._picked(rows, pj.find_prompt(run, prompt_id, rows), record(), pa.Asked(argv[0], argv, None, doc_for(argv)), prompt_id, Refused)
         except Refused as exc:
             bound = str(exc)
-        offers.note_content(None)
         check(f'{name}: a pick binds after the routine sweep writes', isinstance(bound, dict), bound)
 
     # ---- Every flag a verb parses is shown or refused ----

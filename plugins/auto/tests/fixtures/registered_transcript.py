@@ -1,6 +1,6 @@
 """The one transcript a test session has, registered the way SessionStart registers it.
 
-Pick and prompt checks accept only the path the session registry holds for the session.
+Once the session registry holds a path for a session, pick and prompt checks accept only that path.
 """
 
 import os

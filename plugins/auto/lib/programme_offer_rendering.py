@@ -20,24 +20,25 @@ TEXT_CAP = 900
 _FLAGS = ("ran-now", "widening", "without-rituals")
 # What one option's label can name in full.
 MAX_SET = 4
-_CONTENT = {"doc": None}
 
 
 class OfferError(Exception):
     pass
 
 
-def note_content(doc) -> None:
-    _CONTENT["doc"] = doc
-
-
-def noted_content():
-    return _CONTENT["doc"]
+# Verbs clean free text to DEFAULT_CAP, so longer text would be shown whole and recorded cut.
+def recorded_text(text, cap=programme_sanitize.DEFAULT_CAP) -> str:
+    cleaned = programme_sanitize.clean(text, cap=0)
+    if len(cleaned) > cap:
+        raise OfferError(f"the draft is {len(cleaned)} characters and the record holds {cap}; "
+                         "shorten it, since Shawn approves all of what is recorded")
+    return programme_journal.redact(cleaned)
 
 
 class Command:
-    def __init__(self, argv):
+    def __init__(self, argv, doc=None):
         self.verb = argv[0]
+        self.doc = doc
         self.pos, self._given, self._read = [], {}, set()
         args = list(argv[1:])
         while args:
@@ -51,16 +52,23 @@ class Command:
             else:
                 raise OfferError(f"{arg} needs a value that does not start with --")
 
-    def opt(self, name, default=""):
+    def opt(self, name, default="", cap=programme_sanitize.DEFAULT_CAP):
         self._read.add(name)
         value = self._given.get(name)
         if isinstance(value, list) and len(value) > 1:
             raise OfferError(f"--{name} is given {len(value)} times; the verb keeps only the last, so give it once")
-        return value[0] if isinstance(value, list) else (value if value is not None else default)
+        if isinstance(value, list):
+            if cap is not None:
+                recorded_text(value[0], cap)
+            return value[0]
+        return value if value is not None else default
 
     def many(self, name) -> list:
         self._read.add(name)
-        return list(self._given.get(name) or [])
+        values = list(self._given.get(name) or [])
+        for value in values:
+            recorded_text(value)
+        return values
 
     def flag(self, name) -> bool:
         self._read.add(name)
@@ -77,12 +85,15 @@ class Command:
             raise OfferError(f"{self.verb} needs --{name} {'|'.join(allowed)}")
         return value
 
-    def extras(self, *used, multi=()) -> str:
+    def extras(self, *used, multi=(), stored_whole=()) -> str:
         words = []
         for name in self._given:
             if name in used:
                 continue
-            value = " and ".join(self.many(name)) if name in multi else self.opt(name)
+            if name in multi:
+                value = " and ".join(self.many(name))
+            else:
+                value = self.opt(name, cap=None if name in stored_whole else programme_sanitize.DEFAULT_CAP)
             words.append(f"{name.replace('-', ' ')}: {value}.")
         return " ".join(words)
 

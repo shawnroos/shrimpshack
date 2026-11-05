@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import collections
 import functools
 import json
 import os
@@ -19,15 +18,12 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_journal = load_lib_module("programme_journal")
 programme_pick_source = load_lib_module("programme_pick_source")
-programme_sanitize = load_lib_module("programme_sanitize")
 programme_fixes = load_lib_module("programme_fixes")
 programme_home = load_lib_module("programme_home")
 programme_offer_rendering = load_lib_module("programme_offer_rendering")
 programme_offers_stores = load_lib_module("programme_offers_stores")
 
 OfferError = programme_offer_rendering.OfferError
-note_content = programme_offer_rendering.note_content
-noted_content = programme_offer_rendering.noted_content
 _rendered = programme_offer_rendering.rendered
 _layered = programme_offer_rendering.layered
 _whole_set = programme_offer_rendering.whole_set
@@ -64,9 +60,6 @@ def bound_argv(argv) -> list:
 
 def argv_hash(argv) -> str:
     return load_lib_module("programme_approval").text_hash(shlex.join(bound_argv(argv)))
-
-
-Binding = collections.namedtuple("Binding", "reading argv record programme error")
 
 
 def _item(programme, ident) -> tuple:
@@ -151,7 +144,7 @@ def _amend_term(cmd, programme) -> dict:
     key, value = cmd.pos
     term = ((programme.get("agreement") or {}).get("terms") or {}).get(key) or {}
     label = programme_offer_rendering.fitting(f"Set {key} to {value}", f"Change term {key}")
-    return _rendered(label, f"New: {value}. Now: {term.get('value')}. {cmd.extras()}", term.get("value"))
+    return _rendered(label, f"New: {value}. Now: {term.get('value')}. {cmd.extras(stored_whole=('why',))}", term.get("value"))
 
 
 def _layer_words(cmd) -> str:
@@ -202,12 +195,7 @@ def _accept_context(cmd, programme) -> dict:
                      revision.get("text") or "", revision, authority=wider)
 
 
-def _draft(text) -> str:
-    cleaned = programme_sanitize.clean(text, cap=0)
-    if len(cleaned) > programme_sanitize.DEFAULT_CAP:
-        raise OfferError(f"the draft is {len(cleaned)} characters and the record holds {programme_sanitize.DEFAULT_CAP}; "
-                         "shorten it, since Shawn approves all of what is recorded")
-    return programme_journal.redact(cleaned)
+_draft = programme_offer_rendering.recorded_text
 
 
 # Shawn sees each thing a widening adds, drops or extends.
@@ -260,9 +248,10 @@ def _record_ruling(cmd, programme) -> dict:
         if not kind:
             raise OfferError("record-ruling needs --kind <decision-kind> or --replies-to <ask-or-decision-id>")
         targets = context._scope(load_lib_module("programme_record"), programme, cmd.many("applies-to") or None)
+    load_lib_module("programme_decisions").check_kind(kind)
     rulings._check_protected(kind, effect)
     scope = _draft(cmd.opt("scope"))
-    content = {"kind": kind, "effect": effect, "applies_to": targets, "until": cmd.opt("until") or None,
+    content = {"kind": kind, "effect": effect, "applies_to": targets, "until": rulings._until(cmd.opt("until")),
                "limits": sorted({_draft(v) for v in cmd.many("limit")})}
     current = context.in_force(revisions)
     delta = context.ruling_delta(current, content)
@@ -367,7 +356,7 @@ def _end(cmd, programme) -> dict:
                         if (item or {}).get("state") in load_lib_module("programme_archive").UNFINISHED)
     left = f"Not finished: {' '.join(unfinished)}." if unfinished else "No item is unfinished."
     skip = " without its rituals" if cmd.flag("without-rituals") else ""
-    return _rendered(f"End this programme{skip}", f"No new work starts. {left} {cmd.extras('without-rituals')}",
+    return _rendered(f"End this programme{skip}", f"No new work starts. {left} {cmd.extras('without-rituals', stored_whole=('why',))}",
                      {"unfinished": unfinished}, authority=True)
 
 
@@ -405,7 +394,8 @@ def _limits_lifted(before, after) -> list:
     return lifted
 
 
-def _remit(_cmd, programme, doc) -> dict:
+def _remit(cmd, programme) -> dict:
+    doc = cmd.doc
     if doc is None:
         raise OfferError("set-remit reads the remit as a JSON object on stdin")
     lifecycle = load_lib_module("programme_lifecycle")
@@ -422,7 +412,7 @@ def _remit(_cmd, programme, doc) -> dict:
                      shown or "No change.", authority=wider)
 
 
-# Default-deny: a verb with no entry here cannot be offered. A test pins the keys to PICK_VERBS.
+# Default-deny: a verb with no entry here cannot be offered.
 RENDERERS = {
     "accept-agreement": _accept,
     "accept-context": _accept_context,
@@ -465,8 +455,8 @@ def render(argv, programme, doc=None) -> dict:
     verb = kept[0] if kept else None
     if verb not in RENDERERS:
         raise OfferError(f"{verb} takes no approval, so nothing can offer it")
-    cmd = programme_offer_rendering.Command(kept)
-    rendered = RENDERERS[verb](cmd, programme, doc) if verb in _CONTENT_VERBS else RENDERERS[verb](cmd, programme)
+    cmd = programme_offer_rendering.Command(kept, doc)
+    rendered = RENDERERS[verb](cmd, programme)
     hidden = cmd.unread()
     if hidden:
         raise OfferError(f"the picker for {verb} cannot show {' and '.join('--' + name for name in hidden)}, and Shawn "
@@ -573,161 +563,13 @@ def _h_offer(host, argv):
                        after_end=all(argv[0] in _AFTER_END for argv in parsed))
 
 
-def _newest_offer(rows, want):
+def newest_offer(rows, want):
     return next((r for r in reversed(rows)
                  if r.get("kind") == OFFERED and (r.get("payload") or {}).get("asked_hash") == want), None)
 
 
-def offer_for(rows, row, pick):
-    if pick is None:
-        return None
-    return _newest_offer(rows[:rows.index(row)], asked_hash(pick["questions"]))
-
-
-def _chosen(payload, answer):
+def chosen(payload, answer):
     return next((option for option in payload.get("options") or [] if option.get("label") == answer), None)
-
-
-def _redo(payload) -> str:
-    return f"rerun `programme.sh offer {payload.get('question_key')} --command '<the command>'` and ask Shawn again"
-
-
-def _check_driver(offer, binding, redo) -> None:
-    if offer.get("session_id") != binding.record.get("driving_session_id"):
-        raise binding.error("this picker was offered by another PM; a new driver offers it again", fix=redo)
-
-
-def _check_rendered_now(option, binding, redo) -> None:
-    error = binding.error
-    doc = noted_content()
-    if option.get("content_hash") and (doc is None or content_hash(doc) != option["content_hash"]):
-        raise error("the content on stdin differs from what this offer showed; Shawn approves what he saw", fix=redo)
-    try:
-        rendered = render(binding.argv, binding.programme, doc if option.get("content_hash") else None)
-    except Exception as exc:
-        raise error(f"the facts changed since the offer, so this pick no longer applies: {exc}", fix=redo) from None
-    if subject(rendered) != option.get("subject"):
-        raise error("the facts this picker showed changed since the offer, so Shawn has not seen them", fix=redo)
-
-
-def _picked_decline(error):
-    return error("Shawn declined this offer; nothing runs", fix="do not run the command; ask Shawn what he wants")
-
-
-def bind(offer, answer, binding) -> dict:
-    error = binding.error
-    payload = offer["payload"]
-    redo = _redo(payload)
-    _check_driver(offer, binding, redo)
-    option = _chosen(payload, answer)
-    shown = programme_journal.redact(answer)
-    if option is None:
-        raise error(f"answer {shown!r} is not one of the options this offer printed, so it approves nothing", fix=redo)
-    if "argv_hash" not in option:
-        raise _picked_decline(error)
-    if option["argv_hash"] != argv_hash(binding.argv):
-        raise error(f"this pick approved a different command: {option.get('command')}", fix=redo)
-    _check_rendered_now(option, binding, redo)
-    return {"answer": shown, "quote": option.get("content") or option["label"],
-            "reading": {"wording": programme_journal.PM_DRAFT, "offer_id": payload.get("offer_id")}}
-
-
-def _holding(payload, argv):
-    want = argv_hash(argv)
-    return next((option for option in payload.get("options") or [] if option.get("argv_hash") == want), None)
-
-
-def _own_words(rows, row, offer, why, words, binding) -> dict:
-    error = binding.error
-    payload = offer["payload"]
-    redo = _redo(payload)
-    _check_driver(offer, binding, redo)
-    option = _holding(payload, binding.argv)
-    if option is None:
-        raise error(f"{why}, but no open offer holds this command; the question just asked was "
-                    f"{payload.get('question_key')!r}", fix=redo)
-    label = option["label"]
-    if option.get("authority"):
-        raise error(f"{label!r} moves authority, so only a pick of that option approves it; {why}",
-                    fix="relay his words, then ask again with the same picker; run the command only on a pick")
-    if binding.reading != label:
-        raise error(f"{why}, so the PM states what it read them as: rerun with --reads-as {label!r}",
-                    fix=f"read his words first. If they decline or ask something, run nothing. If they approve, add "
-                        f"--reads-as {shlex.quote(label)}")
-    _check_rendered_now(option, binding, redo)
-    newer = load_lib_module("programme_rulings").newer_words(rows, row["prompt_id"])
-    if newer:
-        raise error(f"prompt {row['prompt_id']!r} is older than {newer!r}, which nothing has cited yet; own words bind "
-                    "only on Shawn's newest message", fix="read his newest message, then ask again if it is unclear")
-    shown = programme_journal.redact(words)
-    is_draft = "content" in option
-    if is_draft:
-        size = len(programme_sanitize.clean(shown, cap=0))
-        if size > programme_sanitize.DEFAULT_CAP:
-            raise error(f"his words are {size} characters and the record holds {programme_sanitize.DEFAULT_CAP}, and "
-                        "they are never cut",
-                        fix="relay this to Shawn and ask him for a shorter text, or split it into two Rulings")
-    read_back = (f"Recorded your words as the text of: {label}. Say so if that is wrong." if is_draft
-                 else f"Read your message as: {label}. Say so if that is wrong.")
-    return {"quote": shown,
-            "reading": {"read_as": label, "read_by": "pm", "offer_id": payload.get("offer_id"),
-                        "wording": programme_journal.SHAWN, "read_back": read_back}}
-
-
-def bind_pick(rows, row, offer, pick, binding) -> dict:
-    answer = pick["answer"]
-    option = _chosen(offer["payload"], answer)
-    if option is not None and "argv_hash" not in option:
-        raise _picked_decline(binding.error)
-    if option is not None and not pick["noted"]:
-        return bind(offer, answer, binding)
-    shown = programme_journal.redact(answer)
-    why = (f"pick {row['prompt_id']!r} carries a note, which counts as Shawn's own words" if pick["noted"]
-           else f"answer {shown!r} is not one of the options this offer printed, so it is Shawn's own words")
-    said = [] if answer == programme_pick_source.NOTES_ONLY or option is not None else [answer]
-    bound = _own_words(rows, row, offer, why, " ".join([*said, *pick["notes"]]) or answer, binding)
-    return dict(bound, answer=shown)
-
-
-def _open_offer(rows, row):
-    """The offer this message answers: the newest one, whose picker is the newest in the transcript at the message's
-    enqueue position, and which no pick answered. Journal order alone would let words sent between the offer row and
-    the asking row bind to a question Shawn had not seen."""
-    offers = [r for r in rows[:rows.index(row)] if r.get("kind") == OFFERED]
-    if not offers:
-        return None
-    asked = programme_pick_source.question_before(row)
-    if asked is None or asked_hash(asked[1]) != offers[-1]["payload"].get("asked_hash"):
-        return None
-    answered = any(r.get("kind") == "prompt" and ((r.get("payload") or {}).get("source") or {}).get("tool_use_id") == asked[0]
-                   for r in rows)
-    return None if answered else offers[-1]
-
-
-def _no_offer(argv, prompt_id, error):
-    return error(f"no open offer of this command asks the question prompt {prompt_id!r} would answer, so it approves "
-                 "nothing", fix=programme_fixes.fix_for(argv[0] if argv else "offer"))
-
-
-def bind_words(rows, row, origin, binding) -> dict:
-    error, argv = binding.error, binding.argv
-    prompt_id = row["prompt_id"]
-    at = rows.index(row)
-    if any(_holding(r.get("payload") or {}, argv) for r in rows[at + 1:] if r.get("kind") == OFFERED):
-        raise error(f"prompt {prompt_id!r} came before the offer of this command, so it does not answer that question",
-                    fix="ask again, or wait for his answer to the picker")
-    offer = _open_offer(rows, row)
-    if origin == "suggested":
-        raise error(f"prompt {prompt_id!r} is an accepted suggestion: the model wrote it, so it approves nothing",
-                    fix="ask with the picker and wait for his pick or his own words")
-    if offer is None or (binding.reading is None and _holding(offer["payload"], argv) is None):
-        raise _no_offer(argv, prompt_id, error)
-    if programme_journal.prompt_spent(rows, prompt_id):
-        raise error(f"prompt {prompt_id!r} already approved a change; one message approves one change",
-                    fix="ask Shawn about this one")
-    why = f"prompt {prompt_id!r} is Shawn's own words"
-    payload = row.get("payload") or {}
-    return _own_words(rows, row, offer, why, payload.get("text") or "", binding)
 
 
 def after_pick(run, session_id, prompt_id, data):
@@ -738,14 +580,12 @@ def after_pick(run, session_id, prompt_id, data):
         return None
     want = asked_hash(tool_input.get("questions"))
     rows = programme_journal.read(run)
-    offer = _newest_offer([r for r in rows if r.get("session_id") == session_id], want)
+    offer = newest_offer([r for r in rows if r.get("session_id") == session_id], want)
     if not offer:
         return None
     answer = next(iter(answers.values()))
-    option = _chosen(offer["payload"], answer)
-    annotations = (data.get("tool_response") or {}).get("annotations")
-    noted = answer == programme_pick_source.NOTES_ONLY or (
-        isinstance(annotations, dict) and any(isinstance(e, dict) and e.get("notes") for e in annotations.values()))
+    option = chosen(offer["payload"], answer)
+    noted = programme_pick_source.has_note(data["tool_response"])
     if option is not None and "argv_hash" not in option:
         programme_journal.append(run, DECLINED, session_id, {"offer_id": offer["payload"].get("offer_id")},
                                  cites=[prompt_id])

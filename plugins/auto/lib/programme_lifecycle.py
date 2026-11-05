@@ -619,7 +619,7 @@ def _h_handover(host, argv):
             raise _Refused("only the driving session may hand the programme over", status)
         if target == sid:
             raise _Refused("this session already drives the programme", status)
-        picked = opts.get("prompt") and programme_lifecycle_picks.approve(run, sid, _tokens(argv), opts["prompt"], status, _Refused)
+        picked = _pick_approves(host, run, sid, argv, opts, status)
         asked = [] if picked else [r for r in _requests(run, "handover", sid) if _cited_typed(run, r, sid)
                                    and target in str((r.get("payload") or {}).get("text") or "").split()]
         if not picked and not asked:
@@ -675,6 +675,11 @@ def _watcher_ids(record) -> dict:
             "process_ids": sorted({str(w["process_id"]) for w in entries if w.get("process_id")})}
 
 
+def _pick_approves(host, run, sid, argv, opts, status):
+    return opts.get("prompt") and programme_lifecycle_picks.approve(
+        run, sid, _tokens(argv), opts["prompt"], status, _Refused, host._OPERATION["reading"])
+
+
 def _h_end(host, argv):
     stray, opts = host._parse(_tokens(argv), values=("run", "why", "prompt"), flags=("without-rituals",))
     if stray:
@@ -691,7 +696,7 @@ def _h_end(host, argv):
         if status == "expired":
             reason, request = EXPIRED_REASON, None
         else:
-            picked = opts.get("prompt") and programme_lifecycle_picks.approve(run, sid, _tokens(argv), opts["prompt"], status, _Refused)
+            picked = _pick_approves(host, run, sid, argv, opts, status)
             reason, request = END_REASON, None if picked else _end_request(run, sid, status)
             if session_registry.caller_drives(programme_home._read_record(run), sid):
                 programme_rituals_due.gate(run, "end", status, opts, _Refused)
@@ -895,7 +900,6 @@ def _h_set_remit(host, argv):
         doc = json.loads(raw)
     except ValueError:
         raise ValueError("set-remit reads the remit as a JSON object on stdin") from None
-    load_lib_module("programme_offers").note_content(doc)
     # Before the leases lock: finishing a move cut off mid-way takes that lock itself.
     run, home, _ = host._locate(opts, finish_move=True)
 
@@ -933,7 +937,7 @@ def _h_set_remit(host, argv):
     # cut-off move, and promote=False also stops _write finishing one, so a later marker refuses as a held home.
     return host.promoting(run, home, "set-remit", lambda: programme_home._with_leases_lock(
         lambda: host._write(opts, change, "remit_set", prompt_id=opts.get("prompt"), verb="set-remit",
-                            target="remit", promote=False)))
+                            target="remit", promote=False, content=doc)))
 
 
 _SPECS = (

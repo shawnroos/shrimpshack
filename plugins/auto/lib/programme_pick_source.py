@@ -26,14 +26,19 @@ def _hash(value):
     return hashlib.sha256(value).hexdigest()
 
 
-def registered(path, sid) -> bool:
-    return isinstance(path, str) and path == load_lib_module("permission_transcript").path_for(sid)
-
-
 # The registry keeps 50 rows per pane, so an approval given long ago outlives its session's row. Its path was checked
 # at capture and when it approved, so a later read of that past approval checks only the file's name.
 def named_for(path, sid) -> bool:
     return isinstance(path, str) and os.path.isabs(path) and os.path.basename(path) == sid + ".jsonl"
+
+
+# A session the registry holds no path for must still verify: a SessionStart probe that timed out leaves a row with no
+# path, and that session's only way back is a takeover.
+def registered(path, sid) -> bool:
+    if not named_for(path, sid):
+        return False
+    held = load_lib_module("session_registry").transcript_path(sid)
+    return held is None or path == held
 
 
 def read_window(path, sid, needle=None):
@@ -225,7 +230,7 @@ def verify(row, pinned=True) -> str:
     return "picked" if _verified(row, pinned) is not None else "unknown"
 
 
-def _has_note(result) -> bool:
+def has_note(result) -> bool:
     annotations = result.get("annotations", {})
     return (NOTES_ONLY in result["answers"].values()
             or not isinstance(annotations, dict)
@@ -251,7 +256,7 @@ def read_pick(row):
     gap, noted = None, False
     if unanswered or not asked:
         gap = f"leaves {len(unanswered)} of {len(asked)} questions unanswered, so it approves nothing"
-    elif _has_note(result):
+    elif has_note(result):
         noted = True
         gap = "carries a note, which counts as Shawn's own words, so it approves no option"
     return {"answers": result["answers"], "gap": gap, "questions": questions, "noted": noted, "notes": _notes(result)}

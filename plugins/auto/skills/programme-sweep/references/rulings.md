@@ -17,7 +17,7 @@ You draft the Ruling. Auto writes the picker and Shawn approves the draft. He ne
 | The same, on an authority option | Refused. Relay his words and ask again by pick | Nothing |
 | Declines, or asks something | Run nothing | Nothing |
 
-An authority option is a new or wider grant, a restrict that loosens, closing a restrict, or a wider `accept-context`. Its label says it widens, the decline comes first, and a pick binds it at once. Only his rewrite counts as content: if his words only say yes, ask him to pick the option, or his "yes" becomes the text. His text is capped at 500 characters. Auto refuses a longer one rather than cut it, so ask him for a shorter one. Show him `read_back` unchanged.
+An authority option is a new or wider grant, a restrict that loosens, closing a restrict, or a wider `accept-context`. Its label says it widens, the decline comes first, and a pick binds it at once. Only his rewrite counts as content: if his words only say yes, ask him to pick the option, or his "yes" becomes the text. His text is capped at 500 characters. Auto refuses a longer one rather than cut it, so draft a shorter text from his words and offer it again. Show him `read_back` unchanged.
 
 ## When a message approves
 

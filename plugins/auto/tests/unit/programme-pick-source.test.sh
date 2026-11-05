@@ -103,11 +103,12 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
     reg_rows = load_lib_module('session_registry')
     registry = pathlib.Path(reg_rows.registry_path('default', 'fixture-transcripts'))
     registry.write_text(''.join(line for line in registry.read_text().splitlines(keepends=True) if 'pick-aged' not in line))
-    check('a new approval refuses once the session row has aged out', pj.prompt_origin(row), 'unknown')
+    check('a new approval falls back to the file name once the session row has aged out', pj.prompt_origin(row), 'picked')
     check('the past approval stays verified after its session row ages out', pj.adopted_origin(row), 'picked')
     moved = copy.deepcopy(row)
     moved['payload']['source']['path'] = str(real.with_name('other.jsonl'))
     check('a past approval still needs the file named for its session', pj.adopted_origin(moved), 'unknown')
+    check('so does a new approval with no row', pj.prompt_origin(moved), 'unknown')
 
     forged = pj.entry('prompt', 'pick-pm', {'text': 'fixed every 15 min', 'origin': 'picked'}, prompt_id='pforged')
     check('a stored picked label without a source resolves unknown', pj.prompt_origin(forged), 'unknown')

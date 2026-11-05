@@ -14,7 +14,7 @@ programme_pick_source = load_lib_module("programme_pick_source")
 
 _hash = programme_pick_source._hash
 # Accepting Claude Code's suggested prompt is Shawn pressing Enter on model-written text: it resolves to
-# "suggested", which approves what a pick may approve but never a typed-only verb. Other sources stay unverified.
+# "suggested", which binds no offer. Other sources stay unverified.
 _HUMAN_SOURCES = ('typed', 'suggestion_accepted')
 _NOT_INPUT = ('isMeta', 'isSidechain', 'isCompactSummary')
 _COMMAND = re.compile(

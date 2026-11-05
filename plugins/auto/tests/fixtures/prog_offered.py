@@ -48,7 +48,7 @@ def _typed_with_no_offer(argv, offers):
     if row is None or journal.prompt_origin(row) != 'typed' or (row.get('payload') or {}).get('driving') is False \
             or row.get('provenance') is not None or row.get('session_id') != os.environ.get('CLAUDE_CODE_SESSION_ID'):
         return None
-    return None if offers._open_offer(rows, row) is not None else run
+    return None if load_lib_module('programme_approval')._open_offer(rows, row) is not None else run
 
 
 def main():

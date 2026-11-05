@@ -16,7 +16,7 @@ programme_journal = load_lib_module("programme_journal")
 session_registry = load_lib_module("session_registry")
 
 
-def approve(run, sid, argv, prompt_id, status, refused) -> dict:
+def approve(run, sid, argv, prompt_id, status, refused, reading) -> dict:
     verb = argv[0]
     offer_fix = load_lib_module("programme_fixes").fix_for(verb)
 
@@ -31,6 +31,6 @@ def approve(run, sid, argv, prompt_id, status, refused) -> dict:
     if row is not None and rows.index(row) <= load_lib_module("programme_lifecycle")._last_driver_change(rows):
         raise error(f"prompt {prompt_id!r} was given before the current PM took the programme")
     approval = load_lib_module("programme_approval")
-    found = approval.prompt(run, record, prompt_id, verb, error, approval.text_hash, argv)
+    found = approval.prompt(run, record, prompt_id, approval.Asked(verb, argv, reading), error)
     return {"request": None, "prompt_id": prompt_id, "quote": found["quote"], **programme_journal.reading_of(found),
             "approval": {key: found[key] for key in ("origin", "answer") if key in found}}

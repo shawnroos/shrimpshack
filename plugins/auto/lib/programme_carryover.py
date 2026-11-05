@@ -335,7 +335,7 @@ def _carry(host, opts, ids):
         programme = programme_home.normalize_programme(rec.get("programme") or {})
         if programme_home.sealed(programme):
             raise host.ProgrammeError("the programme is archived; nothing more is carried over from it")
-        prompt = host._typed_prompt(run_id, rec, opts["prompt"], "carry-rulings")
+        prompt = host._approval_for(run_id, rec, opts["prompt"], "carry-rulings")
         active, keys = _check_carry(host, run_id, programme, prompt, ids)
         adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
         seen.update(prompt=prompt, adopted=adopted)

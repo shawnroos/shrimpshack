@@ -429,7 +429,7 @@ record = load(RUN)
 msgs = []
 for pid in (qid, row["payload"]["answer_id"], "q" + qid):
     try:
-        approval.prompt(RUN, record, pid, "answer-handed", Refused, approval.text_hash)
+        approval.prompt(RUN, record, pid, approval.Asked("answer-handed", []), Refused)
         msgs.append("accepted")
     except Refused as exc:
         msgs.append(str(exc))

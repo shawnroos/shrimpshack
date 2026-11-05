@@ -245,7 +245,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
             tamper(row['payload']['source'])
         argv = ['drop-item', 'mem:tamper', '--reason', 'gone']
         try:
-            return pa._picked(rows, row, record(run), argv, prompt_id, Refused)
+            return pa._picked(rows, row, record(run), pa.Asked(argv[0], argv), prompt_id, Refused)
         except Refused as exc:
             return str(exc)
 
@@ -435,8 +435,6 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     check('the offer binds a command without --op, --prompt and --run, as the verb sees it',
           ok(result) and any(o.get('argv_hash') == offers.argv_hash(['drop-item', 'mem:comma', '--reason', 'x']) for o in stored),
           said(result))
-    check('every pick verb has a renderer and no other verb does', set(offers.RENDERERS) == set(pa.PICK_VERBS),
-          set(offers.RENDERERS) ^ set(pa.PICK_VERBS))
 
     # ---- The verbs ----
     def seed(rec):

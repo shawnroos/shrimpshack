@@ -1007,7 +1007,7 @@ in the decline field, which has no command; on an authority move (`accept-agreem
 remit widening includes emptying a list that limited scope. A `set-remit` offer takes on stdin the JSON the verb will
 read. Every approval verb has a renderer, a verb with no renderer is refused, and a label holds no flag and no `, `. A
 command that carries an option its renderer did not read, or a repeated option the verb keeps once, is refused, so a
-hidden flag cannot be offered. Text too long for its option is refused with a message to split it, and is never cut. Takeover cannot be offered: this session does not drive
+hidden flag cannot be offered. Text too long for its option is refused with a message to split it, and is never cut. A flag value longer than the record keeps (500 characters) is refused at offer too, except `--why` on `amend-term` and `end`, which those verbs store whole. Takeover cannot be offered: this session does not drive
 yet. `become-pm` prints its picker in its input field, written from the driver's session id, and `takeover` compares a pick of
 it to the current driver under the leases lock.
 

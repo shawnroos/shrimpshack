@@ -202,7 +202,6 @@ def _h_adopt(host, argv):
         raise ValueError("usage: adopt-behaviour-file <id> --file <path> --prompt <id>")
     bid = programme_behaviours.check_id(positional[0])
     text = _draft_text(opts)
-    programme_offers.note_content(text)
 
     def change(programme, prompt, rec):
         # The stored entry would shadow the file at load, so the file is refused up front.
@@ -214,7 +213,7 @@ def _h_adopt(host, argv):
         return _adopted(bid, digest, path=_personal_path(bid))
 
     return host._write(opts, change, ADOPTED, prompt_id=opts.get("prompt"), needs_prompt=True,
-                       verb="adopt-behaviour-file", target=bid)
+                       verb="adopt-behaviour-file", target=bid, content=text)
 
 
 def _h_copy(host, argv):
@@ -274,8 +273,6 @@ def _h_settle(host, argv):
     if mode != "shown" and not opts.get("prompt"):
         raise ValueError(f"--as {mode} needs --prompt <id> of Shawn's answer")
     text = _draft_text(opts) if mode == "merge" else None
-    if text is not None:
-        programme_offers.note_content(text)
 
     def change(programme, prompt, _rec):
         return _settle(prompt, bid, mode, text)
@@ -283,7 +280,7 @@ def _h_settle(host, argv):
     shown = mode == "shown"
     return host._write(opts, change, "behaviour_default_shown" if shown else ADOPTED,
                        prompt_id=opts.get("prompt"), needs_prompt=not shown, journal=not shown,
-                       verb="settle-default-update", target=bid)
+                       verb="settle-default-update", target=bid, content=text)
 
 
 _SPECS = (

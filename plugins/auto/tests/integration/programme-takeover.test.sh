@@ -396,7 +396,9 @@ result.update(sessionId=sid, toolUseResult=response)
 result["message"]["content"][0]["tool_use_id"] = tool_use_id
 sys.path[:0] = [os.path.join(root, "lib"), os.path.join(root, "tests", "fixtures")]
 from registered_transcript import register
-path = register(sid, pathlib.Path(work) / "picks" / (sid + ".jsonl"))
+path = pathlib.Path(work) / "picks" / (sid + ".jsonl")
+if not os.environ.get("PICK_NOT_REGISTERED"):
+    register(sid, path)
 path.parent.mkdir(parents=True, exist_ok=True)
 with path.open("a") as stream:
     stream.write(json.dumps(asked) + "\n")
@@ -463,6 +465,67 @@ print(entry["prompt_id"])
 PYEOF
   )
 }
+
+# The real prompt hook, at a transcript of the session's name. A second argument is a path the registry holds instead.
+typed_unregistered() {
+  register_session "$1" w2 >/dev/null
+  ( cd "$NOREPO" && HERDR_WORKSPACE_ID=w2 "$PY" - "$AUTO_ROOT" "$WORK" "$1" "${2:-}" <<'PYEOF'
+import json, os, pathlib, subprocess, sys
+root, work, sid, held = sys.argv[1:]
+sys.path[:0] = [os.path.join(root, "lib"), os.path.join(root, "tests", "fixtures")]
+import programme_prompts
+from registered_transcript import register
+if held:
+    register(sid, pathlib.Path(held))
+path = pathlib.Path(work) / "unregistered" / (sid + ".jsonl")
+path.parent.mkdir(parents=True, exist_ok=True)
+payload, _, path, row = programme_prompts.fixture("/auto:programme-takeover", sid, path=path)
+subprocess.run(["bash", os.path.join(root, ".claude/hooks/on-user-prompt.sh")],
+               input=json.dumps(payload), text=True, capture_output=True)
+path.write_text(json.dumps(row) + "\n")
+PYEOF
+  )
+}
+
+gone_driver() {
+  D="$(driver_of "$RUN")"
+  register "$D" w2:p70 term_p70
+  snapshot "w2:p70|PM|sess-other|term_p70"
+}
+
+set_beat "$RUN" 0
+
+it "a typed takeover works for a session whose only row holds no transcript path"
+gone_driver
+typed_unregistered sess-nopath
+as sess-nopath takeover
+check "0 sess-nopath" "$CODE $(driver_of "$RUN")"
+
+it "a typed takeover from a transcript other than the one the registry holds is refused"
+gone_driver
+typed_unregistered sess-moved "${WORK}/held/sess-moved.jsonl"
+as sess-moved takeover
+check "1 sess-nopath" "$CODE $(driver_of "$RUN")"
+has "no typed takeover request" "$OUT"
+
+it "a pick of the takeover picker works for a session whose only row holds no transcript path"
+P="$(PICK_NOT_REGISTERED=1 take_pick sess-nopick sess-nopath)"
+as sess-nopick takeover --prompt "$P"
+check "0 sess-nopick" "$CODE $(driver_of "$RUN")"
+
+it "a pick from a transcript other than the one the registry holds is refused"
+gone_driver
+register_session sess-otherpick w2 >/dev/null
+"$PY" - "$AUTO_ROOT" <<'PYEOF'
+import os, pathlib, sys
+sys.path[:0] = [os.path.join(sys.argv[1], "lib"), os.path.join(sys.argv[1], "tests", "fixtures")]
+from registered_transcript import register
+register("sess-otherpick", pathlib.Path(os.environ["CLAUDE_AUTO_DATA_DIR"]).parent / "held" / "sess-otherpick.jsonl")
+PYEOF
+P="$(PICK_NOT_REGISTERED=1 take_pick sess-otherpick sess-nopick)"
+as sess-otherpick takeover --prompt "$P"
+check "1 sess-nopick" "$CODE $(driver_of "$RUN")"
+check "none" "$P"
 
 D="$(driver_of "$RUN")"
 register "$D" w2:p80 term_p80

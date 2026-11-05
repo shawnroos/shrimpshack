@@ -522,7 +522,7 @@ def _write(host, opts, change, kind, *, need_ended=True, prompt_id=None):
 
     def mutate(rec):
         _caller_may_close(rec, sid, need_ended=need_ended)
-        prompt = host._typed_prompt(run_id, rec, prompt_id) if prompt_id else None
+        prompt = host._approval_for(run_id, rec, prompt_id) if prompt_id else None
         seen["payload"] = change(rec.setdefault("programme", {}), prompt, rec)
         if prompt and prompt.get("reading"):
             seen["payload"] = dict(seen["payload"] or {}, **prompt["reading"])

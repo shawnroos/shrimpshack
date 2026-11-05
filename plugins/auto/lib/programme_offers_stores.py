@@ -52,26 +52,18 @@ def _ritual_fields(cmd) -> dict:
             "check": {"name": cmd.opt("check")} if cmd.opt("check") else None}
 
 
-def _behaviour_multi() -> tuple:
-    return load_lib_module("programme_behaviours").RECORD_MULTI
-
-
-def _no_multi() -> tuple:
-    return ()
-
-
-def _recorder(noun, module_name, text_of, fields_of, shown=(), multi_of=_no_multi):
+def _recorder(noun, module_name, text_of, fields_of, shown=()):
     def render(cmd, programme) -> dict:
+        multi = getattr(load_lib_module(module_name), "RECORD_MULTI", ())
         ident = cmd.opt("from-proposal")
         if ident:
             entry = load_lib_module(module_name)._programme_entry(programme, ident)
             if entry is None or entry.get("state") != "proposed":
                 raise OfferError(f"no proposed {noun} {ident!r}")
-            return _rendered(f"Apply drafted {noun} {ident}", f"{text_of(entry)} {cmd.extras('from-proposal', multi=multi_of())}",
-                             entry)
+            return _rendered(f"Apply drafted {noun} {ident}", f"{text_of(entry)} {cmd.extras('from-proposal', multi=multi)}", entry)
         if not cmd.opt("when"):
             raise OfferError(f"usage: record-{noun} --when <text> ... or --from-proposal <id>")
-        text = f"{text_of(fields_of(cmd))} {cmd.extras(*shown, multi=multi_of())}"
+        text = f"{text_of(fields_of(cmd))} {cmd.extras(*shown, multi=multi)}"
         digest = programme_offer_rendering.programme_journal.canonical_sha(text)[len("sha256:"):][:6]
         return _rendered(programme_offer_rendering.fitting(f"Record {noun}: {cmd.opt('when')}", f"Record {noun} {digest}"),
                          text)
@@ -91,7 +83,7 @@ def _retire_behaviour(cmd, programme) -> dict:
 def _draft(cmd, bid) -> tuple:
     files = load_lib_module("programme_behaviour_file_verbs")
     path = cmd.opt("file")
-    text = programme_offer_rendering.noted_content()
+    text = cmd.doc
     if text is None:
         if path == "-":
             raise OfferError("an offer needs the draft in a file it can read again; give --file <path>")
@@ -173,7 +165,7 @@ RENDERERS = {
     "copy-default": _copy_default,
     "decline-ritual-file": _decline_ritual_file,
     "record-behaviour": _recorder("behaviour", "programme_behaviours", _behaviour_text, _behaviour_fields,
-                                  ("when", "do", "dont"), _behaviour_multi),
+                                  ("when", "do", "dont")),
     "record-ritual": _recorder("ritual", "programme_rituals", _ritual_text, _ritual_fields,
                                ("when", "step", "offer", "check")),
     "retire-behaviour": _retire_behaviour,
