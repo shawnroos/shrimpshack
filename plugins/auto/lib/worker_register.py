@@ -66,8 +66,9 @@ def load_contract_file(path, set_by) -> dict:
             doc = json.load(fh)
     except (OSError, ValueError) as exc:
         raise RegisterError(f"cannot read the --contract file: {exc}", "bad_contract_file") from None
-    if not isinstance(doc, dict) or set(doc) != set(CONTRACT_FIELDS):
-        raise RegisterError(f"the --contract file needs exactly the keys {list(CONTRACT_FIELDS)}", "bad_contract_file")
+    if not isinstance(doc, dict) or set(doc) - {"limits"} != set(CONTRACT_FIELDS):
+        raise RegisterError(f"the --contract file needs exactly the keys {list(CONTRACT_FIELDS)}, and may add limits",
+                            "bad_contract_file")
     return worker_contract.new_contract(set_by=set_by, **doc)
 
 

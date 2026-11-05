@@ -429,6 +429,7 @@ session.
   `start-worker` and `prompt-item` refuse what it holds; `lift-pause` needs a typed
   prompt naming it. `record-denial` keeps a tool's refusal; the same action on that
   item then refuses, and requirements stay unchanged.
+- **Check settings**: `set-check` (`<name> on|off [--item <id> | --own] [--prompt <id>]`) turns a named check on or off for the programme or one item, and is driver-only. Turning a check off needs no prompt. The table in `skills/programme-sweep/references/checks.md` names the checks whose turning on needs Shawn's pick of `offer`. That moves authority, so the picker lists the decline first and his own words are refused. `--own` sets the Stop block for the PM's own run, which the PM may turn on alone. The pre-filled answer refusal and the Linear done, cancelled and root-cause rule have no off setting. It journals `check_set`, and `status` and `rules` list the settings. A setting stays outside the agreed terms, so `terms_digest` does not move. A contract's `--limit` and a behaviour file's `limit:` only record a name: `status` lists it as not on, with the offer to run.
 - **Hook code**: `record-hook-patch` (`<file> --why <line> --pr <url or number>`) records that the PM changed
   hook code. It journals `hook_patched`, sends Shawn the notice through the terminal host and prints it for
   the PM to post. The notice names the protected rules the file holds. It needs no prompt, because it records what
@@ -508,7 +509,7 @@ session.
   to another item, an item that already has a bound run, and a run that predates contracts. It copies the
   seed into the run record, then marks the item "bound"; a repeat after a crash between the two completes
   the bind with no duplicate.
-- **Contract write**: `set-contract` (args: `--item`, optional `--run`; changes `--authority <kind>=<mode>[:<asks>]`
+- **Contract write**: `set-contract` (args: `--item`, optional `--run`; changes `--limit <check>`, `--drop-limit <check>`, `--authority <kind>=<mode>[:<asks>]`
   (repeatable), `--drop-authority <kind>` (repeatable), `--done-internal`, `--done-external` (the word none for empty),
   `--workflow`, `--fan-out-cap`; optional `--bite` pulse or step) is the only way to change a worker's contract
   after it starts. Only the programme's driving session that holds its lease may call it, for a worker in the

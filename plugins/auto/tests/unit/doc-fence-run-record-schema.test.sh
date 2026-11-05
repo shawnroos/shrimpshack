@@ -94,6 +94,7 @@ REQUIRED=(
   "KINDS"
   "check_settings"
   "checks_unreadable"
+  "check_set"
   "inbox_offset"
   "claims.jsonl"
   "journal.jsonl"

@@ -107,6 +107,9 @@ FIXES = {
     "record-behaviour": _OFFERED,
     "record-denial": _WRITE,
     "record-hook-patch": _WRITE,
+    "set-check": ("`programme.sh describe` says which changes need Shawn's pick. For those, run `programme.sh offer "
+                  "<question-key> --command '{verb} <args>'`, ask Shawn with the input it prints, then rerun citing "
+                  "his pick with --prompt <its id>"),
     "record-ruling": _OFFERED,
     "record-issues": _WRITE,
     "record-tested-build": _WRITE,

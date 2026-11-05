@@ -182,6 +182,7 @@ def rules_in_force(record, journals=None, protocol=None, changes=True, *, behavi
                            for r in protocol["rejected"]],
         "rulings": active_rulings(programme, run_record_core.now_iso()),
         "permission_proposals": programme_permission.in_force(programme),
+        "checks": load_lib_module("programme_checks").setting_rows(programme),
     }
     legacy = [{"id": r["id"], "area": r["area"], "scope": r["scope"]}
               for r in programme_rulings.pc.rulings(programme, None)

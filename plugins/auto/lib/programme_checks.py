@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The PM's record of a hook patch, the registry of named checks, and how a hook reads a session's checks."""
+"""The PM's record of a hook patch, the registry of named checks, how a hook reads them, and `set-check`."""
 
 from __future__ import annotations
 
@@ -43,6 +43,7 @@ PROTECTED = {
     "on-pretooluse-askuser": (_PREFILL,),
     "on-pretooluse-action": (_LINEAR,),
     "programme_evidence": (_LINEAR,),
+    "programme_checks": (_PREFILL, _LINEAR),
     "hooks": (_PICKER, _PICK, _PREFILL, _LINEAR),
 }
 
@@ -76,19 +77,13 @@ def _h_record(host, argv):
     return host._write(opts, change, PATCHED, verb="record-hook-patch", target=path, after=notify)
 
 
-_SPECS = (
-    ("record-hook-patch", _h_record, "<file> --why <line> --pr <url or number> [--run <id>]",
-     "a session that does not drive the programme; a missing file, --why or --pr. Journals hook_patched with the "
-     "file, the why, the PR and the protected rules the file holds, sends Shawn the notice through the terminal "
-     "host, and prints it as text for the PM to post. It needs no prompt, because it records what the PM did and "
-     "approves nothing."),
-)
-
-
 SHAWN = "shawn"
 PM = "pm"
 SETTINGS_KEY = "check_settings"
 UNREADABLE = "checks_unreadable"
+SET_KIND = "check_set"
+OWN = "own"
+STATES = ("on", "off")
 STORE_WAIT_MS = 250
 JOURNAL_LOCK_WAIT = 0.5
 DETAIL_CAP = 300
@@ -119,13 +114,30 @@ def turning_on_needs(name, own_run=False):
     return row.own_run_on_needs if own_run else row.on_needs
 
 
-def _setting(block, name):
+def limit_names() -> list:
+    return [name for name, row in CHECKS.items() if row.limit]
+
+
+def _has_own_run(name) -> bool:
+    return CHECKS[name].own_run_on_needs != CHECKS[name].on_needs
+
+
+def _entry(block, name):
     settings = block.get(SETTINGS_KEY) if isinstance(block, dict) else None
     entry = settings.get(name) if isinstance(settings, dict) else None
-    state = entry.get("state") if isinstance(entry, dict) else None
+    return entry if isinstance(entry, dict) else {}
+
+
+def _setting(block, name):
+    state = _entry(block, name).get("state")
     if state == "on":
         return True
     return False if state == "off" and CHECKS[name].can_turn_off else None
+
+
+def _own_setting(programme, name):
+    own = _entry(programme, name).get(OWN) if _has_own_run(name) else None
+    return {"on": True, "off": False}.get(own) if isinstance(own, str) else None
 
 
 def _live_item(item) -> bool:
@@ -161,6 +173,8 @@ def _decide(name, matches) -> tuple:
             continue
         item, programme = match["_blocks"]
         setting, scope = _setting(item, name), "item"
+        if setting is None and match["item"] is None:
+            setting, scope = _own_setting(programme, name), OWN
         if setting is None:
             setting, scope = _setting(programme, name), "programme"
         votes.append((row.default if setting is None else setting, setting, scope, match))
@@ -230,7 +244,8 @@ def _faults(programme) -> list:
         for name, entry in sorted(settings.items()):
             state = entry.get("state") if isinstance(entry, dict) else None
             frozen = name in CHECKS and not CHECKS[name].can_turn_off and state == "off"
-            if frozen or state not in ("on", "off"):
+            only_own = state is None and name in CHECKS and _own_setting(block, name) is not None
+            if frozen or (state not in STATES and not only_own):
                 found.append(f"{where} {name}")
     return found
 
@@ -290,6 +305,164 @@ def session_checks(session_id, now=None) -> dict:
             decided_by[name] = source
     return {"states": states, "decided_by": decided_by, "unreadable": unreadable,
             "matches": [{k: m[k] for k in ("run", "item", "role")} for m in matches]}
+
+
+def refusal(name, state, own=False, item=None):
+    if name not in CHECKS:
+        return f"unknown check {name!r}; the checks are {', '.join(CHECKS)}"
+    if not CHECKS[name].can_turn_off:
+        return (f"{name} has no off setting, so nothing can set it: it keeps Shawn's answer and Auto's proof from "
+                "being forged")
+    if own and not _has_own_run(name):
+        names = [n for n in CHECKS if _has_own_run(n)]
+        return f"--own is for the PM's own run, and only {' and '.join(names)} has a setting for it"
+    if own and item:
+        return "--own is the PM's own run and --item is one item's run, so give one of them"
+    return None
+
+
+def needs_pick(name, state, own=False) -> bool:
+    return state == "on" and turning_on_needs(name, own_run=own) == SHAWN
+
+
+def place(programme, ident, own=False) -> tuple:
+    if own:
+        return OWN, None, programme
+    if not ident:
+        return "programme", None, programme
+    key = programme_record._resolve(programme, programme_record.check_item_id(ident))
+    if not _live_item(programme["items"][key]):
+        raise programme_record.RecordError(f"item {key!r} is finished, and a finished item's settings never apply")
+    return "item", key, programme["items"][key]
+
+
+def where_text(scope, key) -> str:
+    return {OWN: "the PM's own run", "programme": "the programme"}.get(scope) or f"item {key}"
+
+
+def stored_state(block, name, scope):
+    return _entry(block, name).get(OWN if scope == OWN else "state")
+
+
+def limit_asks(programme, key, names) -> list:
+    item = (programme.get("items") or {}).get(key) if key else None
+    asks = []
+    for name in names:
+        if _setting(item, name) or _setting(programme, name):
+            continue
+        scope = f" --item {key}" if key else ""
+        asks.append(f"programme.sh offer limit-{name} --command 'set-check {name} on{scope}'")
+    return asks
+
+
+def _contract_limits(rows, key, item) -> list:
+    set_rows = [r for r in rows if r.get("kind") == "contract_set" and (r.get("payload") or {}).get("item") == key
+                and "limits" in r["payload"]]
+    if set_rows:
+        return set_rows[-1]["payload"]["limits"]
+    run = item.get("auto_run")
+    seed = run.get("contract") if isinstance(run, dict) else None
+    return seed.get("limits") or [] if isinstance(seed, dict) else []
+
+
+def _still_off(programme, item, name) -> bool:
+    return name in CHECKS and CHECKS[name].limit and not (_setting(item, name) or _setting(programme, name))
+
+
+def named_limits(programme, rows, behaviours) -> list:
+    out = [{"check": b["limit"], "via": f"behaviour {b.get('id')}", "ask": limit_asks(programme, None, [b["limit"]])[0]}
+           for b in behaviours or [] if b.get("limit") and b.get("in_force") and _still_off(programme, None, b["limit"])]
+    for key, item in sorted(_items(programme).items()):
+        if not _live_item(item):
+            continue
+        out += [{"check": name, "via": f"the contract of item {key}", "ask": limit_asks(programme, key, [name])[0]}
+                for name in _contract_limits(rows or [], key, item) if _still_off(programme, item, name)]
+    return out
+
+
+def setting_rows(programme) -> list:
+    out = []
+    for name, row in CHECKS.items():
+        entry = _entry(programme, name)
+        base = {"check": name, "text": row.text}
+        if not row.can_turn_off:
+            out.append(dict(base, state="on", scope="fixed"))
+        elif _setting(programme, name) is None:
+            out.append(dict(base, state="on" if row.default else "off", scope="default"))
+        else:
+            out.append(dict(base, state=entry["state"], scope="programme", set_at=entry.get("set_at"),
+                            set_by=entry.get("set_by")))
+        if _own_setting(programme, name) is not None:
+            out.append(dict(base, state=entry[OWN], scope=OWN, set_at=entry.get("own_set_at"),
+                            set_by=entry.get("own_set_by")))
+        for key, item in sorted(_items(programme).items()):
+            if _live_item(item) and _setting(item, name) is not None:
+                held = _entry(item, name)
+                out.append(dict(base, state=held["state"], scope="item", item=key, set_at=held.get("set_at"),
+                                set_by=held.get("set_by")))
+    return out
+
+
+def _differ(programme, name, state) -> list:
+    return [key for key, item in sorted(_items(programme).items())
+            if _live_item(item) and _entry(item, name).get("state") not in (None, state)]
+
+
+_SET_USAGE = "usage: set-check <name> on|off [--item <id> | --own] [--prompt <id>] [--run <id>]"
+_SEE_CHECKS = "`programme.sh status` lists the checks and their settings"
+
+
+def _h_set_check(host, argv):
+    positional, opts = host._parse(argv, values=("run", "item", "prompt"), flags=("own",))
+    if len(positional) != 2 or positional[1] not in STATES:
+        raise ValueError(_SET_USAGE)
+    name, state = positional
+    own, ident = bool(opts.get("own")), opts.get("item")
+    why = refusal(name, state, own, ident)
+    if why:
+        raise host.ProgrammeError(why, fix=_SEE_CHECKS)
+    needs = needs_pick(name, state, own)
+    if opts.get("prompt") and not needs:
+        raise host.ProgrammeError(f"set-check {name} {state} needs no pick, so it spends none",
+                                  fix="rerun it without --prompt")
+
+    def change(programme, prompt, _rec):
+        scope, key, block = place(programme, ident, own)
+        where = where_text(scope, key)
+        if stored_state(block, name, scope) == state:
+            raise host.ProgrammeError(f"{name} is already {state} for {where}; nothing changed", fix=_SEE_CHECKS)
+        settings = block.get(SETTINGS_KEY)
+        settings = block[SETTINGS_KEY] = dict(settings) if isinstance(settings, dict) else {}
+        by = SHAWN if prompt else PM
+        stamp = run_record_core.now_iso()
+        settings[name] = dict(_entry(block, name), **({OWN: state, "own_set_at": stamp, "own_set_by": by} if own
+                                                      else {"state": state, "set_at": stamp, "set_by": by}))
+        payload = {"check": name, "state": state, "scope": scope, "set_by": by, "text": f"{name} {state} for {where}"}
+        if key:
+            payload["item"] = key
+        differ = _differ(programme, name, state) if scope == "programme" else []
+        return dict(payload, items_still_differ=differ) if differ else payload
+
+    return host._write(opts, change, SET_KIND, prompt_id=opts.get("prompt"), needs_prompt=needs, verb="set-check",
+                       target=name)
+
+
+_SPECS = (
+    ("record-hook-patch", _h_record, "<file> --why <line> --pr <url or number> [--run <id>]",
+     "a session that does not drive the programme; a missing file, --why or --pr. Journals hook_patched with the "
+     "file, the why, the PR and the protected rules the file holds, sends Shawn the notice through the terminal "
+     "host, and prints it as text for the PM to post. It needs no prompt, because it records what the PM did and "
+     "approves nothing."),
+    ("set-check", _h_set_check, "<name> on|off [--item <id> | --own] [--prompt <id>] [--run <id>]",
+     "a session that does not drive the programme; an unknown check; tracker-proof or prefilled-answers, which have "
+     "no off setting; an unknown or finished item; a check already in that state there. Turning a check off needs no "
+     "prompt, and neither does turning on one the PM may turn on alone; --prompt on such a change is refused. Turning "
+     "on no-destructive-commands, no-settings-writes, literal-send, advisor-redirect or stop-block needs --prompt of "
+     "Shawn's pick of `offer`: it moves authority, so the picker lists the decline first and his own words are "
+     "refused. --own sets stop-block for the PM's own run alone, which the PM may turn on alone. An item setting "
+     "beats the programme setting. Journals check_set; the setting is outside the agreed terms, so terms_digest "
+     "stays the same."),
+)
 
 
 def build_verbs(host) -> dict:

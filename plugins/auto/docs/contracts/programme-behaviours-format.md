@@ -62,11 +62,13 @@ Any other key rejects the entry (`unknown_key`). A field of the wrong type gives
 
 A behaviour has no decision kind, no item list and no autonomy level, so nothing in it can widen what the PM or a worker may decide.
 
+`limit` is optional and only a behaviour file sets it. It holds one limit check name from `programme_checks.CHECKS`, and any other value is `bad_value limit`. It gives the behaviour no authority and turns nothing on: the limit stays off until Shawn's pick of `set-check`. `status` lists it as named and not on, with the offer to run.
+
 ### 3.1 Behaviour file
 
 A file is one entry: the file name without `.md` is the `id`, and a file with no `.md` ending or a leading dot is ignored. It starts with a frontmatter block between two `---` lines, then a body.
 
-- Frontmatter keys: `when` (required, one scalar line), and the optional scalars `trigger`, `applies_to` (default `both`), `evidence`, `stop`, `why`; and the optional lists `checks` (each item starts `pm:` or `agent:`), `overrides`, `skills`, `tools`, `agents`, `formats`, `comms`. Any other key, including `examples`, is `unknown_key`. A key given twice, a line that is not `key: value`, or a bad check prefix is `bad_value`.
+- Frontmatter keys: `when` (required, one scalar line), and the optional scalars `trigger`, `applies_to` (default `both`), `evidence`, `stop`, `why`, `limit`; and the optional lists `checks` (each item starts `pm:` or `agent:`), `overrides`, `skills`, `tools`, `agents`, `formats`, `comms`. Any other key, including `examples`, is `unknown_key`. A key given twice, a line that is not `key: value`, or a bad check prefix is `bad_value`.
 - The body holds a `Do:` heading and a `Don't:` heading, each followed by `-` or `*` bullets. Text outside a bullet list is `bad_value body`. At least one Do or Don't line is required (section 3).
 - A line may hold the placeholder `{claim_command}`. A start brief, a reminder and `prompt-item --standing` replace it with the `programme.sh claim` command for that run and item; the status and rules views show it unfilled. Any other `{name}` is `bad_value placeholder` and the file does not load.
 - `prompt-item <item> <text> --standing` appends the worker behaviours with trigger `start` that are in force for the item, as the same "Behaviours this work follows:" block a start brief carries. A start with no handoff carries no brief, so its first prompt uses this flag.

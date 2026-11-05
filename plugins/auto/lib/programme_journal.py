@@ -79,6 +79,7 @@ KINDS = (
     "behaviours_kept",
     "hook_patched",
     "checks_unreadable",
+    "check_set",
     "approval_offered",
     "approval_declined",
     "ritual_recorded",

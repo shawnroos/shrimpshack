@@ -348,7 +348,7 @@ def _rules(block, rules) -> dict:
                           "terms": {k: {"value": _dict(t).get("value"), "set_by": _dict(t).get("set_by")}
                                     for k, t in sorted(terms.items())}},
             "rules": [], "autonomy": [], "rejected_rules": [], "rulings": [],
-            "permission_proposals": []}
+            "permission_proposals": [], "checks": load_lib_module("programme_checks").setting_rows(block)}
 
 
 def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, protocol=None, focus=None) -> dict:
@@ -397,6 +397,8 @@ def build(record, journal_entries, now=None, *, inbox_size=None, rules=None, pro
         "rules_in_force": _rules(block, rules),
         "items": items,
     }
+    model["limits_named"] = load_lib_module("programme_checks").named_limits(
+        block, journal_entries, model["rules_in_force"].get("behaviours"))
     model["agreement"] = programme_view_agreement.build(block, journal_entries, model["rules_in_force"], protocol, now)
     model["agreement"]["behaviours"] = model["rules_in_force"].get("behaviours") or []
     model["agreement"]["rituals"] = rituals_view(record, journal_entries or [])
@@ -503,7 +505,7 @@ def _behaviour_row(entry, forced, overriders, deliveries) -> dict:
            "do": list(entry.get("do") or []), "dont": list(entry.get("dont") or []),
            "pm_checks": [c["text"] for c in checks if c["by"] == "pm"],
            "agent_checks": [c["text"] for c in checks if c["by"] == "agent"],
-           "evidence": entry.get("evidence"), "stop": entry.get("stop"),
+           "evidence": entry.get("evidence"), "stop": entry.get("stop"), "limit": entry.get("limit"),
            "deliveries": deliveries.get(entry["id"], []),
            "prompt_id": source.get("prompt_id"),
            "quote": programme_journal.redact(source["quote"]) if source.get("quote") else None,
@@ -638,6 +640,8 @@ def _behaviour_text(b) -> str:
         status.append(f"overridden by {', '.join(b['overridden_by'])}")
     status.append(f"applies to {b.get('applies_to')}")
     parts = [f"when {b.get('when')} (trigger {b.get('trigger')})"]
+    if b.get("limit"):
+        parts.append(f"limit: {b['limit']}, on only by Shawn's pick of set-check")
     parts += [f"{label}: {' / '.join(b[key])}" for key, label in
               (("do", "do"), ("dont", "don't"), ("pm_checks", "PM checks"), ("agent_checks", "agent checks"))
               if b.get(key)]
@@ -652,6 +656,23 @@ def behaviour_texts(r) -> list:
     if rejected:
         out.append((f"rejected behaviours: {len(rejected)} ({', '.join(rejected)})", "warn"))
     return out + [(f"behaviours store: {n}", "warn") for n in r.get("behaviour_notices") or []]
+
+
+def check_texts(rows) -> list:
+    checks = load_lib_module("programme_checks")
+    out = [f"check {r['check']}: {r['state']} for {checks.where_text(r['scope'], r.get('item'))} "
+           f"(by {r.get('set_by')} at {r.get('set_at')})" for r in rows if r["scope"] not in ("default", "fixed")]
+    defaults = [f"{r['check']} ({r['state']})" for r in rows if r["scope"] == "default"]
+    if defaults:
+        out.append(f"checks at their default: {', '.join(defaults)}")
+    fixed = [r["check"] for r in rows if r["scope"] == "fixed"]
+    if fixed:
+        out.append(f"no off setting: {', '.join(fixed)}")
+    return out
+
+
+def _named_rows(named) -> list:
+    return [_row(f"  limit {n['check']}: named by {n['via']}, not on; to ask Shawn: {n['ask']}", "warn") for n in named]
 
 
 def _rule_text(rule) -> str:
@@ -683,6 +704,7 @@ def rule_texts(r) -> list:
             if not programme_home.opt_in_hidden(key, _dict(term))]
     out += [(_ruling_text(_dict(e)), "text") for e in r.get("rulings") or []]
     out += behaviour_texts(r)
+    out += [(text, "text") for text in check_texts(r.get("checks") or [])]
     out += [(_rule_text(_dict(rule)), "text") for rule in r.get("rules") or []]
     out += [(f"authority {_dict(e).get('action')}: {_dict(e).get('level')}{_adopted_on(_dict(e))}", "text")
             for e in r.get("autonomy") or []]
@@ -817,6 +839,8 @@ def rows(model, work=None) -> list:
         _section(out, "End and archive", life, "active")
     _section(out, "Rules in force", [_row(f"  {text}", style) for text, style in rules_texts(model["rules_in_force"])],
              "none")
+    if model.get("limits_named"):
+        _section(out, "Limits named, not on", _named_rows(model["limits_named"]), "none")
     _section(out, "Items", [line for item in model["items"] for line in _item_lines(item)], "no items")
     if work is not None:
         _section(out, "Work", [_row(f"  {text}", style) for text, style in programme_view_work.work_texts(work)],
@@ -835,6 +859,9 @@ def agreement_rows(model) -> list:
                  "none")
     if model["agreement"].get("rituals"):
         _section(out, "Rituals", [_row(f"  {_ritual_text(_dict(r))}") for r in model["agreement"]["rituals"]], "none")
+    _section(out, "Checks, outside the agreed terms",
+             [_row(f"  {text}") for text in check_texts(_dict(model["rules_in_force"]).get("checks") or [])]
+             + _named_rows(model.get("limits_named") or []), "none")
     return out
 
 

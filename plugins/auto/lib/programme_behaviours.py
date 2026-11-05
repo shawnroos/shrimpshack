@@ -56,7 +56,7 @@ EDITABLE_FIELDS = ("when", "applies_to", "examples") + LIST_FIELDS + TEXT_FIELDS
 REQUIRED = ("id", "layer", "when", "applies_to")
 OPTIONAL = LIST_FIELDS + TEXT_FIELDS + (
     "repo_key", "examples", "source", "state", "overrides", "moved_to", "moved_repo_key", "history", "at",
-    "relates_to", "unrelated", "edit_of", "edit_base",
+    "relates_to", "unrelated", "edit_of", "edit_base", "limit",
 )
 # The other fields stay unscanned: stop conditions and "don't" lines need words such as
 # "cost", "limit" and "publish", which are protected stems.
@@ -182,6 +182,8 @@ def _validate(entry, *, allow_adoption=True) -> None:
     if not entry.get("do") and not entry.get("dont"):
         raise _Reject("missing_field", "do or dont")
     _check_extras(entry)
+    if "limit" in entry and entry["limit"] not in load_lib_module("programme_checks").limit_names():
+        raise _Reject("bad_value", "limit")
     kind = protected_kind(entry)
     if kind:
         raise _Reject("protected_escalation", kind)

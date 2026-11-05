@@ -606,5 +606,317 @@ OUT="$(states sess-shape $SEND)"
 stop_store_lock
 check "off" "$OUT"
 
+# ---- set-check: the verb, the approval rule and status ----
+
+opick() { CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$SR" "$@"; }
+sc() {
+  OUT="$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" set-check "$@" --run "$SR" 2>&1)"
+  CODE=$?
+}
+offer() {
+  OUT="$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" offer "$1" --command "$2" --run "$SR" 2>&1)"
+  CODE=$?
+}
+stored() {
+  run_py "$SR" "$1" <<'EOF'
+rec = load_lib_module("run_record_core").read_run_record(ph.home_path(args[0]), args[0])
+print(json.dumps(eval(args[1], {"prog": rec["programme"]}), sort_keys=True))
+EOF
+}
+check_set_rows() {
+  run_py "$SR" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "check_set"))
+EOF
+}
+last_set() {
+  run_py "$SR" "$1" <<'EOF'
+row = [r for r in pj.read(args[0]) if r["kind"] == "check_set"][-1]
+print(json.dumps(eval(args[1], {"row": row, "p": row["payload"]}), sort_keys=True))
+EOF
+}
+digest() {
+  run_py "$SR" <<'EOF'
+rec = load_lib_module("run_record_core").read_run_record(ph.home_path(args[0]), args[0])
+print(load_lib_module("programme_approval").terms_digest(ph.normalize_programme(rec["programme"])))
+EOF
+}
+status_text() { CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" status --run "$SR" 2>&1; }
+ITEM_S='{"id": "linear:AI-7", "title": "s", "state": "open", "owner": {"session_id": "sess-sw", "pane": "w90:p1"}}'
+ITEM_T='{"id": "linear:AI-8", "title": "t", "state": "open", "owner": {"session_id": "sess-tw", "pane": "w90:p2"}}'
+ITEM_DONE='{"id": "linear:AI-9", "title": "d", "state": "done", "owner": {"session_id": "sess-dw", "pane": "w90:p3"}}'
+SR="$(new_run sess-ps w90)"
+edit_run "$SR" "prog['items'] = {'linear:AI-7': $ITEM_S, 'linear:AI-8': $ITEM_T, 'linear:AI-9': $ITEM_DONE}"
+DIGEST_BEFORE="$(digest)"
+
+it "AE5: the PM turns the literal send check off alone"
+sc literal-send off
+check "0" "$CODE"
+has '"kind": "check_set"' "$OUT"
+check '"off"' "$(stored "prog['check_settings']['literal-send']['state']")"
+check "off" "$(states sess-sw literal-send)"
+
+it "AE5: the change is journaled, with no prompt"
+check "1" "$(check_set_rows)"
+check '["literal-send", "off", "programme", null, null]' "$(last_set '[p["check"], p["state"], p["scope"], p.get("item"), p.get("prompt_id")]')"
+
+it "AE5: status lists the setting, and rules lists it too"
+has "check literal-send: off for the programme" "$(status_text)"
+has "check literal-send: off for the programme" "$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" rules --run "$SR" 2>&1)"
+has '"literal-send"' "$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" status --json --run "$SR" 2>&1 | "$PY" -c 'import json,sys; print(json.dumps([r["check"] for r in json.load(sys.stdin)["model"]["rules_in_force"]["checks"] if r.get("set_at")]))')"
+
+it "the agreement page lists the checks too, outside the agreed terms"
+has "check literal-send: off for the programme" "$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" status agreement --run "$SR" 2>&1)"
+
+it "AE5: turning on a limit with no prompt is refused, and the limit stays off"
+sc no-destructive-commands on
+check "1" "$CODE"
+has "needs --prompt" "$OUT"
+check "null" "$(stored "prog['check_settings'].get('no-destructive-commands')")"
+check "off" "$(states sess-sw no-destructive-commands)"
+
+it "the picker for a limit lists the decline first and names the check and its reach"
+offer limit-a "set-check no-destructive-commands on"
+check "0" "$CODE"
+check '"Not now"' "$(printf '%s' "$OUT" | "$PY" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["input"]["questions"][0]["options"][0]["label"]))')"
+has "Turn on no destructive commands for the whole programme" "$OUT"
+
+it "a pick of the offer turns the limit on, for workers, with the pick cited"
+P="$(opick "set-check no-destructive-commands on")"
+sc no-destructive-commands on --prompt "$P"
+check "0" "$CODE"
+check "on" "$(states sess-sw no-destructive-commands)"
+check "[\"$P\", \"$P\"]" "$(last_set '[row["cites"][0], p["prompt_id"]]')"
+check '"shawn"' "$(stored "prog['check_settings']['no-destructive-commands']['set_by']")"
+
+it "one pick approves one change: it cannot turn the limit on again after an off"
+sc no-destructive-commands off
+check "0" "$CODE"
+sc no-destructive-commands on --prompt "$P"
+check "1" "$CODE"
+has "already used" "$OUT"
+check "off" "$(states sess-sw no-destructive-commands)"
+
+it "turning a limit off needs no prompt at all, and the record says the PM did it"
+check '"pm"' "$(stored "prog['check_settings']['no-destructive-commands']['set_by']")"
+
+it "a prompt on a change that needs none is refused and is not spent"
+P="$(opick "set-check no-destructive-commands on")"
+sc subagent-refusals off --prompt "$P"
+check "1" "$CODE"
+has "needs no pick" "$OUT"
+sc no-destructive-commands on --prompt "$P"
+check "0" "$CODE"
+sc no-destructive-commands off
+
+it "own words cannot turn on a limit: the option moves authority"
+P="$(opick --other "yes please turn it on" "set-check no-destructive-commands on")"
+OUT="$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" set-check no-destructive-commands on --prompt "$P" --reads-as "Turn on no destructive commands for the whole programme" --run "$SR" 2>&1)"
+CODE=$?
+check "1" "$CODE"
+has "moves authority" "$OUT"
+check "off" "$(states sess-sw no-destructive-commands)"
+
+it "a decline runs nothing"
+P="$(opick --decline "set-check no-destructive-commands on")"
+sc no-destructive-commands on --prompt "$P"
+check "1" "$CODE"
+has "declined" "$OUT"
+check "off" "$(states sess-sw no-destructive-commands)"
+
+it "a pick of another command approves nothing here"
+P="$(opick "set-check no-settings-writes on")"
+sc no-destructive-commands on --prompt "$P"
+check "1" "$CODE"
+has "different command" "$OUT"
+
+it "--item sets one item only, and beats the programme setting"
+P="$(opick "set-check no-settings-writes on --item linear:AI-7")"
+sc no-settings-writes on --item linear:AI-7 --prompt "$P"
+check "0" "$CODE"
+check "on off" "$(states sess-sw no-settings-writes) $(states sess-tw no-settings-writes)"
+has "check no-settings-writes: on for item linear:AI-7" "$(status_text)"
+check '["no-settings-writes", "on", "item", "linear:AI-7"]' "$(last_set '[p["check"], p["state"], p["scope"], p["item"]]')"
+
+it "an item setting survives a programme off, and the output says which items still differ"
+sc no-settings-writes off
+check "0" "$CODE"
+has '"items_still_differ": ["linear:AI-7"]' "$OUT"
+check "on" "$(states sess-sw no-settings-writes)"
+
+it "a pick made while the item was open does not apply once the item has changed"
+P="$(opick "set-check no-destructive-commands on --item linear:AI-8")"
+edit_run "$SR" "prog['items']['linear:AI-8']['state'] = 'waiting'"
+sc no-destructive-commands on --item linear:AI-8 --prompt "$P"
+check "1" "$CODE"
+has "changed since the offer" "$OUT"
+edit_run "$SR" "prog['items']['linear:AI-8']['state'] = 'open'"
+
+it "--item on an unknown item is refused, with or without a prompt"
+sc literal-send off --item linear:AI-404
+check "1" "$CODE"
+has "AI-404" "$OUT"
+offer limit-u "set-check no-destructive-commands on --item linear:AI-404"
+check "1" "$CODE"
+has "AI-404" "$OUT"
+
+it "--item on a finished item is refused: a finished item's settings never apply"
+sc literal-send off --item linear:AI-9
+check "1" "$CODE"
+has "finished" "$OUT"
+
+it "the pre-filled answer refusal and Linear proof have no off setting, and the refusal gives the reason"
+for name in prefilled-answers tracker-proof; do
+  sc "$name" off
+  check "1" "$CODE"
+  has "has no off setting" "$OUT"
+  sc "$name" on
+  check "1" "$CODE"
+  has "has no off setting" "$OUT"
+  offer "fixed-${name}" "set-check $name off"
+  check "1" "$CODE"
+done
+check "null null" "$(stored "prog['check_settings'].get('prefilled-answers')") $(stored "prog['check_settings'].get('tracker-proof')")"
+check "on on" "$(states sess-sw prefilled-answers tracker-proof)"
+
+it "an unknown check name is refused, and the refusal lists the names"
+sc no-such-check off
+check "1" "$CODE"
+has "unknown check" "$OUT"
+has "literal-send" "$OUT"
+
+it "a state other than on or off is refused with the usage"
+sc literal-send maybe
+check "2" "$CODE"
+has "usage: set-check" "$OUT"
+
+it "the same state twice is refused and writes no row"
+BEFORE="$(check_set_rows)"
+sc literal-send off
+check "1" "$CODE"
+has "already off" "$OUT"
+check "$BEFORE" "$(check_set_rows)"
+
+it "a worker running the verb is refused"
+OUT="$(CLAUDE_CODE_SESSION_ID=sess-sw "$PY" "$PROG" set-check tracker-outside-remit off --run "$SR" 2>&1)"
+CODE=$?
+check "1" "$CODE"
+has "driving session" "$OUT"
+check "null" "$(stored "prog['check_settings'].get('tracker-outside-remit')")"
+
+it "a PM's sub-agent running the verb is refused"
+OUT="$(subagent "bash ${AUTO_ROOT}/lib/programme.sh set-check tracker-outside-remit off --run ${SR}")"
+has '"permissionDecision": "deny"' "$OUT"
+
+it "no setting moves terms_digest"
+check "$DIGEST_BEFORE" "$(digest)"
+
+it "a limit stays out of the accepted terms: on and off leave the digest alone"
+P="$(opick "set-check no-destructive-commands on")"
+sc no-destructive-commands on --prompt "$P"
+check "$DIGEST_BEFORE" "$(digest)"
+sc no-destructive-commands off
+
+it "every check the PM turns off alone goes off with no prompt"
+for name in pm-settings-writes tracker-outside-remit advisor-redirect subagent-refusals stop-block; do
+  sc "$name" off
+  check "0" "$CODE"
+  check '"off"' "$(stored "prog['check_settings']['$name']['state']")"
+done
+
+it "every check the table gives the PM alone goes on with no prompt"
+for name in pm-settings-writes tracker-outside-remit subagent-refusals; do
+  sc "$name" on
+  check "0" "$CODE"
+done
+check '"pm"' "$(stored "prog['check_settings']['subagent-refusals']['set_by']")"
+
+it "every check the table gives Shawn stays off with no prompt, and goes on with his pick"
+for name in advisor-redirect literal-send stop-block; do
+  sc "$name" on
+  check "1" "$CODE"
+  has "needs --prompt" "$OUT"
+  P="$(opick "set-check $name on")"
+  sc "$name" on --prompt "$P"
+  check "0" "$CODE"
+  sc "$name" off
+done
+
+it "a change that needs no pick cannot be offered"
+offer free-a "set-check literal-send off"
+check "1" "$CODE"
+has "needs no pick" "$OUT"
+offer free-b "set-check subagent-refusals on"
+check "1" "$CODE"
+has "needs no pick" "$OUT"
+
+it "the same check already on cannot be offered"
+P="$(opick "set-check no-destructive-commands on")"
+sc no-destructive-commands on --prompt "$P"
+offer dup-a "set-check no-destructive-commands on"
+check "1" "$CODE"
+has "already on" "$OUT"
+sc no-destructive-commands off
+
+it "the Stop block: the PM turns on its own alone, and a worker's run stays off"
+sc stop-block on --own
+check "0" "$CODE"
+check "on off" "$(states sess-ps stop-block) $(states sess-sw stop-block)"
+has "check stop-block: on for the PM's own run" "$(status_text)"
+check '["stop-block", "on", "own", null]' "$(last_set '[p["check"], p["state"], p["scope"], p.get("item")]')"
+
+it "the Stop block: the PM turns off its own alone, and that moves only the PM"
+sc stop-block off --own
+check "0" "$CODE"
+check "off" "$(states sess-ps stop-block)"
+
+it "the Stop block on an item stays Shawn's pick"
+sc stop-block on --item linear:AI-7
+check "1" "$CODE"
+has "needs --prompt" "$OUT"
+
+it "--own is refused on any other check and beside --item"
+sc literal-send on --own
+check "1" "$CODE"
+has "only stop-block" "$OUT"
+sc stop-block on --own --item linear:AI-7
+check "1" "$CODE"
+has "--own" "$OUT"
+
+it "the PM's own setting leaves the record of who set the programme's: Shawn's pick stays Shawn's"
+P="$(opick "set-check stop-block on")"
+sc stop-block on --prompt "$P"
+check "0" "$CODE"
+sc stop-block on --own
+check "0" "$CODE"
+check '["shawn", "pm"]' "$(stored "[prog['check_settings']['stop-block']['set_by'], prog['check_settings']['stop-block']['own_set_by']]")"
+has "check stop-block: on for the programme (by shawn" "$(status_text)"
+has "check stop-block: on for the PM's own run (by pm" "$(status_text)"
+sc stop-block off
+sc stop-block off --own
+
+it "a Stop block entry holding only the PM's own setting is a good shape: no fault row"
+edit_run "$SR" "prog['check_settings']['stop-block'].pop('state', None)"
+BEFORE="$(check_rows "$SR")"
+states sess-ps stop-block >/dev/null
+check "$BEFORE" "$(check_rows "$SR")"
+check "off" "$(states sess-ps stop-block)"
+
+it "status shows defaults on one line and the no-off pair on one line"
+TEXT="$(status_text)"
+has "checks at their default:" "$TEXT"
+has "no off setting: tracker-proof, prefilled-answers" "$TEXT"
+
+it "a patch to the file that holds the registry names the two rules it holds"
+PATCH_OUT="$(CLAUDE_CODE_SESSION_ID=sess-ps "$PY" "$PROG" record-hook-patch "lib/programme_checks.py" --why "w" --pr 1 --run "$SR" 2>&1)"
+has "pre-filled answer refusal" "$PATCH_OUT"
+has "Linear done, cancelled and root-cause rule" "$PATCH_OUT"
+
+it "what set-check stores is a shape the hooks' read accepts"
+check "[]" "$(run_py "$SR" <<'EOF'
+rec = load_lib_module("run_record_core").read_run_record(ph.home_path(args[0]), args[0])
+print(load_lib_module("programme_checks")._faults(rec["programme"]))
+EOF
+)"
+
 echo "programme-checks.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

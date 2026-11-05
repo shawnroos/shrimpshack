@@ -179,6 +179,7 @@ with tempfile.TemporaryDirectory(prefix='auto-offers-flags-') as work:
         'retire-behaviour': ['retire-behaviour', behaviour_id, '--as', 'retired'],
         'retire-ritual': ['retire-ritual', ritual_id, '--as', 'retired'],
         'run-ritual': ['run-ritual', ritual_id],
+        'set-check': ['set-check', 'no-destructive-commands', 'on', '--item', 'mem:d'],
         'set-remit': ['set-remit'],
         'settle-default-update': ['settle-default-update', 'd1', '--as', 'keep'],
         'skip-ritual': ['skip-ritual', ritual_id],
