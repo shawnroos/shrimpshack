@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 
 PASS=0
@@ -71,6 +72,7 @@ CRASHES=""
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 # An earlier build of this branch wrote Ruling changes and carries straight onto a legacy home; this
@@ -98,6 +100,7 @@ remit() {
   local run="$1" doc="$2"
   OUT="$(printf '%s' "$doc" | "$PY" "$PROG" set-remit --run "$run" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 pyget() {
   "$PY" -c 'import json,sys; d=json.loads(sys.argv[1].splitlines()[-1]); v=eval(sys.argv[2]); print(v if isinstance(v, str) else json.dumps(v, sort_keys=True))' "$1" "$2" 2>&1

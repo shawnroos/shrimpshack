@@ -223,15 +223,19 @@ has "effect" "$([ "$CODE" -ne 0 ] && echo "$OUT")"
 it "Covers AE4. A Ruling that grants prod_deploy is refused and nothing is written"
 BEFORE="$(ctx_hash)"
 P12="$(prompt 'r-deploy: you can deploy herdr:a to production yourself')"
-prog record-ruling r-deploy --kind prod_deploy --effect grant --scope "deploy" --applies-to herdr:a \
+OFFER_REFUSAL=1 prog record-ruling r-deploy --kind prod_deploy --effect grant --scope "deploy" --applies-to herdr:a \
   --prompt "$P12" --run "$RUN"
-REFUSED="$CODE"
-check "nonzero protected $BEFORE null" "$([ "$REFUSED" -ne 0 ] && echo nonzero) $(case "$OUT" in *protected*) echo protected ;; esac) $(ctx_hash) $(pyget "$(ctx)" "d['decisions'].get('r-deploy')")"
+check "97 is protected $BEFORE null" "$CODE $(case "$OUT" in *"is protected"*) echo is protected ;; esac) $(ctx_hash) $(pyget "$(ctx)" "d['decisions'].get('r-deploy')")"
 
 it "Covers AE4. A decided Ruling on a protected kind is refused too"
-prog record-ruling r-deploy --kind full_release --effect decided --scope "release" --applies-to herdr:a \
-  --prompt "$P12" --run "$RUN"
-check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+offer_refused "is protected" record-ruling r-deploy --kind full_release --effect decided --scope "release" \
+  --applies-to herdr:a --prompt "$P12" --run "$RUN"
+
+it "the verb itself refuses a protected grant with no prompt, and writes nothing"
+BEFORE="$(ctx_hash)"
+real record-ruling r-x --kind prod_deploy --effect grant --scope s --run "$RUN"
+check "1 $BEFORE" "$CODE $(ctx_hash)"
+has "is protected" "$OUT"
 
 it "Covers AE4. Every production deploy still goes to Shawn"
 check "shawn protected" "$(gate herdr:a prod_deploy act)"
@@ -285,8 +289,27 @@ it "a correction granting a protected kind is refused"
 prog hand-item herdr:d --question "Over the cap?" --kind spend_over_cap --run "$RUN"
 ASK2="$(pyget "$OUT" 'd["ask"]')"
 P_S="$(prompt 'you can just spend it')"
-prog record-ruling r-spend --replies-to "$ASK2" --effect grant --scope "spend" --prompt "$P_S" --run "$RUN"
-check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+offer_refused "is protected" record-ruling r-spend --replies-to "$ASK2" --effect grant --scope "spend" --prompt "$P_S" --run "$RUN"
+
+it "a correction with no prompt is refused before the verb reads its anchor"
+real record-ruling r-x --replies-to "$ASK2" --effect grant --scope s --run "$RUN"
+check "1" "$CODE"
+has "this approval needs --prompt" "$OUT"
+
+# No picker can approve this correction, since the offer refuses it, so only a stubbed approval reaches the verb's check.
+it "the verb itself refuses a correction granting a protected kind, whatever approved it, and writes nothing"
+BEFORE="$(ctx_hash)"
+REFUSAL="$(run_py "$RUN" "$ASK2" "$P_S" <<'EOF'
+run, ask, prompt_id = args
+programme = load_lib_module("programme")
+programme._approval_for = lambda *_: {"prompt_id": prompt_id, "quote": "spend", "origin": "typed"}
+print("exit", programme._cli(["record-ruling", "r-x", "--replies-to", ask, "--effect", "grant", "--scope", "s",
+                              "--prompt", prompt_id, "--run", run]))
+EOF
+)"
+has "exit 1" "$REFUSAL"
+has "is protected" "$REFUSAL"
+check "$BEFORE" "$(ctx_hash)"
 
 it "a correction needs a typed prompt"
 prog record-ruling r-nop --replies-to "$ASK2" --effect restrict --scope "x" --run "$RUN"

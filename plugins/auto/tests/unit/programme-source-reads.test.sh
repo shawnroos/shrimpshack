@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 
 PASS=0
 FAIL=0
@@ -232,6 +233,7 @@ CODE=0
 prog() {
   OUT="$("$PY" "$PROG" "$@" --run "$RUN" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 jq_py() {
   "$PY" -c "import json,sys; d=json.loads(sys.stdin.read()); print(json.dumps($1, sort_keys=True))" <<< "$OUT" 2>&1

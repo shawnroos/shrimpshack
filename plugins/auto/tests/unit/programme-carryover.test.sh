@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 
 PASS=0
@@ -115,6 +116,7 @@ CRASHES=""
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 
@@ -136,6 +138,7 @@ remit() {
   local doc="$1"; shift
   OUT="$(printf '%s' "$doc" | "$PY" "$PROG" set-remit --run "$run" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 end_programme() {
@@ -219,8 +222,7 @@ check "nonzero no-store" "$([ "$CODE" -ne 0 ] && echo nonzero) $([ -e "$STORE" ]
 has "no open offer" "$OUT"
 it "carry-rulings refuses an id that is not an active Ruling"
 P_NONE="$(prompt "$RUN_A" 'carry zz to the next programme')"
-prog carry-rulings zz --prompt "$P_NONE" --run "$RUN_A"
-check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+offer_refused "no active Ruling zz" carry-rulings zz --prompt "$P_NONE" --run "$RUN_A"
 it "carry-rulings with a pick after the offer stores the Ruling under each remit repo key"
 P_KEEP="$(opick "$RUN_A" 'carry-rulings g1')"
 prog carry-rulings g1 --prompt "$P_KEEP" --run "$RUN_A"

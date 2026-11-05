@@ -301,9 +301,10 @@ EOF
 has 'term:cadence' "$OUT"
 
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 OUT=""
 CODE=0
-prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
+prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; prog_exit_check "$@"; }
 jfield() { "$PY" -c 'import json,sys; d=json.loads(sys.argv[1].splitlines()[-1]); print(eval(sys.argv[2]))' "$1" "$2" 2>&1; }
 new_run() {
   py <<'EOF'

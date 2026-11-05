@@ -257,6 +257,20 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     result = drop('mem:w2', words, *reads_as(printed))
     check('the same message still binds with the right reading after those refusals', ok(result), said(result))
 
+    d_sid, d_new = 'words-driver', 'words-new-driver'
+    d_run = programme(d_sid, 'words-driver')
+    add_item(d_sid, d_run, 'mem:driver-words')
+    printed = offer(d_sid, d_run, 'driver', 'drop-item mem:driver-words --reason gone')
+
+    def hand_to_new_driver(rec):
+        rec['driving_session_id'] = d_new
+    edit(d_run, hand_to_new_driver)
+    answered = pick(d_new, d_run, printed['input']['questions'], 'yes drop that one')
+    result = verb(d_new, d_run, 'drop-item', 'mem:driver-words', '--reason', 'gone', '--prompt', answered,
+                  *reads_as(printed))
+    check('a new driver asks the old driver\'s picker, and his own words are refused',
+          refused(result, 'another PM') and state(d_run, 'mem:driver-words') == 'open', said(result))
+
     # One message, one approval.
     add_item(w_sid, w_run, 'mem:w3')
     add_item(w_sid, w_run, 'mem:w4')

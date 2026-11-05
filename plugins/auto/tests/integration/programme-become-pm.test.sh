@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 PASS=0
@@ -107,6 +108,7 @@ as() {
   local sid="$1"; shift
   OUT="$(as_pane "$sid" w2 "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 typed() {

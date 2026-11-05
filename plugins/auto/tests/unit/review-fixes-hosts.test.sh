@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 PASS=0
@@ -145,6 +146,7 @@ as_stub() {
   local sid="$1"; shift
   OUT="$(env CLAUDE_CODE_SESSION_ID="$sid" AUTO_TEST_HOST=stub ${STUBVARS[@]+"${STUBVARS[@]}"} "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 driver_panes() {
   py <<PYEOF
@@ -182,6 +184,7 @@ fresh_case() {
 takeover_as() {
   OUT="$(env CLAUDE_CODE_SESSION_ID="$CASE_TAKER" AUTO_TEST_HOST=stub AUTO_TEST_STUB_PRESENCE_SEQ="$SEQ" "$PY" "$PROG" takeover "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 typed() {
   ( cd "$NOREPO" && AUTO_TEST_HOST=stub "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$CASE_TAKER" "$1" >/dev/null 2>&1 )

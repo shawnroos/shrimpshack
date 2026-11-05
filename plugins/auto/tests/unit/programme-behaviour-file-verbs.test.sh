@@ -127,6 +127,32 @@ P="$(opick "$RUN" "adopt-behaviour-file pbig --file ${WORK}/drafts/big.md")"
 prog adopt-behaviour-file pbig --file "${WORK}/drafts/big.md" --prompt "$P" --run "$RUN"
 check "over-59k 1 absent 0 same" "$([ "$BIG_BYTES" -gt 59000 ] && echo over-59k) $GOT $CODE $(cmp -s "${WORK}/drafts/big.md" "${PERS}/pbig.md" && echo same || echo different)"
 
+path_of_length() {
+  local path="${WORK}/drafts" part
+  while [ $((${#path} + 1 + 200 + 3)) -lt "$1" ]; do
+    part="$(printf 'd%.0s' $(seq 1 200))"
+    path="${path}/${part}"
+  done
+  mkdir -p "$path"
+  part="$(printf 'f%.0s' $(seq 1 $(($1 - ${#path} - 4))))"
+  printf '%s/%s.md' "$path" "$part"
+}
+
+it "adopt-behaviour-file: a 600-character path is a path, not record text, and the draft is adopted"
+LONG_PATH="$(path_of_length 600)"
+cp "${WORK}/drafts/a.md" "$LONG_PATH"
+P="$(opick "$RUN" "adopt-behaviour-file plong --file ${LONG_PATH}")"
+prog adopt-behaviour-file plong --file "$LONG_PATH" --prompt "$P" --run "$RUN"
+check "600 0 same" "${#LONG_PATH} $CODE $(cmp -s "$LONG_PATH" "${PERS}/plong.md" && echo same || echo different)"
+rm -f "${PERS}/plong.md"
+
+it "adopt-behaviour-file: a path the option cannot show whole is refused by the description check"
+TOO_LONG="$(path_of_length 950)"
+cp "${WORK}/drafts/a.md" "$TOO_LONG"
+OFFERED="$("$PY" "$PROG" offer too-long --command "adopt-behaviour-file ptoolong --file ${TOO_LONG}" --run "$RUN" 2>&1)"
+check "1" "$?"
+has "the description is" "$OFFERED"
+
 it "adopt-behaviour-file: a decline writes nothing"
 P="$(opick "$RUN" --decline "adopt-behaviour-file pd1 --file ${WORK}/drafts/a.md")"
 prog adopt-behaviour-file pd1 --file "${WORK}/drafts/a.md" --prompt "$P" --run "$RUN"

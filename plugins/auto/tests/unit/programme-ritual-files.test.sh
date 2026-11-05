@@ -86,9 +86,10 @@ PYEOF
 }
 
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 OUT=""
 CODE=0
-prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
+prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; prog_exit_check "$@"; }
 new_run() {
   run_py <<'EOF'
 print(setup([]))

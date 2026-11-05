@@ -489,7 +489,7 @@ def _options(host, parsed, programme, doc) -> list:
     options = []
     for argv in parsed:
         try:
-            rendered = render(argv, programme, doc)
+            rendered = render(argv, programme, doc if argv[0] in _CONTENT_VERBS else None)
         except Exception as exc:
             raise host.ProgrammeError(f"cannot offer {shlex.join(argv)}: {exc}",
                                       fix=programme_fixes.fix_for("offer")) from None

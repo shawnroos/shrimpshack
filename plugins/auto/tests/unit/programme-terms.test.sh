@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 
@@ -101,6 +102,7 @@ CODE=0
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 terms() { field 'prog["agreement"].get("project_terms")'; }
@@ -359,7 +361,7 @@ check '["PM picks the crop default from the brand kit, smallest first", "Shawn p
 
 it "after acceptance a named edit of the old reserved deploys term refuses and changes nothing"
 P_DEP="$(prompt typed 'deploys: Shawn deploys on Fridays')"
-prog edit-project-term "$DEPLOYS" "Shawn deploys on Fridays" --prompt "$P_DEP"
+OFFER_REFUSAL=1 prog edit-project-term "$DEPLOYS" "Shawn deploys on Fridays" --prompt "$P_DEP"
 has "no project term" "$OUT"
 check '97 "Shawn deploys"' "$CODE $(field "prog['context']['decisions']['$DEPLOYS'][-1]['scope']")"
 

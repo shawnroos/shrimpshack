@@ -80,9 +80,13 @@ def _retire_behaviour(cmd, programme) -> dict:
     return _rendered(f"{word} behaviour {ident}", _behaviour_text(entry), entry)
 
 
+def _path(cmd) -> str:
+    return cmd.opt("file", cap=None)
+
+
 def _draft(cmd, bid) -> tuple:
     files = load_lib_module("programme_behaviour_file_verbs")
-    path = cmd.opt("file")
+    path = _path(cmd)
     text = cmd.doc
     if text is None:
         if path == "-":
@@ -95,7 +99,7 @@ def _adopt_file(cmd, _programme) -> dict:
     bid = cmd.first("<id> --file <path>")
     _text, digest = _draft(cmd, bid)
     return _rendered(f"Adopt behaviour file {bid} (content {_short(digest)})",
-                     f"Writes the draft shown in chat, from {cmd.opt('file')}, to your personal behaviours folder.",
+                     f"Writes the draft shown in chat, from {_path(cmd)}, to your personal behaviours folder.",
                      {"hash": digest})
 
 
@@ -119,7 +123,7 @@ def _settle_default(cmd, _programme) -> dict:
                                 {"shipped": shipped})
     _text, digest = _draft(cmd, bid)
     return _rendered(f"Merge default {bid} (content {_short(digest)})",
-                     f"Replaces your copy with the merged draft shown in chat, from {cmd.opt('file')}.",
+                     f"Replaces your copy with the merged draft shown in chat, from {_path(cmd)}.",
                             {"shipped": shipped, "hash": digest})
 
 

@@ -3,9 +3,10 @@
 
 Tests that set up state cite a typed prompt, and a typed message with no open offer approves nothing. This runs the
 real `offer`, answers the printed picker in a transcript the transcript check reads, and runs the verb on that pick.
-A verb's own refusal stays that verb's refusal. An `offer` that fails exits EXIT_OFFER_FAILED, which no verb returns, so
-a broken renderer cannot pass as a refusal in a test that only asserts non-zero. Tests of what typed words do call
-lib/programme.py directly.
+An `offer` that fails means the verb never ran, so its exit says nothing about the verb's own refusal: it exits
+EXIT_OFFER_FAILED, which no verb returns, and tests/helpers/prog-exit.sh counts that as a failure unless the case says
+it means an offer refusal and asserts the offer's message. A step of this wrapper that fails exits EXIT_WRAPPER_FAILED,
+always a failure. Tests of a verb's own refusal and of what typed words do call lib/programme.py directly.
 """
 
 import json
@@ -20,6 +21,7 @@ REAL = str(ROOT / 'lib/programme.py')
 sys.path.insert(0, str(ROOT / 'lib'))
 sys.path.insert(0, str(ROOT / 'tests/fixtures'))
 EXIT_OFFER_FAILED = 97
+EXIT_WRAPPER_FAILED = 98
 
 
 def passthrough():
@@ -67,10 +69,14 @@ def main():
     if offered.returncode != 0:
         sys.stderr.write(f'prog_offered: offer failed for {shlex.join(bound)}:\n{offered.stdout}{offered.stderr}')
         return EXIT_OFFER_FAILED
-    printed = json.loads(offered.stdout)
-    questions = printed['input']['questions']
-    answer = next(o['label'] for o in questions[0]['options'] if o['label'] != printed['decline'])
-    pick = offer_pick.answer_picker(run, os.environ['CLAUDE_CODE_SESSION_ID'], questions, answer)
+    try:
+        printed = json.loads(offered.stdout)
+        questions = printed['input']['questions']
+        answer = next(o['label'] for o in questions[0]['options'] if o['label'] != printed['decline'])
+        pick = offer_pick.answer_picker(run, os.environ['CLAUDE_CODE_SESSION_ID'], questions, answer)
+    except Exception as exc:
+        sys.stderr.write(f'prog_offered: wrapper step failed for {shlex.join(bound)}: {exc!r}\n')
+        return EXIT_WRAPPER_FAILED
     swapped = [pick if a == _value(argv, '--prompt') and argv[i - 1] == '--prompt' else a for i, a in enumerate(argv)]
     return subprocess.run([sys.executable, REAL, *swapped], input=stdin, text=True).returncode
 

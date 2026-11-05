@@ -53,6 +53,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     transcripts.mkdir()
     counter = [0]
     refresh_failures = []
+    wrapper_failures = []
 
     def check(name, condition, detail=''):
         global passed, failed
@@ -85,6 +86,8 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                                 env=env, input=stdin)
         if 'refresh failed' in result.stderr:
             refresh_failures.append((args, result.stderr))
+        if result.returncode in (97, 98):
+            wrapper_failures.append((args, result.returncode, result.stderr))
         return result
 
     def real(sid, run, *args, stdin=None):
@@ -566,6 +569,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           (beat_before, record(run).get('loop')))
     flag.unlink()
     check('no verb left the view stale', not refresh_failures, refresh_failures)
+    check('every verb ran: no offer or wrapper step stopped one', not wrapper_failures, wrapper_failures)
     check('setup writes are not approvals', not kinds(run, 'approval_refused'), kinds(run, 'approval_refused'))
 
     # Run D: the accept by a pick bound to the terms digest.

@@ -99,10 +99,11 @@ PYEOF
 }
 
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 OUT=""
 CODE=0
-prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
+prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; prog_exit_check "$@"; }
 new_run() {
   run_py "${1:-two}" <<'EOF'
 print(setup([], repos=args[0]))

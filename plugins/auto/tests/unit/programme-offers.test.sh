@@ -334,6 +334,20 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     printed = offer(sid, run, 'remit-less', 'set-remit', stdin=json.dumps(narrow))
     check('a remit narrowing does not claim to widen, and the decline comes last',
           'iden' not in command_label(printed) and options(printed)[-1]['label'] == printed['decline'], printed['input'])
+    paired_draft = work / 'paired-draft.md'
+    paired_draft.write_text('---\nwhen: a bug is reported\nchecks:\n  - pm: the item is a bug\n---\nDo:\n- reproduce it\n')
+    paired_home = work / 'paired-behaviours'
+    os.environ['CLAUDE_AUTO_BEHAVIOURS_DIR'] = str(paired_home)
+    paired = verb(sid, run, 'offer', 'paired', '--command', 'set-remit',
+                  '--command', f'adopt-behaviour-file paired --file {paired_draft}', stdin=json.dumps(narrow))
+    check('a picker can pair set-remit with a behaviour draft', ok(paired), said(paired))
+    if ok(paired):
+        printed = json.loads(paired.stdout)
+        result = verb(sid, run, 'adopt-behaviour-file', 'paired', '--file', str(paired_draft),
+                      '--prompt', picked(sid, run, printed, index=1))
+        check('a pick of the draft in that picker adopts the draft',
+              ok(result) and (paired_home / 'paired.md').read_text() == paired_draft.read_text(), said(result))
+    del os.environ['CLAUDE_AUTO_BEHAVIOURS_DIR']
 
     # ---- The wrapper: an offer that fails is not a refusal ----
     add_item(sid, run, 'mem:wrapped')
@@ -342,6 +356,19 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     check('prog_offered exits 97 with the offer failure when the offer fails',
           result.returncode == 97 and 'offer failed' in result.stderr and '--reason' in result.stderr
           and state(run, 'mem:wrapped') == 'open', (result.returncode, said(result)))
+
+    add_item(sid, run, 'mem:wrapper-step')
+    typed = typed_prompt(run, sid, 'drop it')['prompt_id']
+    stubbed = ('import offer_pick, prog_offered, sys\n'
+               'def broken(*_):\n    raise RuntimeError("the pick could not be written")\n'
+               'offer_pick.answer_picker = broken\n'
+               'sys.exit(prog_offered.main())\n')
+    result = subprocess.run([sys.executable, '-c', stubbed, 'drop-item', 'mem:wrapper-step', '--reason', 'gone',
+                             '--prompt', typed, '--run', run], text=True, capture_output=True, input='',
+                            cwd=str(root / 'tests/fixtures'), env=dict(os.environ, CLAUDE_CODE_SESSION_ID=sid))
+    check('prog_offered exits 98, not a refusal code, when its own step fails',
+          result.returncode == 98 and 'the pick could not be written' in result.stderr
+          and state(run, 'mem:wrapper-step') == 'open', (result.returncode, said(result)))
 
     # ---- Session restart and new driver ----
     add_item(sid, run, 'mem:restart')

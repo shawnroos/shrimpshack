@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 
@@ -91,6 +92,7 @@ CODE=0
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 it "describe lists exactly the programme verbs"

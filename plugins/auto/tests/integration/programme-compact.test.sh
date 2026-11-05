@@ -6,6 +6,7 @@ AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 
 PASS=0
 FAIL=0
@@ -93,6 +94,7 @@ CODE=0
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 RUN="$(run_py <<'EOF'
