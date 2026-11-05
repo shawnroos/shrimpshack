@@ -230,6 +230,56 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-offers-') as work:
     check('a pick spent once, then cited again, is refused',
           ok(first) and refused(result, 'already used') and state(run, 'mem:two') == 'dropped', said(first) + said(result))
 
+    # ---- One transcript read on the pick path: a tampered row still approves nothing ----
+    class Refused(Exception):
+        def __init__(self, reason, fix=None):
+            super().__init__(reason)
+
+    def bind_row(prompt_id, tamper=None):
+        rows = pj.read(run)
+        row = pj.find_prompt(run, prompt_id, rows)
+        if tamper:
+            at = rows.index(row)
+            row = rows[at] = copy.deepcopy(row)
+            tamper(row['payload']['source'])
+        argv = ['drop-item', 'mem:tamper', '--reason', 'gone']
+        try:
+            return pa._picked(rows, row, record(run), argv, prompt_id, Refused)
+        except Refused as exc:
+            return str(exc)
+
+    add_item(sid, run, 'mem:tamper')
+    printed = offer(sid, run, 'tamper', 'drop-item mem:tamper --reason gone')
+    prompt = picked(sid, run, printed)
+    reads = []
+    read_pick = ps.read_pick
+    ps.read_pick = lambda row: reads.append(row) or read_pick(row)
+    bound = bind_row(prompt)
+    ps.read_pick = read_pick
+    check('an untampered pick binds with one transcript read', isinstance(bound, dict) and len(reads) == 1, (bound, len(reads)))
+    for name, tamper in (('answer hash', lambda s: s.update(answers_hash='0' * 64)),
+                         ('recorded answers', lambda s: s.update(answers={'Other?': 'Other'})),
+                         ('window hash', lambda s: s.update(window_hash='0' * 64)),
+                         ('tool use id', lambda s: s.update(tool_use_id='toolu_forged'))):
+        check(f'a row with a changed {name} approves nothing',
+              'no offer printed' in str(bind_row(prompt, tamper)), bind_row(prompt, tamper))
+    rows = pj.read(run)
+    try:
+        pj.judged_pick(rows, pj.find_prompt(run, prompt, rows), None)
+        unverified = None
+    except ValueError as exc:
+        unverified = str(exc)
+    check('a pick that did not verify is refused however it reached the check',
+          'does not verify against the transcript' in str(unverified), unverified)
+    transcript = transcripts / (sid + '.jsonl')
+    original = transcript.read_text()
+    assert 'Drop item mem:tamper' in original
+    transcript.write_text(original.replace('Drop item mem:tamper', 'Drop item mem:tamperX'))
+    result = verb(sid, run, 'drop-item', 'mem:tamper', '--reason', 'gone', '--prompt', prompt)
+    transcript.write_text(original)
+    check('a transcript rewritten after the pick approves nothing, end to end',
+          result.returncode != 0 and state(run, 'mem:tamper') != 'dropped', said(result))
+
     # ---- Facts changed since the offer ----
     add_item(sid, run, 'mem:renamed', 'Old name')
     printed = offer(sid, run, 'rename', 'drop-item mem:renamed --reason gone')

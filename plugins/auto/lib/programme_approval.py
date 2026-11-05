@@ -14,6 +14,7 @@ programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
 programme_home = load_lib_module("programme_home")
 programme_offers = load_lib_module("programme_offers")
+programme_pick_source = load_lib_module("programme_pick_source")
 programme_fixes = load_lib_module("programme_fixes")
 
 # Default-deny: an approval binds only for these verbs. A test pins this set to the offer renderers.
@@ -101,17 +102,22 @@ def _strip_recommended(answer) -> str:
     return answer[:-len(_RECOMMENDED)] if answer.casefold().endswith(_RECOMMENDED) else answer
 
 
+def _binding(verb_argv, record, error):
+    return programme_offers.Binding(_READING["label"], verb_argv or [], record, _block(record), error)
+
+
 def _picked(rows, row, record, verb_argv, prompt_id, error) -> dict:
     fix = programme_fixes.fix_for(verb_argv[0] if verb_argv else "offer")
-    offer = programme_offers.offer_for(rows, row)
+    read = programme_pick_source.read_pick(row)
+    offer = programme_offers.offer_for(rows, row, read)
     if offer is None:
         raise error(f"pick {prompt_id!r} answers a picker no offer printed, so it approves nothing", fix=fix)
     try:
-        pick = programme_journal.checked_pick(rows, row, own_words=True)
+        pick = programme_journal.judged_pick(rows, row, read, own_words=True)
     except ValueError as exc:
         raise error(str(exc), fix=fix) from None
     return programme_offers.bind_pick(rows, row, offer, dict(pick, answer=_strip_recommended(pick["answer"])),
-                                      _READING["label"], verb_argv or [], record, _block(record), error)
+                                      _binding(verb_argv, record, error))
 
 
 def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) -> dict:
@@ -142,8 +148,7 @@ def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) ->
     if origin == "picked":
         approval.update(_picked(rows, row, record, verb_argv, prompt_id, error))
     else:
-        approval.update(programme_offers.bind_words(rows, row, origin, _READING["label"], verb_argv or [], record,
-                                                    _block(record), error))
+        approval.update(programme_offers.bind_words(rows, row, origin, _binding(verb_argv, record, error)))
     return approval
 
 

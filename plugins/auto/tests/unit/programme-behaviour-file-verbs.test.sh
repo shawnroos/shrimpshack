@@ -146,7 +146,7 @@ for text, handler, argv in (("text one", fv._h_adopt, ["adopt-behaviour-file", "
                             ("text two", fv._h_settle, ["settle-default-update", "nb", "--as", "merge", "--file", args[0], "--prompt", "p"])):
     open(args[0], "w").write(text)
     handler(Host, argv)
-    seen.append(offers._CONTENT["doc"])
+    seen.append(offers.noted_content())
 print("|".join(seen))
 EOF
 )"

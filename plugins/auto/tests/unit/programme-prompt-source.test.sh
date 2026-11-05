@@ -195,7 +195,7 @@ with tempfile.TemporaryDirectory(prefix='auto-prompt-source-') as work:
         return None
 
     def pick_answer_of(row):
-        return pj.pick_answer(pj.read(run), row)
+        return pj.checked_pick(pj.read(run), row)['answer']
 
     plain = pick_row(ONE, {'Drop it?': 'Approve drop-item i1'})
     check('a plain pick verifies', pj.prompt_origin(plain), 'picked')

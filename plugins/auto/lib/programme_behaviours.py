@@ -639,7 +639,7 @@ def _h_record(host, argv):
             entry["relates_to"] = related
         if unrelated:
             entry["unrelated"] = unrelated
-        entry["source"] = load_lib_module("programme_offers_stores").source_of(prompt)
+        entry["source"] = programme_journal.source_of(prompt)
         if target:
             applied = _mark(dict(_programme_entry(programme, proposal), state="retired"), "applied", prompt,
                             edited=target["id"])

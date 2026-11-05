@@ -480,7 +480,7 @@ def _h_record(host, argv):
             entry = dict(entry, state=ACTIVE)
         else:
             entry = _draft(opts, rid, programme)
-        entry["source"] = load_lib_module("programme_offers_stores").source_of(prompt)
+        entry["source"] = programme_journal.source_of(prompt)
         schedule = entry["when"].get("schedule")
         if opts.get("ran-now") and not schedule:
             raise RitualError("--ran-now only applies to a scheduled ritual; an event ritual has no first slot to mark done")

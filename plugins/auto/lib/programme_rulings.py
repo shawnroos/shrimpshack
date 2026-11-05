@@ -230,11 +230,10 @@ def _record(host, programme, rec, cid, content, prompt, *, correction=None) -> d
     carried = pc._dict(revisions[-1]).get("carried") if revisions and current is None else None
     delta = _carried_delta(content) if carried else pc.ruling_delta(current, content)
     wider = bool(delta and delta["wider"])
-    accept = bool(prompt)
-    if accept:
+    if prompt:
         check_approval(programme_journal.read(rec["run_id"]), cid, prompt["prompt_id"])
     revisions = ctx["decisions"].setdefault(cid, revisions)
-    revision = pc._append(revisions, content, prompt, accept=accept, delta=delta)
+    revision = pc._append(revisions, content, prompt, accept=bool(prompt), delta=delta)
     revision.update(quote=prompt and prompt["quote"], replies_to=correction, baseline=None)
     if prompt:
         programme_journal.mark_wording(revision, prompt)

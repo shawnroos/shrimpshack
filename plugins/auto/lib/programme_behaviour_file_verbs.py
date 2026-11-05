@@ -22,7 +22,6 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_behaviours = load_lib_module("programme_behaviours")
 programme_offers = load_lib_module("programme_offers")
-programme_offers_stores = load_lib_module("programme_offers_stores")
 programme_behaviour_files = load_lib_module("programme_behaviour_files")
 programme_home = load_lib_module("programme_home")
 programme_protocol = load_lib_module("programme_protocol")

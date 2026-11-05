@@ -27,8 +27,8 @@ settle = load_lib_module("programme_permission_settle")
 RecordError = programme_record.RecordError
 
 EVIDENCE_CAP = 50
-CHOICES = ("allow", "applied", "not-now", "no")
-WRITES_OR_VERIFIES = ("allow", "applied")
+CHOICES = state.CHOICES
+WRITES_OR_VERIFIES = state.WRITES_OR_VERIFIES
 
 
 def _joined(item, sid):

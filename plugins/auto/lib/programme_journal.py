@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -451,11 +452,12 @@ def _same_pick(source, path, tool_use_id) -> bool:
     return isinstance(source, dict) and (source.get("path"), source.get("tool_use_id")) == (path, tool_use_id)
 
 
-def pick_use(rows, source):
-    """The first row that spent this picker answer, under any prompt id it was journaled as."""
-    path, tool_use_id = source.get("path"), source.get("tool_use_id")
-    ids = {r.get("prompt_id") for r in rows
-           if r.get("kind") == "prompt" and _same_pick((r.get("payload") or {}).get("source"), path, tool_use_id)}
+def canonical_sha(value) -> str:
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _spending_rows(rows):
     for row in rows:
         if row.get("kind") in ("prompt", "approval_refused"):
             continue
@@ -463,7 +465,19 @@ def pick_use(rows, source):
         # A verb that changed nothing approved nothing, so its answer can still approve the same command.
         if payload.get("unchanged"):
             continue
-        refs = set(row.get("cites") or []) | {payload.get("prompt_id")}
+        yield row, payload, set(row.get("cites") or []) | {payload.get("prompt_id")}
+
+
+def prompt_spent(rows, prompt_id) -> bool:
+    return any(prompt_id in refs for _row, _payload, refs in _spending_rows(rows))
+
+
+def pick_use(rows, source):
+    """The first row that spent this picker answer, under any prompt id it was journaled as."""
+    path, tool_use_id = source.get("path"), source.get("tool_use_id")
+    ids = {r.get("prompt_id") for r in rows
+           if r.get("kind") == "prompt" and _same_pick((r.get("payload") or {}).get("source"), path, tool_use_id)}
+    for row, payload, refs in _spending_rows(rows):
         # Setup verbs record the pick's path and tool_use_id on their own payload, not as a cite.
         if ids & refs or _same_pick(payload, path, tool_use_id):
             return row
@@ -471,10 +485,14 @@ def pick_use(rows, source):
 
 
 def checked_pick(rows, row, own_words=False) -> dict:
+    return judged_pick(rows, row, programme_pick_source.read_pick(row), own_words)
+
+
+def judged_pick(rows, row, pick, own_words=False) -> dict:
+    """`pick` is what read_pick returned for this row, so a caller that needs it first reads the transcript once."""
     source = row["payload"]["source"]
     if len(source["answers"]) != 1:
         raise ValueError(f"pick {row['prompt_id']!r} must hold exactly one question to approve a change")
-    pick = programme_pick_source.read_pick(row)
     if pick is None:
         raise ValueError(f"pick {row['prompt_id']!r} does not verify against the transcript")
     if pick["gap"] and not (own_words and pick["noted"]):
@@ -486,21 +504,25 @@ def checked_pick(rows, row, own_words=False) -> dict:
     return dict(pick, answer=next(iter(pick["answers"].values())))
 
 
-def pick_answer(rows, row) -> str:
-    return checked_pick(rows, row)["answer"]
+def reading_of(prompt) -> dict:
+    return prompt.get("reading") or {}
 
 
 def wording_of(prompt) -> str:
-    return (prompt.get("reading") or {}).get("wording") or SHAWN
+    return reading_of(prompt).get("wording") or SHAWN
 
 
 # His words on an offered draft replace it.
 def his_text(prompt):
-    return prompt["quote"] if prompt and (prompt.get("reading") or {}).get("wording") == SHAWN else None
+    return prompt["quote"] if prompt and reading_of(prompt).get("wording") == SHAWN else None
+
+
+def source_of(prompt) -> dict:
+    return {"prompt_id": prompt["prompt_id"], "quote": redact(prompt["quote"]), "wording": wording_of(prompt)}
 
 
 def mark_wording(entry, prompt) -> None:
-    reading = prompt.get("reading") or {}
+    reading = reading_of(prompt)
     entry.update(wording=wording_of(prompt),
                  approved={"prompt_id": prompt.get("prompt_id"), "origin": prompt.get("origin"),
                            "offer_id": reading.get("offer_id"), "read_by": reading.get("read_by")})

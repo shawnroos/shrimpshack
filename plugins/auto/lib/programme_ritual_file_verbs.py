@@ -16,7 +16,6 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from _bootstrap import load_lib_module  # noqa: E402
 
-programme_offers_stores = load_lib_module("programme_offers_stores")
 programme_ritual_files = load_lib_module("programme_ritual_files")
 programme_rituals = load_lib_module("programme_rituals")
 run_record_core = load_lib_module("run_record_core")
@@ -35,6 +34,14 @@ def file_rows(programme, ref, lookup) -> list:
     return [r for r in got["proposals"] + got["adopted"] + got["declined"] if r["repo_key"] == key and r["id"] == rid]
 
 
+def proposed_row(rows):
+    return next((r for r in rows if r["state"] in ("proposed", "changed")), None)
+
+
+def declinable_row(rows):
+    return next((r for r in rows if r["state"] in ("proposed", "changed", "declined")), rows[0] if rows else None)
+
+
 def _h_adopt(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt"))
     if len(positional) != 1:
@@ -42,11 +49,10 @@ def _h_adopt(host, argv):
     ref = positional[0]
 
     def change(programme, prompt, rec):
-        rows = [r for r in file_rows(programme, ref, host.prompt_lookup) if r["state"] in ("proposed", "changed")]
-        if not rows:
+        row = proposed_row(file_rows(programme, ref, host.prompt_lookup))
+        if row is None:
             raise RitualError(f"no proposed ritual file {ref!r}; it may be rejected, declined, already adopted "
                               "at this content, or not on the default branch")
-        row = rows[0]
         record = {"state": "adopted", "hash": row["hash"], "adopted_at": run_record_core.now_iso(),
                   "prompt_id": prompt["prompt_id"], "snapshot": row["entry"]}
         programme.setdefault("ritual_adoptions", {})[ref] = record
@@ -66,11 +72,9 @@ def _h_decline(host, argv):
     ref = positional[0]
 
     def change(programme, prompt, rec):
-        rows = file_rows(programme, ref, host.prompt_lookup)
-        current = [r for r in rows if r["state"] in ("proposed", "changed", "declined")] or rows
-        if not current:
+        row = declinable_row(file_rows(programme, ref, host.prompt_lookup))
+        if row is None:
             raise RitualError(f"no ritual file {ref!r} to decline")
-        row = current[0]
         programme.setdefault("ritual_adoptions", {})[ref] = {
             "state": "declined", "hash": row["hash"], "declined_at": run_record_core.now_iso(),
             "prompt_id": prompt["prompt_id"]}

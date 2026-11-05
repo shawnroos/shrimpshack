@@ -32,5 +32,5 @@ def approve(run, sid, argv, prompt_id, status, refused) -> dict:
         raise error(f"prompt {prompt_id!r} was given before the current PM took the programme")
     approval = load_lib_module("programme_approval")
     found = approval.prompt(run, record, prompt_id, verb, error, approval.text_hash, argv)
-    return {"request": None, "prompt_id": prompt_id, "quote": found["quote"], **found.get("reading", {}),
+    return {"request": None, "prompt_id": prompt_id, "quote": found["quote"], **programme_journal.reading_of(found),
             "approval": {key: found[key] for key in ("origin", "answer") if key in found}}

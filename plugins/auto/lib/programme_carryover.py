@@ -340,7 +340,7 @@ def _carry(host, opts, ids):
         adopted = prepare([entry_for(rid, active[rid], key, rec) for rid in ids for key in keys], prompt, rec)
         seen.update(prompt=prompt, adopted=adopted)
         return {"carried": ids, "keys": keys, "stored": summary(adopted), "store_path": store_path(),
-                **prompt.get("reading", {})}
+                **programme_journal.reading_of(prompt)}
 
     def compose(payload, _):
         return programme_journal.entry("rulings_carried", sid, dict(payload, prompt_id=seen["prompt"]["prompt_id"],

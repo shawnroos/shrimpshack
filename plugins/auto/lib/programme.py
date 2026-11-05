@@ -290,7 +290,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         seen["kind"] = kind(payload) if callable(kind) else kind
         prompt = seen["prompt"]
         if prompt:
-            payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"], **prompt.get("reading", {}))
+            payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"], **programme_journal.reading_of(prompt))
         seen["full"] = payload
         if not journal:
             return None
