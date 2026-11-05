@@ -7,13 +7,13 @@ topics: [programme, permission, proposal, transcript]
 # Programme permission proposals
 
 A worker can be refused a read it needs, such as `gh pr checks 12`. Programme turns
-the refusal into one proposal for a native allow rule. Shawn applies the rule
-himself and answers by typing. Programme then checks the settings files, asks the
-worker to run the read once, and settles the proposal from the worker's
+the refusal into one proposal for a native allow rule. Shawn answers through a
+picker. If he picks allow, Programme writes the rule, checks the settings files,
+asks the worker to run the read once, and settles the proposal from the worker's
 transcript.
 
-Programme never writes a settings file. It opens settings files only to read
-them.
+`answer-permission <id> allow` is the only path that writes a settings file. Every
+other path opens settings files only to read them.
 
 ## Finding refusals
 
@@ -87,7 +87,7 @@ instead of a proposal.
 | `destination` | the main checkout path |
 | `settings_file` | `<destination>/.claude/settings.local.json` |
 | `operations` | catalog operation ids, in catalog order |
-| `rules` | the rendered allow rules, for example `Bash(gh pr checks *)`. Display only |
+| `rules` | the rendered allow rules, for example `Bash(gh pr checks *)`. Display only: allow renders them again from the catalog |
 | `reach` | what the rules allow beyond the blocked read, for example other repositories through `--repo` |
 | `exclusions` | what the rules do not allow: merge, comment or review, push, credential access |
 | `key` | `{operations, destination}` |
@@ -96,14 +96,15 @@ instead of a proposal.
 | `state` | see States |
 | `created_at`, `changed_at` | ISO times; `changed_at` moves on every state change and every fold |
 | `notified_at` | set only after the herdr notifier exits 0 |
-| `answers` | `{at, choice, prompt_id, from, to}` for every typed answer |
+| `answers` | `{at, choice, prompt_id, from, to}` for every answer |
+| `written` | `{rules_written, file, before_hash, after_hash, at}` from the last allow. `rules_written` is empty when allow wrote nothing |
 | `explanation` | the latest plain-text result for Shawn |
 | `verified` | `{at, outcome, files}` from the last verify |
 | `reservation` | the one reserved retry: `{item, session_id, operation, target, normalized, at, transcript_offset}` |
 | `attempts` | how many retries were reserved |
-| `pending_answer` | a not-now or no typed while retrying, applied after the outcome |
+| `pending_answer` | a not-now or no given while retrying, applied after the outcome |
 | `outcome` | `{state, tool_use_id, detail, at}` from settlement |
-| `confirmed` | true when settled after a typed applied; false when resolved without one |
+| `confirmed` | true when settled after an allow or applied answer; false when resolved without one |
 | `covering` | `{rule, source}` for an unconfirmed resolution |
 | `redenied_at` | set when a resolved proposal's operations are denied again |
 
@@ -144,29 +145,61 @@ Programme asks again about `open`, `ineffective` and `retry_unobserved`.
 
 ## Shawn's answer
 
-Shawn types in the PM's pane, for example `applied perm-1`. The PM runs
-`answer-permission <perm-id> applied|not-now|no --prompt <id>`. The verb refuses
-the answer unless the prompt:
+The PM runs `programme.sh offer <question-key> --command 'answer-permission <perm-id>
+<choice>'` and asks with the picker it prints. Auto writes the option. The allow
+option shows every rule, the file, the reach and the exclusions, and comes after
+the decline. All the proposal's rules are approved together. A proposal that
+changes after the offer makes the offer stale, so the PM offers again.
 
-- was typed by a human in the driving session;
-- names the proposal id;
-- says exactly one answer: "applied" or "apply"; "not now", "later" or
-  "postpone"; "reject" or "decline" ("no" alone is read as a negation);
-- is newer than the proposal's `changed_at`;
-- was not cited by an earlier answer to that proposal.
+The PM then runs `answer-permission <perm-id> allow|applied|not-now|no --prompt <id>`.
+The verb refuses an answer that is not bound to an offer of that exact command,
+whatever its words say.
+
+| Answer | Means | Own words |
+|---|---|---|
+| `allow` | write the rule | refused: relay his words and ask again. Only a pick approves |
+| `applied` | Shawn added the rule by hand; check it | approved, with the PM's reading shown back |
+| `not-now` | postpone | approved, with the PM's reading shown back |
+| `no` | reject | approved, with the PM's reading shown back |
 
 | Answer | From | Result |
 |---|---|---|
 | not-now or no | `open`, `ineffective`, `retry_unobserved` | `postponed` or `rejected` |
 | not-now or no | `postponed`, `rejected` | recorded; state kept |
 | not-now or no | `retrying` | recorded as `pending_answer`; applied after the outcome unless the retry ran |
-| applied | `retrying` | recorded; nothing changes |
+| allow or applied | `retrying` | recorded; nothing changes |
 | any | `resolved` | refused |
+| allow | any other state | write, below, then verify |
 | applied | any other state | verify, below |
+
+## Write
+
+On allow, the verb:
+
+1. Renders the rules again from the catalog, and never uses the stored `rules` text.
+2. Recomputes the destination from each linked item's `repo` and the remit. A
+   mismatch, or a repo no longer in the remit, is refused.
+3. Runs verify. `covered` writes nothing. `blocked_elsewhere` writes nothing and
+   gives `ineffective`, since an allow rule cannot beat a deny rule, an ask rule or
+   `classifyAllShell`.
+4. Refuses when git tracks `.claude/settings.local.json`, naming the file. If git
+   cannot answer, the write goes on and the explanation says so.
+5. Merges into the parsed file. Every other key, the key order and the file's mode
+   stay. Only rules not already listed are appended to `permissions.allow`. A
+   symlink stays a link, and its target gets the change. The verb creates an
+   absent file and folder, with mode 0600.
+6. Refuses a file that is not valid JSON, is not an object, is larger than 1 MiB, or
+   has a `permissions` or `permissions.allow` value of the wrong type. The file stays
+   as it was.
+7. Runs verify again, which picks the next state, and journals `written`
+   (`rules_written`, `file`, `before_hash`, `after_hash`) on `permission_verified`.
+
+The same `--op` replays the committed result. The same pick cited again is refused.
+A fresh answer on a rule already written adds no second copy.
 
 ## Verify
 
-On applied, the verb reads three files:
+On allow or applied, the verb reads three files:
 
 - the user's `~/.claude/settings.json`;
 - the main checkout's `.claude/settings.local.json`;
@@ -225,13 +258,14 @@ An `open` proposal resolves with `confirmed: false` when every one of its
 operations ran with decision `accept` in an affected session, after that
 session's last recorded denial. It shows as a decision for Shawn with its covering rule, if any.
 
-Only a new typed applied arms one more attempt from `ineffective` or
+Only a new allow or applied answer arms one more attempt from `ineffective` or
 `retry_unobserved`.
 
-## Settings writes are refused
+## Direct settings writes are refused
 
 The PreToolUse hook refuses a Write, Edit, MultiEdit or Bash call that names a
-proposal's `.claude/settings.local.json`. It applies to the driving session only,
+proposal's `.claude/settings.local.json`. Only the `allow` verb writes that file,
+after Shawn's pick. The hook applies to the driving session only,
 for every proposal in the programme, whatever its state. Workers may write the
 file. It journals `blocked_settings_write` with `{tool, path}`, plus the redacted
 `command` for Bash. Rows written before this change also carry `item_ids`. Other
@@ -255,9 +289,17 @@ unaffected.
 ## Known limits
 
 - Workers run as the same user. A process that writes rows into its own
-  transcript can fake a refusal or a run. The typed-prompt gate has the same
+  transcript can fake a refusal or a run. The pick check has the same
   limit. The Bash part of the settings guard is a text match that such a process
   can get around.
+- Claude Code also writes `settings.local.json`, and shares no lock with Auto. The
+  merge reads and then replaces the file, so a write between those steps can be
+  lost. The second verify detects a lost rule: the proposal stays `open`. It cannot
+  detect a lost rule of Claude Code's own.
+- If the journal commit fails after the write, the rule is in the file with no
+  record. The next allow finds it covered and writes nothing.
+- Whether a running session picks up a new rule without a restart was not tested.
+  A worker that is still refused settles as `ineffective` or `retry_unobserved`.
 - A session started outside herdr has no session registry row, so it has no
   transcript path. Its refusals are never read, and it can never take a retry.
 - A refusal in the PM's own session is never read, because the PM's session is

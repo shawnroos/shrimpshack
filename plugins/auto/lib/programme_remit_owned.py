@@ -75,12 +75,6 @@ def parse_repo(raw, stored, fail):
     return {"path": os.path.normpath(path), "github": github}
 
 
-def unnamed_removals(changes, gone) -> list:
-    """The changes that still need typed words: a repo whose folder is gone is dropped without them."""
-    return [(part, entry) for part, how, entry in changes
-            if not (part == "repos" and how == "removed" and os.path.normpath(entry["path"]) in gone)]
-
-
 def add_for_worker(programme, *, worktree, folder, item, session, at) -> dict:
     """Adds the repo the PM launched. ``repo`` is the confirmed root, ``added`` the path written."""
     out = {"added": None, "repo": None, "reason": None}

@@ -299,7 +299,7 @@ def _decisions(block, items) -> list:
                     f"{proposal.get('settings_file')} for {', '.join(proposal.get('items') or [])} "
                     f"({proposal.get('state')}); " + (
                         "no answer needed; check the rule is still in place" if proposal.get("state") == "resolved"
-                        else f"answer applied, not now or reject {proposal.get('id')}"))
+                        else f"ask him with `programme.sh offer` for {proposal.get('id')}"))
         covering = _dict(proposal.get("covering"))
         if covering.get("rule"):
             question += "; covered by " + programme_sanitize.wrap(f"{covering['rule']} in {covering.get('source')}")
@@ -507,7 +507,7 @@ def _behaviour_row(entry, forced, overriders, deliveries) -> dict:
            "deliveries": deliveries.get(entry["id"], []),
            "prompt_id": source.get("prompt_id"),
            "quote": programme_journal.redact(source["quote"]) if source.get("quote") else None,
-           "in_force": (entry["layer"], entry.get("repo_key"), entry["id"]) in forced}
+           "wording": source.get("wording"), "in_force": (entry["layer"], entry.get("repo_key"), entry["id"]) in forced}
     if row["state"] == programme_behaviours.ACTIVE and not row["in_force"]:
         row["overridden_by"] = sorted(overriders.get(entry["id"], ()))
     return row
@@ -616,8 +616,8 @@ def _ritual_text(r) -> str:
         failed = f", failed: {', '.join(f['plugin'] for f in got.get('failed') or [])}" if got.get("failed") else ""
         offers += f"; check {got['name']}: {got['result']}" + (f" ({got['reason']})" if got.get("reason") else "") + failed + age
     flag = {"missed": " [MISSED, ask Shawn]", "in_flight": " [IN FLIGHT, finish or offer]", "due": " [due]",
-            "proposed": " [PROPOSED FILE, needs Shawn's typed adoption]",
-            "changed": " [FILE CHANGED, needs Shawn's typed adoption]"}.get(r.get("state"), "")
+            "proposed": " [PROPOSED FILE, needs Shawn's answer to its offer]",
+            "changed": " [FILE CHANGED, needs Shawn's answer to its offer]"}.get(r.get("state"), "")
     layer = r.get("layer")
     file = r.get("file")
     if file:

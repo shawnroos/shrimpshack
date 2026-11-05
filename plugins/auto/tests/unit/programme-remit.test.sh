@@ -4,7 +4,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 
 PASS=0
 FAIL=0
@@ -146,8 +147,8 @@ EOF
 
 OUT=""
 CODE=0
-prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; }
-remit_in() { local input="$1"; shift; OUT="$(printf '%s' "$input" | "$PY" "$PROG" set-remit "$@" 2>&1)"; CODE=$?; }
+prog() { OUT="$("$PY" "$PROG" "$@" 2>&1)"; CODE=$?; prog_exit_check "$@"; }
+remit_in() { local input="$1"; shift; OUT="$(printf '%s' "$input" | "$PY" "$PROG" set-remit "$@" 2>&1)"; CODE=$?; prog_exit_check "$@"; }
 jq_py() {
   "$PY" -c 'import json,sys; d=json.loads(sys.stdin.read().strip().splitlines()[-1]); print(json.dumps(eval(sys.argv[1]), sort_keys=True))' "$1" <<< "$OUT"
 }
@@ -204,19 +205,20 @@ it "after acceptance set-remit needs a typed prompt"
 remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}'
 check 1 "$CODE"
 
-it "a prompt that does not name the added team is refused"
-VAGUE="$(prompt 'add that other team too')"
-remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}' --prompt "$VAGUE"
+it "typed words with no open offer add no team, even naming it"
+TYPED="$(prompt 'add the CUE team to the remit')"
+PROG="${AUTO_ROOT}/lib/programme.py" remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}' --prompt "$TYPED"
 check 1 "$CODE"
-has "CUE" "$OUT"
+has "no open offer" "$OUT"
+check '["AI"]' "$(field '[t["key"] for t in prog["remit"]["tracker"]["teams"]]')"
 
-it "a prompt naming the added team is accepted"
+it "a pick of the offer to add the team is accepted"
 NAMED="$(prompt 'add the CUE team to the remit')"
 remit_in '{"tracker":{"teams":[{"key":"AI"},{"key":"CUE","name":"Cue"}]}}' --prompt "$NAMED"
 check 0 "$CODE"
 check '["shawn", ["AI", "CUE"]]' "$(field '[prog["agreement"]["terms"]["remit"]["set_by"], [t["key"] for t in prog["remit"]["tracker"]["teams"]]]')"
 
-it "removing a team needs a prompt naming it"
+it "removing a team goes through its offer too"
 DROP="$(prompt 'drop CUE from the remit')"
 remit_in '{"tracker":{"teams":[{"key":"AI"}]}}' --prompt "$DROP"
 check 0 "$CODE"

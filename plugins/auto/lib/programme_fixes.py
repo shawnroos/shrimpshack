@@ -3,14 +3,6 @@
 
 from __future__ import annotations
 
-import os
-import sys
-
-_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
-from _bootstrap import load_lib_module  # noqa: E402
-
 FALLBACK = "programme.sh become-pm"
 
 _WRITE = ("`programme.sh become-pm` if this session does not drive the programme; "
@@ -18,20 +10,17 @@ _WRITE = ("`programme.sh become-pm` if this session does not drive the programme
 _ITEM = ("`programme.sh status` lists the items and their state; `programme.sh describe` names what {verb} "
          "needs, then rerun it")
 _READ = "`programme.sh status` names the programme run ids; rerun `programme.sh {verb}` with --run <id>"
-_PICKED = ("run `programme.sh approval-label {verb} <args>`, offer its output as one AskUserQuestion option, "
-           "then rerun citing the pick with --prompt <pick id>")
-_TYPED = "ask Shawn to type the approval for {verb} in this session, then rerun with --prompt <its id>"
+_OFFERED = ("run `programme.sh offer <question-key> --command '{verb} <args>'`, ask Shawn with the input it prints, "
+            "then rerun citing his answer with --prompt <its id>")
 _PICK_ID = "ask Shawn with an AskUserQuestion picker, then rerun citing the pick with --pick <pick id>"
 _START = ("`programme.sh become-pm` if a programme already holds this space; else the refusal names what "
           "start needs, such as a herdr pane or --space <server.workspace>")
-_LABEL = ("rerun `programme.sh approval-label <verb> <args>` with a verb a pick can approve "
-          "(`programme.sh describe` lists them), or `approval-label takeover --replace <driving session id>`")
 _ENDED = ("`programme.sh check-archive --run <id>` names each failed check and its remedy; "
           "`programme.sh status --run <id>` shows the end state")
 
 FIXES = {
-    "accept-agreement": load_lib_module("programme_approval").ACCEPT_FIX,
-    "accept-context": _PICKED,
+    "accept-agreement": _OFFERED,
+    "accept-context": _OFFERED,
     "ack-protocol": _WRITE,
     "answer-worker-question": _WRITE,
     "contract-status": _ITEM,
@@ -43,15 +32,16 @@ FIXES = {
     "set-contract": _ITEM,
     "write-goal": _ITEM,
     "add-item": _ITEM,
-    "adopt-autonomy": _PICKED,
-    "adopt-behaviour-file": _TYPED,
-    "adopt-check": _PICKED,
-    "adopt-rule": _PICKED,
+    "adopt-autonomy": _OFFERED,
+    "adopt-behaviour-file": _OFFERED,
+    "adopt-check": _OFFERED,
+    "adopt-rule": _OFFERED,
     "alias-item": _ITEM,
-    "amend-term": _PICKED,
-    "answer-handed": _PICKED,
-    "answer-permission": _PICKED,
-    "approval-label": _LABEL,
+    "amend-term": _OFFERED,
+    "answer-handed": _OFFERED,
+    "answer-permission": _OFFERED,
+    "offer": ("rerun `programme.sh offer <question-key> --command '<verb> <args>'` with a verb a pick can approve "
+              "(`programme.sh describe` lists them); `programme.sh become-pm` prints the takeover picker"),
     "archive": _ENDED,
     "ask-relayed": _ITEM,
     "ask-shown": _ITEM,
@@ -61,7 +51,7 @@ FIXES = {
     "recommendations-shown": _WRITE,
     "assign-item": _ITEM,
     "beat": _WRITE,
-    "carry-rulings": _TYPED,
+    "carry-rulings": _OFFERED,
     "become-pm": ("run Claude from a pane in the space the programme leases, "
                   "then rerun `programme.sh become-pm` there"),
     "check-archive": _ENDED,
@@ -72,32 +62,33 @@ FIXES = {
     "check-behaviour": _READ,
     "clear-blocker": _ITEM,
     "clear-proposal": _WRITE,
-    "close-ruling": _TYPED,
+    "close-ruling": _OFFERED,
     "collect-result": _ITEM,
     "context": _READ,
     "create-successor": _ENDED,
-    "define-requirement": _TYPED,
+    "define-requirement": _OFFERED,
     "describe": "rerun `programme.sh describe` with no arguments",
-    "dispose-action": _PICKED,
+    "dispose-action": _OFFERED,
     "dispose-item": _ENDED,
-    "drop-item": _PICKED,
-    "edit-project-term": _TYPED,
-    "end": "ask Shawn to type /auto:programme-end in this session, then rerun `programme.sh end`",
+    "drop-item": _OFFERED,
+    "edit-project-term": _OFFERED,
+    "end": ("run `programme.sh offer end-programme --command 'end'`, ask Shawn with the input it prints, unchanged, "
+            "then rerun `programme.sh end --prompt <pick id>`"),
     "expire": _ENDED,
     "focus-note": _WRITE,
     "focus-recheck": _WRITE,
     "hand-item": _ITEM,
-    "copy-default": _TYPED,
-    "handover": ("ask Shawn to type /auto:programme-handover <session-id> in the driving session, "
-                 "then rerun `programme.sh handover`"),
+    "copy-default": _OFFERED,
+    "handover": ("run `programme.sh offer hand-pm --command 'handover <session-id>'`, ask Shawn with the input it "
+                 "prints, unchanged, then rerun `programme.sh handover <session-id> --prompt <pick id>`"),
     "inbox": _READ,
     "sweep-inputs": _READ,
-    "keep-behaviours": _PICKED,
-    "lift-pause": _PICKED,
+    "keep-behaviours": _OFFERED,
+    "lift-pause": _OFFERED,
     "log-decision": _ITEM,
     "mark-read": "`programme.sh inbox` prints the current offset; rerun `programme.sh mark-read` with it",
     "merge-item": _ITEM,
-    "move-behaviour": _PICKED,
+    "move-behaviour": _OFFERED,
     "note-term": _WRITE,
     "pause": _WRITE,
     "pick-term": _PICK_ID,
@@ -113,23 +104,23 @@ FIXES = {
     "raise-blocker": _ITEM,
     "reconcile-leases": _WRITE,
     "reconcile-operations": _WRITE,
-    "record-behaviour": _TYPED,
+    "record-behaviour": _OFFERED,
     "record-denial": _WRITE,
     "record-hook-patch": _WRITE,
-    "record-ruling": _TYPED,
+    "record-ruling": _OFFERED,
     "record-issues": _WRITE,
     "record-tested-build": _WRITE,
     "record-trajectories": _WRITE,
     "recover": _READ,
     "release-resources": _ENDED,
     "remind-behaviour": _ITEM,
-    "reopen-item": _PICKED,
+    "reopen-item": _OFFERED,
     "request-reread": _WRITE,
-    "retire-behaviour": _TYPED,
-    "record-ritual": _TYPED,
-    "retire-ritual": _TYPED,
-    "move-ritual": _PICKED,
-    "keep-rituals": _PICKED,
+    "retire-behaviour": _OFFERED,
+    "record-ritual": _OFFERED,
+    "retire-ritual": _OFFERED,
+    "move-ritual": _OFFERED,
+    "keep-rituals": _OFFERED,
     "propose-ritual": _WRITE,
     "start-ritual": _WRITE,
     "run-ritual": _WRITE,
@@ -137,14 +128,14 @@ FIXES = {
     "skip-ritual": _WRITE,
     "offer-rituals": _WRITE,
     "run-ritual-checks": _READ,
-    "adopt-ritual-file": _TYPED,
-    "decline-ritual-file": _TYPED,
+    "adopt-ritual-file": _OFFERED,
+    "decline-ritual-file": _OFFERED,
     "rules": ("`programme.sh rules` prints the rules in force and their context digest; "
               "then `programme.sh rules --ack`"),
     "set-now": _WRITE,
-    "settle-default-update": _TYPED,
+    "settle-default-update": _OFFERED,
     "skip-behaviour": _ITEM,
-    "set-remit": _TYPED,
+    "set-remit": _OFFERED,
     "set-source": _WRITE,
     "set-waiting": _ITEM,
     "settle-permissions": _WRITE,
@@ -155,8 +146,8 @@ FIXES = {
     "start": _START,
     "start-worker": _ITEM,
     "status": _READ,
-    "override-focus": _PICKED,
-    "swap-item": _PICKED,
+    "override-focus": _OFFERED,
+    "swap-item": _OFFERED,
     "sweep": _WRITE,
     "take-recommendations": _PICK_ID,
     "takeover": FALLBACK,

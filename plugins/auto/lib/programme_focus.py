@@ -230,8 +230,8 @@ _NEXT_STEPS = {
 }
 _QUEUE_STEP = ("Next: leave it queued and run `focus-recheck` when room frees, ask Shawn for a swap, "
                "or {override_step}")
-_OVERRIDE_STEP = ("ask Shawn to approve breaking the budget: offer `programme.sh approval-label override-focus "
-                  "{key}` through AskUserQuestion, run `override-focus {key} --prompt <pick id>`, then start "
+_OVERRIDE_STEP = ("ask Shawn to approve breaking the budget: run `programme.sh offer focus --command 'override-focus "
+                  "{key}'`, ask with the input it prints, run `override-focus {key} --prompt <pick id>`, then start "
                   "again with `--despite {override}`.")
 
 
@@ -468,16 +468,12 @@ def _swap_refusal(programme, out, newcomer, workers):
 def _h_swap_item(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt"))
     if len(positional) != 2 or not opts.get("prompt"):
-        raise ValueError("usage: swap-item <out> <in> --prompt <pick id> [--run <id>]")
+        raise ValueError("usage: swap-item <out> <in> --prompt <id> [--run <id>]")
     run_id, home, record = host._locate(opts)
     workers, why = host.programme_sources.worker_panes(
         programme_home.normalize_programme(record.get("programme") or {}), record)
 
     def change(programme, prompt, rec):
-        if prompt.get("origin") != "picked":
-            raise host.ProgrammeError(
-                f"swap-item needs a pick of its exact label, not typed or suggested text; run "
-                f"`programme.sh approval-label swap-item {positional[0]} {positional[1]}`")
         if workers is None:
             raise host.ProgrammeError(f"swap refused: cannot count workers, {why}; retry")
         out = host.programme_record._resolve(programme, positional[0])
@@ -505,13 +501,9 @@ def _h_swap_item(host, argv):
 def _h_override_focus(host, argv):
     positional, opts = host._parse(argv, values=("run", "prompt"))
     if len(positional) != 1 or not opts.get("prompt"):
-        raise ValueError("usage: override-focus <item> --prompt <pick id> [--run <id>]")
+        raise ValueError("usage: override-focus <item> --prompt <id> [--run <id>]")
 
     def change(programme, prompt, rec):
-        if prompt.get("origin") != "picked":
-            raise host.ProgrammeError(
-                f"override-focus needs a pick of its exact label, not typed or suggested text; run "
-                f"`programme.sh approval-label override-focus {positional[0]}`")
         key = host.programme_record._resolve(programme, positional[0])
         item = programme["items"][key]
         if item["state"] in programme_home.FINISHED_ITEM_STATES:
@@ -534,15 +526,13 @@ _SPECS = (
     ("focus-note", _h_focus_note, "--agents <n> [--run <id>]",
      "a missing or non-numeric --agents. Records how many subagents the PM is running with, for the status "
      "view; the plugin cannot count them."),
-    ("swap-item", _h_swap_item, "<out> <in> --prompt <pick id> [--run <id>]",
-     "typed or suggested text (only a pick whose answer is exactly the approval-label for this command "
-     "approves it); an <out> no live worker holds; an <in> that parking <out> would still not let start (the "
+    ("swap-item", _h_swap_item, "<out> <in> --prompt <id> [--run <id>]",
+     "a prompt that is not a pick of this command's `offer` or Shawn's own words read as that option; an <out> no live worker holds; an <in> that parking <out> would still not let start (the "
      "refusal names the missing points); herdr unreadable. Parks <out>: held with a reason, its old pane "
      "recorded, its points freed, and returns the stop prompt for its worker. Records a work_sequencing "
      "decision naming both items. <in> then starts through start-worker."),
-    ("override-focus", _h_override_focus, "<item> --prompt <pick id> [--run <id>]",
-     "typed or suggested text (only a pick whose answer is exactly the approval-label for this command "
-     "approves it); a finished item; an item that is not held. Records one approval on the item, bound to "
+    ("override-focus", _h_override_focus, "<item> --prompt <id> [--run <id>]",
+     "a prompt that is not a pick of this command's `offer` or Shawn's own words read as that option; a finished item; an item that is not held. Records one approval on the item, bound to "
      "its current hold. The next `start-worker --despite focus` for it passes the focus gate once, if the "
      "hold reads the same, and uses the approval up; without it that flag is refused. A size change, a "
      "cleared hold or a drop withdraws it. The old-worker hold is never overridden."),

@@ -138,14 +138,15 @@ check "unwatched_wait|herdr:w2-p3|True" "$(view_q '"|".join([r["kind"] + "|" + s
 it "decisions for Shawn lists the handed item with its question"
 check "linear:AI-3|Turn the flag on for everyone?" "$(view_q '"|".join([d["item"] + "|" + d["question"] for d in m["decisions_for_shawn"] if d["kind"] == "handed"])')"
 
-it "the top-level asks list carries an ask handed before structured fields, with its live replies"
-check "linear:AI-3|open|Flag rollout (linear:AI-3)|ship Flag rollout|2026-10-03T01:00:00Z|None" \
-  "$(view_q '"|".join(str(a[k]) if not isinstance(a[k], dict) else a[k]["ship"] for a in v["asks"] for k in ("item", "status", "name", "replies", "at", "fingerprint"))')"
+it "the top-level asks list carries an ask handed before structured fields, with no replies"
+check "linear:AI-3|open|Flag rollout (linear:AI-3)|2026-10-03T01:00:00Z|None" \
+  "$(view_q '"|".join(str(a[k]) for a in v["asks"] for k in ("item", "status", "name", "at", "fingerprint"))')"
+check "False" "$(view_q 'any("replies" in a for a in v["asks"])')"
 
-it "the Decisions for Shawn row names the item by name and id and gives the reply"
+it "the Decisions for Shawn row names the item by name and id and gives no reply to type"
 DECISION_ROWS="$(view_q '"\n".join(r["text"] for r in v["rows"])')"
 has "  Flag rollout (linear:AI-3): Turn the flag on for everyone?" "$DECISION_ROWS"
-has "    reply: \"ship Flag rollout\" or \"decline Flag rollout\"" "$DECISION_ROWS"
+lacks "reply:" "$DECISION_ROWS"
 
 it "just did shows the latest journal write first"
 check "working_now" "$(view_q 'm["just_did"][0]["kind"]')"
@@ -749,7 +750,7 @@ has "$(printf '  r-tools grant tool_choice "let the PM pick tools"\n    d000002 
 has "$(printf '  no Ruling applied\n    d000003 work_sequencing by pm: docs first')" "$AGREE_OUT"
 
 it "an amendment shows with its source and redacted quote"
-has "project_term_amended t000001: test depth: none -> unit tests only · source typed prompt p000009" "$AGREE_OUT"
+has "project_term_amended t000001: test depth: none -> unit tests only · source Shawn's answer p000009" "$AGREE_OUT"
 it "the secret in the quote never reaches the page"
 lacks "sk-abcdefghijklmnopqrstuvwx" "$AGREE_OUT$AGREE_JSON"
 

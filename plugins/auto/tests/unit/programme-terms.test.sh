@@ -4,7 +4,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
+REAL_PROG="${AUTO_ROOT}/lib/programme.py"
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 
 PASS=0
 FAIL=0
@@ -99,6 +102,7 @@ CODE=0
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 terms() { field 'prog["agreement"].get("project_terms")'; }
@@ -269,18 +273,18 @@ prog edit-project-term "$(term_id 'code review')" "Shawn picks the reviewer" --r
 check 2 "$CODE"
 check false "$(field "[t['reserved'] for t in prog['agreement']['project_terms'] if t['area'] == 'code review'][0]")"
 
-P_STALE="$(prompt typed 'yes, I accept the agreement')"
+P_STALE="$(opick "$RUN" accept-agreement)"
 prog edit-project-term "$CROP" "PM picks the crop default from the brand kit, smallest first"
-it "accept-agreement citing a prompt older than the last project-term edit refuses"
-prog accept-agreement --prompt "$P_STALE"
+it "accept-agreement citing a pick older than the last project-term edit refuses"
+PROG="$REAL_PROG" prog accept-agreement --prompt "$P_STALE"
 check 1 "$CODE"
-has "older than" "$OUT"
+has "the facts this picker showed changed since the offer" "$OUT"
 check "null null" "$(field 'prog["agreement"]["accepted"]') $(field 'prog["agreement"].get("contract_version")')"
 
-P_STALE2="$(prompt typed 'yes, I accept the agreement')"
+P_STALE2="$(opick "$RUN" accept-agreement)"
 prog propose-agreement --term cadence=fixed
-it "accept-agreement citing a prompt older than the last proposal refuses"
-prog accept-agreement --prompt "$P_STALE2"
+it "accept-agreement citing a pick older than the last proposal refuses"
+PROG="$REAL_PROG" prog accept-agreement --prompt "$P_STALE2"
 check 1 "$CODE"
 check null "$(field 'prog["agreement"]["accepted"]')"
 it "the refused acceptances journaled nothing"
@@ -290,9 +294,9 @@ it "accept-agreement citing an unknown prompt refuses"
 prog accept-agreement --prompt pdeadbe
 check 1 "$CODE"
 
-P_ACCEPT="$(prompt typed 'yes, I accept the agreement')"
-it "accept-agreement with a prompt newer than every proposal and edit accepts"
-prog accept-agreement --prompt "$P_ACCEPT"
+P_ACCEPT="$(opick "$RUN" accept-agreement)"
+it "accept-agreement with a pick newer than every proposal and edit accepts"
+PROG="$REAL_PROG" prog accept-agreement --prompt "$P_ACCEPT"
 check 0 "$CODE"
 it "acceptance stamps the contract version beside accepted"
 check '1' "$(field 'prog["agreement"]["contract_version"]')"
@@ -310,35 +314,29 @@ it "after acceptance an edit citing a cron prompt refuses"
 P_CRON="$(prompt cron 'crop defaults: Shawn picks the crop')"
 prog edit-project-term "$CROP" "Shawn picks the crop" --prompt "$P_CRON"
 check 1 "$CODE"
-it "after acceptance a prompt that does not name the area refuses"
-P_NOAREA="$(prompt typed 'Shawn picks the crop')"
-prog edit-project-term "$CROP" "Shawn picks the crop" --prompt "$P_NOAREA"
+it "after acceptance typed words with no open offer refuse, even naming the area and new text"
+P_WORDS="$(prompt typed 'crop defaults: Shawn picks the crop')"
+PROG="$REAL_PROG" prog edit-project-term "$CROP" "Shawn picks the crop" --prompt "$P_WORDS"
 check 1 "$CODE"
-has "does not name" "$OUT"
-it "after acceptance a prompt that does not name the new text refuses"
-P_NOTEXT="$(prompt typed 'change crop defaults please')"
-prog edit-project-term "$CROP" "Shawn picks the crop" --prompt "$P_NOTEXT"
-check 1 "$CODE"
-it "after acceptance a prompt that names the area only in a negation refuses"
-P_NEG="$(prompt typed 'not crop defaults: Shawn picks the crop')"
-prog edit-project-term "$CROP" "Shawn picks the crop" --prompt "$P_NEG"
-check 1 "$CODE"
+has "no open offer" "$OUT"
 it "after acceptance a change of reservation refuses"
 P_RES="$(prompt typed 'crop defaults: Shawn picks the crop')"
-prog edit-project-term "$CROP" "Shawn picks the crop" --reserved --prompt "$P_RES"
+PROG="$REAL_PROG" prog edit-project-term "$CROP" "Shawn picks the crop" --reserved --prompt "$P_RES"
 check 2 "$CODE"
+has "unknown option --reserved" "$OUT"
 it "after acceptance an unprotected area cannot be unreserved either"
 P_UNRES="$(prompt typed 'pricing copy: PM writes them')"
-prog edit-project-term "$(term_id 'pricing copy')" "PM writes them" --unreserved --prompt "$P_UNRES"
+PROG="$REAL_PROG" prog edit-project-term "$(term_id 'pricing copy')" "PM writes them" --unreserved --prompt "$P_UNRES"
 check 2 "$CODE"
+has "unknown option --unreserved" "$OUT"
 it "after acceptance the refusals wrote nothing"
 check "$ACCEPTED" "$(snapshot)"
 it "after acceptance the refusals journaled nothing"
 check 0 "$(journal_count project_term_amended)"
 
-it "after acceptance a typed prompt naming the area and new text changes the term"
-P_AMEND="$(prompt typed 'crop defaults: Shawn picks the crop')"
-prog edit-project-term "$CROP" "Shawn picks the crop" --prompt "$P_AMEND"
+it "after acceptance a pick of its offer changes the term"
+P_AMEND="$(opick "$RUN" "edit-project-term $CROP 'Shawn picks the crop'")"
+PROG="$REAL_PROG" prog edit-project-term "$CROP" "Shawn picks the crop" --prompt "$P_AMEND"
 check 0 "$CODE"
 check "[\"Shawn picks the crop\", \"shawn\", \"${P_AMEND}\"]" \
   "$(field "[[t['value'], t['set_by'], t['prompt_id']] for t in prog['agreement']['project_terms'] if t['id'] == '$CROP'][0]")"
@@ -363,8 +361,9 @@ check '["PM picks the crop default from the brand kit, smallest first", "Shawn p
 
 it "after acceptance a named edit of the old reserved deploys term refuses and changes nothing"
 P_DEP="$(prompt typed 'deploys: Shawn deploys on Fridays')"
-prog edit-project-term "$DEPLOYS" "Shawn deploys on Fridays" --prompt "$P_DEP"
-check '1 "Shawn deploys"' "$CODE $(field "prog['context']['decisions']['$DEPLOYS'][-1]['scope']")"
+OFFER_REFUSAL=1 prog edit-project-term "$DEPLOYS" "Shawn deploys on Fridays" --prompt "$P_DEP"
+has "no project term" "$OUT"
+check '97 "Shawn deploys"' "$CODE $(field "prog['context']['decisions']['$DEPLOYS'][-1]['scope']")"
 
 it "propose-agreement still refuses once the agreement is accepted"
 prog propose-agreement --project-term "naming=kebab case" --source x

@@ -76,5 +76,23 @@ it "the sweep names the standing clause as a refusal of an Auto limit"
 has "a refusal of an Auto limit" "$S"
 lacks "a blocked command" "$S"
 
+OWN="$(cat "${AUTO_ROOT}/skills/programme-sweep/references/own-words.md" 2>/dev/null)"
+it "the sweep points to own-words.md, and a decline in his own words runs nothing"
+has "references/own-words.md" "$S"
+has "\"No\", \"Skip r1\" and \"Keep item-x\" on a drop picker are declines" "$OWN"
+has "Run nothing" "$OWN"
+has "--reads-as" "$OWN"
+it "own-words.md keeps the authority moves on a pick and the suggestion out"
+has "Relay his words and ask again" "$OWN"
+has "An accepted suggestion approves no offer" "$OWN"
+has "Show the \`read_back\` line to Shawn" "$OWN"
+
+it "the PM is told to offer permission allow, and the fix lines name it"
+has "--command 'answer-permission <perm-id> allow'" "$S"
+has "answer-permission <perm-id> allow\\|not-now\\|no --prompt <id>" "$S"
+SETTLE="$(cat "${AUTO_ROOT}/lib/programme_permission_settle.py")"
+has "offer answer-permission {proposal['id']} allow again" "$SETTLE"
+has "offer answer-permission {proposal['id']} allow to arm" "$SETTLE"
+
 echo "programme-sweep-skill.test.sh: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

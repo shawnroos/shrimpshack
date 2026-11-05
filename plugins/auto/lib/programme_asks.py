@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Structured asks to Shawn: their facts, fingerprint, exact replies and shown/relayed marks."""
+"""Structured asks to Shawn: their facts, fingerprint and shown/relayed marks."""
 
 from __future__ import annotations
 
 import functools
 import os
+import shlex
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +19,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_store = load_lib_module("programme_store")
 run_record_core = load_lib_module("run_record_core")
 
-REPLY_CHOICES = ("ship", "decline")
+ANSWER_CHOICES = ("ship", "decline")
 # Every cap stays at or under programme_sanitize.DEFAULT_CAP: the view model re-cleans its strings at that cap.
 TEXT_CAPS = {"question": 500, "if-nothing": 500, "recommend": 300, "recommend-why": 500,
              "pr-url": 300, "pr-title": 200, "issue-url": 300, "issue-title": 200}
@@ -99,7 +100,7 @@ def new_ask(kind, facts, op=None) -> dict:
     ask.update({"options": [], "if_nothing": None, "recommendation": None, "recommendation_why": None,
                 "risks": [], "evidence": [], "pr": None, "issue": None, "readiness": None})
     ask.update(facts)
-    ask.update(facts_at=ask["at"], shown=None, superseded_answers=[], replies=None)
+    ask.update(facts_at=ask["at"], shown=None, superseded_answers=[])
     ask["fingerprint"] = fingerprint(ask)
     return ask
 
@@ -112,17 +113,11 @@ def item_name(key, item) -> str:
     return programme_naming.item_name(key, item)
 
 
-def replies(items, key) -> dict:
-    live = programme_naming.live_items(items, key)
-    return {choice: programme_naming.reply(live, key, choice) for choice in REPLY_CHOICES}
-
-
-def refresh_replies(programme) -> None:
-    items = programme.get("items") or {}
-    for key, item in items.items():
-        ask = item.get("handed")
-        if structured(ask) and item.get("state") == "handed" and not ask.get("answered"):
-            ask["replies"] = replies(items, key)
+def how_to_ask(key, ask_id) -> str:
+    commands = [arg for choice in ANSWER_CHOICES
+                for arg in ("--command", shlex.join(["answer-handed", key, "--choice", choice]))]
+    return (f"programme.sh {shlex.join(['offer', ask_id, *commands])}, then ask Shawn with AskUserQuestion using "
+            "the input it prints")
 
 
 def _open(item) -> bool:
@@ -160,7 +155,7 @@ def view_asks(items) -> list:
                  "fingerprint": ask.get("fingerprint"), "shown": shown,
                  "shown_current": bool(shown and ask.get("fingerprint")
                                        and shown.get("fingerprint") == ask.get("fingerprint")),
-                 "replies": replies(items, key), "answered": ask.get("answered"),
+                 "answered": ask.get("answered"),
                  "superseded_answers": ask.get("superseded_answers") or []}
         entry.update({k: ask.get(k) for k in FACT_KEYS})
         entry["options"] = entry["options"] or []
@@ -195,9 +190,6 @@ def detail_lines(items, key) -> list:
             label = f"{name.upper() if name == 'pr' else name}: "
             parts = [v for v in (link.get("title"), link.get("url")) if v]
             out += _fit(label + " ".join(parts), [line for v in parts for line in _labelled(label, v)])
-    reply = replies(items, key)
-    out += _fit(f'reply: "{reply["ship"]}" or "{reply["decline"]}"',
-                [line for choice in ("ship", "decline") for line in _labelled(f"reply to {choice}: ", f'"{reply[choice]}"')])
     return [programme_sanitize.clean(line, cap=0) for line in out]
 
 
@@ -282,8 +274,8 @@ def _h_update_ask(host, argv):
             out["voided"] = answered.get("decision_id")
             record._history(item, "ask_answer_voided", ask=ask.get("id"), decision_id=out["voided"])
         item["handed"] = new
-        refresh_replies(programme)
-        out["replies"] = new.get("replies")
+        if new.get("id"):
+            out["next"] = how_to_ask(key, new["id"])
         record._history(item, "ask_updated", ask=ask.get("id"), fingerprint=new["fingerprint"])
         return out
 

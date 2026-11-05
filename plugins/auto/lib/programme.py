@@ -2,7 +2,7 @@
 """Programme agreement and rule verbs.
 
 Every write verb runs in the programme's driving session, refuses while the compact
-flag is set, and journals. Approval verbs cite a typed prompt from the journal and
+flag is set, and journals. Approval verbs cite Shawn's answer to an offer from the journal and
 copy its text as the quote; their own arguments never become the quote.
 """
 
@@ -40,16 +40,13 @@ PROG = "programme.py"
 RULES_TAG = "auto-rules"
 SETUP_RESUME = "Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep."
 PERSONAL_LOCK = ".personal-protocol.lock"
-_OPERATION = {"id": None, "verb": None, "argv": None}
+_OPERATION = {"id": None, "verb": None, "argv": None, "reading": None}
 # Write verbs that never pass an operation id to the store; --op on them would promise a replay.
 NO_OP_VERBS = ("claim", "start", "takeover", "handover", "end", "expire", "promote", "reconcile-leases",
-               "reconcile-operations", "release-resources", "create-successor", "sweep", "approval-label",
-               "become-pm")
+               "reconcile-operations", "release-resources", "create-successor", "sweep", "become-pm")
 
 
-_name_words, _squash, _runs, _affirmed, _NEGATIONS = (
-    programme_naming.name_words, programme_naming.squash, programme_naming.runs, programme_naming.affirmed,
-    programme_naming.NEGATIONS)
+_name_words, _squash = programme_naming.name_words, programme_naming.squash
 
 
 class ProgrammeError(Exception):
@@ -142,7 +139,7 @@ def active_rulings(programme, now=None) -> list:
         targets = [t for t in targets if t == pc.PROGRAMME_SCOPE or _item_open(programme, t)]
         if targets:
             out.append(dict({k: r[k] for k in ("rev", "kind", "effect", "legacy", "scope", "reason", "quote",
-                                               "until", "at", "limits", "baseline")},
+                                               "until", "at", "limits", "baseline", "wording")},
                             id=r["id"], applies_to=targets, prompt_id=r["prompt_id"]))
     return out
 
@@ -221,11 +218,11 @@ def render_restore(run_id) -> str:
     return render_rules(record, revision)
 
 
-def _guard(home, record, *, compact_exempt=False):
+def _guard(home, record, *, compact_exempt=False, after_end=False):
     sid = driver_session.driving_session_id()
     if not session_registry.caller_drives(record, sid):
         raise ProgrammeError("only the programme's driving session may run this verb", fix="programme.sh become-pm")
-    if (record.get("programme") or {}).get("ended"):
+    if (record.get("programme") or {}).get("ended") and not after_end:
         raise ProgrammeError("the programme has ended")
     if not compact_exempt and os.path.exists(_flag_path(home)):
         sys.stdout.write(render_rules(record))
@@ -235,31 +232,9 @@ def _guard(home, record, *, compact_exempt=False):
     return sid
 
 
-def _typed_prompt(run_id, record, prompt_id, verb=None) -> dict:
-    return programme_approval.prompt(run_id, record, prompt_id, _OPERATION["verb"] or verb,
-                                     ProgrammeError, text_hash, _OPERATION["argv"])
-
-
-def require_named(prompt, *needs) -> None:
-    missing = programme_naming.missing(programme_journal.named_text(prompt), needs) if prompt else []
-    if missing:
-        raise ProgrammeError(
-            f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
-            f"contain {' and '.join(missing)}"
-        )
-
-
-def require_sources_named(prompt, before, after) -> None:
-    quote = programme_journal.named_text(prompt) if prompt else ""
-    missing = programme_naming.missing_sources(quote, before, after) if prompt else []
-    if missing:
-        raise ProgrammeError(
-            f"prompt {prompt['prompt_id']!r} does not name what it approves; its text must "
-            f"contain {' and '.join(repr(n) for n in missing)}")
-
-
-def _widen_word(opts) -> tuple:
-    return (("widen", "widening", "widened"),) if opts.get("widening") else ()
+def _approval_for(run_id, record, prompt_id, verb=None, content=None) -> dict:
+    asked = programme_approval.Asked(_OPERATION["verb"] or verb, _OPERATION["argv"], _OPERATION["reading"], content)
+    return programme_approval.prompt(run_id, record, prompt_id, asked, ProgrammeError)
 
 
 # promote finishes or discards a half-done move and reports a home another process moved first, so this runs
@@ -294,21 +269,19 @@ AFTER_BEAT = []
 
 
 def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_exempt=False,
-           journal=True, after=None, verb=None, target=None, beat=True, names_change=True, promote=True):
+           journal=True, after=None, verb=None, target=None, beat=True, promote=True, after_end=False, content=None):
     run_id, home, _ = _locate(opts, finish_move=promote)
     seen = {}
 
     def mutate(rec):
-        seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt)
+        seen["sid"] = _guard(home, rec, compact_exempt=compact_exempt, after_end=after_end)
         if beat:
             loop = rec.setdefault("loop", {})
             seen["previous_beat"] = loop.get("last_beat_at")
             loop["last_beat_at"] = run_record_core.now_iso()
-        prompt = _typed_prompt(run_id, rec, prompt_id, verb) if (needs_prompt or prompt_id) else None
+        prompt = _approval_for(run_id, rec, prompt_id, verb, content) if (needs_prompt or prompt_id) else None
         rec["programme"] = programme_home.normalize_programme(rec.get("programme") or {})
         seen["payload"] = change(rec["programme"], prompt, rec)
-        if names_change:
-            programme_asks.refresh_replies(rec["programme"])
         seen["prompt"] = prompt
         seen["record"] = rec
 
@@ -317,7 +290,7 @@ def _write(opts, change, kind, *, prompt_id=None, needs_prompt=False, compact_ex
         seen["kind"] = kind(payload) if callable(kind) else kind
         prompt = seen["prompt"]
         if prompt:
-            payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"])
+            payload.update(prompt_id=prompt["prompt_id"], quote=prompt["quote"], **programme_journal.reading_of(prompt))
         seen["full"] = payload
         if not journal:
             return None
@@ -431,8 +404,7 @@ def _h_describe(argv):
             "`release-resources`, `dispose-item`, `dispose-action` and `archive`), and "
             "journal. `claim` is open "
             "to any session with --run <id>. Approval verbs need --prompt <id> "
-            "of a typed prompt and copy its text as the quote; a verb that approves a named "
-            "target also needs the prompt text to name it. See "
+            "of Shawn's answer to `offer` and copy its text as the quote. See "
             "docs/contracts/agent-tool-surface.md."
         ),
         "locate": "--run <id>, else the programme whose lease names this session.",
@@ -504,15 +476,14 @@ def _h_propose_agreement(argv):
 
 
 def _h_accept_agreement(argv):
-    _, opts = _parse(argv, values=("run", "prompt", "terms"))
+    _, opts = _parse(argv, values=("run", "prompt"))
     if not opts.get("prompt"):
-        raise ValueError("accept-agreement needs --prompt <id> of a typed prompt or a terms-bound pick")
+        raise ValueError("accept-agreement needs --prompt <id> of Shawn's pick on the picker `offer` prints")
 
     def change(programme, prompt, rec):
         if programme["agreement"].get("accepted"):
             raise ProgrammeError("the agreement is already accepted")
         programme_terms.check_accept_order(rec["run_id"], prompt["prompt_id"])
-        programme_approval.check_terms(programme, opts.get("terms"), ProgrammeError)
         programme["agreement"]["accepted"] = {"at": _now(), "prompt_id": prompt["prompt_id"],
                                               "quote": prompt["quote"]}
         version = programme_terms.stamp(programme)
@@ -535,10 +506,6 @@ def _h_amend_term(argv):
     def change(programme, prompt, rec):
         term = _term(programme, key)
         checked = programme_proposals.check_amend(sys.modules[__name__], term, value, opts)
-        if key == "tools_of_record":
-            require_sources_named(prompt, term.get("value") or [], checked)
-        else:
-            require_named(prompt, key, value)
         out = _set_term(term, checked, opts, set_by="shawn", why=opts.get("why"), prompt=prompt)
         programme_proposals.settle_amend(term, checked)
         return out
@@ -650,7 +617,6 @@ def _h_adopt_rule(argv):
             raise ProgrammeError(f"rule refused: {verdict['reason']} ({verdict['detail']})")
         # An older plugin reading the synced personal file requires this field and rejects a widening.
         rule[programme_protocol.LEGACY_RULE_FIELD] = programme_protocol.legacy_autonomy(rule_id)
-        require_named(prompt, rule_id)
         adoption = _adoption(rule, prompt, rec, False)
         _write_personal(_put_rule(dict(rule, adoption=adoption)))
         programme["proposed_rules"] = [r for r in proposals if r is not hits[0]]
@@ -673,7 +639,6 @@ def _h_adopt_autonomy(argv):
     _check_widening(action, level, opts.get("widening"))
 
     def change(programme, prompt, rec):
-        require_named(prompt, action, level, *_widen_word(opts))
         adopted = dict(entry, adoption=_adoption(entry, prompt, rec, opts.get("widening")))
         _write_personal(lambda doc: doc.setdefault("autonomy", {}).__setitem__(action, adopted))
         return {"entry": "autonomy", "action": action, "level": level,
@@ -697,7 +662,6 @@ def _h_adopt_check(argv):
         raise ProgrammeError(f"check refused: {verdict['reason'] or 'bad_value'} ({verdict['detail'] or 'repo'})")
 
     def change(programme, prompt, rec):
-        require_named(prompt, repo, key)
         adopted = dict(entry, adoption=_adoption(entry, prompt, rec, False))
         _write_personal(lambda doc: doc.setdefault("checks", {}).setdefault(repo, {}).__setitem__(key, adopted))
         return {"entry": "check", "repo": repo, "check": key,
@@ -735,10 +699,9 @@ _VERBS = {
     "amend-term": _Verb(
         _h_amend_term,
         "<key> <value> --prompt <id> [--why <text>] [--until <iso>] [--seconds <n>] [--run <id>]",
-        rejects="a value outside the term's options (use record-ruling); a prompt that is "
-        "not typed or does not name the term key and the value; until_time without --until. "
-        "The tools_of_record term takes a comma list of its tools, or none; its prompt must name each tool "
-        "it turns on or off. Settles a pending proposal: accepted when the value matches it, else superseded.",
+        rejects="a value outside the term's options (use record-ruling); a prompt that answers no open offer of this command; "
+        "until_time without --until. "
+        "The tools_of_record term takes a comma list of its tools, or none. Settles a pending proposal: accepted when the value matches it, else superseded.",
     ),
     "propose-rule": _Verb(
         _h_propose_rule,
@@ -748,22 +711,19 @@ _VERBS = {
     "adopt-rule": _Verb(
         _h_adopt_rule,
         "<rule-id> --prompt <id> [--run <id>]",
-        rejects="no proposal with that id; a rule that fails the protocol rule format; a prompt that is "
-        "not typed or does not name the rule id.",
+        rejects="no proposal with that id; a rule that fails the protocol rule format; a prompt that answers no open offer of this command.",
     ),
     "adopt-autonomy": _Verb(
         _h_adopt_autonomy,
         "<action> <never|propose|act_and_tell|act> --prompt <id> [--widening] [--run <id>]",
-        rejects="an unknown level or a bad action name; a prompt that is not typed or does not name "
-        "the action and the level (and the word widen with --widening); a level wider "
+        rejects="an unknown level or a bad action name; a prompt that answers no open offer of this command (--widening takes a pick); a level wider "
         "than the plugin default without --widening.",
     ),
     "adopt-check": _Verb(
         _h_adopt_check,
         "<repo> <verified.lookup|verified.deployed_sha> <argv-json> --prompt <id> [--run <id>]",
         rejects="an unknown check; an argv that is not a non-empty JSON array of strings or names a "
-        "placeholder other than {id}, {sha} or {repo}; a prompt that is not typed or does not name "
-        "the repo and the check key.",
+        "placeholder other than {id}, {sha} or {repo}; a prompt that answers no open offer of this command.",
     ),
 }
 
@@ -971,7 +931,7 @@ def _take_operation(argv) -> list:
 
 def _cli(argv) -> int:
     try:
-        argv = _take_operation(argv)
+        argv, _OPERATION["reading"] = programme_approval.take_reading(_take_operation(argv))
     except ValueError as exc:
         sys.stderr.write(f"{PROG}: {exc}\n")
         return 2
@@ -990,7 +950,6 @@ programme_protocol_changes = load_lib_module("programme_protocol_changes")
 _VERBS.update(programme_protocol_changes.build_verbs(sys.modules[__name__]))
 _VERBS.update(load_lib_module("programme_readiness").build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_asks.build_verbs(sys.modules[__name__]))
-_VERBS.update(programme_approval.build_verbs(sys.modules[__name__]))
 _VERBS.update(programme_focus.build_verbs(sys.modules[__name__]))
 for _mod in worker_contract.VERB_MODULES:
     _VERBS.update(load_lib_module(_mod).build_verbs(sys.modules[__name__]))

@@ -29,7 +29,6 @@ ENDINGS = ("fulfilled", "withdrawn")
 CORRECTION_EFFECTS = ("grant", "restrict")
 ANCHOR_ROWS = {"item_handed": "ask", "pm_decided": "decision_id", "handed_answered": "decision_id"}
 CHANGE_ROWS = {"ruling_recorded": "ruling_id", "context_accepted": "decision_id", "ruling_closed": "ruling_id"}
-NAMED_WHEN_NEW = ("grant", "decided")
 
 
 class RulingError(programme_decisions.DecisionError):
@@ -76,25 +75,38 @@ def _touches(row, cid) -> bool:
         isinstance(e, dict) and e.get("ruling") == cid for e in payload.get("carried_over") or [])
 
 
+def _unanswered_words(rows, row, cited) -> bool:
+    payload = row.get("payload") or {}
+    if row.get("kind") != "prompt" or row.get("prompt_id") in cited or payload.get("driving") is False:
+        return False
+    source = payload.get("source")
+    if isinstance(source, dict) and source.get("kind") == "pick" and programme_journal.pick_use(rows, source):
+        return False
+    return programme_journal.prompt_origin(row) in ("typed", "picked")
+
+
 # A later reply ("no, keep it") voids an earlier approval, so the prompt must be Shawn's newest unanswered words.
-def check_newest(rows, prompt_id) -> None:
+def newer_words(rows, prompt_id):
     at = prompt_index(rows, prompt_id)
     cited = programme_journal._cited_ids(rows)
-    later = next((r.get("prompt_id") for r in rows[at + 1:] if r.get("kind") == "prompt"
-                  and programme_journal.prompt_origin(r) == "typed" and r.get("prompt_id") not in cited), None)
+    return next((r.get("prompt_id") for r in rows[at + 1:] if _unanswered_words(rows, r, cited)), None)
+
+
+def check_newest(rows, prompt_id) -> None:
+    later = newer_words(rows, prompt_id)
     if later:
-        raise RulingError(f"prompt {prompt_id!r} was typed before prompt {later!r}, which nothing has cited yet; "
-                          f"a Ruling change binds only on Shawn's newest typed prompt")
+        raise RulingError(f"prompt {prompt_id!r} came before prompt {later!r}, which nothing has cited yet; "
+                          f"a Ruling change binds only on Shawn's newest words")
 
 
-# Default-deny: the prompt must postdate every journaled change to the Ruling, so words Shawn typed about an
+# Default-deny: the prompt must postdate every journaled change to the Ruling, so words Shawn gave about an
 # older version never approve a newer one.
 def check_fresh(rows, cid, prompt_id) -> None:
     at = prompt_index(rows, prompt_id)
     changed = [i for i, row in enumerate(rows) if _touches(row, cid)]
     if changed and at < changed[-1]:
-        raise RulingError(f"prompt {prompt_id!r} was typed before the latest change to {cid!r}; a Ruling "
-                          "change binds only on a prompt Shawn typed after it was proposed")
+        raise RulingError(f"prompt {prompt_id!r} came before the latest change to {cid!r}; a Ruling "
+                          "change binds only on Shawn's answer after it was proposed")
     check_newest(rows, prompt_id)
 
 
@@ -123,11 +135,11 @@ def check_prompt_unused(rows, prompt_id) -> None:
     for row in rows:
         approved = _approval_of(row) if prompt_id in (row.get("cites") or []) else None
         if approved is not None:
-            raise RulingError(f"prompt {prompt_id!r} already approved a Ruling change ({approved}); one typed "
-                              "prompt approves one Ruling change")
+            raise RulingError(f"prompt {prompt_id!r} already approved a Ruling change ({approved}); one "
+                              "answer approves one Ruling change")
 
 
-# Runs on the journal as the approval row lands: a prompt Shawn typed or a use another writer committed
+# Runs on the journal as the approval row lands: a prompt Shawn sent or a use another writer committed
 # after the verb's own check refuses the change before its record is written.
 def recheck_approval(rows, row) -> None:
     if _approval_of(row) is None:
@@ -169,7 +181,9 @@ def repos_for(programme, targets, every=None) -> frozenset:
 
 def _activate(host, programme, revision, prompt, baseline=None) -> None:
     if revision.get("quote") is None:
-        revision["quote"] = prompt["quote"]
+        drafted = programme_journal.wording_of(prompt) == programme_journal.PM_DRAFT
+        revision["quote"] = revision.get("scope") if drafted else prompt["quote"]
+        programme_journal.mark_wording(revision, prompt)
     if revision.get("effect") == "grant":
         revision["baseline"] = baseline or host.programme_protocol.AuthorityLevels(host.prompt_lookup).level(
             revision["kind"], repos_for(programme, revision.get("applies_to") or []))
@@ -190,24 +204,10 @@ def _check_revisable(cid, revisions, kind, effect, prompt) -> None:
         raise RulingError(f"Ruling {cid!r} is a {last.get('effect')} of {last.get('kind')}; a revision keeps "
                           "its kind and effect, so record a new Ruling for a different one")
     if effect == "decided" and pc.in_force(revisions) is not None and not prompt:
-        raise RulingError(f"Ruling {cid!r} is Shawn's own decision; changing it needs a typed prompt naming it")
+        raise RulingError(f"Ruling {cid!r} is Shawn's own decision; changing it needs his answer to `programme.sh offer`")
 
 
-def _named(target):
-    return target if target == pc.PROGRAMME_SCOPE else pc._item_options(target)
-
-
-# The PM picks a Ruling's id, so a prompt naming only the id proves nothing about a new grant or decided
-# Ruling; Shawn's words must also name its kind and items. A new restrict only narrows the PM.
-def _names_needed(content, delta, new) -> list:
-    if new and content.get("effect") in NAMED_WHEN_NEW:
-        return [content["kind"]] + [_named(t) for t in content.get("applies_to") or []]
-    delta = pc._dict(delta)
-    return [_named(t) for t in delta.get("names", delta.get("added")) or []] + list(delta.get("words") or [])
-
-
-# A carried Ruling arrives with no items, so every item it is given is new here and must be named by
-# Shawn's prompt, whatever its effect; accept-context reads the same names.
+# A carried Ruling arrives with no items, so every item it is given is new here, whatever its effect.
 def _carried_delta(content) -> dict:
     items = list(content["applies_to"])
     return {"added": items, "removed": [], "removed_limits": [], "until": None, "names": items, "words": [],
@@ -229,18 +229,18 @@ def _record(host, programme, rec, cid, content, prompt, *, correction=None) -> d
         return dict(out, rev=current["rev"], state="accepted", unchanged=True)
     carried = pc._dict(revisions[-1]).get("carried") if revisions and current is None else None
     delta = _carried_delta(content) if carried else pc.ruling_delta(current, content)
-    accept = bool(prompt) and not (delta and delta["wider"])
-    if accept:
+    wider = bool(delta and delta["wider"])
+    if prompt:
         check_approval(programme_journal.read(rec["run_id"]), cid, prompt["prompt_id"])
-    if prompt and not correction:
-        host.require_named(prompt, cid, *_names_needed(content, delta if carried else None, current is None))
     revisions = ctx["decisions"].setdefault(cid, revisions)
-    revision = pc._append(revisions, content, prompt, accept=accept, delta=delta)
+    revision = pc._append(revisions, content, prompt, accept=bool(prompt), delta=delta)
     revision.update(quote=prompt and prompt["quote"], replies_to=correction, baseline=None)
+    if prompt:
+        programme_journal.mark_wording(revision, prompt)
     if carried:
         revision["carried"] = carried
     if revision["state"] == "accepted":
-        _activate(host, programme, revision, prompt, baseline=pc._dict(current).get("baseline"))
+        _activate(host, programme, revision, prompt, baseline=None if wider else pc._dict(current).get("baseline"))
     return dict(out, rev=revision["rev"], state=revision["state"], unchanged=False, delta=delta,
                 source=revision["source"], baseline=revision["baseline"])
 
@@ -258,8 +258,9 @@ def _correction(host, programme, rec, cid, base, anchor_id, prompt) -> dict:
         host.programme_record._history(item, "reopened", ruling=cid)
         out["reopened"] = target
     who = "the PM decides" if base["effect"] == "grant" else "Shawn decides"
+    source = "said" if programme_journal.wording_of(prompt) == programme_journal.SHAWN else "approved"
     out["notice"] = programme_sanitize.clean(
-        f"Ruling {cid}: {who} {kind} on {target} from now on. Shawn said \"{prompt['quote']}\"", cap=0)
+        f"Ruling {cid}: {who} {kind} on {target} from now on. Shawn {source} \"{prompt['quote']}\"", cap=0)
     return out
 
 
@@ -287,9 +288,11 @@ def _h_record_ruling(host, argv):
         _check_protected(kind, base["effect"])
 
     def change(programme, prompt, rec):
+        his = programme_journal.his_text(prompt)
+        drafted = dict(base, scope=programme_sanitize.clean(his)) if his else base
         if replies:
-            return _correction(host, programme, rec, cid, base, replies, prompt)
-        content = dict(base, kind=kind, applies_to=pc._scope(record, programme, opts["applies-to"]))
+            return _correction(host, programme, rec, cid, drafted, replies, prompt)
+        content = dict(drafted, kind=kind, applies_to=pc._scope(record, programme, opts["applies-to"]))
         return _record(host, programme, rec, cid, content, prompt)
 
     return host._write(opts, change, "ruling_recorded", prompt_id=opts.get("prompt"), needs_prompt=bool(replies),
@@ -313,18 +316,21 @@ def _h_close_ruling(host, argv):
             raise RulingError(f"no Ruling {cid!r} in force or pending to close")
         # Closing a restrict hands its kind back to the PM, and closing a decided Ruling reopens Shawn's call.
         if not prompt and (ending == "withdrawn" or current.get("effect") != "grant"):
-            raise RulingError(f"closing Ruling {cid!r} ({current.get('effect')}, as {ending}) needs a typed "
-                              "prompt naming it")
+            raise RulingError(f"closing Ruling {cid!r} ({current.get('effect')}, as {ending}) needs his answer to "
+                              "`programme.sh offer`")
         if prompt:
             check_approval(programme_journal.read(rec["run_id"]), cid, prompt["prompt_id"])
-            host.require_named(prompt, cid)
         for revision in revisions:
             if revision.get("state") == "pending_acceptance":
                 revision["state"] = "replaced"
         current["state"] = "closed"
-        current["closed"] = {"at": run_record_core.now_iso(), "as": ending, "why": why,
+        his = programme_journal.his_text(prompt)
+        said = programme_sanitize.clean(his) if his else why
+        current["closed"] = {"at": run_record_core.now_iso(), "as": ending, "why": said,
                              "prompt_id": prompt and prompt["prompt_id"]}
-        return {"ruling_id": cid, "rev": current["rev"], "as": ending, "why": why, "state": "closed",
+        if prompt:
+            programme_journal.mark_wording(current["closed"], prompt)
+        return {"ruling_id": cid, "rev": current["rev"], "as": ending, "why": said, "state": "closed",
                 "origin": origin}
 
     withdrawn = ending == "withdrawn"
@@ -345,10 +351,6 @@ def _h_accept_context(host, argv):
         revision = pc.pending(ctx[kind].get(cid)) if kind else None
         if revision is None:
             raise record.RecordError(f"no pending revision of {cid!r} to accept")
-        # accept-context is a pick verb for requirements, but a Ruling binds only on words Shawn typed (R5).
-        if kind == "decisions" and prompt.get("origin") != "typed":
-            raise RulingError(f"accepting Ruling {cid!r} needs a typed prompt; prompt {prompt['prompt_id']!r} is "
-                              f"{'a pick' if prompt.get('origin') == 'picked' else 'an accepted suggestion'}")
         if revision.get("carried") and not revision.get("applies_to"):
             raise RulingError(f"bind carried Ruling {cid} with record-ruling naming its items")
         delta = pc._dict(revision.get("delta"))
@@ -358,8 +360,6 @@ def _h_accept_context(host, argv):
         if kind == "decisions":
             check_approval(programme_journal.read(rec["run_id"]), cid, prompt["prompt_id"])
         prior = pc.in_force(ctx[kind][cid])
-        host.require_named(prompt, cid, *_names_needed(revision, revision.get("delta"), kind == "decisions"
-                                                       and prior is None))
         pc._accept(ctx[kind][cid], revision, prompt)
         if revision.get("effect") in pc.EFFECTS:
             # Only a widening re-baselines; a narrowing must not clear an open Ruling conflict.
@@ -373,7 +373,7 @@ def _h_accept_context(host, argv):
 
 MOVE_FIRST = ("On a home still on its old JSON files, once every check above passes it moves the home to "
               "programme.db and runs the change there, checks and all, and refuses, changing nothing, when that "
-              "move cannot run; a prompt typed before the move approves nothing.")
+              "move cannot run; an answer given before the move approves nothing.")
 
 _SPECS = (
     ("record-ruling", _h_record_ruling,
@@ -382,10 +382,11 @@ _SPECS = (
      "[--limit <text>]... [--until <iso>] [--requirement <id>]... [--prompt <id>] [--run <id>]",
      "an unknown kind or effect; a grant or decided Ruling of a protected kind; an end date that is not ISO "
      "UTC time; a revision that changes the kind or effect, or revises a closed Ruling or a kind-less "
-     "decision record; a change to a decided Ruling without a typed prompt; a prompt that is not typed or does "
-     "not name the id, or for a new grant or decided Ruling its kind and every item too; a prompt that would "
-     "bind the change but was typed before the Ruling's latest journaled change or before a typed prompt "
-     "nothing has cited yet, or already approved a Ruling change. Without a prompt it "
+     "decision record; a change to a decided Ruling without his answer; a prompt that answers no open offer of this command; a prompt that would "
+     "bind the change but came before the Ruling's latest journaled change or before a message "
+     "nothing has cited yet, or already approved a Ruling change. A pick binds "
+     "the draft with wording pm_draft, a pick of a widening option binds at once, and his own words with --reads-as "
+     "become the scope with wording shawn, except on a new or wider grant, which takes a pick. Without a prompt it "
      "waits for accept-context. A widening (a grant that adds items, drops a limit or ends later; a restrict "
      "that loses items, drops a limit or ends sooner) waits too, while the prior revision stays in force. "
      "With --replies-to the anchor gives the item and kind, the prompt must come after the anchor and approve "
@@ -393,15 +394,13 @@ _SPECS = (
     ("close-ruling", _h_close_ruling,
      "<id> --as fulfilled|withdrawn [--why <text>] [--prompt <id>] [--origin pm|ui] [--run <id>]",
      "no Ruling in force or pending; --as fulfilled without --why; --as withdrawn, or closing a restrict or a decided "
-     "Ruling, without a typed prompt naming the id; a prompt typed before the Ruling's latest change or before "
-     "a typed prompt nothing has cited yet, or that already approved a Ruling change. Closing as fulfilled never counts as a beat. "
+     "Ruling, without his answer to `offer`; a prompt from before the Ruling's latest "
+     "change or before a message nothing has cited yet, or that already approved a Ruling change. On an offer, his "
+     "own words with --reads-as become the reason, except on a restrict, which takes a pick. Closing as fulfilled never counts as a beat. "
      + MOVE_FIRST),
     ("accept-context", _h_accept_context, "<decision-or-requirement-id> --prompt <id> [--run <id>]",
-     "no pending revision; a pick or accepted suggestion for a Ruling (a requirement takes one); a prompt "
-     "that is not typed, came from a legacy journal or an obsolete writer, or does not name the id and every "
-     "target the revision adds (for a Ruling, every item it gives the PM; for a grant revision, each limit it "
-     "drops and its new end date as YYYY-MM-DD or 'no end date'; for a new grant or decided Ruling its kind); "
-     "for a Ruling, a prompt typed before the pending revision was recorded or before a typed prompt nothing "
+     "no pending revision; a prompt that answers no open offer of this command; a prompt from a legacy journal or an obsolete writer; "
+     "for a Ruling, a prompt from before the pending revision was recorded or before a message nothing "
      "has cited yet, or that already approved a Ruling change; a pending wider grant recorded before its dropped limits and end date were kept (re-record it); "
      "a carried Ruling that has no items yet. A grant that becomes active records the Authority level for its "
      "kind as its baseline; accepting a narrowing keeps the prior baseline. For a Ruling, not a requirement: "

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Verify an applied permission proposal, reserve one retry, and settle it from transcripts.
+"""Write an allowed permission proposal's rules, verify them, reserve one retry, and settle it from transcripts.
 
-Settings files are only ever opened for reading. Settlement trusts the blocked
-session's own transcript, found through the session registry, never a journal row alone.
+Only apply_allow changes a settings file. Settlement trusts the blocked session's own transcript,
+found through the session registry, never a journal row alone.
 """
 
 from __future__ import annotations
@@ -25,12 +25,13 @@ programme_sanitize = load_lib_module("programme_sanitize")
 programme_sources = load_lib_module("programme_sources")
 rules = load_lib_module("programme_permission_rules")
 state = load_lib_module("programme_permission_state")
+writer = load_lib_module("programme_permission_write")
 transcript = load_lib_module("permission_transcript")
 session_registry = load_lib_module("session_registry")
 
 RecordError = programme_record.RecordError
 USER_SETTINGS_ENV = "CLAUDE_AUTO_TEST_USER_SETTINGS"
-SETTINGS_CAP = 1024 * 1024
+SETTINGS_CAP = writer.SETTINGS_CAP
 WORKTREE_FILE = os.path.join(".claude", "settings.json")
 WORST = ("covered", "not_covered", "blocked_elsewhere")
 OUTCOME_STATE = {"covered": state.RETRYING, "not_covered": state.OPEN, "blocked_elsewhere": state.INEFFECTIVE}
@@ -177,23 +178,67 @@ def retry_text(proposal_id, reservation) -> str:
     return f"Permission {proposal_id} is applied. Run this once, exactly as written: {reservation['normalized']}"
 
 
-def apply_answer(programme, proposal, choice, prompt, live) -> dict:
+def apply_answer(programme, proposal, choice, prompt, live, written=None, note=None) -> dict:
     check = verify(proposal)
+    if note:
+        check["notes"].append(note)
     target = OUTCOME_STATE[check["outcome"]]
     reservation = _reserve(programme, proposal, live) if target == state.RETRYING and live else None
     if target == state.RETRYING and reservation is None:
         target = state.RETRY_UNOBSERVED
         check["notes"].append("covered, but no linked item's owner pane has a live agent, so nothing was "
-                              f"retried; type applied {proposal['id']} again once a worker is running")
+                              f"retried; offer answer-permission {proposal['id']} allow again once a worker is "
+                              "running")
     out = state.record_answer(proposal, choice, prompt, target)
     proposal.update(explanation=explain(check), reservation=reservation, pending_answer=None,
                     verified={"at": run_record_core.now_iso(), "outcome": check["outcome"], "files": check["files"]})
+    if written:
+        proposal["written"] = dict(written, at=run_record_core.now_iso())
     if reservation:
         proposal["attempts"] = proposal.get("attempts", 0) + 1
     state.note_items(programme, proposal, f"verify_{check['outcome']}", proposal["explanation"])
     out.update(verify=check, reservation=reservation, retry_item=reservation and reservation["item"],
                retry_text=reservation and retry_text(proposal["id"], reservation))
+    if written:
+        out["written"] = written
     return out
+
+
+def allow_plan(programme, proposal) -> dict:
+    """What picking allow writes, worked out afresh: the record's text could have changed since it was proposed."""
+    try:
+        rendered = rules.render_proposal(proposal.get("operations") or [])
+    except ValueError as exc:
+        raise RecordError(f"{proposal.get('id')} cannot be allowed: {exc}") from None
+    if not rendered["rules"]:
+        raise RecordError(f"{proposal.get('id')} names no catalog operation, so it has no rule to allow")
+    remit = [r.get("path") for r in programme["remit"].get("repos") or [] if isinstance(r, dict)]
+    repos = [(programme["items"].get(key) or {}).get("repo") for key in proposal.get("items") or []]
+    repos = [repo for repo in repos if repo]
+    if not repos:
+        raise RecordError(f"{proposal.get('id')} has no linked item with a repo, so its destination cannot be checked")
+    for repo in repos:
+        dest = rules.destination(repo, remit)
+        if not dest["ok"]:
+            raise RecordError(f"{proposal.get('id')} cannot be allowed: {dest['reason']}")
+        if dest["file"] != proposal.get("settings_file"):
+            raise RecordError(f"{proposal.get('id')} targets {proposal.get('settings_file')}, but its item's repo "
+                              f"gives {dest['file']}")
+    return dict(rendered, file=dest["file"], main=dest["main"])
+
+
+def apply_allow(programme, proposal, choice, prompt, live) -> dict:
+    plan = allow_plan(programme, proposal)
+    note = None
+    try:
+        if verify(proposal)["outcome"] == "not_covered":
+            note = writer.tracked_note(plan["main"], plan["file"])
+            written = writer.merge(plan["file"], plan["rules"])
+        else:
+            written = writer.unchanged(plan["file"])
+    except writer.WriteRefused as exc:
+        raise RecordError(f"{proposal['id']}: {exc}") from None
+    return apply_answer(programme, proposal, choice, prompt, live, written=written, note=note)
 
 
 def _calls(command) -> list:
@@ -261,7 +306,7 @@ def _observe_retry(programme, proposal, journal, snap) -> dict:
     if status in ("idle", "gone"):
         return dict(base, state=state.RETRY_UNOBSERVED, unconfirmed=unconfirmed,
                     detail=f"the retry was sent, the owner pane is {status}, and its transcript shows no run; "
-                           f"type applied {proposal['id']} to arm one more attempt")
+                           f"offer answer-permission {proposal['id']} allow to arm one more attempt")
     return dict(base, pending=f"owner pane {pane} is {status}", unconfirmed=unconfirmed)
 
 

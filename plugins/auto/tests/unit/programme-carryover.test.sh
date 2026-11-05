@@ -6,7 +6,9 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
+REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 
 PASS=0
 FAIL=0
@@ -69,6 +71,7 @@ $(cat)
 PYEOF
 }
 
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$@"; }
 new_programme() {
   run_py "$1" <<'EOF'
 print(ph.create_programme([args[0]], "sess-pm")["run"])
@@ -113,6 +116,7 @@ CRASHES=""
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 
@@ -134,6 +138,7 @@ remit() {
   local doc="$1"; shift
   OUT="$(printf '%s' "$doc" | "$PY" "$PROG" set-remit --run "$run" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 end_programme() {
@@ -200,33 +205,33 @@ prog record-ruling r1 --kind technical_approach --effect restrict --scope "Shawn
   --applies-to herdr:a --prompt "$P_R1" --run "$RUN_A"
 P_EARLY="$(prompt "$RUN_A" 'carry g1 to the next programme')"
 
-it "carry-rulings with ids needs a typed prompt"
+it "carry-rulings with ids needs a prompt"
 prog carry-rulings g1 --run "$RUN_A"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
 it "carry-rulings refuses a prompt typed before any offer"
-prog carry-rulings g1 --prompt "$P_EARLY" --run "$RUN_A"
+PROG="$REAL_PROG" prog carry-rulings g1 --prompt "$P_EARLY" --run "$RUN_A"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
-has "offer" "$OUT"
+has "no open offer" "$OUT"
 it "carry-rulings with no ids offers every active Ruling"
 prog carry-rulings --run "$RUN_A"
 check '0 ["g1", "r1"]' "$CODE $(field "$RUN_A" 'prog["carryover_offer"]["offered"]')"
-it "carry-rulings refuses a prompt that does not name the Ruling"
+it "carry-rulings refuses typed words with no open offer of the command, and stores nothing"
 P_VAGUE="$(prompt "$RUN_A" 'yes carry that one')"
-prog carry-rulings g1 --prompt "$P_VAGUE" --run "$RUN_A"
-check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+PROG="$REAL_PROG" prog carry-rulings g1 --prompt "$P_VAGUE" --run "$RUN_A"
+check "nonzero no-store" "$([ "$CODE" -ne 0 ] && echo nonzero) $([ -e "$STORE" ] && echo stored || echo no-store)"
+has "no open offer" "$OUT"
 it "carry-rulings refuses an id that is not an active Ruling"
 P_NONE="$(prompt "$RUN_A" 'carry zz to the next programme')"
-prog carry-rulings zz --prompt "$P_NONE" --run "$RUN_A"
-check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
-it "carry-rulings with a prompt after the offer naming the Ruling stores it under each remit repo key"
-P_KEEP="$(prompt "$RUN_A" 'carry g1 to the next programme')"
+offer_refused "no active Ruling zz" carry-rulings zz --prompt "$P_NONE" --run "$RUN_A"
+it "carry-rulings with a pick after the offer stores the Ruling under each remit repo key"
+P_KEEP="$(opick "$RUN_A" 'carry-rulings g1')"
 prog carry-rulings g1 --prompt "$P_KEEP" --run "$RUN_A"
 check '0 [["'"${ALPHA2}"'", "g1", "tool_choice", "grant"], ["shawn/alpha", "g1", "tool_choice", "grant"]]' "$CODE $("$PY" -c '
 import json, sys
 doc = json.load(open(sys.argv[1]))
 print(json.dumps(sorted([k, e["ruling"], e["kind"], e["effect"]] for k, v in doc["keys"].items() for e in v)))' "$STORE")"
-it "the stored entry keeps the scope, limits and Shawn's words, and no items"
-check '["PM picks tools", ["no paid tools"], "g1: tool choice for herdr:a is yours", false]' "$("$PY" -c '
+it "the stored entry keeps the scope, limits and the text Shawn picked, and no items"
+check '["PM picks tools", ["no paid tools"], "PM picks tools", false]' "$("$PY" -c '
 import json, sys
 e = json.load(open(sys.argv[1]))["keys"]["shawn/alpha"][0]
 print(json.dumps([e["scope"], e["limits"], e["quote"], "applies_to" in e]))' "$STORE")"
@@ -242,7 +247,7 @@ EOF
 )"
 
 prog carry-rulings --run "$RUN_A"
-P_PRE_END="$(prompt "$RUN_A" 'carry r1 over')"
+P_PRE_END="$(opick "$RUN_A" 'carry-rulings r1')"
 it "end lists the active Rulings for carry-over"
 end_programme "$RUN_A"
 check 0 "$CODE"
@@ -255,17 +260,94 @@ row = [r for r in pj.read(args[0]) if r["kind"] == "programme_ended"][-1]
 print(json.dumps([e["id"] for e in row["payload"]["carryover"]]))
 EOF
 )"
-it "after end, a prompt typed after the earlier offer and before the end offer still stores the pick"
+it "after end, a pick made after the earlier offer and before the end offer still stores"
 prog carry-rulings r1 --prompt "$P_PRE_END" --run "$RUN_A"
 check "0 2" "$CODE $("$PY" -c '
 import json, sys
 print(len(json.load(open(sys.argv[1]))["keys"]["shawn/alpha"]))' "$STORE")"
-it "after end, carry-rulings with a prompt typed after the end offer still stores the pick"
-P_KEEP_R1="$(prompt "$RUN_A" 'carry r1 as well')"
+it "after end, carry-rulings with a pick made after the end offer still stores"
+P_KEEP_R1="$(opick "$RUN_A" 'carry-rulings r1')"
 prog carry-rulings r1 --prompt "$P_KEEP_R1" --run "$RUN_A"
 check "0 2" "$CODE $("$PY" -c '
 import json, sys
 print(len(json.load(open(sys.argv[1]))["keys"]["shawn/alpha"]))' "$STORE")"
+
+# ── carrying by pick ──
+RUN_PICK="$(new_programme w-pick)"
+it_ruling() {
+  local p
+  p="$(prompt "$RUN_PICK" "$1: tool choice for herdr:p is yours")"
+  prog record-ruling "$1" --effect grant --kind tool_choice --scope "scope of $1" --applies-to herdr:p --prompt "$p" --run "$RUN_PICK"
+}
+remit "$RUN_PICK" "{\"spaces\":[\"w-pick\"],\"repos\":[{\"path\":\"${GAMMA}\",\"github\":\"shawn/picks\"}]}"
+prog add-item herdr:p --title "An item" --kind fix_only --run "$RUN_PICK"
+for n in 01 02 03 04 05 06 07 08 09 10 11 12; do it_ruling "c${n}"; done
+prog carry-rulings --run "$RUN_PICK"
+
+it "carry by pick: twelve Rulings cannot be one option, and the refusal says to split"
+"$PY" "$PROG" offer carry-all --command "carry-rulings c01 c02 c03 c04 c05 c06 c07 c08 c09 c10 c11 c12" --run "$RUN_PICK" > "${WORK}/offer.out" 2>&1
+check "1" "$?"
+has "split" "$(cat "${WORK}/offer.out")"
+
+it "carry by pick: twelve Rulings split across three pickers, each spending one pick, all stored"
+SPENT=""
+for set in "c01 c02 c03 c04" "c05 c06 c07 c08" "c09 c10 c11 c12"; do
+  P_SET="$(opick "$RUN_PICK" "carry-rulings ${set}")"
+  prog carry-rulings $set --prompt "$P_SET" --run "$RUN_PICK"
+  SPENT="${SPENT}${CODE}"
+  LAST_PICK="$P_SET"
+done
+check "000 12" "$SPENT $("$PY" -c '
+import json, sys
+print(len({e["ruling"] for e in json.load(open(sys.argv[1]))["keys"]["shawn/picks"]}))' "$STORE")"
+
+it "carry by pick: a pick already spent carries nothing more"
+prog carry-rulings c09 c10 c11 c12 --prompt "$LAST_PICK" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "already" "$OUT"
+
+it "carry by pick: a set no option offered is refused, so the PM asks again"
+it_ruling c13
+it_ruling c14
+prog carry-rulings --run "$RUN_PICK"
+P_SET="$(opick "$RUN_PICK" "carry-rulings c13 c14")"
+prog carry-rulings c13 --prompt "$P_SET" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+has "different command" "$OUT"
+
+it "carry by pick: a Ruling changed after the offer is refused"
+P_SET="$(opick "$RUN_PICK" "carry-rulings c13")"
+P_CHANGE="$(prompt "$RUN_PICK" "c13: tool choice for herdr:p stays yours, changed")"
+prog record-ruling c13 --effect grant --kind tool_choice --scope "scope of c13 changed" --applies-to herdr:p --prompt "$P_CHANGE" --run "$RUN_PICK"
+prog carry-rulings c13 --prompt "$P_SET" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+
+it "carry by pick: an accepted suggestion carries nothing"
+prog carry-rulings --run "$RUN_PICK"
+P_SUGGEST="$("$PY" - "$AUTO_ROOT" "$RUN_PICK" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+sys.path.insert(0, os.path.join(sys.argv[1], "tests", "fixtures"))
+from programme_prompts import append_prompt
+print(append_prompt(sys.argv[2], "sess-pm", "carry c14 to the next programme", prompt_source="suggestion_accepted")["prompt_id"])
+EOF
+)"
+prog carry-rulings c14 --prompt "$P_SUGGEST" --run "$RUN_PICK"
+check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
+
+it "a carried Ruling keeps its wording mark on arrival, and an older one with none adds no key"
+check "pm_draft|False" "$(run_py <<'EOF'
+co = load_lib_module("programme_carryover")
+rec = {"run_id": "run-x"}
+ruling = {"kind": "tool_choice", "effect": "grant", "scope": "pick tools", "quote": "a draft", "wording": "pm_draft"}
+held, older = co.entry_for("wm", ruling, "shawn/k", rec), co.entry_for("wo", dict(ruling, wording=None), "shawn/k", rec)
+programme = ph.normalize_programme({})
+ctx = pc._mutable(programme)
+co._arrive(ctx, held, "shawn/k")
+co._arrive(ctx, older, "shawn/k")
+print(ctx["decisions"]["wm"][-1]["carried"]["wording"] + "|" + str("wording" in ctx["decisions"]["wo"][-1]["carried"]))
+EOF
+)"
 
 # ── arrival in the next programme on the project ─────────────────────────
 RUN_B="$(new_programme w3)"
@@ -277,8 +359,8 @@ check '[["g1", "tool_choice", "grant", "pending_acceptance", [], "shawn/alpha"],
 has '"carried_over"' "$OUT"
 it "the pre-fill writes no project term, reserved or not"
 check "[]" "$(field "$RUN_B" '[t["area"] for t in prog["agreement"].get("project_terms") or [] if t.get("origin") or t.get("reserved")]')"
-it "the carried revision keeps the scope, limits and Shawn's old words apart from its own quote"
-check '["PM picks tools", ["no paid tools"], null, "g1: tool choice for herdr:a is yours"]' \
+it "the carried revision keeps the scope, limits and the picked text apart from its own quote"
+check '["PM picks tools", ["no paid tools"], null, "PM picks tools"]' \
   "$(field "$RUN_B" '[prog["context"]["decisions"]["g1"][-1][k] for k in ("scope", "limits", "quote")] + [prog["context"]["decisions"]["g1"][-1]["carried"]["quote"]]')"
 it "set-remit again adds no second revision"
 remit "$RUN_B" "$REMIT_A"
@@ -290,13 +372,14 @@ check "" "$(run_py "$RUN_B" <<'EOF'
 print(" ".join(r["id"] for r in pc.rulings_for(ph.normalize_programme(record(args[0])["programme"]), "herdr:x", "tool_choice", core.now_iso())))
 EOF
 )"
-it "a typed prompt naming only the Ruling does not bind it to new items"
-P_ID="$(prompt "$RUN_B" 'yes, g1 again')"
-prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" \
+it "typed words with no open offer do not bind a carried Ruling to new items"
+P_ID="$(prompt "$RUN_B" 'g1 tool choice applies to herdr:x now')"
+PROG="$REAL_PROG" prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" \
   --applies-to herdr:x --prompt "$P_ID" --run "$RUN_B"
 check "nonzero pending" "$([ "$CODE" -ne 0 ] && echo nonzero) $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["state"]' | tr -d '"' | sed 's/_acceptance//')"
-it "a typed prompt naming the Ruling and its new items binds it, with a fresh baseline"
-P_ITEMS="$(prompt "$RUN_B" 'g1 tool choice applies to herdr:x now')"
+has "no open offer" "$OUT"
+it "a pick of the Ruling on its new items binds it, with a fresh baseline"
+P_ITEMS="$(opick "$RUN_B" 'record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" --applies-to herdr:x')"
 prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" \
   --applies-to herdr:x --prompt "$P_ITEMS" --run "$RUN_B"
 check '0 "accepted" ["herdr:x"] "act"' "$CODE $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["state"]') $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["applies_to"]') $(field "$RUN_B" 'prog["context"]["decisions"]["g1"][-1]["baseline"]')"
@@ -304,12 +387,13 @@ it "a carried restrict proposed with items but no prompt stays pending"
 prog record-ruling r1 --kind technical_approach --effect restrict --scope "Shawn picks approach" \
   --applies-to herdr:x --run "$RUN_B"
 check '0 "pending_acceptance"' "$CODE $(field "$RUN_B" 'prog["context"]["decisions"]["r1"][-1]["state"]')"
-it "accept-context refuses a prompt that names the carried Ruling but not its new items"
-P_ACC="$(prompt "$RUN_B" 'accept r1')"
-prog accept-context r1 --prompt "$P_ACC" --run "$RUN_B"
-check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
-it "accept-context with a prompt naming the new items binds it"
-P_ACC2="$(prompt "$RUN_B" 'accept r1 for herdr:x')"
+it "accept-context refuses typed words with no open offer, and the carried Ruling stays pending"
+P_ACC="$(prompt "$RUN_B" 'accept r1 for herdr:x')"
+PROG="$REAL_PROG" prog accept-context r1 --prompt "$P_ACC" --run "$RUN_B"
+check 'nonzero "pending_acceptance"' "$([ "$CODE" -ne 0 ] && echo nonzero) $(field "$RUN_B" 'prog["context"]["decisions"]["r1"][-1]["state"]')"
+has "no open offer" "$OUT"
+it "accept-context with a pick binds it"
+P_ACC2="$(opick "$RUN_B" 'accept-context r1')"
 prog accept-context r1 --prompt "$P_ACC2" --run "$RUN_B"
 check '0 "accepted"' "$CODE $(field "$RUN_B" 'prog["context"]["decisions"]["r1"][-1]["state"]')"
 it "once bound, set-remit brings no second copy"
@@ -411,35 +495,35 @@ P_FC="$(prompt "$RUN_F" 'carry f1 to the next programme')"
 prog carry-rulings f1 --prompt "$P_FC" --run "$RUN_F"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
 has "changed after the offer" "$OUT"
-it "after a fresh offer, a prompt typed after it carries the new revision"
+it "after a fresh offer, Shawn's own words on it carry the new revision"
 prog carry-rulings --run "$RUN_F"
-P_FC2="$(prompt "$RUN_F" 'carry f1 to the next programme')"
-prog carry-rulings f1 --prompt "$P_FC2" --run "$RUN_F"
+P_FC2="$(opick "$RUN_F" --other 'carry f1, and f2 is mine' 'carry-rulings f1' 'record-ruling f2 --kind technical_approach --effect restrict --scope x --applies-to herdr:f')"
+PROG="$REAL_PROG" prog carry-rulings f1 --prompt "$P_FC2" --reads-as "Carry Rulings f1 to the next programme" --run "$RUN_F"
 check "0" "$CODE"
-it "a prompt that already carried a Ruling cannot approve another Ruling change"
-prog record-ruling f2 --kind technical_approach --effect restrict --scope "x" --applies-to herdr:f \
-  --prompt "$P_FC2" --run "$RUN_F"
+it "words that already carried a Ruling cannot approve another Ruling change"
+PROG="$REAL_PROG" prog record-ruling f2 --kind technical_approach --effect restrict --scope "x" --applies-to herdr:f \
+  --prompt "$P_FC2" --reads-as "Record restrict Ruling f2 on technical_approach" --run "$RUN_F"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
-has "already approved" "$OUT"
+has "was already used" "$OUT"
 
 # ── which rows the carry checks read ──────────────────────────────────────
-it "carry-rulings refuses a prompt that already approved a record-ruling"
+it "carry-rulings refuses words that already approved a record-ruling"
 prog carry-rulings --run "$RUN_F"
-P_FU="$(prompt "$RUN_F" 'carry f1, and f3: I pick the technical approach on herdr:f')"
-prog record-ruling f3 --kind technical_approach --effect restrict --scope "f3" --applies-to herdr:f \
-  --prompt "$P_FU" --run "$RUN_F"
+P_FU="$(opick "$RUN_F" --other 'carry f1, and f3 is mine' 'record-ruling f3 --kind technical_approach --effect restrict --scope f3 --applies-to herdr:f' 'carry-rulings f1')"
+PROG="$REAL_PROG" prog record-ruling f3 --kind technical_approach --effect restrict --scope "f3" --applies-to herdr:f \
+  --prompt "$P_FU" --reads-as "Record restrict Ruling f3 on technical_approach" --run "$RUN_F"
 K1="$CODE"
-prog carry-rulings f1 --prompt "$P_FU" --run "$RUN_F"
+PROG="$REAL_PROG" prog carry-rulings f1 --prompt "$P_FU" --reads-as "Carry Rulings f1 to the next programme" --run "$RUN_F"
 check "0 nonzero" "$K1 $([ "$CODE" -ne 0 ] && echo nonzero)"
-has "already approved" "$OUT"
+has "was already used" "$OUT"
 
-it "carry-rulings refuses a prompt when Shawn typed a later prompt nothing has cited"
+it "carry-rulings refuses a pick when Shawn typed a later prompt nothing has cited"
 prog carry-rulings --run "$RUN_F"
-P_FL1="$(prompt "$RUN_F" 'carry f1 to the next programme')"
+P_FL1="$(opick "$RUN_F" 'carry-rulings f1')"
 P_FL2="$(prompt "$RUN_F" "no, don't carry f1")"
-prog carry-rulings f1 --prompt "$P_FL1" --run "$RUN_F"
+PROG="$REAL_PROG" prog carry-rulings f1 --prompt "$P_FL1" --run "$RUN_F"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
-has "newest typed prompt" "$OUT"
+has "newest words" "$OUT"
 
 it "carry-rulings refuses an offer that did not record the Ruling's revision"
 run_py "$RUN_F" <<'EOF' >/dev/null
@@ -452,16 +536,16 @@ prog carry-rulings f1 --prompt "$P_FN" --run "$RUN_F"
 check "nonzero" "$([ "$CODE" -ne 0 ] && echo nonzero)"
 has "changed after the offer" "$OUT"
 
-it "a prompt typed before set-remit brought a carried Ruling in cannot bind it"
+it "a pick made before set-remit brought a carried Ruling in cannot bind it"
 RUN_G="$(new_programme w10)"
 prog propose-agreement --run "$RUN_G" --project-term "naming=kebab case files" --source "repo README"
-P_GPRE="$(prompt "$RUN_G" 'g1 tool choice applies to herdr:y now')"
-remit "$RUN_G" "{\"spaces\":[\"w10\"],\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"shawn/alpha\"}]}"
 prog add-item herdr:y --title "y" --kind fix_only --run "$RUN_G"
-prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" \
+P_GPRE="$(opick "$RUN_G" 'record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" --applies-to herdr:y')"
+remit "$RUN_G" "{\"spaces\":[\"w10\"],\"repos\":[{\"path\":\"${ALPHA}\",\"github\":\"shawn/alpha\"}]}"
+PROG="$REAL_PROG" prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --limit "no paid tools" \
   --applies-to herdr:y --prompt "$P_GPRE" --run "$RUN_G"
 check "nonzero pending_acceptance" "$([ "$CODE" -ne 0 ] && echo nonzero) $(field "$RUN_G" 'prog["context"]["decisions"]["g1"][-1]["state"]' | tr -d '"')"
-has "typed before the latest change" "$OUT"
+has "changed since the offer" "$OUT"
 
 # ── a carry is checked and journaled under the programme's write lock ─────
 home_of() {
@@ -478,7 +562,7 @@ race() {
   while [ "$1" != "--" ]; do first+=("$1"); shift; done
   shift
   rm -f "${WORK}/race1.out" "${WORK}/race2.out"
-  CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$PROG" "${first[@]}" > "${WORK}/race1.out" 2>&1 &
+  CLAUDE_AUTO_TEST_WRITE_PAUSE_BEFORE_JOURNAL=1 "$PY" "$REAL_PROG" "${first[@]}" > "${WORK}/race1.out" 2>&1 &
   local p1=$!
   PAUSED="never paused"; wait_for "${WORK}/race1.out" "paused:write_before_journal" && PAUSED="paused"
   "$@" > "${WORK}/race2.out" 2>&1 &
@@ -502,21 +586,22 @@ prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" -
   --prompt "$P_Q1" --run "$R"
 prog carry-rulings --run "$R"
 it "a carry racing a record-ruling on the same prompt is refused once the record-ruling journals"
-P_QR="$(prompt "$R" 'carry q1, and q2: I pick the work sequencing on herdr:q')"
+P_QR="$(opick "$R" --other 'carry q1, and q2 is mine' 'record-ruling q2 --kind work_sequencing --effect restrict --scope q2 --applies-to herdr:q' 'carry-rulings q1')"
 race "$(home_of "$R")" record-ruling q2 --kind work_sequencing --effect restrict --scope "q2" \
-  --applies-to herdr:q --prompt "$P_QR" --run "$R" -- "$PY" "$PROG" carry-rulings q1 --prompt "$P_QR" --run "$R"
+  --applies-to herdr:q --prompt "$P_QR" --reads-as "Record restrict Ruling q2 on work_sequencing" --run "$R" -- \
+  "$PY" "$REAL_PROG" carry-rulings q1 --prompt "$P_QR" --reads-as "Carry Rulings q1 to the next programme" --run "$R"
 check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
-has "already approved" "$OUT2"
+has "was already used" "$OUT2"
 
 it "a carry racing a change to the Ruling re-reads its revision and refuses the stale offer"
 prog record-ruling q1 --kind technical_approach --effect restrict --scope "q1" --run "$R"
 prog carry-rulings --run "$R"
-P_QC="$(prompt "$R" 'carry q1 to the next programme')"
-P_QA="$(prompt "$R" 'accept q1 for herdr:q')"
+P_QC="$(opick "$R" 'carry-rulings q1')"
+P_QA="$(opick "$R" 'accept-context q1')"
 race "$(home_of "$R")" accept-context q1 --prompt "$P_QA" --run "$R" -- \
-  "$PY" "$PROG" carry-rulings q1 --prompt "$P_QC" --run "$R"
+  "$PY" "$REAL_PROG" carry-rulings q1 --prompt "$P_QC" --run "$R"
 check "paused blocked 0 nonzero" "$PAUSED $BLOCKED $C1 $([ "$C2" -ne 0 ] && echo nonzero)"
-has "changed after the offer" "$OUT2"
+has "changed since the offer" "$OUT2"
 
 it "a rulings_carried row approves each stored entry; a foreign row or one citing another prompt first approves nothing"
 check "True" "$(run_py <<'EOF'
@@ -554,7 +639,7 @@ REPO_K="${WORK}/repos/crash-promoted"
 mkdir -p "$REPO_K"
 remit "$R" "{\"spaces\":[\"w12\"],\"repos\":[{\"path\":\"${REPO_K}\"}]}"
 prog carry-rulings --run "$R"
-P_K="$(prompt "$R" 'carry q2 to the next programme')"
+P_K="$(opick "$R" 'carry-rulings q2')"
 OUT="$(AUTO_ROOT="$AUTO_ROOT" "$PY" -c "$CRASH_PY" carry-rulings q2 --prompt "$P_K" --run "$R" 2>&1)"
 CODE=$?
 it "a carry killed straight after its locked write leaves its entry in the store"
@@ -601,7 +686,7 @@ heal_case() {
   remit "$run" "{\"spaces\":[\"${space}\"],\"repos\":[{\"path\":\"${repo}\"}]}"
   prog carry-rulings --run "$run"
   local p
-  p="$(prompt "$run" 'carry q2 to the next programme')"
+  p="$(opick "$run" 'carry-rulings q2')"
   N_ROWS="$(carried_rows "$run")"
   OUT="$(AUTO_ROOT="$AUTO_ROOT" DIE_AT="$at" "$PY" -c "$DIE_PY" carry-rulings q2 --prompt "$p" --run "$run" "$@" 2>&1)"
   CODE=$?
@@ -788,7 +873,7 @@ RUN_LF="$(new_legacy w25)"
 prog add-item herdr:l --title "l" --kind fix_only --run "$RUN_LF"
 copy_into "$RUN_LF" "$RUN_S" l1
 end_programme "$RUN_LF"
-P_LF="$(prompt "$RUN_LF" 'carry l1 to the next programme')"
+P_LF="$(opick "$RUN_LF" 'carry-rulings l1')"
 hold_secret "$RUN_LF"
 H_LF="$(home_hash "$RUN_LF" store)"
 it "legacy, promotion declined: carry-rulings runs its checks on the JSON files, refuses the move, home and store byte-identical"
@@ -822,7 +907,7 @@ die_carry() {
   local run="$1" rid="$2"
   prog carry-rulings --run "$run"
   OUT="$(AUTO_ROOT="$AUTO_ROOT" DIE_AT=put "$PY" -c "$DIE_PY" carry-rulings "$rid" \
-    --prompt "$(prompt "$run" "carry ${rid} to the next programme")" --run "$run" 2>&1)"
+    --prompt "$(opick "$run" "carry-rulings ${rid}")" --run "$run" 2>&1)"
   CODE=$?
 }
 next_programme() {

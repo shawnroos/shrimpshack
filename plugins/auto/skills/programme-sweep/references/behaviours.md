@@ -23,19 +23,21 @@ Authority and Rulings, and acceptance stays with Done standards.
   and why, the behaviour result and the contract result (what each lists and
   what is flagged), the `undo` line it printed, any conflict and which one wins,
   and ask: "Keep it for this programme, move it to the repo, or make it global?"
-  It moves only on his typed answer naming the layer.
+  Run `P offer <key> --command 'move-behaviour <id> --to repo'` with one `--command`
+  per layer, ask with the input it prints, and move it on his answer. See
+  [own words](own-words.md) when he answers in his own words.
 - `synergies` says how the new behaviour should fit with one it listed: `link`
   (a shared moment or tool: record it with `--relates-to`, or ask whether the
   two should merge) and `ending_rule` (one ends the work its situation names,
   and the other's `do` lines never say what happens then). It never blocks
   recording. Code gives the target and the field, not the wording: write the
   proposed change yourself from the row's `lines` and show it in the same
-  message as the conflicts. Apply an offered edit only on Shawn's typed words:
+  message as the conflicts. Apply an offered edit only on Shawn's answer:
   - `route: programme_edit`: `P propose-behaviour --edit-of <id>` with the
     fields to change (give a full replacement for each field you name, for
     example the whole `do` list), tell him the proposal id, and run
-    `P record-behaviour --from-proposal <id> --prompt <id>` once his reply
-    names it. The old wording stays in force until then.
+    `P record-behaviour --from-proposal <id> --prompt <id>` once he approves its
+    offer. The old wording stays in force until then.
   - `route: copy_default_then_settle`: a shipped or file behaviour; follow
     "Edit a default" below (copy it, then edit the copy).
   - `route: record_with_conflicts_with`: a stored repo or personal behaviour;
@@ -65,53 +67,56 @@ Authority and Rulings, and acceptance stays with Done standards.
   digest shows 20 lines. After answering them, run `P sweep-inputs --save`
   again while its `behaviours_due.overflow` is above 0. A reminder answers only
   the trigger it was sent for, so pass `--trigger` as the line shows it.
-  `skip-behaviour` needs no typed prompt: it records
+  `skip-behaviour` needs no prompt: it records
   your judgment, not Shawn's approval.
 - A do line, skill, tool or agent that names a protected escalation
   (production deploys, releases, spend over cap, merging around the gate,
   refused permissions) is refused. Tell Shawn those still come to him.
 - When Shawn corrects you twice on the same thing, you may draft a behaviour
-  from his words with `P propose-behaviour`. Tell him its id. It applies only
-  when his typed reply names it (the "Apply a behaviour you proposed" row).
+  from his words with `P propose-behaviour`. It applies only when he approves
+  `P offer <key> --command 'record-behaviour --from-proposal <id>'`.
 - Once per programme, offer to move preferred tools out of the agreement's
   Scope. For each preferred tool `P status --agreement` lists, run
   `P propose-behaviour --from-term <term-id>`. Show him each term with its
-  drafted behaviour id and ask which are tool preferences. Apply the ids his
-  typed reply names with `--from-proposal`, and retire the rest with
-  `--as retired`, citing the same reply. The term itself stays as it is; from
-  then on, read the preferred tool from the behaviour.
+  drafted behaviour and ask which are tool preferences, one offer per behaviour:
+  `record-behaviour --from-proposal <id>` and `retire-behaviour <id> --as retired`
+  as its two options. The term itself stays as it is; from then on, read the
+  preferred tool from the behaviour.
 
 ## Guided flow: a standing preference as a file
 
-Offer it when Shawn types a standing preference ("always", "never", "from now
+Offer it when Shawn states a standing preference ("always", "never", "from now
 on") or asks to change a default. After two corrections for the same thing you
 may suggest a behaviour, but only as a proposal: nothing is written. A proposal
 is not an adoption, and you cannot write the personal behaviours folder or
 `behaviours.json` yourself: a direct Write, Edit or shell write there is denied.
-The files get written by the verbs below, after his typed approval.
+The files get written by the verbs below, after he approves their offer.
 
 1. Draft the whole file from his words: id (the file name), `when`, `trigger`,
    `applies_to`, the checks (`pm:` or `agent:`), the Do and Don't lines, and a
    `why`. Say which choices you inferred.
 2. Ask with the picker only when you are unsure: personal, repo or programme,
    or which trigger fits. Otherwise decide and say so.
-3. Show the finished file once. Run `P adopt-behaviour-file <id> --file <path>
-   --prompt <id>` only after he types approval that names the id and carries
-   the content hash. The refusal prints that hash, so run the verb first
-   without his approval to get it, show it, then run it again on his reply.
-4. Edit a default: run `P copy-default <id> --prompt <id>` once his words name
-   the id. Draft the edited file at a scratch path, show the difference against
-   the shipped file, and on his typed approval write it with
-   `P settle-default-update <id> --as merge --file <path>` (the adopt verb
-   refuses to overwrite a file that exists).
+3. Write the draft to a scratch path and show the finished file in chat, whole:
+   a large draft does not fit a picker. Run
+   `P offer <key> --command 'adopt-behaviour-file <id> --file <path>'` and ask
+   with the input it prints. Auto stores the content's hash, and he carries
+   nothing: on his answer run `P adopt-behaviour-file <id> --file <path> --prompt
+   <id>`. If the draft changed since the offer the verb refuses, so show the new
+   draft and offer again. Keep the path; `--file -` cannot be offered.
+4. Edit a default: offer `copy-default <id>` and on his answer run
+   `P copy-default <id> --prompt <id>`. Draft the
+   edited file at a scratch path, show the difference against the shipped file,
+   and offer `settle-default-update <id> --as merge --file <path>` (the adopt
+   verb refuses to overwrite a file that exists).
 5. Update notice: a copy made with `copy-default` is flagged `update available`
    when the shipped default changed. Raise the update prompt only when the row
    also says `not yet shown`. Show the shipped difference once, then record it
    with `P settle-default-update <id> --as shown` (no approval needed); the
    row stops saying `not yet shown`, so later sweeps stay quiet. Then offer
-   keep mine, take theirs or merge. Settle on his typed choice:
-   `--as keep`, `--as take`, or `--as merge --file <path>` carrying the merged
-   file's hash.
+   keep mine, take theirs or merge: one offer whose three commands are
+   `settle-default-update <id> --as keep`, `--as take` and
+   `--as merge --file <path>`, so each is an option. Run the one he picks.
 
 To switch a shipped default off, no verb retires it: write a personal file whose
 `overrides` names its id, or record a programme behaviour with

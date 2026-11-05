@@ -463,7 +463,7 @@ core = load_lib_module("run_record_core")
 print(sorted(core.read_run_record(ph.home_path(args[0]), args[0])["programme"]["agreement"]))
 EOF
 }
-PROGPY="${AUTO_ROOT}/lib/programme.py"
+PROGPY="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
 it "an accepted record with no project terms and no stamp survives writes through the verbs without gaining either"
 CODES=""
 "$PY" "$PROGPY" add-item linear:AI-7 --title "Crop" --kind fix_only >/dev/null 2>&1; CODES="${CODES}$?"
@@ -474,8 +474,9 @@ CODES=""
 "$PY" "$PROGPY" status --json >/dev/null 2>&1; CODES="${CODES}$?"
 check "00000 ['accepted', 'terms']" "${CODES} $(old_agreement_keys)"
 it "the old accepted record refuses a project-term edit and gains nothing"
-"$PY" "$PROGPY" edit-project-term t000000 "anything" --prompt "$(old_prompt 'anything')" >/dev/null 2>&1
-check "1 ['accepted', 'terms']" "$? $(old_agreement_keys)"
+OUT="$("$PY" "$PROGPY" edit-project-term t000000 "anything" --prompt "$(old_prompt 'anything')" 2>&1)"
+check "97 ['accepted', 'terms']" "$? $(old_agreement_keys)"
+has "no project term" "$OUT"
 
 it "no shipped code reads a retired programme key outside normalize_programme"
 retired_leaks() {

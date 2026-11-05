@@ -27,7 +27,7 @@ programme_decisions = load_lib_module("programme_decisions")
 phase_grammar = load_lib_module("phase-grammar")
 
 VERB_MODULES = ("goal_doc", "worker_register", "worker_contract_write", "worker_handover", "worker_question_verbs",
-                "worker_contract_status", "programme_checks")
+                "worker_contract_status", "programme_checks", "programme_offers")
 CONTRACT_KEY = "contract"
 NO_CONTRACT = "no_contract"
 HAS_CONTRACT = "contract"

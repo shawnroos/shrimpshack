@@ -10,25 +10,25 @@ step it prints:
 
 - `start`: no programme holds this space; run `/auto:programme`.
 - `already-pm`: this session drives it; run the sweep.
-- `ask-shawn`: another session holds the programme, live or stopped. Offer its
-  `label` as the recommended option of one AskUserQuestion picker, with a
-  decline option that keeps the current PM. When Shawn picks the label, run
-  `programme.sh takeover --prompt <pick id>`; the pick id is in the
-  `<auto-data>` tag the hook adds after his answer. When he declines, stop.
-  Nothing else Shawn types or accepts approves a takeover; only that pick does.
+- `ask-shawn`: another session holds the programme, live or stopped. Ask with
+  its `input` in one AskUserQuestion picker, unchanged. When Shawn picks the
+  takeover option, run `programme.sh takeover --prompt <pick id>`; the pick id is
+  in the `<auto-data>` tag the hook adds after his answer. When he declines, stop.
+  His own words, Other text and notes never approve a takeover: relay them and
+  ask again. Only a pick of that option does.
 - `stand-down`: another session now drives the programme this session drove,
   and it has not stopped. CronList shows this session's programme cron; delete
   it with CronDelete. Stop each Monitor task this session started with
   TaskStop. Then stop. Do not message Shawn.
 - `refused`: run its `fix:` line.
 
-If `takeover --prompt` refuses, run its `fix:` line: it names the
-`approval-label` command whose output to offer in a new picker, then the
-takeover to rerun with that pick id.
+If `takeover --prompt` refuses, run its `fix:` line: it names the picker to ask
+with and the takeover to rerun with that pick id.
 
 Run the dispatch line below only when Shawn typed `/auto:programme-takeover`
-himself. The prompt hook journaled that typed request; the typed text, not the
-argument, is what counts, so pass `--replace` only when Shawn typed it.
+himself. Offer the picker instead of asking him for it. The prompt hook journaled
+his request; what he sent, not the argument, is what counts, so pass `--replace`
+only when his request holds it.
 
 `bash "${CLAUDE_PLUGIN_ROOT}/lib/programme.sh" takeover "$ARGUMENTS"`
 

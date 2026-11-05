@@ -37,7 +37,7 @@ take a worker's word for it.
   space first, so only one programme runs there. It then shows the proposed
   agreement (Scope: remit, stop rule, cadence, sources and preferred tools; and
   Rulings) and the standing Authority and Done standards it reads. Nothing else
-  happens until you accept the agreement in a typed message.
+  happens until you accept the agreement by picking it in the picker the PM shows.
 - **`/programme-view`** opens a live pane in the PM session. It shows what the PM is
   doing now, its queue, what it watches, who waits on whom, the decisions waiting on
   you, what it just did, and the rules in force.
@@ -46,7 +46,7 @@ take a worker's word for it.
 - **`/auto:programme-takeover`** moves the programme to a new session when the old
   session is gone, or replaces a PM you name with `--replace <session id>`. **`/auto:programme-handover`**, typed in the PM session, passes
   it to another session. **`/auto:programme-end`** ends it and frees the space.
-  Each of these works only from a typed message, and auto records the request.
+  Each works when you send it yourself or pick it in the picker the PM offers, and auto records the request.
 - **`/auto:programme-resume`**, typed in the PM session after a crash, a quit or a
   login reset, re-arms the PM's watcher and cron, restarts every worker pane in the
   remit with `claude --resume`, briefs each one once, then sweeps.
@@ -56,7 +56,7 @@ that it can act on. Workers report finished work with a `claim`, and the PM conf
 each claim before it counts. After a context compaction the PM reloads the rules in
 force before it writes anything. Standing rules come from three protocol files
 (plugin, personal, project). The PM can propose a new rule, but a rule takes effect
-only after you approve it in a typed message.
+only after you approve it in a picker.
 
 ## Workflows
 

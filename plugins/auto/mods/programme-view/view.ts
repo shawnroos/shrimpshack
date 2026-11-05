@@ -51,8 +51,6 @@ export type SetupStep = {
   values: string
   recommendation: string | null
   recommendation_source: string | null
-  needs_typed: boolean
-  reply: string | null
   items: SetupItem[]
 }
 
@@ -60,7 +58,7 @@ export type Scope = { in: Record<string, string[]>; out: Record<string, string[]
 
 export type Setup = { current: string | null; steps: SetupStep[]; scope: Scope }
 
-export type Decision = { kind: string; question: string; reply: string | null }
+export type Decision = { kind: string; question: string }
 
 export type Found =
   | { kind: 'none' }
@@ -196,8 +194,6 @@ function setupStep(raw: Raw): SetupStep[] {
       values: shown(raw.values) ?? '',
       recommendation: shown(raw.recommendation),
       recommendation_source: text(raw.recommendation_source),
-      needs_typed: raw.needs_typed === true,
-      reply: text(raw.reply),
       items,
     },
   ]
@@ -218,7 +214,7 @@ export function readDecisions(model: unknown): Decision[] {
   if (!Array.isArray(raw)) return []
   return raw.filter(isRaw).flatMap(entry => {
     const question = text(entry.question)
-    return question === null ? [] : [{ kind: String(entry.kind ?? ''), question, reply: text(entry.reply) }]
+    return question === null ? [] : [{ kind: String(entry.kind ?? ''), question }]
   })
 }
 

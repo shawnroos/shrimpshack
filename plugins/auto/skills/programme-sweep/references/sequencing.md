@@ -85,7 +85,7 @@ before you record anything.
 | --- | --- | --- | --- |
 | Unrelated investigation | No accepted requirement's check needs its answer. | Nothing new. It shows as a follow-up in `P status`. | It never gates acceptance. A browser requirement can pass while a Linux probe stays open. |
 | Required dependency | A named check of an accepted requirement cannot pass until it finishes, and you can show why. | `P raise-blocker <id> --requirement <id> --check <item>=<deliverable> --dependency <item> --evidence <ref> --unblock <condition>` | It blocks only that requirement. `P clear-blocker <id> --why <text>` when the condition holds. |
-| Safety or data-loss risk | Continuing could harm users, production or data, whatever the requirements say. | `P pause <id> --risk safety\|data_loss --reason <text> [--item <item>]` | It stops `start-worker` and `prompt-item` on what it holds and tells Shawn. Only `P lift-pause <id> --prompt <id>` with his typed words lifts it. |
+| Safety or data-loss risk | Continuing could harm users, production or data, whatever the requirements say. | `P pause <id> --risk safety\|data_loss --reason <text> [--item <item>]` | It stops `start-worker` and `prompt-item` on what it holds and tells Shawn. Only `P lift-pause <id> --prompt <id>` with his answer to `P offer` lifts it. |
 
 - Unfinished investigation alone is never a blocker. Without the requirement,
   the check, the dependency, the evidence and the unblock condition,

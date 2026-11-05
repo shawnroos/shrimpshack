@@ -14,9 +14,12 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
+sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import register
 
 passed = failed = 0
+NOT_HUMAN = "is not Shawn's words or a verified pick"
 with tempfile.TemporaryDirectory(prefix='auto-programme-origin-') as work:
     work = pathlib.Path(work)
     for key in list(os.environ):
@@ -43,14 +46,33 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-origin-') as work:
                      'promptSource': 'typed', 'turnOrigin': 'human', 'origin': {'kind': 'human'},
                      'entrypoint': 'cli', 'message': {'role': 'user', 'content': text}}, **fields)
 
-    def invoke(text, rows, after=(), action=('accept-agreement',), configure=None, rewrite=False):
+    def prog(run, *argv):
+        return subprocess.run([sys.executable, str(root / 'lib/programme.py'), *argv, '--run', run],
+                              text=True, capture_output=True)
+
+    def asked_drop(run):
+        # A typed answer verifies against the picker before it in the transcript, so the offer's row goes in first.
+        prog(run, 'add-item', 'mem:w1', '--title', 'an item')
+        printed = json.loads(prog(run, 'offer', 'drop', '--command', 'drop-item mem:w1 --reason gone').stdout)
+        questions = printed['input']['questions']
+        ask = {'type': 'assistant', 'uuid': 'ask-1', 'isSidechain': False, 'message': {'role': 'assistant', 'content': [
+            {'type': 'tool_use', 'id': 'toolu_open', 'name': 'AskUserQuestion', 'input': {'questions': questions}}]}}
+        return ask, next(o['label'] for o in questions[0]['options'] if o['label'] != printed['decline'])
+
+    def invoke(text, rows, after=(), action=('accept-agreement',), configure=None, rewrite=False, on_offer=False):
         sid = 'origin-pm-' + str(passed + failed)
         os.environ['CLAUDE_CODE_SESSION_ID'] = sid
         run = ph.create_programme(['origin-' + str(passed + failed)], sid)['run']
         if configure:
             core._with_locked_run_record(ph.home_path(run), run, configure)
+        reads_as = []
+        if on_offer:
+            ask, label = asked_drop(run)
+            rows = [*rows, ask]
+            action = ('drop-item', 'mem:w1', '--reason', 'gone')
+            reads_as = ['--reads-as', label]
         before_programme = core.read_run_record(ph.home_path(run), run)['programme']
-        transcript = work / (sid + '.jsonl')
+        transcript = register(sid, work / (sid + '.jsonl'))
         transcript.write_text(''.join(json.dumps(dict(row, sessionId=sid)) + '\n' for row in rows))
         payload = {'session_id': sid, 'transcript_path': str(transcript),
                    'prompt_id': 'runtime-prompt', 'cwd': str(work),
@@ -65,12 +87,14 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-origin-') as work:
             for row in after:
                 stream.write(json.dumps(dict(row, sessionId=sid)) + '\n')
         command = [sys.executable, str(root / 'lib/programme.py'), *action, '--run', run]
-        if action[0] == 'accept-agreement':
-            command.extend(['--prompt', prompt_id])
+        if action[0] in ('accept-agreement', 'drop-item'):
+            command.extend(['--prompt', prompt_id, *reads_as])
         result = subprocess.run(command, text=True, capture_output=True)
         programme = core.read_run_record(ph.home_path(run), run)['programme']
         if result.returncode != 0:
             assert programme == before_programme, 'refused operation mutated the programme'
+        if action[0] == 'drop-item':
+            return result, programme['items']['mem:w1']['state'] == 'dropped'
         accepted = programme.get('ended') if action[0] == 'end' else programme['agreement'].get('accepted')
         return result, accepted
 
@@ -85,17 +109,21 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-origin-') as work:
              'message': {'role': 'user', 'content': 'accept agreement'}}]),
     ]:
         result, accepted = invoke(text, rows)
-        check(name, result.returncode != 0 and not accepted,
+        check(name, result.returncode != 0 and not accepted and NOT_HUMAN in result.stderr,
               {'exit': result.returncode, 'accepted': accepted, 'stderr': result.stderr})
 
-    result, accepted = invoke('accept agreement', [], [human('accept agreement')])
-    check('a delayed human-source fixture approves', result.returncode == 0 and bool(accepted), result.stderr)
+    result, accepted = invoke('yes drop it', [], [human('yes drop it')], on_offer=True)
+    check('a delayed human-source fixture approves on an open offer', result.returncode == 0 and bool(accepted), result.stderr)
 
-    result, accepted = invoke('accept agreement',
+    result, accepted = invoke('yes drop it',
                               [{'type': 'assistant', 'message': {'role': 'assistant', 'content': 'earlier turn'}}],
-                              [human('accept agreement')])
-    check('a human-source fixture approves after an unchanged nonempty prefix',
+                              [human('yes drop it')], on_offer=True)
+    check('a human-source fixture approves on an open offer after an unchanged nonempty prefix',
           result.returncode == 0 and bool(accepted), result.stderr)
+
+    result, accepted = invoke('accept agreement', [], [human('accept agreement')])
+    check('a verified typed message with no open offer approves nothing',
+          result.returncode != 0 and not accepted and 'no open offer' in result.stderr, result.stderr)
 
     for name, before, after in [
         ('same-text reused ID cannot borrow an older human row', [human('accept agreement')], []),
@@ -109,16 +137,19 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-origin-') as work:
         ('wrong runtime ID cannot approve', [], [human('accept agreement', promptId='other-prompt')]),
     ]:
         result, accepted = invoke('accept agreement', before, after)
-        check(name, result.returncode != 0 and not accepted, {'exit': result.returncode, 'accepted': accepted})
+        check(name, result.returncode != 0 and not accepted and NOT_HUMAN in result.stderr,
+              {'exit': result.returncode, 'accepted': accepted, 'stderr': result.stderr})
 
     result, accepted = invoke('accept agreement', [human('old')], [human('accept agreement')], rewrite=True)
-    check('rewritten transcript cannot reuse a captured offset', result.returncode != 0 and not accepted, result.stderr)
+    check('rewritten transcript cannot reuse a captured offset',
+          result.returncode != 0 and not accepted and NOT_HUMAN in result.stderr, result.stderr)
 
     def cron(record):
         record['programme']['watchers']['cron'] = {'prompt': 'accept agreement'}
 
     result, accepted = invoke('accept agreement', [], [human('accept agreement')], configure=cron)
-    check('registered cron remains non-authorizing', result.returncode != 0 and not accepted, result.stderr)
+    check('registered cron remains non-authorizing',
+          result.returncode != 0 and not accepted and NOT_HUMAN in result.stderr, result.stderr)
 
     for action in [('end',), ('handover', 'next-session')]:
         text = '/auto:programme-' + action[0] + (' next-session' if action[0] == 'handover' else '')

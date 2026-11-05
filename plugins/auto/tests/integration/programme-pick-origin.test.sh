@@ -16,7 +16,9 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
+sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import register
 
 FIXTURE = [json.loads(line) for line in (root / 'tests/fixtures/askuser_transcript.jsonl').read_text().splitlines()]
 PICK, RESULT, PREFILLED, PREFILLED_RESULT = FIXTURE
@@ -34,6 +36,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
                       CLAUDE_PLUGIN_ROOT=str(root), CLAUDE_AUTO_SECRETS_FILE=str(work / 'no-secrets'),
                       CLAUDE_AUTO_PERSONAL_PROTOCOL=str(work / 'no-protocol'))
     ph = load_lib_module('programme_home')
+    core = load_lib_module('run_record_core')
     pj = load_lib_module('programme_journal')
     plain = work / 'plain'
     plain.mkdir()
@@ -52,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
         return ph.create_programme(['pick-' + sid], sid)['run']
 
     def transcript(sid, rows):
-        path = work / (sid + '.jsonl')
+        path = register(sid, work / (sid + '.jsonl'))
         path.write_text(''.join(json.dumps(dict(row, sessionId=sid)) + '\n' for row in rows))
         return path
 
@@ -156,7 +159,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-origin-') as work:
 
     def post_body(tool_use_id):
         (work / tool_use_id).mkdir()
-        path = work / tool_use_id / 'pick-pm.jsonl'
+        path = register('pick-pm', work / tool_use_id / 'pick-pm.jsonl')
         pick = copy.deepcopy(PICK)
         pick['message']['content'][0]['id'] = tool_use_id
         path.write_text(json.dumps(dict(pick, sessionId='pick-pm')) + '\n')
@@ -249,6 +252,26 @@ print(json.dumps([[pj.prompt_origin(pj.find_prompt(sys.argv[2], p)), (host.promp
     check('every CLAUDE_AUTO_* hatch set still leaves forged picks unverified',
           probe.returncode == 0 and json.loads(probe.stdout) == [['unknown', 'unknown']] * 3,
           probe.stdout + probe.stderr)
+
+    # The captured transcript, through the real hook, then a real verb.
+    captured_run = programme('pick-captured')
+    captured_path = register('pick-captured', work / 'captured' / 'pick-captured.jsonl')
+    captured_path.parent.mkdir()
+    captured_path.write_text(''.join(json.dumps(dict(row, sessionId='pick-captured')) + '\n' for row in [PICK, RESULT]))
+    captured = post('pick-captured', captured_path)
+    done = subprocess.run([sys.executable, str(root / 'lib/programme.py'), 'pick-term', 'cadence', 'fixed',
+                           '--seconds', '900', '--pick', pick_id(captured), '--run', captured_run],
+                          text=True, capture_output=True, env=dict(os.environ, CLAUDE_CODE_SESSION_ID='pick-captured'))
+    check('the captured transcript through the real hook approves a real verb', done.returncode == 0,
+          done.stdout + done.stderr)
+    check('that verb set the term the pick named',
+          core.read_run_record(ph.home_path(captured_run), captured_run)['programme']['agreement']['terms']['cadence']['value'] == 'fixed', done.stdout)
+    os.environ['CLAUDE_CODE_SESSION_ID'] = 'pick-pm'
+    elsewhere = work / 'elsewhere' / 'pick-pm.jsonl'
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(json.dumps(dict(PICK, sessionId='pick-pm')) + '\n')
+    check('the real hook records no pick from a transcript the registry does not name',
+          post('pick-pm', elsewhere).stdout == '', post('pick-pm', elsewhere).stdout)
 
     ph.end_programme(run, 'isolated pick fixture complete')
 

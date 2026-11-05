@@ -183,7 +183,7 @@ prog record-hook-patch "lib/programme_approval.py" --why "blocks work" --pr 999
 has "Auto writing the picker's text" "$OUT"
 has "approvals that need a pick" "$OUT"
 
-for file in programme_journal programme_setup programme_prompt_source; do
+for file in programme_journal programme_setup programme_prompt_source programme_offers; do
   it "patching ${file}.py names the pick rule"
   prog record-hook-patch "lib/${file}.py" --why "blocks work" --pr 999
   has "approvals that need a pick" "$OUT"

@@ -135,7 +135,7 @@ def check_accept_order(run_id, prompt_id) -> None:
         raise TermsError(
             f"prompt {prompt_id!r} is older than the last proposal, project-term edit, term amend, pick or "
             "carried-over term; Shawn accepts "
-            "the terms he last saw, so cite a prompt typed or picked after it")
+            "the terms he last saw, so offer the accept again and cite his pick")
 
 
 def stamp(programme) -> int:
@@ -178,18 +178,20 @@ def _find(programme, term_id) -> dict:
 
 def _amend(host, entry, text, source, prompt) -> dict:
     if prompt is None:
-        raise TermsError("the agreement is accepted; edit-project-term needs --prompt <id> of a typed "
-                         "prompt that names the area and the new text")
-    host.require_named(prompt, entry["area"], text)
+        raise TermsError("the agreement is accepted; edit-project-term needs --prompt <id> of his answer to "
+                         "`programme.sh offer`")
+    his = programme_journal.his_text(prompt)
+    text = programme_sanitize.clean(his) if his else text
     _check_area(host, entry["area"], text)
     previous = entry.get("value")
     entry.setdefault("history", []).append(
         {k: entry.get(k) for k in ("value", "set_by", "at", "source", "prompt_id")})
     entry.update(value=text, set_by="shawn", at=run_record_core.now_iso(),
                  prompt_id=prompt["prompt_id"], quote=prompt["quote"])
+    programme_journal.mark_wording(entry, prompt)
     if source:
         entry["source"] = source
-    return {"previous": previous}
+    return {"previous": previous, "value": text}
 
 
 def _h_edit(host, argv):
@@ -221,7 +223,8 @@ _SPECS = (
     ("edit-project-term", _h_edit,
      "<term-id> <text> [--prompt <id>] [--source <evidence>] [--run <id>]",
      "an unknown term id (an old reserved term reads as a Ruling now); an empty text; a protected area or text. "
-     "After acceptance it also rejects no typed --prompt and a prompt that does not name the area and the new text."),
+     "After acceptance it also rejects no --prompt, and a prompt that answers no open offer of this command. On an offer, a pick binds the draft with wording pm_draft, and his own words with --reads-as become the "
+     "text with wording shawn."),
 )
 
 

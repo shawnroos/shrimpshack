@@ -13,7 +13,9 @@ import tempfile
 
 root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
+sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
+from registered_transcript import register
 
 passed = failed = 0
 
@@ -48,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
         count[0] += 1
         folder = work / ('t' + str(count[0]))
         folder.mkdir()
-        path = folder / (sid + '.jsonl')
+        path = register(sid, folder / (sid + '.jsonl'))
         def own(row):
             return dict(row, sessionId=sid) if row.get('sessionId') == 'S' else row
         path.write_text(''.join(json.dumps(own(row)) + '\n' for row in before))
@@ -75,6 +77,38 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
           row['payload']['source']['answers'], {QUESTION: 'fixed every 15 min'})
     row, _ = journaled([PICK, RESULT], [])
     check('a result row before the captured offset still verifies', pj.prompt_origin(row), 'picked')
+
+    # A session's own file name in any folder used to pass: the file must be the one the registry holds.
+    row, real = journaled([PICK], [RESULT])
+    copy_path = work / 'forged' / 'pick-pm.jsonl'
+    copy_path.parent.mkdir()
+    copy_path.write_bytes(real.read_bytes())
+    moved = copy.deepcopy(row)
+    moved['payload']['source']['path'] = str(copy_path)
+    check('a copy in a folder the registry does not name resolves unknown', pj.prompt_origin(moved), 'unknown')
+    hook_data = {'session_id': 'pick-pm', 'tool_use_id': 'toolu_pick',
+                 'tool_response': {'answers': {QUESTION: 'fixed every 15 min'}}}
+    check('a capture from a transcript the registry does not name records nothing',
+          picks.capture(dict(hook_data, transcript_path=str(copy_path))), None)
+    check('the same capture from the registered transcript records it',
+          isinstance(picks.capture(dict(hook_data, transcript_path=str(real))), dict), True)
+    register('pick-pm', copy_path)
+    check('the copy verifies once it is the registered one, so only the path refused it', pj.prompt_origin(moved), 'picked')
+    forged_again = copy.deepcopy(row)
+    check('and the first path no longer does', pj.prompt_origin(forged_again), 'unknown')
+    register('pick-pm', real)
+
+    row, real = journaled([PICK], [RESULT], sid='pick-aged')
+    check('a past approval whose session row is still held reads picked', pj.adopted_origin(row), 'picked')
+    reg_rows = load_lib_module('session_registry')
+    registry = pathlib.Path(reg_rows.registry_path('default', 'fixture-transcripts'))
+    registry.write_text(''.join(line for line in registry.read_text().splitlines(keepends=True) if 'pick-aged' not in line))
+    check('a new approval falls back to the file name once the session row has aged out', pj.prompt_origin(row), 'picked')
+    check('the past approval stays verified after its session row ages out', pj.adopted_origin(row), 'picked')
+    moved = copy.deepcopy(row)
+    moved['payload']['source']['path'] = str(real.with_name('other.jsonl'))
+    check('a past approval still needs the file named for its session', pj.adopted_origin(moved), 'unknown')
+    check('so does a new approval with no row', pj.prompt_origin(moved), 'unknown')
 
     forged = pj.entry('prompt', 'pick-pm', {'text': 'fixed every 15 min', 'origin': 'picked'}, prompt_id='pforged')
     check('a stored picked label without a source resolves unknown', pj.prompt_origin(forged), 'unknown')
@@ -158,7 +192,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
         check('a tool_use_id outside [A-Za-z0-9_-] records nothing: ' + odd_id, picks.capture(data), None)
     plain = work / 'plain'
     plain.mkdir()
-    (plain / 'pick-pm.jsonl').write_text(json.dumps(PICK).replace('toolu_pick', 'toolu_01-Ab_9') + '\n')
+    register('pick-pm', plain / 'pick-pm.jsonl').write_text(json.dumps(PICK).replace('toolu_pick', 'toolu_01-Ab_9') + '\n')
     data = {'session_id': 'pick-pm', 'transcript_path': str(plain / 'pick-pm.jsonl'), 'tool_use_id': 'toolu_01-Ab_9',
             'tool_response': {'answers': {QUESTION: 'fixed every 15 min'}}}
     check('a plain tool_use_id still captures', isinstance(picks.capture(data), dict), True)
@@ -172,7 +206,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
     def big_pick(name, before_rows, after_asking_rows):
         folder = work / name
         folder.mkdir()
-        big_path = folder / 'pick-pm.jsonl'
+        big_path = register('pick-pm', folder / 'pick-pm.jsonl')
         pad = json.dumps({'type': 'system', 'sessionId': 'pick-pm', 'pad': 'x' * 4000}) + '\n'
         with big_path.open('w') as stream:
             for _ in range(before_rows):
@@ -205,7 +239,7 @@ with tempfile.TemporaryDirectory(prefix='auto-pick-source-') as work:
 
     legacy = work / 'legacy'
     legacy.mkdir()
-    legacy_path = legacy / 'pick-pm.jsonl'
+    legacy_path = register('pick-pm', legacy / 'pick-pm.jsonl')
     legacy_path.write_text(json.dumps(dict(PICK, sessionId='pick-pm')) + '\n')
     prefix = legacy_path.read_bytes()
     legacy_source = {'version': 1, 'kind': 'pick', 'path': str(legacy_path), 'session_id': 'pick-pm',

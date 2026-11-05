@@ -4,7 +4,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 
 PASS=0
 FAIL=0
@@ -44,7 +45,7 @@ import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
-from programme_prompts import append_prompt as fixture_prompt
+from programme_prompts import append_prompt as fixture_prompt, offered_pick
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -108,6 +109,7 @@ CODE=0
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 decision_count() { field 'len(prog["decisions"])'; }
@@ -215,7 +217,10 @@ prog status
 has "Ask me (linear:AI-4) (ask $(printf '%s' "$ASK" | tr -d '"')): Ship it?" "$OUT"
 
 it "answer-handed writes a Shawn decision linked to the ask id"
-P_SHIP="$(prompt typed 'ship AI-4')"
+P_SHIP="$(run_py "$RUN" <<'EOF'
+print(offered_pick(args[0], "sess-pm", ["answer-handed linear:AI-4 --choice ship"]))
+EOF
+)"
 prog answer-handed linear:AI-4 --choice ship --prompt "$P_SHIP"
 check 0 "$CODE"
 check "[${ASK}, \"product_scope\", \"shawn\", \"ship\", \"${P_SHIP}\", \"linear:AI-4\"]" \
@@ -231,7 +236,7 @@ prog status --agreement
 has "(ask $(printf '%s' "$ASK" | tr -d '"'))" "$OUT"
 
 it "accept-agreement writes a Shawn decision of kind agreement"
-P_ACCEPT="$(prompt typed 'yes, accept the agreement')"
+P_ACCEPT="$("$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$RUN" 'accept-agreement')"
 prog accept-agreement --prompt "$P_ACCEPT"
 check 0 "$CODE"
 check "[\"agreement\", \"shawn\", \"programme\", \"${P_ACCEPT}\"]" \
@@ -337,7 +342,10 @@ check 0 "$CODE"
 it "an old ask reads as kind unknown"
 has '"ask_kind": "unknown"' "$OUT"
 it "answering an old ask records a decision of kind unknown with no ask id"
-P_SHIP1="$(prompt typed 'ship AI-1')"
+P_SHIP1="$(run_py "$RUN" <<'EOF'
+print(offered_pick(args[0], "sess-pm", ["answer-handed linear:AI-1 --choice ship"]))
+EOF
+)"
 prog answer-handed linear:AI-1 --choice ship --prompt "$P_SHIP1"
 check '0 ["unknown", null]' "$CODE $(field '[prog["decisions"][-1]["kind"], prog["decisions"][-1]["ask"]]')"
 

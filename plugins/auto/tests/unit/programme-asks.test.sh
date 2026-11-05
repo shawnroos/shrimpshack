@@ -50,7 +50,7 @@ import json, os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 from _bootstrap import load_lib_module
 sys.path.insert(0, os.path.join(sys.argv[1], 'tests', 'fixtures'))
-from programme_prompts import append_prompt as fixture_prompt
+from programme_prompts import append_prompt as fixture_prompt, offered_pick
 ph = load_lib_module("programme_home")
 pj = load_lib_module("programme_journal")
 core = load_lib_module("run_record_core")
@@ -67,12 +67,15 @@ EOF
 )"
 VIEW="${CLAUDE_AUTO_DATA_DIR}/programmes/${RUN}/views/view.json"
 
-prompt_at() {
-  run_py "$RUN" "$1" "$2" <<'EOF'
-import datetime
-run, minutes, text = args
-when = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=int(minutes))
-print(fixture_prompt(run, "sess-pm", text, "typed", now=when)["prompt_id"])
+pick_offered() {
+  run_py "$RUN" "$@" <<'EOF'
+print(offered_pick(args[0], "sess-pm", args[1:]))
+EOF
+}
+
+pick_second() {
+  run_py "$RUN" "$@" <<'EOF'
+print(offered_pick(args[0], "sess-pm", args[1:], choose=1))
 EOF
 }
 
@@ -149,27 +152,45 @@ check '[[["ship", "merges PR #12 into main", "10 minutes of CI on main"], ["decl
   "$(field "[[[o['label'], o['effect'], o['cost']] for o in items['$A']['handed']['options']]] + [items['$A']['handed'][k] for k in ('if_nothing', 'recommendation', 'recommendation_why', 'risks', 'evidence', 'pr', 'issue', 'readiness')]")"
 it "the ask carries a 16-hex fingerprint, facts_at equal to at, no shown mark and no superseded answers"
 check '[16, true, null, []]' "$(field "[len(items['$A']['handed']['fingerprint']), items['$A']['handed']['facts_at'] == items['$A']['handed']['at'], items['$A']['handed']['shown'], items['$A']['handed']['superseded_answers']]")"
-it "the ask stores the exact replies, by the item's unique title"
-check '{"decline": "decline Crop default", "ship": "ship Crop default"}' "$(ask "$A" '["replies"]')"
-it "hand-item prints the fingerprint and the replies"
+it "the ask stores no text for Shawn to type"
+check 'false' "$(field "'replies' in items['$A']['handed']")"
+it "hand-item prints the fingerprint and how to ask, with no text to type"
 has "\"fingerprint\": \"$(fp "$A")\"" "$OUT"
-has '"ship": "ship Crop default"' "$OUT"
+lacks '"replies"' "$OUT"
+has "programme.sh offer" "$OUT"
+has "answer-handed ${A} --choice ship" "$OUT"
+has "answer-handed ${A} --choice decline" "$OUT"
 
 it "the view's asks entry carries every field"
-check '["open", "Crop default (linear:AI-901)", 2, "ship", "all required checks passed and review approved", "the PR stays open and the issue stays in review", ["the flag default is not verified on prod"], 2, "https://github.com/org/repo/pull/12", "https://linear.app/org/issue/AI-901", "abc123def4567890", true, null, false, "ship Crop default"]' \
-  "$(view_q "[asks['$A'][k] for k in ('status', 'name')] + [len(asks['$A']['options']), asks['$A']['recommendation'], asks['$A']['recommendation_why'], asks['$A']['if_nothing'], asks['$A']['risks'], len(asks['$A']['evidence']), asks['$A']['pr']['url'], asks['$A']['issue']['url'], asks['$A']['readiness'], asks['$A']['facts_at'] == asks['$A']['at'], asks['$A']['shown'], asks['$A']['shown_current'], asks['$A']['replies']['ship']]")"
+check '["open", "Crop default (linear:AI-901)", 2, "ship", "all required checks passed and review approved", "the PR stays open and the issue stays in review", ["the flag default is not verified on prod"], 2, "https://github.com/org/repo/pull/12", "https://linear.app/org/issue/AI-901", "abc123def4567890", true, null, false]' \
+  "$(view_q "[asks['$A'][k] for k in ('status', 'name')] + [len(asks['$A']['options']), asks['$A']['recommendation'], asks['$A']['recommendation_why'], asks['$A']['if_nothing'], asks['$A']['risks'], len(asks['$A']['evidence']), asks['$A']['pr']['url'], asks['$A']['issue']['url'], asks['$A']['readiness'], asks['$A']['facts_at'] == asks['$A']['at'], asks['$A']['shown'], asks['$A']['shown_current']]")"
 it "the view entry stores timestamps and no computed age"
 lacks '"age' "$(view_q "asks['$A']")"
 it "the view keeps view_format 3"
 check 3 "$(view_q 'v["view_format"]')"
 
-it "the Decisions for Shawn rows show the options, recommendation, if-nothing outcome and reply"
+it "the Decisions for Shawn rows show the options, recommendation and if-nothing outcome, and no reply to type"
 ROWS="$("$PY" "$PROG" status 2>&1)"
 has "Crop default (linear:AI-901)" "$ROWS"
 has "option ship: merges PR #12 into main (cost: 10 minutes of CI on main)" "$ROWS"
 has "recommend ship: all required checks passed and review approved" "$ROWS"
 has "if nothing: the PR stays open and the issue stays in review" "$ROWS"
-has "reply: \"ship Crop default\" or \"decline Crop default\"" "$ROWS"
+lacks "reply" "$ROWS"
+
+it "status --json holds no reply, replies or needs_typed key anywhere"
+check "[]" "$("$PY" "$PROG" status --json 2>&1 | "$PY" -c '
+import json, sys
+def walk(value):
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if key in ("reply", "replies", "needs_typed"):
+                yield key
+            yield from walk(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from walk(inner)
+print(json.dumps(sorted(set(walk(json.load(sys.stdin))))))
+')"
 
 it "the herdr notification title names the item by name and id"
 : > "$CALLS"
@@ -241,15 +262,44 @@ prog ask-relayed "$A"
 check 1 "$CODE"
 has "answer-handed" "$OUT"
 
-it "a name reply typed before the ask's current facts is refused"
-edit "prog['items']['$A']['handed']['facts_at'] = '2099-01-01T00:00:00Z'"
-prog answer-handed "$A" --choice ship --prompt "$(prompt_at 0 'ship Crop default')"
-check "1 handed" "$CODE $(field "items['$A']['state']" | tr -d '"')"
-has "before the ask's current facts" "$OUT"
-edit "prog['items']['$A']['handed']['facts_at'] = '2026-01-01T00:00:00Z'"
+it "a pick offered before the ask's facts changed is refused"
+C="linear:AI-915"
+prog add-item "$C" --title "Facts move" --kind fix_only
+prog hand-item "$C" --kind product_call --question "Go?"
+P_STALE="$(pick_offered "answer-handed $C --choice ship")"
+prog update-ask "$C" --risk "a new fact"
+prog answer-handed "$C" --choice ship --prompt "$P_STALE"
+check "1 handed" "$CODE $(field "items['$C']['state']" | tr -d '"')"
+has "programme.sh offer" "$OUT"
+it "typed words naming the item, with no offer, are refused"
+prog answer-handed "$C" --choice ship --prompt "$(run_py "$RUN" <<'EOF'
+print(fixture_prompt(args[0], "sess-pm", "ship Facts move", "typed")["prompt_id"])
+EOF
+)"
+check "1 handed" "$CODE $(field "items['$C']['state']" | tr -d '"')"
+has "programme.sh offer" "$OUT"
 
-it "answer-handed by the stored reply records the answer"
-prog answer-handed "$A" --choice ship --prompt "$(prompt_at 1 'ship Crop default')"
+it "a worker ask: the printed command offers ship and decline, and a pick records through answer-handed"
+W="linear:AI-916"
+prog add-item "$W" --title "Worker wants a call" --kind fix_only
+prog hand-item "$W" --kind product_call --question "Which way?"
+check "0 2" "$CODE $(printf '%s' "$OUT" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["next"].count("--command"))')"
+prog answer-handed "$W" --choice decline --prompt "$(pick_second "answer-handed $W --choice ship" "answer-handed $W --choice decline")"
+check "0 dropped" "$CODE $(field "items['$W']['state']" | tr -d '"')"
+check '"decline"' "$(ask "$W" '["answered"]["choice"]')"
+
+it "marking the ask shown after the offer does not spoil the pick"
+S="linear:AI-917"
+prog add-item "$S" --title "Shown after offer" --kind fix_only
+prog hand-item "$S" --kind product_call --question "Show it?"
+P_SHOWN="$(pick_offered "answer-handed $S --choice ship")"
+prog ask-shown "$S" --fingerprint "$(fp "$S")"
+check 0 "$CODE"
+prog answer-handed "$S" --choice ship --prompt "$P_SHOWN"
+check "0 open" "$CODE $(field "items['$S']['state']" | tr -d '"')"
+
+it "answer-handed by a pick of its offer records the answer"
+prog answer-handed "$A" --choice ship --prompt "$(pick_offered "answer-handed $A --choice ship")"
 check "0 open" "$CODE $(field "items['$A']['state']" | tr -d '"')"
 DEC1="$(ask "$A" '["answered"]["decision_id"]' | tr -d '"')"
 it "the view lists the answered, unrelayed ask so the sweep can relay it"
@@ -267,7 +317,7 @@ check true "$(field "bool([d for d in record(run)['programme']['decisions'] if d
 it "the view lists the ask as open again"
 check '"open"' "$(view_q "asks['$A']['status']")"
 it "a second typed answer records"
-prog answer-handed "$A" --choice ship --prompt "$(prompt_at 2 'ship Crop default')"
+prog answer-handed "$A" --choice ship --prompt "$(pick_offered "answer-handed $A --choice ship")"
 check "0 open" "$CODE $(field "items['$A']['state']" | tr -d '"')"
 
 it "a worker brief that cites the voided decision is refused, not listed as settled"
@@ -297,19 +347,16 @@ check "1 open" "$CODE $(field "items['$A']['state']" | tr -d '"')"
 B="linear:AI-910"
 prog add-item "$B" --title "Flag rollout plan" --kind fix_only
 prog hand-item "$B" --kind product_call --question "Roll out?"
-it "a unique title gives a name reply"
-check '"ship Flag rollout plan"' "$(ask "$B" '["replies"]["ship"]')"
-it "a second item with the same title switches the first ask's reply to its id"
+it "two items with the same title: an ask's picker names its item by id"
 prog add-item linear:AI-911 --title "Flag rollout plan" --kind fix_only
-check '"ship linear:AI-910"' "$(ask "$B" '["replies"]["ship"]')"
-it "the view shows the id reply too"
-check '"decline linear:AI-910"' "$(view_q "asks['$B']['replies']['decline']")"
+prog offer same-title --command "answer-handed $B --choice ship"
+has "Ship item ${B}" "$OUT"
 
 it "an answered decline voided by update-ask returns the item to handed"
 D="linear:AI-920"
 prog add-item "$D" --title "Decline path" --kind fix_only
 prog hand-item "$D" --kind product_call --question "Do it?"
-prog answer-handed "$D" --choice decline --prompt "$(prompt_at 1 'decline Decline path')"
+prog answer-handed "$D" --choice decline --prompt "$(pick_offered "answer-handed $D --choice decline")"
 prog update-ask "$D" --risk "new fact"
 check "0 handed null" "$CODE $(field "items['$D']['state']" | tr -d '"') $(field "items['$D'].get('dropped_reason')")"
 

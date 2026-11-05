@@ -4,7 +4,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 
 PASS=0
 FAIL=0
@@ -115,12 +116,14 @@ as() {
   local sid="$1"; shift
   OUT="$(as_pane "$sid" w2 "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 remit() {
   local sid="$1" run="$2" json="$3"
   OUT="$(printf '%s' "$json" | as_pane "$sid" w2 "$PY" "$PROG" set-remit --run "$run" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 
 typed() {

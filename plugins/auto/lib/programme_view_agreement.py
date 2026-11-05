@@ -54,7 +54,8 @@ def rulings(block, now=None) -> list:
     except programme_context.ContextError:
         return []
     out = [{"id": r["id"], "state": r["state"], "effect": r["effect"] or "decided", "kind": r["kind"],
-            "legacy": r["legacy"], "quote": r["quote"] or r["scope"], "applies_to": list(r["applies_to"] or []),
+            "legacy": r["legacy"], "quote": r["quote"] or r["scope"], "wording": r["wording"] or programme_journal.SHAWN,
+            "applies_to": list(r["applies_to"] or []),
             "until": r["until"], "carried": r["carried"], "pending_rev": r["pending_rev"]}
            for r in rows if r["state"] in RULING_STATES]
     return sorted(out, key=lambda r: (RULING_STATES.index(r["state"]), r["id"]))
@@ -82,6 +83,8 @@ def ruling_label(ruling) -> str:
         head = f"{ruling['effect']} {kind}"
     else:
         head = f"{ruling['effect']}, no kind ({programme_context.ruling_kind_label(ruling, 'decision record')})"
+    if ruling.get("wording") == programme_journal.PM_DRAFT:
+        return f"{head}: {ruling.get('quote')} (the PM's wording, approved by Shawn)"
     return f"{head} \"{ruling.get('quote')}\""
 
 
@@ -118,8 +121,9 @@ def _changes(journal_entries) -> list:
         prompt_id = p.get("prompt_id")
         out.append({"at": row.get("at"), "kind": row["kind"], "term": p.get("term_id"),
                     "text": f"{p.get('area')}: {was}{p.get('value')}",
-                    "source": p.get("source") or (f"typed prompt {prompt_id}" if prompt_id else "the PM"),
-                    "prompt_id": prompt_id, "quote": programme_journal.redact(p["quote"]) if p.get("quote") else None})
+                    "source": p.get("source") or (f"Shawn's answer {prompt_id}" if prompt_id else "the PM"),
+                    "prompt_id": prompt_id, "quote": programme_journal.redact(p["quote"]) if p.get("quote") else None,
+                    "wording": p.get("wording")})
     return out[::-1]
 
 
@@ -161,7 +165,8 @@ def _authority_row(a) -> dict:
 
 
 def _change_row(c) -> dict:
-    quote = f" · Shawn: \"{c['quote']}\"" if c.get("quote") else ""
+    who = "approved" if c.get("wording") == programme_journal.PM_DRAFT else "Shawn:"
+    quote = f" · {who} \"{c['quote']}\"" if c.get("quote") else ""
     return _row(f"  {c['at']} {c['kind']} {c['term']}: {c['text']} · source {c['source']}{quote}", "dim")
 
 

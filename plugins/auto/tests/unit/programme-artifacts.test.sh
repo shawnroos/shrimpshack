@@ -270,10 +270,10 @@ OUT="$(run_py "$RUN" "$CRON_P" <<'EOF'
 prog = load_lib_module("programme")
 rec = load_lib_module("programme_authority").read_record(args[0])
 try:
-    prog._typed_prompt(args[0], rec, args[1])
+    prog._approval_for(args[0], rec, args[1])
     print("ACCEPTED")
 except prog.ProgrammeError as exc:
-    print("REFUSED", "not typed" in str(exc))
+    print("REFUSED", "not Shawn's words" in str(exc))
 EOF
 )"
 check "REFUSED True" "$OUT"
@@ -305,7 +305,7 @@ OUT="$(run_py "$RUN" "$TYPED_P" <<'EOF'
 prog = load_lib_module("programme")
 rec = load_lib_module("programme_authority").read_record(args[0])
 try:
-    prog._typed_prompt(args[0], rec, args[1])
+    prog._approval_for(args[0], rec, args[1])
     gate = "ACCEPTED"
 except prog.ProgrammeError:
     gate = "REFUSED"

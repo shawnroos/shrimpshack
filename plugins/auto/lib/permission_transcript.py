@@ -36,8 +36,7 @@ NEXT_ACTION = {
 
 def path_for(sid):
     # The registry's path, never one a caller supplies: a forged path could name a transcript its author wrote.
-    row = session_registry.lookup(sid, include_headless=True) or {} if sid else {}
-    path = row.get("transcript_path")
+    path = session_registry.transcript_path(sid) if sid else None
     return path if isinstance(path, str) and os.path.basename(path) == f"{sid}.jsonl" else None
 
 

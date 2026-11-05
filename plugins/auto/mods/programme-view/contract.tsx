@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 
-import { acceptReply, customOf, draftReply, draftText, isChecklist, rulingTemplate, toolsOf, withdrawReply } from './actions'
+import { customOf, draftChanges, draftText, isChecklist, PM_WILL_ASK, proposalWaiting, rulingHint, toolsOf, WITHDRAW_HINT } from './actions'
 import type { Draft, EditorKind, Outcome } from './actions'
 import { COLOR, GLYPH } from './palette'
 import type { Ui } from './tree'
@@ -34,6 +34,7 @@ export type Term = {
 export type Ruling = {
   id: string
   quote: string
+  wording?: 'shawn' | 'pm_draft'
   applies_to: string[]
   scope: 'own' | 'inherited'
   effect: 'decided' | 'grant' | 'restrict'
@@ -145,10 +146,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
   const focus = (key: string) => (focusedRow === key ? { autoFocus: true as const } : {})
   const cursor = (key: string, mark: string) => <Text color={COLOR.accent}>{focusedRow === key ? mark : ' '}</Text>
   const pad = (width: number) => <Text>{' '.repeat(width)}</Text>
-  const typeThis = (key: string, reply: string, width: number, label = 'Type this:') => {
-    line(`${key}:label`, <Text dimColor>{`${' '.repeat(width)}${label}`}</Text>)
-    line(`${key}:reply`, <Text bold>{`${' '.repeat(width)}${reply}`}</Text>)
-  }
+  const hint = (key: string, text: string, width: number) => line(key, <Text dimColor>{`${' '.repeat(width)}${text}`}</Text>)
   const action = (key: string, hotkey: string, label: string, onPress: () => void) => (
     <Button key={key} label={label} plain hotkey={hotkey} onPress={onPress} />
   )
@@ -277,10 +275,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
     customOptions(term, draft)
     const change = draft ? draftText(term, draft) : undefined
     if (change) line(`${term.key}:draft`, <Text dimColor>{`        ${GLYPH.draft}  Your change: ${change}`}</Text>)
-    const accept = acceptReply(term)
-    if (accept) typeThis(`${term.key}:accept`, accept, 8)
-    const amend = draftReply(term, draft)
-    if (amend && amend !== accept) typeThis(`${term.key}:amend`, amend, 8)
+    if (proposalWaiting(term) || draftChanges(term, draft)) hint(`${term.key}:ask`, PM_WILL_ASK, 8)
     if (armed) {
       line(
         `${term.key}:actions`,
@@ -318,7 +313,7 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
       cursor(key, '▌'),
       <Text color={COLOR.warning}>{`   ${GLYPH.clause}  `}</Text>,
       <Button key={key} label={ruling.quote} plain {...focus(key)} onPress={() => act.focusRow(key)}>
-        <Text bold>{`"${ruling.quote}"`}</Text>
+        <Text bold>{ruling.wording === 'pm_draft' ? `${ruling.quote} (the PM's wording)` : `"${ruling.quote}"`}</Text>
       </Button>,
     )
     const targets = ruling.applies_to.map(id => (id === 'programme' ? 'the whole programme' : (itemTitles[id] ?? id)))
@@ -329,8 +324,8 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
       <Text dimColor>{`         Applies to ${targets.join(', ')}${until} (${ruling.scope}) · ${what} · ${steps(ruling.reliant_steps)}`}</Text>,
     )
     if (focusedRow !== key) continue
-    typeThis(`${key}:withdraw`, withdrawReply(ruling.id, ruling.quote), 9)
-    // close-ruling takes a fulfilled close without a typed prompt only for a grant.
+    hint(`${key}:withdraw`, WITHDRAW_HINT, 9)
+    // close-ruling takes a fulfilled close with no approval only for a grant.
     if (armed && ruling.effect === 'grant') {
       line(`${key}:actions`, pad(9), action('act:fulfil', 'f', 'close as fulfilled', () => act.fulfil(ruling.id)))
     }
@@ -343,6 +338,6 @@ export function ContractView(ui: Ui, props: ContractProps): RenderElement {
     }
   }
   const title = selectedItem ? itemTitles[selectedItem] : undefined
-  typeThis('ruling:new', rulingTemplate(title), 4, 'To add a Ruling, type this:')
+  hint('ruling:new', rulingHint(title), 4)
   return <Box flexDirection="column">{out}</Box>
 }

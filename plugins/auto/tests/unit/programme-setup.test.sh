@@ -20,11 +20,13 @@ root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / 'lib'))
 sys.path.insert(0, str(root / 'tests' / 'fixtures'))
 from _bootstrap import load_lib_module
-from programme_prompts import append_prompt as typed_prompt
+from registered_transcript import transcript
+from programme_prompts import append_prompt as typed_prompt, offered_pick
 
 FIXTURE = [json.loads(line) for line in (root / 'tests/fixtures/askuser_transcript.jsonl').read_text().splitlines()]
 ASK, ANSWER = FIXTURE[0], FIXTURE[1]
-PROG = str(root / 'lib/programme.py')
+PROG = str(root / 'tests/fixtures/prog_offered.py')
+REAL_PROG = str(root / 'lib/programme.py')
 
 passed = failed = 0
 with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
@@ -51,6 +53,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     transcripts.mkdir()
     counter = [0]
     refresh_failures = []
+    wrapper_failures = []
 
     def check(name, condition, detail=''):
         global passed, failed
@@ -83,23 +86,35 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                                 env=env, input=stdin)
         if 'refresh failed' in result.stderr:
             refresh_failures.append((args, result.stderr))
+        if result.returncode in (97, 98):
+            wrapper_failures.append((args, result.returncode, result.stderr))
         return result
 
-    def pick(sid, run, answers, tool_use_id=None, answered=True, driving=True):
+    def real(sid, run, *args, stdin=None):
+        return subprocess.run([sys.executable, REAL_PROG, *args, '--run', run], text=True, capture_output=True,
+                              env=dict(os.environ, CLAUDE_CODE_SESSION_ID=sid), input=stdin)
+
+    def opick(sid, run, *args):
+        made = subprocess.run([sys.executable, str(root / 'tests/fixtures/offer_pick.py'), run, *args], text=True,
+                              capture_output=True, env=dict(os.environ, CLAUDE_CODE_SESSION_ID=sid))
+        assert made.returncode == 0, made.stdout + made.stderr
+        return made.stdout.strip()
+
+    def pick(sid, run, answers, tool_use_id=None, answered=True, driving=True, annotations=None, unanswered=()):
         if tool_use_id is None:
             counter[0] += 1
             tool_use_id = f'toolu_{counter[0]}'
-        path = transcripts / (sid + '.jsonl')
+        path = transcript(sid)
         ask = copy.deepcopy(ASK)
         ask.update(uuid='a-' + tool_use_id, sessionId=sid)
         ask['message']['content'][0].update(id=tool_use_id, input={'questions': [
             {'question': q, 'header': 'Setup', 'multiSelect': False,
-             'options': [{'label': answers[q], 'description': ''}, {'label': 'other', 'description': ''}]}
-            for q in answers]})
+             'options': [{'label': answers.get(q, 'yes'), 'description': ''}, {'label': 'other', 'description': ''}]}
+            for q in [*answers, *unanswered]]})
         result = copy.deepcopy(ANSWER)
         result.update(uuid='u-' + tool_use_id, sessionId=sid, sourceToolAssistantUUID='a-' + tool_use_id,
-                      toolUseResult={'questions': [{'question': q} for q in answers], 'answers': answers,
-                                     'annotations': {}})
+                      toolUseResult={'questions': [{'question': q} for q in [*answers, *unanswered]],
+                                     'answers': answers, 'annotations': annotations or {}})
         result['message']['content'][0].update(tool_use_id=tool_use_id)
         rows = [ask, result] if answered else [ask]
         if not (path.exists() and f'"id": "{tool_use_id}"' in path.read_text()):
@@ -134,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     entries = record(run)['programme']['agreement']['project_terms']
     ruling = next(e['id'] for e in entries if not e['reserved'])
     reserved = next(e['id'] for e in entries if e['reserved'])
-    early_accept = typed_prompt(run, a_sid, 'accept the agreement')['prompt_id']
+    early_accept = offered_pick(run, a_sid, ['accept-agreement'])
 
     cadence_q = 'Cadence: how often should the PM sweep?'
     cadence_pick = pick(a_sid, run, {cadence_q: 'fixed every 15 min'})
@@ -157,6 +172,12 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           refused(result, 'before this session drove the programme') and terms(run)['cadence']['set_by'] == 'default',
           result.stdout + result.stderr)
 
+    noted = pick(a_sid, run, {cadence_q: 'fixed every 15 min'}, annotations={cadence_q: {'notes': 'only at night'}})
+    result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', noted)
+    check('pick-term refuses a pick with a note', refused(result, 'own words'), result.stderr)
+    partial = pick(a_sid, run, {cadence_q: 'fixed every 15 min'}, unanswered=['And the budget?'])
+    result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', partial)
+    check('pick-term refuses a picker with a question left unanswered', refused(result, 'unanswered'), result.stderr)
     result = verb(a_sid, run, 'pick-term', 'cadence', 'fixed', '--seconds', '900', '--pick', cadence_pick)
     cadence = terms(run)['cadence']
     check('AE1: pick-term sets the term with set_by shawn and origin picked',
@@ -213,7 +234,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                                  ('rulings', 'x', 'the rulings step')):
         shared_pick = pick(a_sid, run, {f'{target}: which?': value})
         result = verb(a_sid, run, 'pick-term', target, value, '--pick', shared_pick)
-        check(f'AE2: pick-term refuses {label}', result.returncode != 0 and 'stays typed' in result.stderr,
+        check(f'AE2: pick-term refuses {label}', result.returncode != 0 and 'pick-term sets only' in result.stderr,
               result.stdout + result.stderr)
 
     tools_q = 'Tools of record: which sources stay on?'
@@ -229,12 +250,12 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           (result.stdout + result.stderr, terms(run)['tools_of_record']))
 
     result = verb(a_sid, run, 'accept-agreement', '--prompt', early_accept)
-    check('accept-agreement citing a typed prompt older than the last pick refuses',
-          refused(result, 'older than') and not record(run)['programme']['agreement']['accepted'],
+    check('accept-agreement citing a pick older than the last pick refuses',
+          refused(result, 'the facts this picker showed changed since the offer') and not record(run)['programme']['agreement']['accepted'],
           result.stdout + result.stderr)
     result = verb(a_sid, run, 'accept-agreement', '--prompt', twin)
-    check('accept-agreement citing a pick without --terms refuses and prints the terms-bound label',
-          refused(result, '--terms') and 'approval-label accept-agreement' in result.stderr
+    check('accept-agreement citing a pick of a setup question refuses',
+          refused(result, 'answers a picker no offer printed') and 'programme.sh offer' in result.stderr
           and not record(run)['programme']['agreement']['accepted'], result.stdout + result.stderr)
 
     for args, label in ((('amend-term', 'cadence', 'on_change'), 'amend-term'),
@@ -243,20 +264,19 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
                         (('dispose-action', '--attempt', 'o1', '--as', 'abandoned_unknown'), 'dispose-action (archive)')):
         result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{label}?': 'Approve ' + ' '.join(args)}))
         out = result.stdout + result.stderr
-        check(f'{label} accepts a pick of its exact approval label past the origin and label checks',
-              'is not typed' not in out and 'needs a typed prompt' not in out and 'already used' not in out
-              and 'approval label' not in out, out)
+        check(f'{label} refuses a pick of an approve-worded label no offer printed',
+              result.returncode != 0 and 'answers a picker no offer printed' in out, out)
     for args in (('record-ruling', 'r8', '--effect', 'restrict', '--kind', 'tool_choice', '--scope', 'mine'),
-                 ('close-ruling', 'tdeploy', '--as', 'withdrawn'), ('carry-rulings', 'tdeploy')):
+                 ('close-ruling', 'tdeploy', '--as', 'withdrawn')):
         result = verb(a_sid, run, *args, '--prompt', pick(a_sid, run, {f'{args[0]}?': 'Approve ' + ' '.join(args)}))
-        check(f'{args[0]} refuses a pick of its exact label: a Ruling binds only on typed words',
-              refused(result, f'{args[0]} needs a typed prompt'), result.stdout + result.stderr)
+        check(f'{args[0]} refuses a pick of its exact label: a Ruling binds only through an offer',
+              refused(result, 'answers a picker no offer printed'), result.stdout + result.stderr)
     result = verb(a_sid, run, 'record-ruling', 'r8', '--effect', 'restrict', '--kind', 'tool_choice', '--scope', 'mine')
     check('record-ruling with no prompt leaves the Ruling pending', result.returncode == 0, result.stdout + result.stderr)
     result = verb(a_sid, run, 'accept-context', 'r8', '--prompt',
                   pick(a_sid, run, {'accept-context?': 'Approve accept-context r8'}))
     check('accept-context refuses a pick of its exact label for a Ruling',
-          refused(result, "accepting Ruling 'r8' needs a typed prompt"), result.stdout + result.stderr)
+          refused(result, 'answers a picker no offer printed'), result.stdout + result.stderr)
     suggested = typed_prompt(run, a_sid, 'accept r8, tool choice is mine',
                              prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'accept-context', 'r8', '--prompt', suggested)
@@ -301,9 +321,9 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('the protocol adoption check passes the typed step for a typed prompt (control)',
           adoption_reject(typed_end) == 'no approval', adoption_reject(typed_end))
 
-    accept = typed_prompt(run, a_sid, 'accept the agreement')['prompt_id']
-    result = verb(a_sid, run, 'accept-agreement', '--prompt', accept)
-    check('a typed accept after the last pick is accepted', result.returncode == 0, result.stdout + result.stderr)
+    accept = offered_pick(run, a_sid, ['accept-agreement'])
+    result = real(a_sid, run, 'accept-agreement', '--prompt', accept)
+    check('a pick of the accept offer after the last pick is accepted', result.returncode == 0, result.stdout + result.stderr)
 
     def propose(rule_id):
         rule = {'id': rule_id, 'applies_when': {'change_kinds': ['evals_or_docs']}, 'requires': ['merged'],
@@ -316,41 +336,37 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
         return [r['id'] for r in record(run)['programme'].get('proposed_rules') or []]
 
     propose('pick-rule')
-    declined = pick(a_sid, run, {'Adopt rule pick-rule?': 'No'})
-    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', declined)
-    check('adopt-rule refuses a pick whose question names the rule but whose answer declines',
-          refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    declined = opick(a_sid, run, '--decline', 'adopt-rule pick-rule')
+    result = real(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', declined)
+    check('adopt-rule refuses a decline of its offer',
+          refused(result, 'Shawn declined this offer') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     for decline in ('Skip pick-rule', 'Reject pick-rule', 'Hold off on pick-rule', 'Keep pick-rule as a proposal',
                     'Approve adopt-rule other-rule', 'Approve adopt-rule pick-rule --widening'):
         result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', pick(a_sid, run, {'Adopt which rule?': decline}))
         check(f'adopt-rule refuses a decline-worded pick that names the rule: {decline!r}',
-              refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(),
+              refused(result, 'answers a picker no offer printed') and 'pick-rule' in proposed_ids(),
               result.stdout + result.stderr)
     bare_yes = pick(a_sid, run, {'Adopt rule pick-rule?': 'Yes'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', bare_yes)
     check('adopt-rule refuses a pick whose rule id is only in the PM-written question',
-          refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+          refused(result, 'answers a picker no offer printed') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     two = pick(a_sid, run, {'Adopt which rule?': 'adopt pick-rule', 'Anything else?': 'no'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', two)
     check('adopt-rule refuses a pick with more than one question',
-          refused(result, 'exactly one question') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+          refused(result, 'answers a picker no offer printed') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     negated = pick(a_sid, run, {'Adopt which rule?': 'Adopt pick-rule? No, not now'})
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', negated)
     check('adopt-rule refuses a pick whose answer names the rule but negates it',
-          refused(result, 'is not the approval label') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+          refused(result, 'answers a picker no offer printed') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', spent_by_setup)
     check('a pick spent by a setup verb is refused by an approval verb',
-          refused(result, 'already used') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
-    printed = verb(a_sid, run, 'approval-label', 'adopt-rule', 'pick-rule')
-    check('approval-label prints the exact option that approves the command',
-          printed.returncode == 0 and printed.stdout.strip() == 'Approve adopt-rule pick-rule',
-          printed.stdout + printed.stderr)
-    result = verb(a_sid, run, 'approval-label', 'set-remit')
-    check('approval-label refuses set-remit: its change comes from stdin', refused(result, 'needs a typed prompt'),
+          refused(result, 'answers a picker no offer printed') and 'pick-rule' in proposed_ids(), result.stdout + result.stderr)
+    result = verb(a_sid, run, 'approval-label', 'adopt-rule', 'pick-rule')
+    check('approval-label is gone', result.returncode == 2 and 'unknown subcommand' in result.stderr,
           result.stdout + result.stderr)
     result = verb(a_sid, run, 'set-remit', '--prompt', pick(a_sid, run, {'Change the remit?': 'Approve set-remit'}),
                   stdin='{}')
-    check('set-remit refuses a pick of its bare label', refused(result, 'reads its change from stdin'),
+    check('set-remit refuses a pick of its bare label', refused(result, 'answers a picker no offer printed'),
           result.stdout + result.stderr)
     extra = work / 'remit-extra'
     subprocess.run(['git', 'init', '-q', str(extra)], check=True)
@@ -358,23 +374,20 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     remit_doc.setdefault('repos', []).append({'path': str(extra)})
     suggested = typed_prompt(run, a_sid, f'Add {extra} to the remit', prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'set-remit', '--prompt', suggested, stdin=json.dumps(remit_doc))
-    check('set-remit accepts an accepted suggestion that names the added repo',
-          result.returncode == 0 and str(extra) in json.dumps(record(run)['programme']['remit']),
+    check('set-remit refuses an accepted suggestion, even one naming the added repo',
+          refused(result, 'is an accepted suggestion') and str(extra) not in json.dumps(record(run)['programme']['remit']),
           result.stdout + result.stderr)
     result = verb(a_sid, run, 'amend-term', 'cadence', 'on_change', '--why', '--run', run)
     check('an option value that looks like an option is refused', result.returncode == 2 and 'needs a value' in result.stderr,
           result.stdout + result.stderr)
-    result = verb(a_sid, run, 'approval-label', 'record-ruling')
-    check('approval-label refuses a verb a pick cannot approve', refused(result, 'needs a typed prompt'),
-          result.stdout + result.stderr)
-    early = pick(a_sid, run, {'Adopt which rule?': printed.stdout.strip()}, driving=False)
+    early = pick(a_sid, run, {'Adopt which rule?': 'Adopt rule pick-rule'}, driving=False)
     result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', early)
-    check('adopt-rule refuses an exact-label pick answered before this session drove the programme',
+    check('adopt-rule refuses a pick answered before this session drove the programme',
           refused(result, 'before this session drove the programme') and 'pick-rule' in proposed_ids(),
           result.stdout + result.stderr)
-    yes = pick(a_sid, run, {'Adopt which rule?': printed.stdout.strip() + ' (Recommended)'})
-    result = verb(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', yes)
-    check('adopt-rule accepts a pick of its exact approval label, marked recommended',
+    yes = opick(a_sid, run, '--other', 'Adopt rule pick-rule (Recommended)', 'adopt-rule pick-rule')
+    result = real(a_sid, run, 'adopt-rule', 'pick-rule', '--prompt', yes)
+    check('adopt-rule accepts a pick of its offer, marked recommended',
           result.returncode == 0 and 'pick-rule' not in proposed_ids(), result.stdout + result.stderr)
     loaded = protocol.load(prompt_lookup=programme_mod.prompt_lookup)
     check('a rule adopted by a pick loads as adopted',
@@ -386,28 +399,25 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     ruling = record(run)['programme']['agreement']['project_terms'][0]
     ruling_pick = pick(a_sid, run, {'Change the ruling?': f"{ruling['area']}: use snake case"})
     result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', ruling_pick)
-    check('edit-project-term refuses a pick after acceptance', refused(result, 'edit-project-term needs a typed prompt'),
+    check('edit-project-term refuses a pick of a picker Auto did not print', refused(result, 'answers a picker no offer printed'),
           result.stdout + result.stderr)
     propose('suggested-rule')
     suggested = typed_prompt(run, a_sid, 'adopt suggested-rule', prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'adopt-rule', 'suggested-rule', '--prompt', suggested)
-    check('adopt-rule accepts an accepted suggestion that names the rule',
-          result.returncode == 0 and 'suggested-rule' not in proposed_ids(), result.stdout + result.stderr)
+    check('adopt-rule refuses an accepted suggestion, even one naming the rule',
+          refused(result, 'is an accepted suggestion') and 'suggested-rule' in proposed_ids(), result.stdout + result.stderr)
     propose('negated-rule')
     suggested = typed_prompt(run, a_sid, 'No, do not adopt negated-rule', prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'adopt-rule', 'negated-rule', '--prompt', suggested)
     check('adopt-rule refuses an accepted suggestion that negates the rule',
-          refused(result, 'not a plain yes') and 'negated-rule' in proposed_ids(), result.stdout + result.stderr)
-    for name in ('retire-behaviour', 'record-ruling', 'close-ruling', 'carry-rulings', 'record-behaviour',
-                 'define-requirement'):
-        check(f'{name} is not on the pick list: it does not bind its target', name not in approval_mod.PICK_VERBS)
+          refused(result, 'is an accepted suggestion') and 'negated-rule' in proposed_ids(), result.stdout + result.stderr)
     check('every pick-list verb is a real CLI verb', approval_mod.PICK_VERBS <= set(programme_mod._VERBS),
           approval_mod.PICK_VERBS - set(programme_mod._VERBS))
     suggested = typed_prompt(run, a_sid, f"{ruling['area']}: use snake case",
                              prompt_source='suggestion_accepted')['prompt_id']
     result = verb(a_sid, run, 'edit-project-term', ruling['id'], 'use snake case', '--prompt', suggested)
     check('edit-project-term refuses an accepted suggestion',
-          refused(result, 'edit-project-term needs a typed prompt'), result.stdout + result.stderr)
+          refused(result, 'is an accepted suggestion'), result.stdout + result.stderr)
     pathlib.Path(os.environ['CLAUDE_AUTO_PERSONAL_PROTOCOL']).unlink()
     context_mod = load_lib_module('programme_context')
     check('an approval by pick is recorded with origin label picked',
@@ -432,7 +442,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
          '--term', 'cadence=fixed', '--seconds', '600')
     verb(b_sid, run, 'propose-term', 'stop_rule', 'only_when_done')
     personal = pathlib.Path(os.environ['CLAUDE_AUTO_PERSONAL_PROTOCOL'])
-    stale_accept = typed_prompt(run, b_sid, 'accept the agreement')['prompt_id']
+    stale_accept = offered_pick(run, b_sid, ['accept-agreement'])
     result = verb(b_sid, run, 'take-recommendations', '--pick',
                   pick(b_sid, run, {'Setup: how to start?': 'Go step by step'}))
     check('take-recommendations refuses a pick that is not the take-all option',
@@ -467,8 +477,8 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           [r['payload'].get('prompt_id') for r in kinds(run, 'recommendations_taken')] == [take],
           kinds(run, 'recommendations_taken'))
     result = verb(b_sid, run, 'accept-agreement', '--prompt', stale_accept)
-    check('accept-agreement citing a typed prompt older than take-recommendations refuses',
-          refused(result, 'older than') and not record(run)['programme']['agreement']['accepted'],
+    check('accept-agreement citing a pick older than take-recommendations refuses',
+          refused(result, 'the facts this picker showed changed since the offer') and not record(run)['programme']['agreement']['accepted'],
           result.stdout + result.stderr)
     d_sid = 'setup-d'
     d_run = programme(d_sid, 'setup-d')
@@ -490,9 +500,9 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     check('take-recommendations refuses a used pick', refused(result, 'already'), result.stdout + result.stderr)
     later =pick(b_sid, run, {'Cadence: how often?': 'on change'})
     verb(b_sid, run, 'pick-term', 'cadence', 'on_change', '--pick', later)
-    accept = typed_prompt(run, b_sid, 'accept the agreement')['prompt_id']
-    result = verb(b_sid, run, 'accept-agreement', '--prompt', accept)
-    check('a typed accept after take-recommendations and picks is accepted', result.returncode == 0,
+    accept = offered_pick(run, b_sid, ['accept-agreement'])
+    result = real(b_sid, run, 'accept-agreement', '--prompt', accept)
+    check('a pick of the accept offer after take-recommendations and picks is accepted', result.returncode == 0,
           result.stdout + result.stderr)
     resume_line = 'Setup is not finished: resume /auto:programme step 5 at the first step not done before any sweep.'
     render_rules = load_lib_module('programme').render_rules
@@ -535,7 +545,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     state = lambda: {s['key']: s['state'] for s in view(run)['setup']['steps']}
     check('the rulings step starts unfinished', state()['rulings'] != 'done', state())
     result = verb(c_sid, run, 'setup-keep', 'rulings')
-    check('setup-keep marks a typed-reply step done', result.returncode == 0 and state()['rulings'] == 'done',
+    check('setup-keep marks a Rulings step done', result.returncode == 0 and state()['rulings'] == 'done',
           (result.stdout + result.stderr, state()))
     result = verb(c_sid, run, 'setup-keep', 'accept')
     check('setup-keep accept refuses', refused(result, 'accept'), result.stdout + result.stderr)
@@ -559,6 +569,7 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           (beat_before, record(run).get('loop')))
     flag.unlink()
     check('no verb left the view stale', not refresh_failures, refresh_failures)
+    check('every verb ran: no offer or wrapper step stopped one', not wrapper_failures, wrapper_failures)
     check('setup writes are not approvals', not kinds(run, 'approval_refused'), kinds(run, 'approval_refused'))
 
     # Run D: the accept by a pick bound to the terms digest.
@@ -569,14 +580,15 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     approval_mod = load_lib_module('programme_approval')
 
     def accept_label():
-        printed = verb(f_sid, run, 'approval-label', 'accept-agreement')
+        printed = real(f_sid, run, 'offer', 'accept', '--command', 'accept-agreement')
         assert printed.returncode == 0, printed.stdout + printed.stderr
-        return printed.stdout.strip()
+        offer = json.loads(printed.stdout)
+        return next(o['label'] for o in offer['input']['questions'][0]['options'] if o['label'] != offer['decline'])
 
     first = accept_label()
     digest = first.rsplit(' ', 1)[-1]
-    check('approval-label accept-agreement prints the label with the current terms digest',
-          first == f'Approve accept-agreement --terms {digest}' and len(digest) == 8
+    check('the accept offer prints the label with the current terms digest',
+          first == f'Accept the agreement with terms {digest}' and len(digest) == 8
           and digest == approval_mod.terms_digest(ph.normalize_programme(record(run)['programme'])), first)
     block = ph.normalize_programme(record(run)['programme'])
     changed = copy.deepcopy(block)
@@ -585,14 +597,14 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           accept_label() == first and approval_mod.terms_digest(copy.deepcopy(block)) == digest
           and approval_mod.terms_digest(changed) != digest, (first, approval_mod.terms_digest(changed)))
     accept_step = next(s for s in view(run)['setup']['steps'] if s['key'] == 'accept')
-    check('the setup view offers the accept as a pick of its terms-bound label',
-          not accept_step['needs_typed'] and accept_step['label'] == first and accept_step['terms_digest'] == digest,
+    check('the setup view carries the terms digest and no text to type',
+          'needs_typed' not in accept_step and accept_step['terms_digest'] == digest,
           accept_step)
 
     bare = pick(f_sid, run, {'Accept the agreement?': 'Approve accept-agreement'})
     result = verb(f_sid, run, 'accept-agreement', '--prompt', bare)
-    check('a pick of the bare label without --terms refuses and the fix prints the terms-bound label',
-          refused(result, '--terms') and first in result.stderr
+    check('a pick of the old bare label refuses and the fix says to offer',
+          refused(result, 'answers a picker no offer printed') and 'programme.sh offer' in result.stderr
           and not record(run)['programme']['agreement']['accepted'], result.stdout + result.stderr)
     suggested = typed_prompt(run, f_sid, 'accept the agreement', prompt_source='suggestion_accepted')['prompt_id']
     check('the test suggestion verifies as suggested', origin(run, suggested) == 'suggested', origin(run, suggested))
@@ -601,25 +613,25 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
           refused(result, 'accepted suggestion') and not record(run)['programme']['agreement']['accepted'],
           result.stdout + result.stderr)
 
-    before_amend = pick(f_sid, run, {'Accept the agreement?': first})
-    amend = typed_prompt(run, f_sid, 'amend-term stop_rule never_stop')['prompt_id']
-    result = verb(f_sid, run, 'amend-term', 'stop_rule', 'never_stop', '--prompt', amend)
+    before_amend = offered_pick(run, f_sid, ['accept-agreement'])
+    amend = offered_pick(run, f_sid, ['amend-term stop_rule never_stop'])
+    result = real(f_sid, run, 'amend-term', 'stop_rule', 'never_stop', '--prompt', amend)
     check('run F: amend-term changes a term before acceptance (control)', result.returncode == 0,
           result.stdout + result.stderr)
-    result = verb(f_sid, run, 'accept-agreement', '--prompt', before_amend, '--terms', digest)
-    check('AE5: a pick taken before a later amend-term refuses through the accept-order check',
-          refused(result, 'older than') and not record(run)['programme']['agreement']['accepted'],
+    result = real(f_sid, run, 'accept-agreement', '--prompt', before_amend)
+    check('AE5: a pick taken before a later amend-term refuses',
+          refused(result, 'the facts this picker showed changed since the offer') and not record(run)['programme']['agreement']['accepted'],
           result.stdout + result.stderr)
 
     current = accept_label()
     check('the amend changed the terms digest', current != first, (first, current))
     stale = pick(f_sid, run, {'Accept the agreement?': first})
-    result = verb(f_sid, run, 'accept-agreement', '--prompt', stale, '--terms', digest)
-    check('AE5: a pick naming an older digest refuses and the fix prints the current label',
-          refused(result, 'does not match') and current in result.stderr
+    result = real(f_sid, run, 'accept-agreement', '--prompt', stale)
+    check('AE5: a pick of the older digest on a picker no offer printed refuses',
+          refused(result, 'answers a picker no offer printed')
           and not record(run)['programme']['agreement']['accepted'], result.stdout + result.stderr)
-    fresh = pick(f_sid, run, {'Accept the agreement?': current})
-    result = verb(f_sid, run, 'accept-agreement', '--prompt', fresh, '--terms', current.rsplit(' ', 1)[-1])
+    fresh = offered_pick(run, f_sid, ['accept-agreement'])
+    result = real(f_sid, run, 'accept-agreement', '--prompt', fresh)
     accepted = record(run)['programme']['agreement']['accepted'] or {}
     check('AE5: a pick of the current label taken after the last term change accepts the agreement',
           result.returncode == 0 and accepted.get('prompt_id') == fresh, result.stdout + result.stderr)
@@ -628,9 +640,33 @@ with tempfile.TemporaryDirectory(prefix='auto-programme-setup-') as work:
     run = programme(g_sid, 'setup-g')
     verb(g_sid, run, 'propose-agreement', '--project-term', 'naming=use kebab case', '--source', 'brief')
     typed_accept = typed_prompt(run, g_sid, 'accept the agreement')['prompt_id']
-    result = verb(g_sid, run, 'accept-agreement', '--prompt', typed_accept)
-    check('a typed accept without --terms is accepted, as before',
-          result.returncode == 0 and record(run)['programme']['agreement']['accepted'], result.stdout + result.stderr)
+    result = real(g_sid, run, 'accept-agreement', '--prompt', typed_accept)
+    check('typed words with no open offer accept nothing',
+          refused(result, 'no open offer') and not record(run)['programme']['agreement']['accepted'],
+          result.stdout + result.stderr)
+    own_words = opick(g_sid, run, '--other', 'yes, accept the agreement', 'accept-agreement')
+    label = 'Accept the agreement with terms ' + approval_mod.terms_digest(ph.normalize_programme(record(run)['programme']))
+    result = real(g_sid, run, 'accept-agreement', '--prompt', own_words, '--reads-as', label)
+    check('own words on the accept offer accept nothing: it moves authority',
+          refused(result, 'moves authority') and not record(run)['programme']['agreement']['accepted'],
+          result.stdout + result.stderr)
+
+    p_sid = 'setup-p'
+    run = programme(p_sid, 'setup-p')
+    states = lambda: {s['key']: s['state'] for s in view(run)['setup']['steps']}
+    rule = {'id': 'p1', 'applies_when': {'change_kinds': ['evals_or_docs']}, 'requires': ['merged'],
+            'evidence_bar': {'merged': 'merged at the gate'}, 'caveat': '', 'autonomy': 'act_and_tell',
+            'added_by': 'pm', 'added_at': '2026-10-26T10:00:00Z', 'why': 'docs need a merge'}
+    assert verb(p_sid, run, 'propose-rule', json.dumps(rule)).returncode == 0
+    check('a proposed shared rule leaves the shared step open with no text to type',
+          states()['shared'] != 'done' and not {'reply', 'needs_typed'} & set(
+              next(s for s in view(run)['setup']['steps'] if s['key'] == 'shared')), states())
+    result = verb(p_sid, run, 'adopt-rule', 'p1', '--prompt', offered_pick(run, p_sid, ['adopt-rule p1']))
+    check('a pick of the offer adopts the proposed rule', result.returncode == 0, result.stdout + result.stderr)
+    keep = {'shared': verb(p_sid, run, 'setup-keep', 'shared'), 'rulings': verb(p_sid, run, 'setup-keep', 'rulings')}
+    check('the shared and Rulings steps finish with no typed line',
+          states()['shared'] == 'done' and states()['rulings'] == 'done' and all(r.returncode == 0 for r in keep.values()),
+          (states(), {k: r.stderr for k, r in keep.items()}))
 
 print(f'programme-setup.test.sh: {passed} passed, {failed} failed')
 sys.exit(1 if failed else 0)

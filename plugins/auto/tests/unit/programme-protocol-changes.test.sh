@@ -6,7 +6,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 
 PASS=0
 FAIL=0
@@ -80,6 +81,7 @@ CRASHES=""
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 
@@ -214,9 +216,8 @@ has "Ruling conflict: g1" "$OUT"
 lacks "protocol change: Authority tool_choice" "$OUT"
 
 it "Covers AE6. a new revision Shawn accepts records a fresh baseline and the conflict line goes"
-P_W="$(prompt 'g1: add herdr:b')"
 prog record-ruling g1 --kind tool_choice --effect grant --scope "PM picks tools" --applies-to herdr:a \
-  --applies-to herdr:b --prompt "$P_W" --run "$RUN"
+  --applies-to herdr:b --run "$RUN"
 P_WA="$(prompt 'accept g1 for herdr:b too')"
 prog accept-context g1 --prompt "$P_WA" --run "$RUN"
 check "0 propose" "$CODE $(baseline g1)"

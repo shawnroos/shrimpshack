@@ -44,6 +44,6 @@ test('no action in the pane submits, suggests or fills a prompt', async ($, on) 
 
   expect(calls.length).toBe(11)
   const drawn = await lines(pane)
-  expect(drawn.some(line => line.includes('Type this:'))).toBe(true)
+  expect(drawn.some(line => line.includes('To withdraw this Ruling, tell the PM in the chat.'))).toBe(true)
   expect(sent).toEqual([])
 })

@@ -2,7 +2,8 @@
 # No real herdr, spinoff or tracker ever runs: PATH puts the fakes first and every call is logged.
 # Needs AUTO_ROOT, PY and WORK set by the caller.
 
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 PASS=0
 FAIL=0
 CURRENT="anonymous"
@@ -130,6 +131,7 @@ CRASHES=""
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
 # pyget '<json>' '<python expression over d>' — the first JSON object line of the text

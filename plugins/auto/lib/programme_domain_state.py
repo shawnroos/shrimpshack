@@ -123,7 +123,7 @@ def _h_recommendations_shown(host, argv):
         box["shown"] = {"at": run_record_core.now_iso(), "fingerprint": box["fingerprint"]}
         return {"fingerprint": box["fingerprint"], "sessions": len(box["set"])}
 
-    return host._write(opts, change, "recommendations_shown", names_change=False)
+    return host._write(opts, change, "recommendations_shown")
 
 
 def _h_answer_domain_behaviour(host, argv):
@@ -138,7 +138,7 @@ def _h_answer_domain_behaviour(host, argv):
             {"id": bid, "reason": opts["as"], "at": run_record_core.now_iso(), "why": " ".join(opts["why"].split())[:400]})
         return {"behaviour": bid, "answer": opts["as"]}
 
-    return host._write(opts, change, "domain_behaviour_answered", names_change=False)
+    return host._write(opts, change, "domain_behaviour_answered")
 
 
 _SPECS = (

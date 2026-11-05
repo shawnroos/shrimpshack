@@ -18,6 +18,7 @@ _WINDOW_BYTES = 1024 * 1024
 _LOOKBACK_BYTES = 32 * 1024 * 1024
 _MAX_OFFSET = 1 << 50
 TOOL = "AskUserQuestion"
+NOTES_ONLY = "(notes only)"
 _TOOL_USE_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -25,10 +26,25 @@ def _hash(value):
     return hashlib.sha256(value).hexdigest()
 
 
+# The registry keeps 50 rows per pane, so an approval given long ago outlives its session's row. Its path was checked
+# at capture and when it approved, so a later read of that past approval checks only the file's name.
+def named_for(path, sid) -> bool:
+    return isinstance(path, str) and os.path.isabs(path) and os.path.basename(path) == sid + ".jsonl"
+
+
+# A session the registry holds no path for must still verify: a SessionStart probe that timed out leaves a row with no
+# path, and that session's only way back is a takeover.
+def registered(path, sid) -> bool:
+    if not named_for(path, sid):
+        return False
+    held = load_lib_module("session_registry").transcript_path(sid)
+    return held is None or path == held
+
+
 def read_window(path, sid, needle=None):
     """The part of the transcript a later check must find unchanged: from the line holding `needle` (a pick's
     asking row) to the end, or the last _WINDOW_BYTES when there is no needle. Returns (start, bytes) or None."""
-    if not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl":
+    if not registered(path, sid):
         return None
     try:
         with open(path, "rb") as stream:
@@ -158,6 +174,7 @@ def _human_result(row, source) -> bool:
     result = row.get("toolUseResult")
     answers = result.get("answers") if isinstance(result, dict) else None
     return (isinstance(by, str) and by.startswith("user") and _valid_answers(answers)
+            and "afkTimeoutMs" not in result
             and answers_hash(answers) == source.get("answers_hash")
             and redacted(answers) == source.get("answers"))
 
@@ -179,30 +196,100 @@ def _rows(path, source, tool_use_id):
     return rows
 
 
-def verify(row) -> str:
+def _verified(row, pinned=True):
+    """The asking block and result the transcript holds for this pick, or None unless it shows a human answer."""
     source = (row.get("payload") or {}).get("source")
     sid = row.get("session_id")
     if not isinstance(source, dict) or type(source.get("version")) is not int or source.get("version") not in (1, 2):
-        return "unknown"
+        return None
     path = source.get("path")
     tool_use_id = source.get("tool_use_id")
     if (source.get("kind") != "pick" or source.get("session_id") != sid or not isinstance(sid, str)
             or not isinstance(tool_use_id, str) or not tool_use_id
-            or not isinstance(path, str) or not os.path.isabs(path) or os.path.basename(path) != sid + ".jsonl"):
-        return "unknown"
+            or not (registered if pinned else named_for)(path, sid)):
+        return None
     try:
         rows = _rows(path, source, tool_use_id)
         if rows is None:
-            return "unknown"
+            return None
         asked = [r for r in rows if r.get("type") == "assistant" and _asks(r, tool_use_id)]
         if len(asked) != 1 or not _plain(asked[0], sid) or not _unprefilled(asked[0], tool_use_id):
-            return "unknown"
+            return None
         uuid = asked[0].get("uuid")
         results = [r for r in rows if r.get("type") == "user" and _answers_row(r, tool_use_id)]
         if (not isinstance(uuid, str) or not uuid or len(results) != 1
                 or results[0].get("sourceToolAssistantUUID") != uuid
                 or not _plain(results[0], sid) or not _human_result(results[0], source)):
-            return "unknown"
-        return "picked"
+            return None
+        return _tool_use(asked[0], tool_use_id), results[0]["toolUseResult"]
     except (OSError, ValueError, TypeError, AttributeError):
-        return "unknown"
+        return None
+
+
+def verify(row, pinned=True) -> str:
+    return "picked" if _verified(row, pinned) is not None else "unknown"
+
+
+def has_note(result) -> bool:
+    annotations = result.get("annotations", {})
+    return (NOTES_ONLY in result["answers"].values()
+            or not isinstance(annotations, dict)
+            or any(not isinstance(entry, dict) or entry.get("notes") for entry in annotations.values()))
+
+
+def _notes(result) -> list:
+    annotations = result.get("annotations", {})
+    entries = annotations.values() if isinstance(annotations, dict) else ()
+    return [entry["notes"] for entry in entries if isinstance(entry, dict) and isinstance(entry.get("notes"), str)]
+
+
+def read_pick(row):
+    """The raw answers from the transcript (the journal holds them redacted) and why they cannot approve an option,
+    or None when the pick does not verify. A noted pick stays verified: the note is Shawn's own words."""
+    found = _verified(row)
+    if found is None:
+        return None
+    block, result = found
+    questions = block["input"].get("questions")
+    asked = [q.get("question") for q in questions if isinstance(q, dict)] if isinstance(questions, list) else []
+    unanswered = [question for question in asked if question not in result["answers"]]
+    gap, noted = None, False
+    if unanswered or not asked:
+        gap = f"leaves {len(unanswered)} of {len(asked)} questions unanswered, so it approves nothing"
+    elif has_note(result):
+        noted = True
+        gap = "carries a note, which counts as Shawn's own words, so it approves no option"
+    return {"answers": result["answers"], "gap": gap, "questions": questions, "noted": noted, "notes": _notes(result)}
+
+
+def question_before(row):
+    """The newest picker in the transcript before this prompt's enqueue position, as (tool_use_id, questions), or None.
+    The hook fires at send time, so the row's offset holds that position wherever the words are delivered later."""
+    source = (row.get("payload") or {}).get("source")
+    sid = row.get("session_id")
+    if not isinstance(source, dict) or source.get("session_id") != sid or not registered(source.get("path"), sid):
+        return None
+    try:
+        checked = read_checked(source["path"], source)
+    except (OSError, TypeError, ValueError):
+        return None
+    if checked is None:
+        return None
+    for line in reversed(checked[0].splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(candidate, dict) or candidate.get("type") != "assistant" or not _plain(candidate, sid):
+            continue
+        for block in reversed(_content(candidate)):
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == TOOL:
+                tool_input = block.get("input")
+                if isinstance(tool_input, dict) and "answers" not in tool_input:
+                    return block.get("id"), tool_input.get("questions")
+    return None
+
+
+def approval_gap(row):
+    pick = read_pick(row)
+    return "does not verify against the transcript" if pick is None else pick["gap"]

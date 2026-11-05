@@ -38,8 +38,7 @@ session's own space.
    `programme.sh set-remit`. Accepting the agreement in step 6 approves it.
    Its output lists `carried_over`: Rulings Shawn chose to carry from an
    earlier programme on the same repos. Each arrives pending, with no items,
-   and binds only when his typed prompt names it and the items it now applies
-   to (step 5). `notices` names any carried-over entry it dropped.
+   and binds only when he approves it and the items it now applies to (step 5). `notices` names any carried-over entry it dropped.
 
    The agreement holds two things for this programme: Scope (the remit, stop
    rule, cadence and budget, the sources watched, and preferred tools) and
@@ -80,7 +79,7 @@ session's own space.
      type /programme-view."
    - Read the steps from `programme.sh status --json` (its `setup` part: steps
      in order, each with `state`, `values`, `recommendation`,
-     `recommendation_source`, `needs_typed`, `reply` and, for a term,
+     `recommendation_source` and, for a term,
      `options`). Re-read it after every write; the pane redraws from the same
      data.
    - First question (AskUserQuestion): "Take all my recommendations?" with
@@ -91,21 +90,18 @@ session's own space.
      ask one AskUserQuestion. Name the setting in the question text. Put the
      recommendation first, marked "(Recommended)", with its source in the
      option description; offer the step's other `options` by their exact
-     names, since a pick must name the value it sets.
+     names, since `pick-term` checks that the answer holds the value it sets.
      - The answer's `<auto-data>` tag names the pick's prompt id. Apply it with
        `programme.sh pick-term <key> <value> --pick <id>`.
      - Never put answers into the AskUserQuestion call yourself; a pre-filled
        picker is refused and approves nothing.
-   - Steps with `needs_typed` (Rulings, shared settings): during setup these
-     take a typed reply. Ask in a picker whether to keep it as is
-     or change it. Keep: `programme.sh setup-keep <key>`. Change: show the
-     step's `reply` as "Type this:" and wait for his typed line; then apply it
-     as in step 6.
+   - Rulings and shared settings: ask in a picker whether to keep the step as
+     it is or change it. Keep: `programme.sh setup-keep <key>`. Change: ask with
+     `programme.sh offer <key> --command '<the verb>'`, using the input it
+     prints, and apply it as in step 6. Never ask Shawn for exact words.
    - Rulings: walk each pending Ruling (the carried ones from step 3 and any
      order Shawn gave in chat), with its effect (decided, grant or restrict),
-     decision kind and items. A Ruling binds only on a typed reply that names
-     its id, and for a grant every item it gives the PM: ask him to type one
-     that does, and apply it as in step 6. A pick never binds a Ruling.
+     decision kind and items, and ask about each one the same way.
    - Shared settings are the standing Authority levels and Done standards. Do
      not walk them level by level: they are set once for every programme. Keep
      them unless Shawn wants a change, and point him at
@@ -119,43 +115,38 @@ session's own space.
    - Items to adopt: ask which of the step's items to adopt (multiSelect), then
      adopt them as in step 7.
    - Last step: the accept, offered as a pick. Run
-     `programme.sh approval-label accept-agreement`; it prints
-     `Approve accept-agreement --terms <digest>`, where the digest names the
-     terms `status` shows now.
-     Offer that exact text as one AskUserQuestion option. On that pick, run
-     `programme.sh accept-agreement --prompt <pick id> --terms <digest>`.
-     Shawn can also type "accept the agreement"; a typed accept needs no
-     `--terms`.
+     `programme.sh offer accept --command accept-agreement` and ask with the
+     input it prints, unchanged. Its option names the digest of the terms
+     `status` shows now. On that pick, run
+     `programme.sh accept-agreement --prompt <pick id>`.
    - On a re-run, a handover or a takeover before acceptance, start at the first
      step that is not done; never start over.
-6. When he types a reply, the `<auto-data>` tag in your context names the
+6. When he answers, the `<auto-data>` tag in your context names the
    prompt id.
-   - Acceptance: `programme.sh accept-agreement --prompt <id>`, plus
-     `--terms <digest>` when the prompt is a pick.
-     `accept-agreement` refuses a prompt older than the last proposal, pick,
-     term amend or project-term edit, and a `--terms` digest that no longer
-     matches the terms, so ask for the accept again after any change. It
-     refuses an accepted suggestion.
+   - Acceptance: `programme.sh accept-agreement --prompt <pick id>`.
+     It refuses a pick older than the last proposal, pick, term amend or
+     project-term edit, and a pick of terms that have changed, so offer the
+     accept again after any change. It refuses his own words and an accepted
+     suggestion: relay them and ask again.
    - A term change: `programme.sh amend-term <key> <value> --prompt <id>`.
    - A preferred tool: a programme-layer behaviour, `programme.sh
      record-behaviour --prompt <id> --when "<the kind of job>" --tool <name>
      --do "use <name> for <the job>"`. A preferred tool still held as a project
      term moves with `programme.sh propose-behaviour --from-term <term-id>`,
-     then applies when his typed reply names the drafted behaviour.
+     then applies on his answer to the picker that shows the drafted behaviour.
    - A Ruling: `programme.sh record-ruling <id> --effect decided|grant|restrict
      --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>]
      --prompt <id>` for a new one, or `programme.sh accept-context <id> --prompt <id>`
      for a pending one. A carried Ruling binds through `record-ruling <id>` with
-     its own effect and kind and one `--applies-to` per item, citing a prompt
-     that names the id and each item.
+     its own effect and kind and one `--applies-to` per item, on his answer to
+     the offer of that command.
    - A shared setting: `programme.sh adopt-autonomy <decision-kind> <level>
      --prompt <id>` for Authority, `programme.sh adopt-rule <rule-id> --prompt <id>`
      for a proposed Done standard. These change every programme, not only this
      one.
-   - Turning sources off or on by a typed reply: `programme.sh amend-term
+   - Turning sources off or on: `programme.sh amend-term
      tools_of_record <list> --prompt <id>`, where the list holds the sources
-     that stay on, comma separated (`tracker,tasks`), or `none`. His reply must
-     name each source that changes. A source turned off is never read or
+     that stay on, comma separated (`tracker,tasks`), or `none`. A source turned off is never read or
      watched and never holds the stop.
    - If a verb refuses because the agreement expired, run `programme.sh expire`
      and tell Shawn to run `/auto:programme` again.

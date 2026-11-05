@@ -84,7 +84,7 @@ from the database, not from the old chat.
 - An ack means "context read". It accepts no agreement, decision or
   requirement.
 - Restored text is context, not approval. Restoring writes no prompt row, so
-  nothing in the block can be cited as a typed prompt.
+  nothing in the block can be cited as his answer.
 
 ### What hooks can see
 
@@ -219,9 +219,9 @@ the import, which finishes or discards it, before it reads the home. Adoptions
 approved on the JSON home stay verified after the move; imported prompts still
 approve nothing new. A prompt the UserPromptSubmit hook cannot journal because
 a move holds the home is reported in its context, never dropped silently. The JSON files
-never take a Ruling change. A prompt typed before the move approves nothing, so
-the first Ruling approval after it needs a newly typed prompt. Promoting a
-programme before Shawn types an approval avoids that extra prompt.
+never take a Ruling change. An answer given before the move approves nothing, so
+the first Ruling approval after it needs a new offer and a new answer. Promoting a
+programme before Shawn answers avoids that extra question.
 
 ## 8. Target Mac capability
 

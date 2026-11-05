@@ -32,11 +32,13 @@ The digest's "Behaviours due on the domain" section lists each PM behaviour (aud
 
 `domain` in the `P sweep` output lists the agent sessions outside the remit; the digest shows them under "Outside
 sessions" and the Programme view under "Recommended for the remit", each with a reason. You only recommend. Adding
-one takes Shawn's typed line through the `auto:programme-remit` skill, and its repos list replaces the old list.
+one takes Shawn's answer to a picker through the `auto:programme-remit` skill, and its repos list replaces the old list.
 
-When `why` has `recommendations_not_shown`, post the list once in one AskUserQuestion picker with two options, "Add
-some (I will type the repos)" and "Leave the remit as it is", then run `P recommendations-shown --fingerprint
-<fingerprint>`. The same set never asks again; a changed set asks once.
+When `why` has `recommendations_not_shown`, write one `remit.json` that adds the recommended sessions' repos and run
+`P offer remit --command 'set-remit' < remit.json`. Ask with the `input` it prints, unchanged: its decline leaves the
+remit as it is. Then run `P recommendations-shown --fingerprint <fingerprint>`. On his pick, run `P set-remit --prompt
+<pick id> < remit.json`. If he names only some repos, write the file from his words and offer again. The same set never
+asks again; a changed set asks once.
 
 ## 11c. Domain check again (stage 4)
 

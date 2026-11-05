@@ -6,7 +6,7 @@ A ritual is a named workflow you run when a calendar rule or a programme moment 
 
 ## A ritual file in a repo
 
-The digest's `file_proposals` and the Programme view list ritual files that sit on a remit repo's default branch and are not in force for this programme (`proposed`, or `changed` since Shawn adopted an earlier version). Put them to Shawn: the id, when it runs, each step and offer, the check if any, the short hash, and the commit and the age of the clone's last fetch. He adopts with a typed message naming the ritual id, the hash and the check: `P adopt-ritual-file <repo key>/<id> --prompt <id>`; or declines with `P decline-ritual-file`. You never adopt on your own, a hash you named earlier is refused if the file changed since, and an adopted ritual keeps running from the snapshot he approved until he adopts or declines the new content. A rejected file (`id_collision`, a protected step, a bad key) is for the repo's maintainers to fix, not for you to work around.
+The digest's `file_proposals` and the Programme view list ritual files that sit on a remit repo's default branch and are not in force for this programme (`proposed`, or `changed` since Shawn adopted an earlier version). Put them to Shawn: the id, when it runs, each step and offer, the check if any, the short hash, and the commit and the age of the clone's last fetch. Run `P offer <key> --command 'adopt-ritual-file <repo key>/<id>' --command 'decline-ritual-file <repo key>/<id>'`, ask with the input it prints, and run the one he answers with `--prompt <id>`. You never adopt on your own, an answer is refused if the file changed since the offer, and an adopted ritual keeps running from the snapshot he approved until he adopts or declines the new content. A rejected file (`id_collision`, a protected step, a bad key) is for the repo's maintainers to fix, not for you to work around.
 
 ## A ritual with a check
 
@@ -17,7 +17,7 @@ The digest's `file_proposals` and the Programme view list ritual files that sit 
 A `due` row means the trigger passed within the last two cadence periods and nothing has answered it.
 
 1. `P start-ritual <id>`. It prints the steps and records that the ritual is in flight.
-2. Do the steps, in order. A step is Shawn's plain words: a PM action, a message to a worker, or a report to Shawn. Do not do more than the steps say. If the ritual has `offers`, they are questions for Shawn, never steps: ask him (picker or typed words), and act on one only on his typed pick.
+2. Do the steps, in order. A step is Shawn's plain words: a PM action, a message to a worker, or a report to Shawn. Do not do more than the steps say. If the ritual has `offers`, they are questions for Shawn, never steps: ask him, and act on one only on his answer.
 3. `P run-ritual <id> --outcome "<one line>"`. If you cannot finish, `P fail-ritual <id> --why "<one line>"`, and tell Shawn in the next report.
 
 ## Offer a missed ritual
@@ -26,8 +26,8 @@ A `missed` row means no PM ran it in time. Never run it silently late.
 
 1. Collect every `missed` or `in_flight` row with `offered` false (an in-flight ritual is one a previous PM began and did not finish). An offer from a previous PM's tenure does not count: ask again once.
 2. `P offer-rituals <id>...` for all of them in one call. This is what stops the next sweep from asking again.
-3. Ask Shawn in AskUserQuestion pickers, one picker per ritual (a picker holds one decision), posted together. Each option is the exact text `P approval-label <command>` prints for the command it approves: `start-ritual <id>` for run now (for an in-flight ritual, finishing it), `skip-ritual <id>` for skip this time, `retire-ritual <id> --as retired` for retire. A pick approves only that exact label; free text such as "Skip r1" approves nothing.
-4. On his answer, make one call per ritual citing that ritual's pick: `P start-ritual <id> --prompt <pick id>`, the steps, then `P run-ritual <id> --prompt <pick id>`; or `P skip-ritual <id> --prompt <pick id>`; or `P retire-ritual <id> --as retired --prompt <pick id>`. A typed reply naming the ritual id works the same way.
+3. Ask Shawn in AskUserQuestion pickers, one picker per ritual (a picker holds one decision), posted together. For each, run `P offer <key> --command 'start-ritual <id>' --command 'skip-ritual <id>' --command 'retire-ritual <id> --as retired'` and ask with the input it prints: start is run now (for an in-flight ritual, finishing it), skip is skip this time. A pick approves only its own option.
+4. On his answer, make one call per ritual citing that ritual's answer: `P start-ritual <id> --prompt <id>`, the steps, then `P run-ritual <id> --prompt <id>`; or `P skip-ritual <id> --prompt <id>`; or `P retire-ritual <id> --as retired --prompt <id>`. His own words work too: see [own words](own-words.md).
 5. Do not ask again for a miss that is already offered. Ask again only when a new miss appears.
 
 ## Handover and end

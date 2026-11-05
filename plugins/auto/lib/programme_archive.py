@@ -265,7 +265,7 @@ def _caller_may_close(record, sid, *, need_ended=True) -> None:
     if sealed(programme):
         raise ArchiveError("the programme is archived; its home is read-only", "sealed")
     if need_ended and not programme.get("ended"):
-        raise ArchiveError("the programme has not ended; end it first with /auto:programme-end", "not_ended")
+        raise ArchiveError("the programme has not ended; end it first through its picker (`programme.sh offer end-programme --command 'end'`)", "not_ended")
     closers = {record.get("driving_session_id")}
     if programme.get("ended"):
         closers.add((programme.get(CLOSURE) or {}).get("ended_by"))
@@ -356,7 +356,8 @@ def evaluate(run_id, record) -> list:
     ended = programme.get("ended")
     return [
         _check("ended", [] if ended else [{"id": "programme", "reason": "the programme has not ended"}],
-               "type /auto:programme-end in the driving session, then run end"),
+               "in the driving session, run `programme.sh offer end-programme --command 'end'`, ask Shawn with the "
+               "input it prints, then run `programme.sh end --prompt <pick id>`"),
         _check("authority", _integrity(run_id), "the database failed its integrity check; repair it first"),
         _check("operations", _open_operations(programme),
                "run reconcile-operations; an action that stays uncertain needs dispose-action --attempt"),
@@ -521,8 +522,10 @@ def _write(host, opts, change, kind, *, need_ended=True, prompt_id=None):
 
     def mutate(rec):
         _caller_may_close(rec, sid, need_ended=need_ended)
-        prompt = host._typed_prompt(run_id, rec, prompt_id) if prompt_id else None
+        prompt = host._approval_for(run_id, rec, prompt_id) if prompt_id else None
         seen["payload"] = change(rec.setdefault("programme", {}), prompt, rec)
+        if prompt and prompt.get("reading"):
+            seen["payload"] = dict(seen["payload"] or {}, **prompt["reading"])
 
     def compose(_, rec):
         return programme_journal.entry(kind, sid, seen["payload"],
@@ -566,10 +569,9 @@ def _h_dispose_action(host, argv):
         raise ValueError("usage: dispose-action (--attempt <id>|--resource <id>) "
                          "--as abandoned_unknown|accepted_unknown --prompt <id> --run <id>")
     if not opts.get("prompt"):
-        raise ValueError("dispose-action needs --prompt <id> of a typed prompt that names the attempt or resource")
+        raise ValueError("dispose-action needs --prompt <id> of his answer to `programme.sh offer`")
 
     def change(programme, prompt, rec):
-        host.require_named(prompt, target)
         if opts.get("attempt"):
             entry = load_lib_module("programme_recovery").operations(programme).get(target)
             if not isinstance(entry, dict) or entry.get("state") not in ("admitted", "uncertain"):
@@ -718,10 +720,10 @@ _SPECS = (
      "unfinished work stopped; it confirms no requirement."),
     ("dispose-action", _h_dispose_action,
      "(--attempt <id>|--resource <id>) --as abandoned_unknown|accepted_unknown --prompt <id> --run <id>",
-     "a prompt that is not typed in the driving session or does not name the attempt or resource; an "
+     "a prompt that answers no open offer of this command; an "
      "archived programme; an operation that is not admitted or uncertain; a released resource. Records "
-     "a human's acceptance of the uncertainty (origin_verified true: the transcript shows a human typed "
-     "the prompt); the action is never recorded as completed."),
+     "a human's acceptance of the uncertainty (origin_verified true: the transcript shows the "
+     "answer is his); the action is never recorded as completed."),
     ("archive", _h_archive, "--run <id> [--op <id>]",
      "a programme that has not ended; any failed check (named with its remedy; the programme stays "
      "ended and unarchived); a candidate superseded by a later write. Seals once: a retry returns the "

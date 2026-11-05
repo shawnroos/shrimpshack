@@ -6,7 +6,9 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
+REAL_PROG="${AUTO_ROOT}/lib/programme.py"
 
 PASS=0
 FAIL=0
@@ -91,8 +93,11 @@ CRASHES=""
 prog() {
   OUT="$("$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
   case "$OUT" in *Traceback*) CRASHES="${CRASHES}$* | " ;; esac
 }
+
+opick() { "$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$RUN" "$@"; }
 
 # jq-free JSON field read: pyget '<json>' '<python expression over d>'
 pyget() {
@@ -132,7 +137,7 @@ NOW_EXPR='core.now_iso()'
 AUTONOMY_BEFORE="$("$PY" "$PROG" status --run "$RUN" --json 2>&1)"
 P_DEC="$(prompt typed 'record decision d-browser: technical approach for browser-e2e, ship the browser fix, no prod flag changes')"
 
-it "record-ruling with a typed prompt that names it records accepted revision 1"
+it "record-ruling on a pick records accepted revision 1"
 prog record-ruling d-browser --effect decided --kind technical_approach --scope "ship the browser fix" --reason "customers hit the broken flow" \
   --limit "no prod flag changes" --applies-to herdr:browser-e2e --prompt "$P_DEC" --run "$RUN"
 check "0 accepted 1" "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"]')"
@@ -140,7 +145,7 @@ check "0 accepted 1" "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"
 it "the decision revision records its source class"
 SRC="$(pyget "$OUT" 'd["source"]')"
 has '"class": "human_input"' "$SRC"
-it "  ... and origin_verified is true: the transcript shows a human typed the prompt"
+it "  ... and origin_verified is true: the transcript shows a human answered the picker"
 has '"origin_verified": true' "$SRC"
 
 it "assign-item binds the item to the in-force decision revision"
@@ -188,19 +193,41 @@ check "$(pyget "$AUTONOMY_BEFORE" 'd["model"]["rules_in_force"]["autonomy"]')" \
 
 # ── Scenario 2: materially wider work waits for acceptance of the delta ─────
 P_DOCS="$(prompt typed 'record decision d-docs: technical approach for docs-page')"
-prog record-ruling d-docs --effect decided --kind technical_approach --scope "fix the docs page" \
+prog record-ruling d-docs --effect grant --kind technical_approach --scope "fix the docs page" \
   --reason "stale install steps" --applies-to herdr:docs-page --prompt "$P_DOCS" --run "$RUN"
 prog assign-item herdr:docs-page --decision-id d-docs --run "$RUN"
 
-it "a wider revision of d-docs stays pending even with a typed prompt, and names its delta"
+it "a wider revision of d-docs citing typed words with no open offer is refused and adds no revision"
 P_WIDE="$(prompt typed 'widen d-docs to linux-probe too')"
-prog record-ruling d-docs --effect decided --kind technical_approach --scope "fix the docs page" \
+PROG="$REAL_PROG" prog record-ruling d-docs --effect grant --kind technical_approach --scope "fix the docs page" \
   --reason "stale install steps" --applies-to herdr:docs-page --applies-to herdr:linux-probe --prompt "$P_WIDE" \
   --run "$RUN"
+check "1" "$CODE"
+has "no open offer" "$OUT"
+check "1" "$(pyget "$("$PY" "$REAL_PROG" context --run "$RUN" 2>&1)" "len(d['decisions']['d-docs']['revisions'])")"
+
+it "a decided Ruling cannot widen with no prompt: it is Shawn's own decision"
+P_OWN_D="$(opick "record-ruling d-own --effect decided --kind technical_approach --scope \"fix the page\" --applies-to herdr:docs-page")"
+prog record-ruling d-own --effect decided --kind technical_approach --scope "fix the page" \
+  --applies-to herdr:docs-page --prompt "$P_OWN_D" --run "$RUN"
+prog record-ruling d-own --effect decided --kind technical_approach --scope "fix the page" \
+  --applies-to herdr:docs-page --applies-to herdr:linux-probe --run "$RUN"
+check "1" "$CODE"
+has "needs his answer" "$OUT"
+
+it "a pick of a wider decided revision binds at once"
+P_OWN_W="$(opick "record-ruling d-own --effect decided --kind technical_approach --scope \"fix the page\" --applies-to herdr:docs-page --applies-to herdr:linux-probe")"
+prog record-ruling d-own --effect decided --kind technical_approach --scope "fix the page" \
+  --applies-to herdr:docs-page --applies-to herdr:linux-probe --prompt "$P_OWN_W" --run "$RUN"
+check "0 accepted 2" "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"]')"
+
+it "a wider revision of d-docs recorded with no prompt stays pending, and names its delta"
+prog record-ruling d-docs --effect grant --kind technical_approach --scope "fix the docs page" \
+  --reason "stale install steps" --applies-to herdr:docs-page --applies-to herdr:linux-probe --run "$RUN"
 check "0 pending_acceptance 2 [\"herdr:linux-probe\"]" \
   "$CODE $(pyget "$OUT" 'd["state"]') $(pyget "$OUT" 'd["rev"]') $(pyget "$OUT" 'd["delta"]["added"]')"
 
-it "a decided Ruling's delta lists the added target as what the accepting prompt must name"
+it "a decided Ruling's delta lists the added target"
 check "[\"herdr:linux-probe\"]" "$(pyget "$("$PY" "$PROG" context --run "$RUN" 2>&1)" "d['decisions']['d-docs']['pending']['delta']['added']")"
 
 it "the context view reads the decision as active while its wider revision waits"
@@ -218,17 +245,23 @@ check "1 [\"herdr:docs-page\"]" "$(pyget "$D" 'd["decisions"]["d-docs"]["in_forc
 it "the pending delta is a decision for Shawn"
 has "d-docs" "$(pyget "$(status_json)" 'd["model"]["decisions_for_shawn"]')"
 
-it "accept-context refuses a prompt that names the decision but not the added target"
-P_HALF="$(prompt typed 'accept d-docs')"
-prog accept-context d-docs --prompt "$P_HALF" --run "$RUN"
+it "accept-context refuses typed words with no open offer"
+P_HALF="$(prompt typed 'accept d-docs with linux-probe')"
+PROG="$REAL_PROG" prog accept-context d-docs --prompt "$P_HALF" --run "$RUN"
 check "1" "$CODE"
-has "linux-probe" "$OUT"
+has "no open offer" "$OUT"
 
-it "accept-context refuses a prompt that is not typed"
+it "accept-context on a wider revision refuses his own words on the offer: it takes a pick"
+P_OWN="$(opick --other 'accept d-docs with linux-probe' 'accept-context d-docs')"
+PROG="$REAL_PROG" prog accept-context d-docs --prompt "$P_OWN" --run "$RUN"
+check "1 1" "$CODE $(pyget "$("$PY" "$REAL_PROG" context --run "$RUN" 2>&1)" "d['decisions']['d-docs']['in_force']['rev']")"
+has "moves authority" "$OUT"
+
+it "accept-context refuses a prompt that is not Shawn's words or a pick"
 P_CRON="$(prompt cron 'accept d-docs with linux-probe')"
 prog accept-context d-docs --prompt "$P_CRON" --run "$RUN"
 check "1" "$CODE"
-has "not typed" "$OUT"
+has "is not Shawn's words or a verified pick" "$OUT"
 
 it "accept-context refuses a prompt imported from a legacy journal"
 P_LEGACY="$(run_py "$RUN" <<'EOF'
@@ -289,8 +322,8 @@ prog accept-context d-docs --prompt plegsrc1 --run "$RUN"
 check "1" "$CODE"
 has "legacy" "$OUT"
 
-it "accepting the delta with a prompt naming it makes revision 2 in force and supersedes revision 1"
-P_FULL="$(prompt typed 'accept d-docs widened to linux-probe')"
+it "accepting the delta with a pick makes revision 2 in force and supersedes revision 1"
+P_FULL="$(opick 'accept-context d-docs')"
 prog accept-context d-docs --prompt "$P_FULL" --run "$RUN"
 D="$(CLAUDE_CODE_SESSION_ID=sess-other "$PY" "$PROG" context --run "$RUN" 2>&1)"
 check "0 2 2" "$CODE $(pyget "$D" 'd["decisions"]["d-docs"]["in_force"]["rev"]') $(pyget "$D" 'd["decisions"]["d-docs"]["revisions"][0]["superseded_by"]')"
@@ -396,12 +429,12 @@ prog start-worker herdr:browser-e2e --run "$RUN" -- --plan x
 check "1" "$CODE"
 has "safety pause s2" "$OUT"
 
-it "lift-pause needs a typed prompt that names the pause"
-P_LIFT_BAD="$(prompt typed 'lift the pause')"
-prog lift-pause s2 --prompt "$P_LIFT_BAD" --run "$RUN"
+it "lift-pause refuses typed words with no open offer and lifts on a pick"
+P_LIFT_BAD="$(prompt typed 'lift pause s2, the write path is closed')"
+PROG="$REAL_PROG" prog lift-pause s2 --prompt "$P_LIFT_BAD" --run "$RUN"
 check "1" "$CODE"
-has "does not name" "$OUT"
-P_LIFT="$(prompt typed 'lift pause s2, the write path is closed')"
+has "no open offer" "$OUT"
+P_LIFT="$(opick 'lift-pause s2')"
 prog lift-pause s2 --prompt "$P_LIFT" --run "$RUN"
 check "0" "$CODE"
 

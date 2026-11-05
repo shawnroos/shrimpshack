@@ -9,8 +9,6 @@ The recovery packet is built from one committed store revision and is context, n
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import secrets
 import sys
@@ -53,12 +51,7 @@ class DispatchError(Exception):
         self.code = code
 
 
-def _canonical(value) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def canonical_sha(value) -> str:
-    return "sha256:" + hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+canonical_sha = programme_journal.canonical_sha
 
 
 def owner_epoch(programme) -> int:
@@ -366,8 +359,8 @@ def _binding(ctx, programme) -> dict:
     for r in programme_context.rulings(programme, None):
         if not r["is_ruling"] or r["state"] != "active":
             continue
-        entry = _capped({k: r[k] for k in ("kind", "effect", "legacy", "scope", "quote", "applies_to", "until",
-                                           "rev")}, ("scope", "quote"), f"ruling:{r['id']}")
+        entry = _capped({k: r[k] for k in ("kind", "effect", "legacy", "scope", "quote", "wording", "applies_to",
+                                           "until", "rev")}, ("scope", "quote"), f"ruling:{r['id']}")
         entry.update(binding=True, authorizes=False)
         rulings.append(entry)
     return {"pauses": pauses, "denials": denials, "rulings": rulings}

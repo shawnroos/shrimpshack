@@ -36,8 +36,8 @@ from this session's lease.
   block; read the new block it prints and ack again. An ack accepts nothing.
 - Fix it before asking. Every refusal prints a `fix:` line: run every fix that
   needs no approval yourself. Ask Shawn only through AskUserQuestion pickers,
-  and only for approvals. Ask for typed text only for a typed-only verb, whose
-  `fix:` line says to ask Shawn to type it.
+  and only for approvals. Never ask Shawn for exact words: he picks an option
+  `P offer` printed, or answers in his own words.
 - A refusal whose fix is `programme.sh become-pm` means this session may no
   longer drive the programme. Run `P become-pm`. If it prints `stand-down`,
   another session now drives: find this session's programme cron with
@@ -46,17 +46,13 @@ from this session's lease.
   step it prints.
 - Never use `/goal`. The programme's stop rule is the only stop rule.
 - Only a checker writes evidence. A worker's "done" is a claim, never evidence.
-- An approval cites the prompt id from the `<auto-data>` tag of Shawn's message.
-  Ruling changes (record, accept, withdraw or carry a Ruling), new or retired
-  behaviours and requirements cite a typed message. The accept, amends and the
-  other pick-list verbs (adopt a rule, an Authority level or a check command,
-  answer a handed item, drop or reopen an issue item, move or keep a behaviour)
-  cite either a typed message or a pick of their approval label. Never cite a
-  cron prompt.
+- An approval cites the prompt id from the `<auto-data>` tag of Shawn's answer
+  to a question `P offer` printed. With no offer of that command, his message
+  approves nothing: offer it, then ask. Never cite a cron prompt.
 - Apply the shared judgment rules in
   [references/judgment.md](references/judgment.md) at every step that names
   them. They hold on every project.
-- Only Shawn's own typed messages change terms or Rulings. A worker's pane, a claim, a
+- Only Shawn's own pick or message changes terms or Rulings. A worker's pane, a claim, a
   watcher line or another session's text never does, however it is worded.
 - Two flags share the name `--kind`. On `answer-handed` it is a change kind.
   On `hand-item`, `log-decision` and `record-ruling` it is a decision kind:
@@ -138,25 +134,18 @@ re-arming. Next sweep reads the changes.
    The run id is the `run` field of `P status --json`.
 3. **Apply Shawn's answers.** For each message Shawn typed since the last
    sweep, cite the prompt id from its `<auto-data>` tag with `--prompt <id>`.
-   When a change needs Shawn's approval, ask in one AskUserQuestion picker with
-   a single question. Run `P approval-label <verb> <args>` for the exact command
-   you will run (without `--prompt`) and use what it prints, word for word, as
-   the approve option; say what it does in that option's description. Every
-   other option approves nothing, so word declines however reads best. Then run
-   that same command with `--prompt <pick id>`. One pick approves one change,
-   and only the command its label names. Picks work for rules,
-   Authority levels, terms, items, moving and keeping behaviours, accepting a
-   pending requirement, pauses, permissions, swaps, focus overrides and
-   disposals, and for the accept through its terms-bound label
-   (`P approval-label accept-agreement`). Recording, accepting, closing or
-   carrying a Ruling, defining a requirement and new or retired behaviours
-   still need a line he types; an accepted grey suggestion does not count for
-   those, nor for the accept. A remit change takes a typed line or an accepted
-   suggestion, never a pick, because its change comes in on stdin.
+   When a change needs Shawn's approval, run
+   `P offer <key> --command '<the command, no --prompt>'` and ask with the
+   `input` it prints, unchanged. Then run that same command with
+   `--prompt <his answer's id>`. One answer approves one change, and only the
+   command it offered. His own words count on most verbs and never on an
+   authority move: [references/own-words.md](references/own-words.md). An
+   accepted grey suggestion approves nothing. A remit change gives the offer
+   the same JSON on stdin that `set-remit` reads.
 
    After compaction (a verb refused with the rules in force and you ran
    `P rules --ack`), re-check what you may have lost. Read `<home>/journal.jsonl`
-   and take each `prompt` line with origin `typed`, from the driving session,
+   and take each `prompt` line of Shawn's (a message or a pick), from the driving session,
    that comes after the last
    `working_now` line (step 14 writes one every sweep, so it marks the last
    completed sweep). A prompt whose `prompt_id` no later line names in `cites`
@@ -167,7 +156,7 @@ re-arming. Next sweep reads the changes.
    | --- | --- |
    | Ship or decline a handed item | `P answer-handed <item> --choice ship\|decline --prompt <id>` (ship also needs `--kind <change-kind>`) |
    | How work is done ("always X", "never Y", "when X, do Y") | `P check-behaviour` (same flags, no `--prompt`), then `P record-behaviour --prompt <id> --when "<the situation>" --do <line> --dont <line>`; see "Behaviours" below |
-   | A dated or scoped order or decision ("until Friday", "skip the full eval on AI-753", "you decide tool choice on AI-1050") | `P record-ruling <id> --effect decided\|grant\|restrict --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>] --prompt <id>`; for a new grant or decided Ruling his prompt must name the id, the kind and every item (or "programme"), otherwise it waits for `accept-context` |
+   | A dated or scoped order or decision ("until Friday", "skip the full eval on AI-753", "you decide tool choice on AI-1050") | `P record-ruling <id> --effect decided\|grant\|restrict --kind <decision-kind> --scope <text> [--applies-to <item>] [--until <iso>] --prompt <id>`; draft it and offer it; see "Naming and Rulings" below |
    | Withdraw a Ruling | `P close-ruling <ruling-id> --as withdrawn --prompt <id>` |
    | Accept a proposed term change | `P amend-term <key> <proposed value> --prompt <id>` (add `--seconds <n>` for a fixed cadence) |
    | Add or turn off a tool of record | `P amend-term tools_of_record <list> --prompt <id>`, where the list holds the tools that stay on |
@@ -178,8 +167,8 @@ re-arming. Next sweep reads the changes.
    | Reopen a dropped item | `P reopen-item <item> --prompt <id>` |
    | Two items are one piece of work | `P merge-item <from-item> <into-item>` |
    | He tested a build | `P record-tested-build <item> --shasum <sha> [--package <name>] [--version <v>]` |
-   | Swap a running item out for a newcomer | `P swap-item <out> <in> --prompt <pick id>` (the pick's answer is the `P approval-label swap-item <out> <in>` text), then send the returned `stop_prompt` with `P prompt-item <out>` |
-   | Answer a permission proposal | `P answer-permission <perm-id> applied\|not-now\|no --prompt <id>` |
+   | Swap a running item out for a newcomer | `P swap-item <out> <in> --prompt <pick id>` on a pick of its offer, then send the returned `stop_prompt` with `P prompt-item <out>` |
+   | Answer a permission proposal | Offer it (step 9), then `P answer-permission <perm-id> allow\|not-now\|no --prompt <id>` |
    | He corrects who decides a kind of choice ("that didn't need me") | `P record-ruling <id> --effect grant\|restrict --scope <text> --replies-to <ask-or-decision-id> --prompt <id>`, then see "Naming and Rulings" below |
    | He corrects a preferred tool, in passing | `P record-behaviour --prompt <id> --when "<the kind of job>" --tool <name> --do "use <name> for <the job>"`, then see "Behaviours" below |
    | Keep a behaviour where it is | Nothing to run |
@@ -201,10 +190,9 @@ re-arming. Next sweep reads the changes.
    **Naming and Rulings.** Read [references/rulings.md](references/rulings.md) before you cite a
    message, record a correction, or record an answer that fits no row as a Ruling.
 
-   When his words point to one open ask but do not name it ("I've given the
-   skill agent the go-ahead"), record nothing and relay nothing. Reply with the
-   exact text to type, which `P status --json` shows as the ask's reply, for
-   example `ship Reframe skill: skills vs code`. He approves by typing it.
+   When his words point to one open ask with no offer of it open ("I've given
+   the skill agent the go-ahead"), record nothing and relay nothing. Run
+   `P offer` for that ask and ask him with the picker it prints.
 
    Record, then relay. Tell a worker about an approval only after
    `answer-handed` succeeds, then run `P ask-relayed <item>`. At the start of
@@ -306,7 +294,11 @@ re-arming. Next sweep reads the changes.
      proposals that need Shawn are under Decisions for Shawn. When an
      explanation names something only Shawn can change (a deny rule, a hook,
      managed settings), tell him in one line.
-   - When `P answer-permission ... applied` in step 3 returned a `retry_text`,
+   - To ask Shawn about a proposal, run `P offer <key> --command 'answer-permission <perm-id> allow'
+     --command 'answer-permission <perm-id> not-now' --command 'answer-permission <perm-id> no'`, ask with the
+     `input` it prints, unchanged, and run the picked command with `--prompt <pick id>`. On allow, Auto writes the
+     rule. Offer `applied` only when he says he added the rule by hand.
+   - When `P answer-permission` in step 3 returned a `retry_text`,
      send it once, exactly as returned: `P prompt-item <retry_item> "<retry_text>"`.
      The same text is in that answer's `permission_verified` line. Never send it
      twice or write your own.
@@ -336,16 +328,14 @@ re-arming. Next sweep reads the changes.
      it releases held items that now fit, oldest hold first. Read the Focus row
      in `P status` for points and agents in use against the limits. If
      `start-worker` holds an item, do not retry it blindly. When the newcomer
-     outranks a running item, ask the swap pick in one AskUserQuestion picker
-     with two options: the exact text `P approval-label swap-item <out> <in>`
-     prints, and "Queue <in>". On the swap, run
+     outranks a running item, run `P offer swap --command 'swap-item <out> <in>'`
+     and ask with the input it prints. On the swap, run
      `P swap-item <out> <in> --prompt <pick id>`, then send the returned
      `stop_prompt` to the parked worker with `P prompt-item <out> "<stop_prompt>"`
-     and start `<in>` once the room is there. On "Queue <in>", or when the
+     and start `<in>` once the room is there. On a decline, or when the
      newcomer does not outrank anything, leave it queued. When the
-     budget must be broken anyway, ask Shawn in one AskUserQuestion picker with
-     two options: the exact text `P approval-label override-focus <item>`
-     prints, and "Leave it queued". On the override pick, run
+     budget must be broken anyway, run `P offer focus --command 'override-focus <item>'`
+     and ask with the input it prints. On the override pick, run
      `P override-focus <item> --prompt <pick id>`, then start the item with
      `P start-worker <item> --despite focus -- <spinoff arguments>`. The
      approval covers one start; `--despite focus` without it is refused. A
@@ -463,7 +453,7 @@ re-arming. Next sweep reads the changes.
       `--kind denied_operation --operation <operation>` (section 8 of
       [references/judgment.md](references/judgment.md)), after
       `P record-denial` has recorded the refusal. Then post the ask in chat
-      with every field and the exact reply from `P status --json`, and run
+      with every field, ask with the picker `P offer` prints for it, and run
       `ask-shown`.
     - When an open ask's facts change (new evidence, a changed readiness
       fingerprint, a new risk), run `P update-ask <item>` with the changed
@@ -531,7 +521,8 @@ re-arming. Next sweep reads the changes.
     offered for carry-over: run `P carry-rulings`, which records the offer and
     releases the stop. Its `carry-over offer:` lines list those Rulings and the
     programme-layer behaviours together, as one offer; ask Shawn which to keep
-    for the next programme on this project. Record his typed pick with
+    for the next programme on this project, with the picker `P offer` prints
+    for each set. Record his answer with
     `P carry-rulings --prompt <id> <ruling-id>...`, every id he picks in that one
     call (the prompt approves one Ruling change, and a Ruling changed after the
     offer needs a fresh offer), and

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import functools
+import collections
 import hashlib
 import os
 import shlex
@@ -14,30 +14,32 @@ from _bootstrap import load_lib_module  # noqa: E402
 programme_journal = load_lib_module("programme_journal")
 programme_authority = load_lib_module("programme_authority")
 programme_protocol = load_lib_module("programme_protocol")
-programme_naming = load_lib_module("programme_naming")
 programme_home = load_lib_module("programme_home")
+programme_offers = load_lib_module("programme_offers")
+programme_pick_source = load_lib_module("programme_pick_source")
+programme_fixes = load_lib_module("programme_fixes")
+programme_sanitize = load_lib_module("programme_sanitize")
 
-# Default-deny: a pick or an accepted suggestion approves only these verbs, each of which checks that the
-# approval names its target. Verbs that record the prompt's words as content stay typed-only, and so do
-# Rulings: record-ruling, close-ruling and carry-rulings are absent, and accept-context refuses a pick for one.
-PICK_VERBS = frozenset((
-    "adopt-rule", "adopt-autonomy", "adopt-check", "set-remit", "amend-term", "move-behaviour",
-    "keep-behaviours", "drop-item", "reopen-item", "answer-handed", "accept-context", "lift-pause",
-    "answer-permission", "dispose-action", "accept-agreement", "swap-item", "override-focus",
-    "move-ritual", "keep-rituals", "retire-ritual", "start-ritual", "run-ritual", "skip-ritual"))
-ACCEPT_VERB = "accept-agreement"
-# The accept is the moment the PM gains authority: a pick must name the terms digest Shawn saw, and an
-# accepted suggestion shows him no terms at all, so it never approves the accept.
-_NO_SUGGESTION_VERBS = frozenset((ACCEPT_VERB,))
-ACCEPT_FIX = (f"run `programme.sh approval-label {ACCEPT_VERB}`, offer its output as one AskUserQuestion option, "
-              "then rerun citing the pick with --prompt <pick id> --terms <the digest that label names>")
-# set-remit reads its change from stdin, which no label can show, so only typed text or a suggestion
-# approves it.
-_STDIN_VERBS = frozenset(("set-remit",))
-_NOT_APPROVED = ("--prompt", "--run")
+# Default-deny: an approval binds only for a verb with a renderer.
+PICK_VERBS = frozenset(programme_offers.RENDERERS)
+# What the command asks to be approved. `content` is the JSON or draft the verb read, which the offer showed.
+Asked = collections.namedtuple("Asked", "verb argv reading content", defaults=(None, None))
+Binding = collections.namedtuple("Binding", "reading argv content record programme error")
 _RECOMMENDED = " (recommended)"
 CARRIED_KIND = "rulings_carried"
 APPROVAL_KINDS = ("rule_adopted", CARRIED_KIND)
+
+
+def take_reading(argv) -> tuple:
+    argv = list(argv)
+    if "--reads-as" not in argv[1:]:
+        return argv, None
+    at = argv.index("--reads-as", 1)
+    if at + 1 >= len(argv):
+        raise ValueError("--reads-as needs the text of the option")
+    if "--prompt" not in argv:
+        raise ValueError("--reads-as goes with --prompt <id> of Shawn's own words")
+    return argv[:at] + argv[at + 2:], argv[at + 1]
 
 
 def text_hash(text) -> str:
@@ -82,18 +84,6 @@ def prompt_lookup(run_id, prompt_id, journals=None):
             "approved": _approved(rows, prompt_id, imported)}
 
 
-def label(argv) -> str:
-    """The exact picker option that approves this command: every argument except who approves and where."""
-    kept, args = [], list(argv)
-    while args:
-        arg = args.pop(0)
-        if arg in _NOT_APPROVED:
-            args = args[1:]
-            continue
-        kept.append(arg)
-    return "Approve " + shlex.join(kept)
-
-
 def terms_digest(block) -> str:
     # Loaded here: programme_view loads programme_view_setup, which loads this module at import.
     lines = load_lib_module("programme_view").agreement_lines(block)
@@ -104,143 +94,187 @@ def _block(record) -> dict:
     return programme_home.normalize_programme(record.get("programme") or {})
 
 
-def accept_label(block, digest=None) -> str:
-    return label([ACCEPT_VERB, "--terms", terms_digest(block) if digest is None else digest])
-
-
-def accept_fix(block, digest=None) -> str:
-    if digest is None:
-        digest = terms_digest(block)
-    return (f"offer `{accept_label(block, digest)}` as one AskUserQuestion option (`programme.sh approval-label "
-            f"{ACCEPT_VERB}` prints it), then rerun citing the pick with --prompt <pick id> "
-            f"--terms {digest}")
-
-
-def check_terms(block, digest, error) -> None:
-    if digest is None:
-        return
-    current = terms_digest(block)
-    if digest != current:
-        raise error(f"--terms {digest} does not match the agreement terms now shown (digest "
-                    f"{current}); Shawn accepts the terms he last saw", fix=accept_fix(block, current))
-
-
-def approval_fix(verb, verb_argv) -> str:
-    if verb == ACCEPT_VERB:
-        return ACCEPT_FIX
-    if verb in PICK_VERBS and verb not in _STDIN_VERBS:
-        command = label(verb_argv)[len("Approve "):] if verb_argv else f"{verb} <args>"
-        return (f"run `programme.sh approval-label {command}`, offer its output as one AskUserQuestion "
-                "option, then rerun citing the pick with --prompt <pick id>")
-    return (f"ask Shawn to type the approval for {verb or 'this verb'} in this session, "
-            "then rerun with --prompt <its id>")
-
-
 def _strip_recommended(answer) -> str:
     return answer[:-len(_RECOMMENDED)] if answer.casefold().endswith(_RECOMMENDED) else answer
 
 
-def _picked_answer(rows, row, verb_argv, prompt_id, error) -> str:
-    answer = programme_journal.pick_answer(rows, row)
-    if verb_argv and verb_argv[0] in _STDIN_VERBS:
-        raise error(f"{verb_argv[0]} reads its change from stdin, which a pick label cannot show; "
-                    "it needs typed text", fix=approval_fix(verb_argv[0], verb_argv))
-    # Reading a decline's intent from free text leaked three review rounds running ("No", "Skip r1",
-    # "Keep item-x" for drop-item); only the exact label the tool printed approves.
-    answer = _strip_recommended(answer)
-    want = label(verb_argv) if verb_argv else None
-    if answer != want:
-        raise error(f"pick {prompt_id!r} answer {answer!r} is not the approval label for this command; "
-                    f"the answer must be exactly {want!r} (`programme.sh approval-label ...` prints it)",
-                    fix=approval_fix(verb_argv[0] if verb_argv else None, verb_argv))
-    return answer
+def _binding(asked, record, error):
+    return Binding(asked.reading, asked.argv or [], asked.content, record, _block(record), error)
 
 
-def prompt(run_id, record, prompt_id, verb, error, text_hash, verb_argv=None) -> dict:
+def _redo(payload) -> str:
+    return f"rerun `programme.sh offer {payload.get('question_key')} --command '<the command>'` and ask Shawn again"
+
+
+def _check_driver(offer, binding, redo) -> None:
+    if offer.get("session_id") != binding.record.get("driving_session_id"):
+        raise binding.error("this picker was offered by another PM; a new driver offers it again", fix=redo)
+
+
+def _check_rendered_now(option, binding, redo) -> None:
+    error = binding.error
+    doc = binding.content
+    if option.get("content_hash") and (doc is None or programme_offers.content_hash(doc) != option["content_hash"]):
+        raise error("the content on stdin differs from what this offer showed; Shawn approves what he saw", fix=redo)
+    try:
+        rendered = programme_offers.render(binding.argv, binding.programme, doc)
+    except Exception as exc:
+        raise error(f"the facts changed since the offer, so this pick no longer applies: {exc}", fix=redo) from None
+    if programme_offers.subject(rendered) != option.get("subject"):
+        raise error("the facts this picker showed changed since the offer, so Shawn has not seen them", fix=redo)
+
+
+def _holding(payload, argv):
+    want = programme_offers.argv_hash(argv)
+    return next((option for option in payload.get("options") or [] if option.get("argv_hash") == want), None)
+
+
+def _own_words(rows, row, offer, why, words, binding) -> dict:
+    error = binding.error
+    payload = offer["payload"]
+    redo = _redo(payload)
+    _check_driver(offer, binding, redo)
+    option = _holding(payload, binding.argv)
+    if option is None:
+        raise error(f"{why}, but no open offer holds this command; the question just asked was "
+                    f"{payload.get('question_key')!r}", fix=redo)
+    label = option["label"]
+    if option.get("authority"):
+        raise error(f"{label!r} moves authority, so only a pick of that option approves it; {why}",
+                    fix="relay his words, then ask again with the same picker; run the command only on a pick")
+    if binding.reading != label:
+        raise error(f"{why}, so the PM states what it read them as: rerun with --reads-as {label!r}",
+                    fix=f"read his words first. If they decline or ask something, run nothing. If they approve, add "
+                        f"--reads-as {shlex.quote(label)}")
+    _check_rendered_now(option, binding, redo)
+    newer = load_lib_module("programme_rulings").newer_words(rows, row["prompt_id"])
+    if newer:
+        raise error(f"prompt {row['prompt_id']!r} is older than {newer!r}, which nothing has cited yet; own words bind "
+                    "only on Shawn's newest message", fix="read his newest message, then ask again if it is unclear")
+    shown = programme_journal.redact(words)
+    is_draft = "content" in option
+    if is_draft:
+        size = len(programme_sanitize.clean(shown, cap=0))
+        if size > programme_sanitize.DEFAULT_CAP:
+            raise error(f"his words are {size} characters and the record holds {programme_sanitize.DEFAULT_CAP}, and "
+                        "they are never cut",
+                        fix="draft a shorter text from his words and offer that draft again, or split it into "
+                            "two Rulings")
+    read_back = (f"Recorded your words as the text of: {label}. Say so if that is wrong." if is_draft
+                 else f"Read your message as: {label}. Say so if that is wrong.")
+    return {"quote": shown,
+            "reading": {"read_as": label, "read_by": "pm", "offer_id": payload.get("offer_id"),
+                        "wording": programme_journal.SHAWN, "read_back": read_back}}
+
+
+def _bind_pick(rows, row, offer, pick, binding) -> dict:
+    answer, error, payload = pick["answer"], binding.error, offer["payload"]
+    option = programme_offers.chosen(payload, answer)
+    if option is not None and "argv_hash" not in option:
+        raise error("Shawn declined this offer; nothing runs", fix="do not run the command; ask Shawn what he wants")
+    shown = programme_journal.redact(answer)
+    if option is None or pick["noted"]:
+        why = (f"pick {row['prompt_id']!r} carries a note, which counts as Shawn's own words" if pick["noted"]
+               else f"answer {shown!r} is not one of the options this offer printed, so it is Shawn's own words")
+        said = [] if answer == programme_pick_source.NOTES_ONLY or option is not None else [answer]
+        words = " ".join([*said, *pick["notes"]]) or answer
+        return dict(_own_words(rows, row, offer, why, words, binding), answer=shown)
+    redo = _redo(payload)
+    _check_driver(offer, binding, redo)
+    if option["argv_hash"] != programme_offers.argv_hash(binding.argv):
+        raise error(f"this pick approved a different command: {option.get('command')}", fix=redo)
+    _check_rendered_now(option, binding, redo)
+    return {"answer": shown, "quote": option.get("content") or option["label"],
+            "reading": {"wording": programme_journal.PM_DRAFT, "offer_id": payload.get("offer_id")}}
+
+
+def _open_offer(rows, row):
+    """The offer this message answers: the newest one, whose picker is the newest in the transcript at the message's
+    enqueue position, and which no pick answered. Journal order alone would let words sent between the offer row and
+    the asking row bind to a question Shawn had not seen."""
+    offers = [r for r in rows[:rows.index(row)] if r.get("kind") == programme_offers.OFFERED]
+    if not offers:
+        return None
+    asked = programme_pick_source.question_before(row)
+    if asked is None or programme_offers.asked_hash(asked[1]) != offers[-1]["payload"].get("asked_hash"):
+        return None
+    answered = any(r.get("kind") == "prompt"
+                   and ((r.get("payload") or {}).get("source") or {}).get("tool_use_id") == asked[0] for r in rows)
+    return None if answered else offers[-1]
+
+
+def _no_offer(argv, prompt_id, error):
+    return error(f"no open offer of this command asks the question prompt {prompt_id!r} would answer, so it approves "
+                 "nothing", fix=programme_fixes.fix_for(argv[0] if argv else "offer"))
+
+
+def _bind_words(rows, row, origin, binding) -> dict:
+    error, argv = binding.error, binding.argv
+    prompt_id = row["prompt_id"]
+    at = rows.index(row)
+    if any(_holding(r.get("payload") or {}, argv) for r in rows[at + 1:] if r.get("kind") == programme_offers.OFFERED):
+        raise error(f"prompt {prompt_id!r} came before the offer of this command, so it does not answer that question",
+                    fix="ask again, or wait for his answer to the picker")
+    offer = _open_offer(rows, row)
+    if origin == "suggested":
+        raise error(f"prompt {prompt_id!r} is an accepted suggestion: the model wrote it, so it approves nothing",
+                    fix="ask with the picker and wait for his pick or his own words")
+    if offer is None or (binding.reading is None and _holding(offer["payload"], argv) is None):
+        raise _no_offer(argv, prompt_id, error)
+    if programme_journal.prompt_spent(rows, prompt_id):
+        raise error(f"prompt {prompt_id!r} already approved a change; one message approves one change",
+                    fix="ask Shawn about this one")
+    why = f"prompt {prompt_id!r} is Shawn's own words"
+    payload = row.get("payload") or {}
+    return _own_words(rows, row, offer, why, payload.get("text") or "", binding)
+
+
+def _picked(rows, row, record, asked, prompt_id, error) -> dict:
+    fix = programme_fixes.fix_for(asked.argv[0] if asked.argv else "offer")
+    read = programme_pick_source.read_pick(row)
+    offer = read and programme_offers.newest_offer(rows[:rows.index(row)],
+                                                   programme_offers.asked_hash(read["questions"]))
+    if not offer:
+        raise error(f"pick {prompt_id!r} answers a picker no offer printed, so it approves nothing", fix=fix)
+    try:
+        pick = programme_journal.judged_pick(rows, row, read, own_words=True)
+    except ValueError as exc:
+        raise error(str(exc), fix=fix) from None
+    return _bind_pick(rows, row, offer, dict(pick, answer=_strip_recommended(pick["answer"])),
+                      _binding(asked, record, error))
+
+
+def prompt(run_id, record, prompt_id, asked, error) -> dict:
+    verb = asked.verb
+    fix = programme_fixes.fix_for(verb or "offer")
     if not prompt_id:
-        raise error("this approval needs --prompt <id> of a typed prompt or a pick",
-                    fix=approval_fix(verb, verb_argv))
+        raise error("this approval needs --prompt <id> of Shawn's answer to `programme.sh offer`", fix=fix)
     rows = programme_journal.read(run_id)
     row = programme_journal.find_prompt(run_id, prompt_id, rows)
     if row is None:
-        raise error(f"no prompt {prompt_id!r} in this programme's journal",
-                    fix=approval_fix(verb, verb_argv))
+        raise error(f"no prompt {prompt_id!r} in this programme's journal", fix=fix)
     payload = row.get("payload") or {}
     if row.get("provenance") in programme_authority.UNVERIFIED:
         raise error(f"prompt {prompt_id!r} was imported from a legacy journal or appended by an "
-                    "obsolete writer; its typed label is unverified, so it approves nothing new",
-                    fix=approval_fix(verb, verb_argv))
+                    "obsolete writer; its source is unverified, so it approves nothing new", fix=fix)
     if payload.get("driving") is False:
         raise error(f"prompt {prompt_id!r} was answered before this session drove the programme; "
-                    "it can serve only a takeover", fix=approval_fix(verb, verb_argv))
+                    "it can serve only a takeover", fix=fix)
     origin = programme_journal.prompt_origin(row)
-    if origin in ("picked", "suggested") and verb not in PICK_VERBS:
-        raise error(f"{verb or 'this verb'} needs a typed prompt; prompt {prompt_id!r} is "
-                    f"{'a pick' if origin == 'picked' else 'an accepted suggestion'}",
-                    fix=approval_fix(verb, verb_argv))
-    if origin == "suggested" and verb in _NO_SUGGESTION_VERBS:
-        raise error(f"{verb} needs a typed prompt or a pick of its terms-bound label; prompt {prompt_id!r} "
-                    "is an accepted suggestion, which shows Shawn no terms", fix=accept_fix(_block(record)))
-    if origin == "picked" and verb == ACCEPT_VERB and "--terms" not in (verb_argv or []):
-        raise error(f"prompt {prompt_id!r} is a pick, so {ACCEPT_VERB} needs --terms <digest> naming the "
-                    "terms Shawn picked", fix=accept_fix(_block(record)))
     if origin not in programme_protocol.HUMAN_ORIGINS:
-        raise error(f"prompt {prompt_id!r} is not typed or a verified pick "
-                    f"(origin {origin!r}; human source unverified)", fix=approval_fix(verb, verb_argv))
+        raise error(f"prompt {prompt_id!r} is not Shawn's words or a verified pick "
+                    f"(origin {origin!r}; human source unverified)", fix=fix)
+    if verb not in PICK_VERBS:
+        raise error(f"{verb or 'this verb'} takes no approval, so prompt {prompt_id!r} approves nothing", fix=fix)
     if row.get("session_id") != record.get("driving_session_id"):
-        raise error(f"prompt {prompt_id!r} was not typed in the driving session")
+        raise error(f"prompt {prompt_id!r} was not given in the driving session")
     approval = {"prompt_id": prompt_id, "quote": payload.get("text") or "", "origin": origin,
                 "text_hash": text_hash(payload.get("text")), "at": row.get("at"), "origin_verified": True}
     if origin == "picked":
-        approval["answer"] = _picked_answer(rows, row, verb_argv, prompt_id, error)
-    # Naming checks only look at the word before a name, so "No, do not adopt r1" would name r1. This also
-    # refuses "never" as a value; those changes need typed text.
-    # Path tokens are skipped: "/T/" in a macOS temp path would read as the "t" of "don't".
-    prose = " ".join(token for token in approval["quote"].split() if "/" not in token)
-    if origin == "suggested" and set(programme_naming.name_words(prose)) & set(programme_naming.NEGATIONS):
-        raise error(f"prompt {prompt_id!r} is not a plain yes; an accepted suggestion with a negation "
-                    "approves nothing (type it instead)", fix=approval_fix(verb, verb_argv))
+        approval.update(_picked(rows, row, record, asked, prompt_id, error))
+    else:
+        approval.update(_bind_words(rows, row, origin, _binding(asked, record, error)))
     return approval
-
-
-def _h_approval_label(host, argv):
-    if len(argv) < 2:
-        raise ValueError("usage: approval-label <verb> <args...>")
-    if argv[1] == "takeover":
-        return _takeover_label_cli(argv)
-    if argv[1] not in PICK_VERBS or argv[1] in _STDIN_VERBS:
-        raise host.ProgrammeError(f"{argv[1]} needs a typed prompt; a pick cannot approve it",
-                                  fix=approval_fix(argv[1], argv[1:]))
-    if argv[1] == ACCEPT_VERB and "--terms" not in argv:
-        _, opts = host._parse(argv[1:], values=("run",))
-        print(accept_label(_block(host._locate(opts)[2])))
-        return 0
-    print(label(argv[1:]))
-    return 0
-
-
-_SPECS = (
-    ("approval-label", _h_approval_label, "<verb> <args...>",
-     "a verb a pick cannot approve. Prints the exact picker option that approves that command; needs no "
-     "prompt and writes nothing. For takeover it takes only --replace <driving session id>."),
-)
-
-
-def build_verbs(host) -> dict:
-    return {name: host._Verb(functools.partial(handler, host), args, rejects=rejects)
-            for name, handler, args, rejects in _SPECS}
-
-
-def takeover_label(driver) -> str:
-    return label(["takeover", "--replace", driver])
-
-
-def _takeover_label_cli(argv) -> int:
-    # takeover stays out of PICK_VERBS: its pick is checked by takeover itself, against the driver under the lock.
-    if len(argv) != 4 or argv[2] != "--replace" or not argv[3] or argv[3].startswith("--"):
-        raise ValueError("usage: approval-label takeover --replace <driving session id>")
-    print(takeover_label(argv[3]))
-    return 0
 
 
 def _from_shawn(row, prompt_id, sid, error) -> str:
@@ -250,27 +284,27 @@ def _from_shawn(row, prompt_id, sid, error) -> str:
         raise error(f"prompt {prompt_id!r} was not given in this session")
     origin = programme_journal.prompt_origin(row)
     if origin not in programme_protocol.HUMAN_ORIGINS:
-        raise error(f"prompt {prompt_id!r} is not a verified typed prompt, accepted suggestion or pick "
+        raise error(f"prompt {prompt_id!r} is not Shawn's verified words, accepted suggestion or pick "
                     f"(origin {origin!r})")
     return origin
 
 
 def _takeover_answer(rows, row, prompt_id, driver, error) -> str:
     try:
-        answer = programme_journal.pick_answer(rows, row)
+        pick = programme_journal.checked_pick(rows, row)
     except ValueError as exc:
         raise error(str(exc)) from None
-    answer = _strip_recommended(answer)
-    want = takeover_label(driver)
-    if answer != want:
-        raise error(f"pick {prompt_id!r} answer {answer!r} does not approve this takeover; "
-                    f"the answer must be exactly {want!r}")
-    return answer
+    answer = _strip_recommended(pick["answer"])
+    if not programme_offers.takeover_matches(pick["questions"], answer, driver):
+        raise error(f"pick {prompt_id!r} answer {programme_journal.redact(answer)!r} does not approve this takeover; "
+                    f"it needs a pick of {programme_offers.takeover_label(driver)!r} on the picker `become-pm` prints")
+    return programme_journal.redact(answer)
 
 
 def takeover_pick(rows, row, prompt_id, sid, driver, error, stopped=False) -> dict:
     # Typed or suggested text never approves a takeover: an instruction to a worker would hand it the PM role.
     if _from_shawn(row, prompt_id, sid, error) != "picked":
         why = "the PM stopped; replacing it still" if stopped else "the PM is live, so replacing it"
-        raise error(f"{why} needs a pick of {takeover_label(driver)!r}; prompt {prompt_id!r} is not a pick")
+        raise error(f"{why} needs a pick of {programme_offers.takeover_label(driver)!r}; "
+                    f"prompt {prompt_id!r} is not a pick")
     return {"origin": "picked", "answer": _takeover_answer(rows, row, prompt_id, driver, error)}

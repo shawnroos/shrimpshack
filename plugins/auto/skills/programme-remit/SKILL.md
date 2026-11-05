@@ -55,23 +55,26 @@ removing one releases it. A space another programme holds is refused.
 
 - **At start**, before the agreement is accepted, `set-remit` needs no prompt.
   Accepting the agreement is Shawn's approval of the remit.
-- **After acceptance**, it needs `--prompt <id>` of Shawn's typed message, and
-  that message must name each space, repo, team, project or initiative added or
-  removed. If it does not, the verb lists the missing names. Ask Shawn to
-  confirm in words that name them, then cite that reply.
-- **Workers you start yourself need no typed line.** `P start-worker` records
-  the worker's repo in the remit's `worker_repos`, apart from the typed
+- **After acceptance**, ask him with one picker. Run
+  `P offer remit --command 'set-remit' < remit.json`, ask with the `input` it
+  prints, and run `P set-remit --prompt <his answer's id> < remit.json` with the
+  same JSON. The picker shows only what changes, so he names nothing. Adding
+  anything widens the remit and takes a pick: if he answers in his own words,
+  relay them and ask again. A change that only removes also takes his own words:
+  add `--reads-as '<the option's text>'` and show him the `read_back` line.
+- **Workers you start yourself need no picker.** `P start-worker` records
+  the worker's repo in the remit's `worker_repos`, apart from the declared
   `repos`, and `P close-gone-pane` removes it when it closes the worker's
   pane. Start workers with `start-worker`, not by running spinoff yourself; a
-  direct run adds nothing and keeps the typed line. A start's output names what
+  direct run adds nothing and leaves the declared list as it is. A start's output names what
   it recorded (`remit_added`) or why it recorded nothing (`remit_reason`).
   Worker repos widen the sweep only: authority, rulings, PR checks and
-  `set-remit` read the typed repos alone, so a worker in a repo that no typed
-  entry names cannot confirm a merge until you type that repo in. Nothing a
+  `set-remit` read the declared repos alone, so a worker in a repo that no declared
+  entry names cannot confirm a merge until Shawn adds that repo by picker. Nothing a
   worker says or does adds to the remit. A takeover or handover keeps
   `worker_repos`, because the remit moves with the programme.
 - **A repo whose folder is gone never blocks `set-remit`.** The verb drops it
-  and says so (`dropped_stale`) with no typed words naming it, unless that
+  and says so (`dropped_stale`) with no approval, unless that
   would empty the list: an empty list means no limit, so it is kept.
 
 ## Show it

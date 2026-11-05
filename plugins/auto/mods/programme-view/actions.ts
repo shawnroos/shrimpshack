@@ -13,8 +13,6 @@ export type Draft = {
 
 export type EditorKind = 'choice' | 'checklist' | 'interval' | 'space' | 'until'
 
-type Proposed = { value: unknown; extras: Record<string, unknown> }
-
 export type Refusal = { refused: string }
 
 // A term's own typed value beside its options.
@@ -24,7 +22,6 @@ export type Custom = {
   placeholder: (spaces: string[]) => string
   parse: (text: string) => string | Refusal
   argv: (value: string) => string[]
-  proposed: (term: Term, value: string) => Proposed
   text: (value: string) => string
 }
 
@@ -46,7 +43,6 @@ export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
     parse: text =>
       /^\d+$/.test(text.trim()) && Number(text) > 0 ? String(Number(text)) : { refused: `"${text}" is not a whole number of minutes` },
     argv: minutes => ['fixed', '--seconds', String(Number(minutes) * 60)],
-    proposed: (_term, minutes) => ({ value: 'fixed', extras: { seconds: Number(minutes) * 60 } }),
     text: minutes => `fixed, every ${minutes} min`,
   },
   space: {
@@ -55,7 +51,6 @@ export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
     placeholder: spaces => spaces[0] ?? 'default.w2',
     parse: text => text.trim(),
     argv: space => ['--add', space],
-    proposed: (term, space) => ({ value: term.value, extras: { add: space } }),
     text: space => `add space ${space}`,
   },
   until: {
@@ -64,7 +59,6 @@ export const CUSTOM: Partial<Record<EditorKind, Custom>> = {
     placeholder: () => '2026-10-20T18:00:00Z',
     parse: text => (isUtcTime(text.trim()) ? text.trim() : { refused: `"${text}" is not a UTC time like 2026-10-20T18:00:00Z` }),
     argv: until => ['until_time', '--until', until],
-    proposed: (_term, until) => ({ value: 'until_time', extras: { until } }),
     text: until => `until_time, until ${until}`,
   },
 }
@@ -125,50 +119,23 @@ export function proposeArgv(term: Term, draft: Draft | undefined): string[] | st
   return typeof args === 'string' ? args : ['propose-term', term.key, ...args, ...UI_ORIGIN_ARGS]
 }
 
-const words = (name: string) => name.replaceAll('_', ' ')
+export const PM_WILL_ASK = 'The PM will ask you in the chat.'
 
-function interval(seconds: number): string {
-  return seconds % 60 === 0 ? `every ${seconds / 60} min` : `every ${seconds} seconds`
+export function proposalWaiting(term: Term): boolean {
+  const state = term.proposal?.state
+  return state === 'pending' || state === 'refused'
 }
 
-// Every reply must name the term and the value: the approval check refuses a typed reply that does not
-// (require_named / require_sources_named in lib/programme.py), and for tools it needs the dropped ones too.
-function reply(term: Term, { value, extras }: Proposed): string {
-  const label = words(term.key)
+export function draftChanges(term: Term, draft: Draft | undefined): boolean {
+  if (!draft) return false
   if (isChecklist(term)) {
+    if (draft.add?.name) return true
+    if (!draft.tools) return false
     const before = toolsOf(term)
-    const after = Array.isArray(value) ? value.map(String) : []
-    const dropped = before.filter(tool => !after.includes(tool))
-    const verb = after.some(tool => !before.includes(tool)) ? 'widen' : 'amend'
-    const drop = dropped.length > 0 ? ` and drop ${dropped.join(', ')}` : ''
-    return `${verb} ${label} to ${after.join(', ') || 'none'}${drop}`
+    return draft.tools.length !== before.length || !draft.tools.every(tool => before.includes(tool))
   }
-  if (typeof extras.add === 'string') return `widen ${label} to add space ${extras.add}`
-  const parts = [`amend ${label} to ${words(String(value))}`]
-  if (typeof extras.seconds === 'number') parts.push(interval(extras.seconds))
-  if (typeof extras.until === 'string') parts.push(`until ${extras.until}`)
-  return parts.join(' ')
-}
-
-export function acceptReply(term: Term): string | undefined {
-  const proposal = term.proposal
-  if (!proposal || (proposal.state !== 'pending' && proposal.state !== 'refused')) return
-  return reply(term, { value: proposal.value, extras: proposal.extras ?? {} })
-}
-
-// A new tool must be proposed before an amend may name it, so a draft that adds one has no reply yet.
-export function draftReply(term: Term, draft: Draft | undefined): string | undefined {
-  if (!draft) return
-  if (isChecklist(term)) {
-    if (draft.add?.name || !draft.tools) return
-    const before = toolsOf(term)
-    const same = draft.tools.length === before.length && draft.tools.every(tool => before.includes(tool))
-    return same ? undefined : reply(term, { value: draft.tools, extras: {} })
-  }
-  const custom = customOf(term)
-  if (custom && draft.custom) return reply(term, custom.proposed(term, draft.custom))
-  const active = term.options.find(option => option.active)?.name
-  if (draft.option && draft.option !== active) return reply(term, { value: draft.option, extras: {} })
+  if (customOf(term) && draft.custom) return true
+  return Boolean(draft.option) && draft.option !== term.options.find(option => option.active)?.name
 }
 
 export function draftText(term: Term, draft: Draft): string | undefined {
@@ -185,11 +152,8 @@ export function draftText(term: Term, draft: Draft): string | undefined {
   return draft.option
 }
 
-export function rulingTemplate(title: string | undefined): string {
-  return `Ruling for ${title ?? 'the whole programme'}: `
+export function rulingHint(title: string | undefined): string {
+  return `To add a Ruling for ${title ?? 'the whole programme'}, tell the PM in the chat.`
 }
 
-// close-ruling --as withdrawn needs a typed prompt that names the Ruling's id.
-export function withdrawReply(id: string, quote: string): string {
-  return `Withdraw ruling ${id} "${quote}"`
-}
+export const WITHDRAW_HINT = 'To withdraw this Ruling, tell the PM in the chat.'

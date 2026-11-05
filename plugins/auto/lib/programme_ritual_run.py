@@ -51,7 +51,7 @@ def _state_of(host, programme, rec, rid) -> str | None:
 
 
 def _needs_answer(host, opts, rid) -> bool:
-    """A missed ritual runs, starts or is skipped only on Shawn's typed answer, so the prompt is demanded for exactly that state."""
+    """A missed ritual runs, starts or is skipped only on Shawn's answer, so the prompt is demanded for exactly that state."""
     run_id, home, record = host._locate(opts)
     probe = programme_home.normalize_programme(record.get("programme") or {})
     return _state_of(host, probe, dict(record, run_id=run_id), rid) == "missed"
@@ -59,10 +59,8 @@ def _needs_answer(host, opts, rid) -> bool:
 
 def _check_answer(host, programme, rec, rid, prompt) -> None:
     """The unlocked probe only decides whether a prompt is demanded; this decides again under the lock."""
-    if prompt:
-        host.require_named(prompt, rid)
-    elif _state_of(host, programme, rec, rid) == "missed":
-        raise RitualError(f"ritual {rid!r} is missed: it needs Shawn's typed answer naming it (--prompt <id>)")
+    if not prompt and _state_of(host, programme, rec, rid) == "missed":
+        raise RitualError(f"ritual {rid!r} is missed: it needs Shawn's answer to its offer (--prompt <id>)")
 
 
 def _h_start(host, argv):
@@ -86,12 +84,12 @@ def _h_start(host, argv):
                        verb="start-ritual", target=rid)
 
 
-def _answer(host, argv, kind, verb, fields=(), typed=False):
+def _answer(host, argv, kind, verb, fields=(), required=False):
     positional, opts = host._parse(argv, values=("run", "prompt") + fields)
     if len(positional) != 1:
         raise ValueError(f"usage: {verb} <id> {' '.join('[--' + f + ' <text>]' for f in fields)} [--prompt <id>] [--run <id>]")
     rid = positional[0]
-    needs = typed or _needs_answer(host, opts, rid)
+    needs = required or _needs_answer(host, opts, rid)
 
     def change(programme, prompt, rec):
         entry = _find(host, programme, rec, rid)
@@ -109,7 +107,7 @@ def _h_run(host, argv):
 
 def _h_skip(host, argv):
     # Skipping is Shawn's call in every state; an unprompted skip would also satisfy the handover and end gates.
-    return _answer(host, argv, programme_rituals.SKIPPED, "skip-ritual", ("why",), typed=True)
+    return _answer(host, argv, programme_rituals.SKIPPED, "skip-ritual", ("why",), required=True)
 
 
 def _h_fail(host, argv):
@@ -213,7 +211,7 @@ def _record_check(host, opts, entry, row, result) -> bool:
 
     try:
         host._write(opts, change, programme_rituals.CHECKED, verb="run-ritual-checks", target=rid,
-                    beat=False, names_change=False)
+                    beat=False)
     except (host.ProgrammeError, RitualError):
         return False
     return True
@@ -268,17 +266,14 @@ _SPECS = (
      "programme lock; a pass moves the clock, a fail or error leaves the ritual due. --ritual re-runs one."),
     ("start-ritual", _h_start, "<id> [--prompt <id>] [--run <id>]",
      "a session that does not drive the programme; a ritual not in force (a ritual whose step names a "
-     "protected escalation is rejected on load, so it is never in force); a missed ritual without a typed "
-     "prompt that names its id."),
+     "protected escalation is rejected on load, so it is never in force); a missed ritual with no prompt; a prompt that answers no open offer of this command."),
     ("run-ritual", _h_run, "<id> [--outcome <text>] [--prompt <id>] [--run <id>]",
-     "a session that does not drive the programme; a ritual not in force; a missed ritual without a typed "
-     "prompt that names its id. Moves this programme's next-due time past now."),
+     "a session that does not drive the programme; a ritual not in force; a missed ritual with no prompt; a prompt that answers no open offer of this command. Moves this programme's next-due time past now."),
     ("fail-ritual", _h_fail, "<id> --why <line> [--run <id>]",
      "a session that does not drive the programme; a ritual not in force; no --why. Ends the in-flight state "
      "without answering the ritual."),
     ("skip-ritual", _h_skip, "<id> --prompt <id> [--why <text>] [--run <id>]",
-     "a session that does not drive the programme; a ritual not in force; no typed prompt that names the "
-     "ritual id, in any state. Moves this programme's next-due time past now."),
+     "a session that does not drive the programme; a ritual not in force; no prompt, in any state; a prompt that answers no open offer of this command. Moves this programme's next-due time past now."),
     ("offer-rituals", _h_offer, "<id>... [--run <id>]",
      "a session that does not drive the programme; an id that is not a missed or in-flight ritual. Records the "
      "offer once so an unanswered picker is not posted again."),

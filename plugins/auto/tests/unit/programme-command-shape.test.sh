@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # auto unit test: /auto:programme walks setup one question per step instead of
-# printing a setup screen, and offers the accept as a pick of its terms-bound label. Any ask to be
+# printing a setup screen, and offers the accept as a pick of the offer Auto writes. Any ask to be
 # the PM starts with become-pm.
 
 set -uo pipefail
@@ -34,9 +34,9 @@ for verb in "pick-term" "take-recommendations" "setup-step" "setup-seen" "setup-
 done
 if [ -z "$missing" ]; then pass; else fail "missing:${missing}"; fi
 
-it "offers the accept as a pick of the terms-bound approval label"
-if has "programme.sh approval-label accept-agreement" && has "--terms <digest>" \
-   && hasnt "The accept is never a pick"; then pass; else fail "the terms-bound accept pick is not stated"; fi
+it "offers the accept as a pick of the offer Auto writes"
+if has "programme.sh offer accept --command accept-agreement" && hasnt "approval-label" \
+   && hasnt "The accept is never a pick"; then pass; else fail "the accept's offer is not stated"; fi
 
 it "never tells the PM to pre-fill picker answers"
 if has "Never put answers into the AskUserQuestion call yourself"; then pass; else fail "the pre-fill ban is missing"; fi

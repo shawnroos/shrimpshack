@@ -9,7 +9,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
-PROG="${AUTO_ROOT}/lib/programme.py"
+PROG="${AUTO_ROOT}/tests/fixtures/prog_offered.py"
+source "${AUTO_ROOT}/tests/helpers/prog-exit.sh"
 HOOKS="${AUTO_ROOT}/.claude/hooks"
 
 PASS=0
@@ -218,6 +219,7 @@ as_stub() {
   local sid="$1"; shift
   OUT="$(env CLAUDE_CODE_SESSION_ID="$sid" AUTO_TEST_HOST=stub ${STUBVARS[@]+"${STUBVARS[@]}"} "$PY" "$PROG" "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 lease_count() { ls "$LEASES" | grep -vc '^\.'; }
 LEASES_BEFORE="$(lease_count)"
@@ -258,6 +260,7 @@ fresh_case() {
 takeover_as() {
   OUT="$(env CLAUDE_CODE_SESSION_ID="$CASE_TAKER" AUTO_TEST_HOST=stub AUTO_TEST_STUB_PRESENCE_SEQ="$SEQ" "$PY" "$PROG" takeover "$@" 2>&1)"
   CODE=$?
+  prog_exit_check "$@"
 }
 typed() {
   ( cd "$NOREPO" && AUTO_TEST_HOST=stub "$PY" "${AUTO_ROOT}/tests/fixtures/programme_prompts.py" "$AUTO_ROOT" "$CASE_TAKER" "$1" >/dev/null 2>&1 )
@@ -271,22 +274,27 @@ PYEOF
 pick() {
   ( cd "$NOREPO" && AUTO_TEST_HOST=stub "$PY" - "$AUTO_ROOT" "$WORK" "$CASE_TAKER" "$1" <<'PYEOF'
 import json, os, pathlib, re, subprocess, sys, uuid
-root, work, sid, answer = sys.argv[1:5]
+root, work, sid, driver = sys.argv[1:5]
+sys.path.insert(0, root + "/lib")
+from _bootstrap import load_lib_module
+offers = load_lib_module("programme_offers")
 rows = [json.loads(line) for line in (pathlib.Path(root) / "tests/fixtures/askuser_transcript.jsonl").read_text().splitlines()]
 asked, result = rows[0], rows[1]
-question = "Who should drive the programme?"
+tool_input = offers.takeover_input(driver)
+question = tool_input["questions"][0]["question"]
+answer = offers.takeover_label(driver)
 tool_use_id = "toolu_" + uuid.uuid4().hex[:12]
-tool_input = {"questions": [{"question": question, "header": "PM", "multiSelect": False,
-                             "options": [{"label": answer, "description": "Move the lease here."},
-                                         {"label": "Keep the current PM", "description": "Change nothing."}]}]}
 asked["sessionId"] = sid
 asked["message"]["content"][0].update(id=tool_use_id, input=tool_input)
 response = {"questions": [{"question": question}], "answers": {question: answer}, "annotations": {}}
 result.update(sessionId=sid, toolUseResult=response)
 result["message"]["content"][0]["tool_use_id"] = tool_use_id
-path = pathlib.Path(work) / "picks" / uuid.uuid4().hex / (sid + ".jsonl")
-path.parent.mkdir(parents=True)
-path.write_text(json.dumps(asked) + "\n")
+sys.path[:0] = [os.path.join(root, "lib"), os.path.join(root, "tests", "fixtures")]
+from registered_transcript import register
+path = register(sid, pathlib.Path(work) / "picks" / (sid + ".jsonl"))
+path.parent.mkdir(parents=True, exist_ok=True)
+with path.open("a") as stream:
+    stream.write(json.dumps(asked) + "\n")
 payload = {"session_id": sid, "transcript_path": str(path), "cwd": os.getcwd(), "hook_event_name": "PostToolUse",
            "tool_name": "AskUserQuestion", "tool_use_id": tool_use_id, "tool_input": tool_input,
            "tool_response": response}
@@ -301,10 +309,10 @@ PYEOF
   )
 }
 
-# pick_works <host answer>: the exact-label pick, then the takeover citing it, with the host answering $1 throughout.
+# pick_works <host answer>: a pick of the takeover picker, then the takeover citing it, with the host answering $1 throughout.
 pick_works() {
   local p
-  p="$(pick "Approve takeover --replace $CASE_PM")"
+  p="$(pick "$CASE_PM")"
   printf '%s\n%s\n%s\n' "$1" "$1" "$1" > "$SEQ"
   takeover_as --prompt "$p"
 }
@@ -327,19 +335,19 @@ takeover_as
 check "1 $CASE_PM" "$CODE $(driver)"
 it "the unknown refusal does not claim the PM is gone"
 lacks "driver_gone" "$OUT"
-it "host says present: the exact-label pick takes the programme"
+it "host says present: a pick of the takeover picker takes the programme"
 pick_works present
 check "0 $CASE_TAKER" "$CODE $(driver)"
 
 fresh_case
 typed '/auto:programme-takeover'
-it "host says unknown: the exact-label pick takes the programme"
+it "host says unknown: a pick of the takeover picker takes the programme"
 pick_works unknown
 check "0 $CASE_TAKER" "$CODE $(driver)"
 
 fresh_case
 typed '/auto:programme-takeover'
-it "host says gone: the exact-label pick takes the programme"
+it "host says gone: a pick of the takeover picker takes the programme"
 pick_works gone
 check "0 $CASE_TAKER" "$CODE $(driver)"
 

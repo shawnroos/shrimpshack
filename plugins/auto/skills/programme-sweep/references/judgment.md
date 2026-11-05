@@ -174,7 +174,7 @@ Even then, bring it to Shawn with one recommendation when the choice:
 
 - changes the outcome or acceptance;
 - reopens a settled human decision: changing or closing a decided Ruling
-  needs his typed prompt naming it;
+  needs his answer to `P offer`;
 - touches a reserved area: an active restrict Ruling, or an old reservation
   the rules block asks him to record again;
 - exceeds a risk or cost limit: spend over the cap, or a limit a Ruling sets;
@@ -205,7 +205,7 @@ handover, end) follows these rules.
   - what happens if Shawn does nothing;
   - your recommendation and why;
   - any risk or unverified fact that bears on it;
-  - the exact reply to type, using the item's name.
+  - the picker `P offer` prints for it, so he can answer with one pick.
   Never write "say X to do Y" without the trade-off beside it.
 - **A merge ask carries readiness evidence.** Run `P check-mergeable <pr>` and
   cite its result, gates and merge state, with the full PR URL and title and the

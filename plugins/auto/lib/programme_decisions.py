@@ -100,7 +100,7 @@ def add_decision(programme, *, kind, by, item, why, term=None, silent=False, **e
 
 def shawn_decision(programme, *, kind, item, prompt, **extra) -> dict:
     return add_decision(programme, kind=kind, by="shawn", item=item, why=prompt["quote"],
-                        prompt_id=prompt["prompt_id"], **extra)
+                        prompt_id=prompt["prompt_id"], wording=(prompt.get("reading") or {}).get("wording") or "shawn", **extra)
 
 
 def _protected(kind) -> bool:

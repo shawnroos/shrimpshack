@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 run_record_core = load_lib_module("run_record_core")
 programme_home = load_lib_module("programme_home")
 programme_prompt_source = load_lib_module("programme_prompt_source")
+programme_pick_source = load_lib_module("programme_pick_source")
 
 JOURNAL_NAME = "journal.jsonl"
 CLAIMS_NAME = "claims.jsonl"
@@ -33,6 +35,8 @@ REDACTED = "[redacted]"
 STORED_PROMPT_ORIGINS = ("typed", "cron", "unknown")
 # "picked" and "suggested" are only ever resolved from a transcript check, never stored as a label.
 PROMPT_ORIGINS = STORED_PROMPT_ORIGINS + ("picked", "suggested")
+SHAWN = "shawn"
+PM_DRAFT = "pm_draft"
 PRUNE_AFTER_SECONDS = 7 * 24 * 3600
 # Shorter values (flags, ports, "true") would redact ordinary words in prompts.
 MIN_SECRET_LEN = 6
@@ -74,6 +78,8 @@ KINDS = (
     "behaviour_skipped",
     "behaviours_kept",
     "hook_patched",
+    "approval_offered",
+    "approval_declined",
     "ritual_recorded",
     "ritual_proposed",
     "ritual_moved",
@@ -398,9 +404,10 @@ def prompt_origin(row) -> str:
 # Reads a prompt as the JSON home did before the import stamped it, so an adoption Shawn approved there stays
 # verified after the move. Only past approvals read this; a new approval reads prompt_origin and refuses it.
 def adopted_origin(row) -> str:
-    if isinstance(row, dict) and row.get("provenance") == _authority().LEGACY:
-        return programme_prompt_source.origin(row)
-    return prompt_origin(row)
+    provenance = row.get("provenance") if isinstance(row, dict) else None
+    if provenance in _authority().UNVERIFIED and provenance != _authority().LEGACY:
+        return "unknown"
+    return programme_prompt_source.origin(row, pinned=False)
 
 
 def read_path(path: str) -> list:
@@ -446,38 +453,80 @@ def _same_pick(source, path, tool_use_id) -> bool:
     return isinstance(source, dict) and (source.get("path"), source.get("tool_use_id")) == (path, tool_use_id)
 
 
+def canonical_sha(value) -> str:
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _spending_rows(rows):
+    for row in rows:
+        if row.get("kind") in ("prompt", "approval_refused"):
+            continue
+        payload = row.get("payload") or {}
+        # A verb that changed nothing approved nothing, so its answer can still approve the same command.
+        if payload.get("unchanged"):
+            continue
+        yield row, payload, set(row.get("cites") or []) | {payload.get("prompt_id")}
+
+
+def prompt_spent(rows, prompt_id) -> bool:
+    return any(prompt_id in refs for _row, _payload, refs in _spending_rows(rows))
+
+
 def pick_use(rows, source):
     """The first row that spent this picker answer, under any prompt id it was journaled as."""
     path, tool_use_id = source.get("path"), source.get("tool_use_id")
     ids = {r.get("prompt_id") for r in rows
            if r.get("kind") == "prompt" and _same_pick((r.get("payload") or {}).get("source"), path, tool_use_id)}
-    for row in rows:
-        if row.get("kind") in ("prompt", "approval_refused"):
-            continue
-        payload = row.get("payload") or {}
-        refs = set(row.get("cites") or []) | {payload.get("prompt_id")}
+    for row, payload, refs in _spending_rows(rows):
         # Setup verbs record the pick's path and tool_use_id on their own payload, not as a cite.
         if ids & refs or _same_pick(payload, path, tool_use_id):
             return row
     return None
 
 
-def pick_answer(rows, row) -> str:
+def checked_pick(rows, row, own_words=False) -> dict:
+    return judged_pick(rows, row, programme_pick_source.read_pick(row), own_words)
+
+
+def judged_pick(rows, row, pick, own_words=False) -> dict:
+    """`pick` is what read_pick returned for this row, so a caller that needs it first reads the transcript once."""
     source = row["payload"]["source"]
     if len(source["answers"]) != 1:
         raise ValueError(f"pick {row['prompt_id']!r} must hold exactly one question to approve a change")
+    if pick is None:
+        raise ValueError(f"pick {row['prompt_id']!r} does not verify against the transcript")
+    if pick["gap"] and not (own_words and pick["noted"]):
+        raise ValueError(f"pick {row['prompt_id']!r} {pick['gap']}")
     used = pick_use(rows, source)
     if used is not None:
         raise ValueError(f"pick {row['prompt_id']!r} was already used ({used.get('kind')}); "
                          "one picker answer approves one change")
-    return next(iter(source["answers"].values()))
+    return dict(pick, answer=next(iter(pick["answers"].values())))
 
 
-def named_text(prompt) -> str:
-    # A pick's question is PM-written, so only Shawn's answer can name what it approves.
-    if prompt.get("origin") == "picked":
-        return redact(prompt.get("answer") or "")
-    return redact(prompt["quote"])
+def reading_of(prompt) -> dict:
+    return prompt.get("reading") or {}
+
+
+def wording_of(prompt) -> str:
+    return reading_of(prompt).get("wording") or SHAWN
+
+
+# His words on an offered draft replace it.
+def his_text(prompt):
+    return prompt["quote"] if prompt and reading_of(prompt).get("wording") == SHAWN else None
+
+
+def source_of(prompt) -> dict:
+    return {"prompt_id": prompt["prompt_id"], "quote": redact(prompt["quote"]), "wording": wording_of(prompt)}
+
+
+def mark_wording(entry, prompt) -> None:
+    reading = reading_of(prompt)
+    entry.update(wording=wording_of(prompt),
+                 approved={"prompt_id": prompt.get("prompt_id"), "origin": prompt.get("origin"),
+                           "offer_id": reading.get("offer_id"), "read_by": reading.get("read_by")})
 
 
 def find_prompt(run_id: str, prompt_id: str, rows=None):

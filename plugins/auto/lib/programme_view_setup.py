@@ -22,7 +22,6 @@ SOURCES = {"carried_over": "carried over", "proposal": "PM proposal"}
 PROPOSAL_SOURCES = {"pm": "PM proposal", "ui": "proposed in the pane"}
 RULINGS, SHARED, ITEMS, ACCEPT = "rulings", "shared", "items", "accept"
 USING_EXISTING = "using existing"
-REPLIES = {RULINGS: "approve the proposed rulings", SHARED: "adopt the proposed shared rules"}
 SEEN_PARTS = ("tabs", "repos", "tracker")
 
 
@@ -37,10 +36,9 @@ def _strings(value) -> list:
     return [v for v in _list(value) if isinstance(v, str) and v]
 
 
-def _step(key, label, group, done, values, recommendation, source, needs_typed=False, pending=False) -> dict:
+def _step(key, label, group, done, values, recommendation, source) -> dict:
     return {"key": key, "label": label, "group": group, "done": done, "values": values,
-            "recommendation": recommendation, "recommendation_source": source, "needs_typed": needs_typed,
-            "reply": REPLIES.get(key) if needs_typed and pending and not done else None}
+            "recommendation": recommendation, "recommendation_source": source}
 
 
 def _term_step(key, term, kept) -> dict:
@@ -69,7 +67,7 @@ def _rulings_step(block, kept) -> dict:
     values = "; ".join(f"{e.get('area')}: {e.get('value')}" for e in entries) or "none"
     source = next((e.get("source") for e in proposed if e.get("source")), "PM proposal") if proposed else None
     return _step(RULINGS, "rulings", RULINGS, done, values,
-                 f"{len(proposed)} proposed" if proposed else "none", source, needs_typed=True, pending=bool(proposed))
+                 f"{len(proposed)} proposed" if proposed else "none", source)
 
 
 def _shared_step(block, kept, protocol) -> dict:
@@ -80,7 +78,7 @@ def _shared_step(block, kept, protocol) -> dict:
     rules = ", ".join(sorted(protocol["rules"])) or "none"
     return _step(SHARED, "shared settings", SHARED, done, USING_EXISTING if using else f"plugin defaults: {rules}",
                  f"{len(proposed)} proposed rules" if proposed else "plugin defaults",
-                 "personal file" if using else "plugin default", needs_typed=True, pending=bool(proposed))
+                 "personal file" if using else "plugin default")
 
 
 def _seen_items(seen, block) -> list:
@@ -160,8 +158,7 @@ def build(block, protocol=None) -> dict | None:
     terms = _dict(agreement.get("terms"))
     steps = [_term_step(key, _dict(terms[key]), kept) for key in programme_view_work._ordered_terms(terms)]
     accept = _step(ACCEPT, "accept", ACCEPT, False, "not accepted", "accept the agreement", None)
-    digest = programme_approval.terms_digest(block)
-    accept.update(terms_digest=digest, label=programme_approval.accept_label(block, digest))
+    accept.update(terms_digest=programme_approval.terms_digest(block))
     steps += [_rulings_step(block, kept), _shared_step(block, kept, protocol), _items_step(seen, block, kept), accept]
     unfinished = [s["key"] for s in steps if not s["done"]]
     current = setup.get("step") if setup.get("step") in unfinished else unfinished[0]

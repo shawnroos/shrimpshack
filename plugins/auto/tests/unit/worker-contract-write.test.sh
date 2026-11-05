@@ -548,6 +548,8 @@ from programme_prompts import append_prompt
 prog = load_lib_module("programme")
 wq = load_lib_module("worker_question")
 pid = append_prompt(RUN, "sess-pm", "approve the probe", "typed")["prompt_id"]
+# "probe" has no offer; this case is about the refusal journaling after approval.
+prog._approval_for = lambda *_args: {"prompt_id": pid, "quote": "approve the probe"}
 def contract_change(programme, prompt, rec):
     raise wc.ContractError("probe contract refusal", "probe")
 def question_change(programme, prompt, rec):

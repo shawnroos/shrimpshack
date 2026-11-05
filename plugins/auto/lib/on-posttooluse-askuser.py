@@ -20,14 +20,15 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_journal = load_lib_module("programme_journal")
 programme_pick_source = load_lib_module("programme_pick_source")
+programme_offers = load_lib_module("programme_offers")
 on_user_prompt = load_lib_module("on-user-prompt")
 
 DATA_TAG = on_user_prompt.DATA_TAG
 
 
 _DRIVING_NOTE = ("auto journaled this picker answer. Cite its prompt_id with --pick in setup verbs, or with "
-                 "--prompt in an approval verb on the pick list when the answer is that command's "
-                 "`approval-label`; it counts only once the transcript shows Shawn picked it.")
+                 "--prompt in an approval verb when the answer is an option `programme.sh offer` printed for that "
+                 "command; it counts only once the transcript shows Shawn picked it.")
 _TAKEOVER_NOTE = ("auto journaled this picker answer against the programme leased in this session's herdr "
                   "space. This session does not drive it, so the pick can serve only a takeover; no other "
                   "approval or setup verb accepts it, even after this session takes over. It counts only once "
@@ -57,6 +58,14 @@ def handle(raw: str, env=None) -> dict | None:
     entry = programme_journal.append_prompt(run, session_id, programme_pick_source.summary(answers),
                                             "unknown", source=source, driving=driving)
     payload = {"run": run, "prompt_id": entry["prompt_id"], "kind": "pick", "answers": source["answers"]}
+    if driving:
+        # The pick is already journaled; a failed hint costs the PM a line, never the pick.
+        try:
+            hint = programme_offers.after_pick(run, session_id, entry["prompt_id"], data)
+        except Exception:
+            hint = None
+        if hint:
+            payload["offer"] = hint
     text = (_DRIVING_NOTE if driving else _TAKEOVER_NOTE) + "\n" + json.dumps(payload, sort_keys=True)
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                                    "additionalContext": f"<{DATA_TAG}>\n{text}\n</{DATA_TAG}>"}}

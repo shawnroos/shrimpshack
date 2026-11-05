@@ -1,5 +1,6 @@
 import type { RenderElement } from 'claude-code'
 
+import { PM_WILL_ASK } from './actions'
 import { COLOR, GLYPH } from './palette'
 import type { Ui } from './tree'
 import type { Decision, Setup, SetupStep } from './view'
@@ -63,12 +64,9 @@ export function decisionLines(ui: Ui, decisions: Decision[], line: (key: string,
   const { Text } = ui
   if (decisions.length === 0) return
   line('decisions:gap', <Text> </Text>)
-  line('decisions', <Text bold>Waiting on you</Text>)
+  line('decisions', <Text bold>Waiting on you</Text>, <Text dimColor>{`   ${PM_WILL_ASK}`}</Text>)
   for (const [index, decision] of decisions.entries()) {
     line(`decision:${index}`, <Text color={COLOR.warning}>{`${GLYPH.warning}  `}</Text>, <Text>{decision.question}</Text>)
-    if (decision.reply === null) continue
-    line(`decision:${index}:label`, <Text dimColor>{'   Type this:'}</Text>)
-    line(`decision:${index}:reply`, <Text bold>{`   ${decision.reply}`}</Text>)
   }
 }
 
@@ -127,16 +125,12 @@ export function SetupView(ui: Ui, props: { setup: Setup; decisions: Decision[] }
           <Text>{item.title || item.item}</Text>,
         )
       }
-      if (step.reply !== null) {
-        line(`step:${step.key}:label`, <Text dimColor>{`${inner}Type this:`}</Text>)
-        line(`step:${step.key}:reply`, <Text bold>{`${inner}${step.reply}`}</Text>)
-      }
       if (!isCurrent) continue
       if (step.recommendation !== null) {
         const source = step.recommendation_source ? ` · ${step.recommendation_source}` : ''
         line(`step:${step.key}:recommended`, <Text dimColor>{`${inner}Recommended: ${step.recommendation}${source}`}</Text>)
       }
-      if (step.reply === null) line(`step:${step.key}:hint`, <Text dimColor>{`${inner}Answer in the chat.`}</Text>)
+      line(`step:${step.key}:hint`, <Text dimColor>{`${inner}${PM_WILL_ASK}`}</Text>)
     }
   }
   decisionLines(ui, props.decisions.filter(decision => decision.kind !== 'agreement'), line)

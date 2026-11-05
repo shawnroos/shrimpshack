@@ -476,7 +476,7 @@ def _h_sweep(host, argv):
         if result.get("domain") is not None:
             with contextlib.redirect_stdout(io.StringIO()):
                 host._write(opts, lambda programme, prompt, rec: programme_domain_state.record_scan(programme, result),
-                            "domain_recorded", journal=False, beat=False, names_change=False)
+                            "domain_recorded", journal=False, beat=False)
     host._emit(result)
     return 0
 
