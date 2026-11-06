@@ -412,6 +412,30 @@ def _remit(cmd, programme) -> dict:
                      shown or "No change.", authority=wider)
 
 
+def _set_check(cmd, programme) -> dict:
+    checks = load_lib_module("programme_checks")
+    if len(cmd.pos) != 2 or cmd.pos[1] not in checks.STATES:
+        raise OfferError("usage: set-check <name> on|off [--item <id>]")
+    name, state = cmd.pos
+    own, ident = cmd.flag("own"), cmd.opt("item")
+    why = checks.refusal(name, own, ident)
+    if why:
+        raise OfferError(why)
+    if not checks.needs_pick(name, state, own):
+        raise OfferError(f"set-check {name} {state} needs no pick: the PM runs it alone")
+    scope, key, block = checks.place(programme, ident)
+    was = checks.stored_state(block, name)
+    if was == state:
+        raise OfferError(f"{name} is already {state} for {checks.where_text(scope, key)}")
+    text, facts = checks.CHECKS[name].text, {"check": name, "was": was}
+    if key:
+        facts.update(_item(programme, key)[2])
+    where = f"item {key}" if key else "the whole programme"
+    label = programme_offer_rendering.fitting(f"Turn on {text} for {where}", f"Turn on {name} for {where}")
+    return _rendered(label, f"Check {name} goes on for {where}. The PM can turn it off again alone; turning it on "
+                            "again asks you.", facts, authority=True)
+
+
 # Default-deny: a verb with no entry here cannot be offered.
 RENDERERS = {
     "accept-agreement": _accept,
@@ -439,6 +463,7 @@ RENDERERS = {
     "reopen-item": _reopen,
     "retire-ritual": _ritual_step({"retired": "Retire", "undone": "Undo"}),
     "run-ritual": _ritual_step("Run"),
+    "set-check": _set_check,
     "set-remit": _remit,
     "skip-ritual": _ritual_step("Skip"),
     "start-ritual": _ritual_step("Start"),

@@ -12,7 +12,7 @@ His words answer the question just asked. Read what he means before you run anyt
 
 | Class | Commands | His own words |
 |---|---|---|
-| Authority moves | `accept-agreement`, `end`, `handover`, takeover, `adopt-autonomy --widening`, a remit widening, `answer-permission <id> allow`, a wider `accept-context` | Refused. Relay his words and ask again with the picker. Only a pick of the option approves these. A typed `/auto:programme-end` or `/auto:programme-handover` stays valid |
+| Authority moves | `accept-agreement`, `end`, `handover`, takeover, `adopt-autonomy --widening`, a remit widening, `answer-permission <id> allow`, a wider `accept-context`, `set-check <name> on` when it needs a pick | Refused. Relay his words and ask again with the picker. Only a pick of the option approves these. A typed `/auto:programme-end` or `/auto:programme-handover` stays valid |
 | Drafts | `record-ruling`, `close-ruling`, `edit-project-term`, except an authority move | His words become the text, marked `wording: shawn`. See [rulings.md](rulings.md) |
 | Everything else on an offer | `drop-item`, `reopen-item`, `answer-handed`, `lift-pause` and the other verbs `P offer` takes | Approve, with your reading recorded and shown back |
 

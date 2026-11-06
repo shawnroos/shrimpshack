@@ -36,8 +36,10 @@ uncertainty — a malformed run-record, an absent driving_session_id, an interna
 error. Worst case the operator is asked directly (no harm). When the PreToolUse
 deny contract itself is unavailable (test hatch CLAUDE_AUTO_TEST_DENY_UNSUPPORTED,
 fenced via test_hatch_enabled), it still allows the question through but surfaces
-a loud systemMessage — never a pause. The DESTRUCTIVE backstop
-(on-pretooluse-action.py) is the one that fails CLOSED.
+a loud systemMessage — never a pause.
+
+The advisor redirect is the check `advisor-redirect`: off for a run bound to a programme's item,
+the question goes through. A standalone run has no setting. The pre-filled answer refusal has no off.
 
 rel-001: ALWAYS exit 0; never let a bad run-record break the tool flow.
 """
@@ -135,10 +137,8 @@ def _owns_session(led, *, run_record, session_id, skip_staleness, stale_threshol
     # registration: an unrelated standalone session in the same worktree is in
     # neither, so it still never matches (Dimension #2 preserved).
     #
-    # This gate fails OPEN, so a widened match can only ever deny MORE questions,
-    # never allow a destructive action. The fail-CLOSED action gate carries the
-    # operator-pause subtlety; nothing analogous is needed here because the
-    # `driver == "self"` conjunct above already excludes every paused run.
+    # This gate fails OPEN, so a widened match can only ever deny MORE questions.
+    # The `driver == "self"` conjunct above already excludes every paused run.
     if not session_id:
         return False
     is_driving, is_agent = session_membership(led, session_id)
@@ -215,6 +215,8 @@ def decide(repo_root: str, stdin_raw: str, env=None) -> dict | None:
     owned = _owned_run(repo_root, session_id) if repo_root else None
     if owned is None:
         return None  # not our run (or no session) => allow normal AskUserQuestion.
+    if not load_lib_module("programme_checks").task_run_state("advisor-redirect", owned[0], repo_root):
+        return None
     reason = _REDIRECT_REASON
     if isinstance(owned[1].get(CONTRACT_KEY), dict):
         # A contract marks a programme worker: its PM-owned questions never reach the advisor. Unroutable => allow.

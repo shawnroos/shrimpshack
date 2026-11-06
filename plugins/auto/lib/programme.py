@@ -182,6 +182,7 @@ def rules_in_force(record, journals=None, protocol=None, changes=True, *, behavi
                            for r in protocol["rejected"]],
         "rulings": active_rulings(programme, run_record_core.now_iso()),
         "permission_proposals": programme_permission.in_force(programme),
+        "checks": load_lib_module("programme_checks").setting_rows(programme),
     }
     legacy = [{"id": r["id"], "area": r["area"], "scope": r["scope"]}
               for r in programme_rulings.pc.rulings(programme, None)
@@ -200,7 +201,7 @@ def rules_in_force(record, journals=None, protocol=None, changes=True, *, behavi
 
 def render_rules(record, revision=None) -> str:
     rules = rules_in_force(record)
-    lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rules_texts(rules)]
+    lines = [f"programme: {rules['run']}"] + [text for text, _ in programme_view.rules_texts(rules, only_set_checks=True)]
     lines += programme_protocol_changes.lines(rules.get("protocol_changes"))
     body = "\n".join(lines).replace("<", "\\u003c")
     accepted = (((record.get("programme") or {}).get("agreement")) or {}).get("accepted")

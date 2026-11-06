@@ -53,12 +53,12 @@ ITEM_FIELDS = (
     "id", "title", "state", "aliases", "owner", "sessions", "matched_rule",
     "deliverables", "waiting_on", "task_runs", "dropped_reason", "joined_at",
     "history", "trajectory", "repo", "size", "held", "held_at", "parked_pane",
-    "focus_override",
+    "focus_override", "check_settings",
 )
 PROGRAMME_FIELDS = (
     "remit", "created_at", "agreement", "decisions", "items",
     "working_model", "watchers", "inbox_offset", "ended", "permission_proposals", "behaviours",
-    "pm_worktree", "rituals", "ritual_clock", "ritual_adoptions",
+    "pm_worktree", "rituals", "ritual_clock", "ritual_adoptions", "check_settings",
 )
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -404,7 +404,7 @@ def new_programme_block(spaces, now_iso: str) -> dict:
         "ended": None,
         "permission_proposals": [],
         "behaviours": [], "rituals": [], "ritual_clock": {}, "ritual_adoptions": {},
-        "pm_worktree": None,
+        "pm_worktree": None, "check_settings": {},
     }
 
 
@@ -432,7 +432,7 @@ def normalize_item(item: dict, item_id=None) -> dict:
         out[key] = list(item.get(key) or [])
     out["deliverables"] = dict(item.get("deliverables") or {})
     for key in ("matched_rule", "waiting_on", "dropped_reason", "joined_at", "trajectory", "repo", "size", "held", "held_at",
-                "parked_pane", "focus_override"):
+                "parked_pane", "focus_override", "check_settings"):
         out.setdefault(key, None)
     return out
 

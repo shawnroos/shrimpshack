@@ -17,7 +17,7 @@ programme_sanitize = load_lib_module("programme_sanitize")
 LABEL_CAP = 80
 # Room for a whole draft at the verbs' cap plus the facts around it: Shawn approves what he can read.
 TEXT_CAP = 900
-_FLAGS = ("ran-now", "widening", "without-rituals")
+_FLAGS = ("ran-now", "widening", "without-rituals", "own")
 # What one option's label can name in full.
 MAX_SET = 4
 

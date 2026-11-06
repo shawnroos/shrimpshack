@@ -210,7 +210,9 @@ def _h_adopt(host, argv):
                                  "would be rejected as shadowed")
         digest = draft_hash(text, bid)
         _write_file(bid, text, replace=False, used=_use_key(prompt, "adopt-behaviour-file", bid, "adopt", digest))
-        return _adopted(bid, digest, path=_personal_path(bid))
+        limit = programme_behaviour_files.parse_text(text, bid).get("limit")
+        asks = load_lib_module("programme_limit_terms").limit_asks(programme, None, [limit] if limit else [])
+        return _adopted(bid, digest, path=_personal_path(bid), **({"limit_asks": asks} if asks else {}))
 
     return host._write(opts, change, ADOPTED, prompt_id=opts.get("prompt"), needs_prompt=True,
                        verb="adopt-behaviour-file", target=bid, content=text)

@@ -281,7 +281,7 @@ def _warn_if_backstop_dark(run_id: str) -> None:
     v0.6.4: this NO LONGER fires merely because ``CLAUDE_CODE_CHILD_SESSION`` is set
     (the harness sets that in every Bash-tool subprocess, which is exactly where arm
     runs — the old guard mistook it for "spawned sub-agent" and went dark on every
-    run). The backstop (lib/on-pretooluse-action.py) owns a run by session-id
+    run). The question gate (lib/on-pretooluse-askuser.py) owns a run by session-id
     EQUALITY, so a null id can never match. Unlike the resume path (which REFUSES on
     a null id — a paused run staying paused is a safe default), arm PROCEEDS (a hard
     refuse would break headless contexts) but NEVER silently. (security-review fix.)

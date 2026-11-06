@@ -629,51 +629,26 @@ operator types today, but **substantive design/architecture forks still escalate
 to the operator**. A `PreToolUse` hook enforces this; it fires **only** when a
 live self-driven run owns the calling session.
 
-**The destructive check is off by default.** Destructive commands are not refused
-and do not pause a run. The check in `lib/on-pretooluse-action.py` is dormant
-behind `_destructive_check_on`, which only a fenced test hatch
-(`CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK` with `CLAUDE_AUTO_TEST_HARNESS`) turns on. The
-hook's shell shim starts Python only when a programme lease exists. The text below
-that names the action hook describes the dormant check.
+**Destructive commands are not refused unless a limit says so.** `no-destructive-commands`
+is an agreed limit, off by default and read only from the programme record. Under it,
+`lib/on-pretooluse-action.py` refuses one Bash call and journals `limit_refused`. Nothing
+pauses, and it binds every session on the item, whether or not a task run exists. Its shell
+shim starts Python only when a programme lease exists and the command text could match.
 
 ### Ownership predicate (the load-bearing fact)
 
-Both hooks scan `<repo>/.claude/auto/*.json` and treat a question/command as
+The question hook scans `<repo>/.claude/auto/*.json` and treats a question as
 belonging to a live auto run iff, for some run-record:
 
 - current phase `!= "done"` (run not finished), AND
 - `driving_session_id == ` the hook's stdin `session_id` (KTD-5 — **equality**,
   not presence; the field is read defensively, absent ⇒ no match).
 
-**Two conjuncts diverge between the hooks (deliberate). The action hook
-deliberately OMITS both, because it fails CLOSED and a denied tool call does not
-end the agent's turn — so any conjunct that goes false after the first fire would
-self-disarm the backstop:**
-
-- **`loop.driver == "self"` — question hook ONLY (round-1 P0).** The question
-  hook keeps it: it fails OPEN, and once a run is paused/manual there is no live
-  pulse to redirect, so allowing the question through is correct. The action hook
-  drops it: its own `_pause_run` flips the owned run to `driver="manual"` the
-  moment it blocks the first destructive command; if it coupled to
-  `driver=="self"` it would self-disarm after firing once and then allow
-  unlimited `rm -rf` / force-push.
-- **`loop.last_beat_at` freshness (`< DRIVER_SELF_STALE_SECONDS`, 3900s) —
-  question hook ONLY (round-2 P2).** The question hook keeps it as a dead-chain
-  guard (stale ⇒ allow is a benign fail-OPEN). The action hook drops it because
-  `_pause_run` calls `set_loop` WITHOUT `beat=True` — it does NOT re-stamp
-  `last_beat_at`. So a run paused-by-backstop goes stale while the operator
-  deliberates; a stale-conjunct would then read the paused run as a dead chain
-  and ALLOW a second destructive command — the same self-disarm hole the driver
-  omission closes, reopened through the staleness door. For a fail-CLOSED
-  backstop stale⇒allow is a fail-open hole; for the fail-OPEN question gate it is
-  correct. A live session whose id equals the recorded driving id IS the run to
-  gate regardless of beat freshness, and pausing a genuinely-dead run is harmless
-  (fail-safe).
-
-A run the backstop paused before this check went off by default stays paused until
-an operator runs `/auto-resume continue`. Under the hatch, it stays armed until then. Dimension #2 (a concurrent standalone
-ce-skill is never gated) is preserved by the `session_id` equality conjunct
-alone, independent of the driver/staleness checks.
+Two more conjuncts apply: `loop.driver == "self"`, since a paused run has no live pulse to
+redirect, and `loop.last_beat_at` fresher than `DRIVER_SELF_STALE_SECONDS` (3900s), since a
+stale chain is dead. A false conjunct allows the question, and the worst case is the operator
+is asked directly. A run the backstop paused before the destructive check went off stays
+paused until an operator runs `/auto-resume continue`.
 
 `session_id` equality is what cleanly **allows a concurrent standalone
 `/ce-plan`** in the same worktree: it has a different session, so no run-record
@@ -699,12 +674,7 @@ builds the step prompt).
 > strings equal passes BY CONSTRUCTION (`advisor-gate.test.sh` injects matching
 > ids into both the stdin payload and the run-record), so it proves nothing about
 > whether the two identifiers share a namespace in the live harness. A mismatch
-> would SILENTLY no-op BOTH gates — the question gate never redirects to the
-> advisor AND the dormant destructive check never recognizes the run (`_owning_run_id`
-> returns None ⇒ allow). This is NOT
-> caught by the fail-closed design, which covers only an unavailable `deny`
-> contract ("deny unavailable ⇒ pause"), NOT a session mismatch ("not my run ⇒
-> allow").
+> would SILENTLY no-op the gate: the question gate never redirects to the advisor.
 >
 > **REQUIRED pre-merge / pre-release step (blocking, record the result):** from
 > one real `/auto` run, capture one PreToolUse stdin payload and the armed run-record,
@@ -767,61 +737,31 @@ contract) degrades to allowing the question through — worst case the operator 
 asked directly. Under a confirmed-unavailable `deny` contract it allows the
 question but surfaces a loud `systemMessage` (never a pause).
 
-### Action hook (dormant destructive check, off by default)
+### Action hook (`no-destructive-commands`, a limit, off by default)
 
-Nothing in this section runs in production (see the start of §12). When the hatch
-turns it on, it behaves as follows.
+`lib/on-pretooluse-action.py`, behind `.claude/hooks/on-pretooluse-action.sh`. When the limit binds
+the session, the hook applies a deterministic classifier to the Bash `command`:
+`git push --force`/`-f`/`--force-with-lease` in any flag position, `reset --hard`, the
+whole-tree-discard `checkout .`/`restore .` family (a scoped pathspec like
+`checkout -- file.py` does not match), `clean -f`/`-fdx`, `branch -D`, `rm -rf`/`rm -fr`,
+`npm publish`, `gh release create`, `gh repo delete`, `gh release delete` and
+`gh pr merge --admin`. An `rm` whose every target resolves under a temp root is not matched.
+A `Write`'s `content` is not read, because plans and reviews quote these commands.
 
-`lib/on-pretooluse-action.py`. Because the question hook only intercepts the
-decision to *ask*, a separate hook matches `Bash`/`Write` and applies a
-deterministic classifier for the irreversible/destructive set, anchored to the
-project's CLAUDE.md list: `git push --force`/`-f`/`--force-with-lease` (matched in
-ANY flag position — `git push --force origin main` AND the canonical flag-last
-`git push origin main --force`/`-f`/`--force-with-lease`; fix-round-5 P1),
-`reset --hard`, the whole-tree-discard `checkout .`/`restore .` family (any
-spelling whose trailing ` .` pathspec discards the working tree —
-`checkout -- .`, `checkout HEAD -- .`, `restore -- .`, `restore --source=… .` —
-while a scoped pathspec like `checkout -- file.py` correctly does NOT fire),
-`clean -f`/`-fdx`, `branch -D`, `rm -rf`/`rm -fr`, the external-publish endpoints
-`npm publish` / `gh release create`, and the irreversible `gh` subcommands that
-run through the same gated Bash channel (fix-round-5 P2): `gh repo delete`,
-`gh release delete`, and `gh pr merge --admin` (the `--admin` flag bypasses
-branch protection / required reviews). Only the Bash `command` channel
-is classified: a `Write` reaches the hook (it is wired to both tool names) but
-its `content` is **deliberately NOT scanned** (round-4 P2) — classifying Write
-prose against the command set false-positive-pauses the driving session's own
-ce-skill doc Writes (a `/ce-plan` / `/ce-doc-review` markdown quoting `rm -rf`
-as an example), nearly all false-positive cost in auto's own domain. A real
-destructive operation runs through Bash, which IS gated. On a confirmed-destructive command for a confirmed live
-owned run it **pauses the run unconditionally** (`set_loop driver="manual"` +
-`blocked_on`) — even when the PreToolUse `deny` contract is unavailable (then it
-emits a `systemMessage` instead of the deny payload, never a silent allow). The
-halt is observable on the **run-record** (`driver=manual` / `blocked_on`), not the
-process exit code (which always stays 0). Fail-closed scope is precise: a
-malformed run-record, an unidentifiable/non-owned run, or a benign command all fall
-through to allow (an unrelated internal error must not brick the tool flow).
-
-Because this hook pauses the run it fires on (flipping it to `driver="manual"`
-WITHOUT re-stamping `last_beat_at`) and a denied tool call does not end the
-agent's turn, the action gate's ownership check deliberately **omits BOTH the
-`driver=="self"` and the `last_beat_at` staleness conjuncts** (see the Ownership
-predicate divergence above) — so it STAYS armed across a pause it caused, and
-across the staleness window while the operator deliberates, and a second
-destructive command from the same driving session is still denied. When it fires
-it appends its own `kind="action"` audit record (see Audit).
+A match refuses that one call and journals `limit_refused`. The run keeps going: nothing pauses,
+and the next call applies the limit again. The limit follows the item, not a task run, so a
+worker with no task run is bound too. The check reads only the programme record. While that
+cannot be read the limit is off, and the failure is journaled once.
 
 **Documented out-of-scope residual bypasses** (NOT covered — the classifier is a
-deterministic minimum-set backstop, not a sandbox): the general
+best-effort text match, not a sandbox): the general
 flag-reorder/long-form class (`rm -vrf`, `rm --recursive --force`; only the
 literal `rm -rf`/`rm -fr` are caught), refspec force-push
 (`git push origin +<ref>`), compound commands (`a; rm -rf b`), and
 eval/obfuscation. **GitHub MCP write tools** (`delete_file`,
 `merge_pull_request`, `push_files`, `create_or_update_file`) are also an
 acknowledged residual (fix-round-5 P2): they do NOT flow through the Bash
-`command` channel the classifier reads (their `tool_input` carries no `command`),
-and the hook is wired to the `Bash`/`Write` tool names only, so an MCP tool name
-never reaches it at all. Gating MCP-write tools would be a tool-name interception
-change beyond v0.6.0's detect-and-escalate scope.
+`command` channel the classifier reads (their `tool_input` carries no `command`).
 
 ### Audit (KTD-5)
 

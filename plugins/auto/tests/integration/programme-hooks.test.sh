@@ -482,9 +482,9 @@ FAKE_HERDR_PANE="w8:p1" session_start sess-outside "w8:p1" >/dev/null
 OUT="$(action_hook sess-outside 'herdr agent prompt w2:p31 go')"
 check "" "$OUT"
 
-it "with a lease and no repo, a Bash command reaches Python"
+it "with a lease and no repo, a Bash command naming a host reaches Python"
 rm -f "${WORK}/python-ran"
-( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"s0","tool_name":"Bash","tool_input":{"command":"echo w2:p31"}}' )
+( cd "$NOREPO" && CLAUDE_AUTO_PYTHON3="$MARKER_PY" bash "${HOOKS}/on-pretooluse-action.sh" <<< '{"session_id":"s0","tool_name":"Bash","tool_input":{"command":"herdr pane get w2:p31"}}' )
 if [ -e "${WORK}/python-ran" ]; then pass; else fail "python did not run"; fi
 
 it "the journaled command is redacted"

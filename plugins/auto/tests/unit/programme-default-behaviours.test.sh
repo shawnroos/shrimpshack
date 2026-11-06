@@ -149,7 +149,7 @@ has "$SENTENCE" "$COPY"
 it "the start brief carries the never-prompt and Auto-limit refusal clauses with the claim command filled in"
 has "Never prompt the PM's pane." "$COPY"
 has "Report with bash ${AUTO_ROOT}/lib/programme.sh claim --run ${RUN} --item linear:AI-701 --deliverable <name> --ref <ref>." "$COPY"
-has "Do not run it again and do not try another tool, wrapper or worker for it." "$COPY"
+has "Do not retry it, or try it through another tool, wrapper or worker." "$COPY"
 has "an Auto limit (not Claude Code) refuses a command" "$COPY"
 lacks "{claim_command}" "$COPY"
 

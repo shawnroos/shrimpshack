@@ -20,6 +20,8 @@ PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 ALLOW=(
   # Agent instructions for the PM in prose; U8 rewrites them host-neutral.
   "commands/programme-resume.md:prose instructions for the agent"
+  # A text match that decides whether to start Python; it runs no host binary.
+  ".claude/hooks/on-pretooluse-action.sh:the host names as a match pattern"
 )
 
 WORK="$(mktemp -d)"

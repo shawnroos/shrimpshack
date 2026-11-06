@@ -37,7 +37,7 @@ SET_KIND = "contract_set"
 REFUSED_KIND = "request_refused"
 VERB = "set-contract"
 FIELD_OF = {"authority": "authority", "drop": "authority", "done_internal": "done_bar", "done_external": "done_bar",
-            "workflow": "workflow", "fan_out_cap": "fan_out_cap"}
+            "workflow": "workflow", "fan_out_cap": "fan_out_cap", "limit": "limits", "drop_limit": "limits"}
 
 
 def _fields(change) -> list:
@@ -61,7 +61,17 @@ def _merged(block, change) -> dict:
     for key in ("workflow", "fan_out_cap"):
         if key in change:
             new[key] = change[key]
+    if "limit" in change or "drop_limit" in change:
+        new["limits"] = _limits(new.get("limits") or [], change)
     return new
+
+
+def _limits(names, change) -> list:
+    for name in change.get("drop_limit") or []:
+        if name not in names:
+            raise worker_contract.ContractError(f"the contract names no limit {name!r}; nothing to drop", "no_such_entry")
+    kept = [name for name in names if name not in (change.get("drop_limit") or [])]
+    return kept + [name for name in change.get("limit") or [] if name not in kept]
 
 
 def _refuse_widening(change, inputs) -> None:
@@ -93,7 +103,8 @@ def _revise(block, change, bite, programme, key, sid, now, queue):
     else:
         worker_contract.bump(new, sid, now)
     worker_contract.validate(new)
-    return new, {"version": new["version"], "bite": chosen, "fields": _fields(change), "queued": queue}
+    summary = {"version": new["version"], "bite": chosen, "fields": _fields(change), "queued": queue}
+    return new, dict(summary, limits=new["limits"]) if "limits" in summary["fields"] else summary
 
 
 def refuse_if_compacted(home) -> None:
@@ -220,9 +231,13 @@ def parse_change(opts) -> dict:
         change["workflow"] = opts["workflow"]
     if opts.get("fan-out-cap"):
         change["fan_out_cap"] = int(opts["fan-out-cap"])
+    if opts.get("limit"):
+        change["limit"] = list(opts["limit"])
+    if opts.get("drop-limit"):
+        change["drop_limit"] = list(opts["drop-limit"])
     if not change:
         raise ValueError("set-contract needs at least one change: --authority, --drop-authority, --done-internal, "
-                         "--done-external, --workflow or --fan-out-cap")
+                         "--done-external, --workflow, --fan-out-cap, --limit or --drop-limit")
     return change
 
 
@@ -245,16 +260,21 @@ def journaled_refusals(host, run_id, item_id, verb=VERB):
 
 def _h_set_contract(host, argv):
     positional, opts = host._parse(argv, values=("run", "item", "bite", "workflow", "fan-out-cap", "done-internal",
-                                                 "done-external", "approved"), multi=("authority", "drop-authority"))
+                                                 "done-external", "approved"),
+                                   multi=("authority", "drop-authority", "limit", "drop-limit"))
     if positional or not opts.get("item"):
         raise ValueError("usage: set-contract --item <id> [--run <programme run>] [--authority <kind>=<mode>[:<asks>]]... "
                          "[--drop-authority <kind>]... [--done-internal <a,b>] [--done-external <a,b|none>] "
-                         "[--workflow <name>] [--fan-out-cap <n>] [--bite pulse|step] [--approved <ask id>]")
+                         "[--workflow <name>] [--fan-out-cap <n>] [--limit <check>]... [--drop-limit <check>]... "
+                         "[--bite pulse|step] [--approved <ask id>]")
     change = parse_change(opts)
     run_id, home, _record = host._locate(opts)
     with journaled_refusals(host, run_id, opts["item"]):
         out = set_contract(run_id, opts["item"], change, bite=opts.get("bite"), approved=opts.get("approved"))
     host.refresh_view(run_id, home)
+    if out.get("limits"):
+        programme = programme_home.normalize_programme(_record.get("programme") or {})
+        out["limit_asks"] = load_lib_module("programme_limit_terms").limit_asks(programme, out["item"], out["limits"])
     host._emit(dict(out, ok=True, run=run_id, kind=SET_KIND))
     return 0
 
@@ -263,16 +283,17 @@ _SPECS = (
     ("set-contract", _h_set_contract,
      "--item <id> [--run <programme run>] [--authority <kind>=<mode>[:<asks>]]... [--drop-authority <kind>]... "
      "[--done-internal <a,b>] [--done-external <a,b|none>] [--workflow <name>] [--fan-out-cap <n>] "
-     "[--bite pulse|step] [--approved <ask id>]",
+     "[--limit <check>]... [--drop-limit <check>]... [--bite pulse|step] [--approved <ask id>]",
      "any caller but the programme's driving session that holds its lease, checked again inside the run-record "
      "lock; a worker outside the remit; an item with no contracted run or a launch-blocked one; a done run; a "
      "run that predates contracts; an authority change that widens a kind past the Authority table and active "
-     "Rulings; an unknown decision kind, mode, done-bar name, workflow name or bite; a workflow whose file carries an authority key; "
+     "Rulings; an unknown decision kind, mode, done-bar name, workflow name or bite; a --limit that is not a limit check; a workflow whose file carries an authority key; "
      "a workflow change when workflow_change reads never, or propose, which hands a Shawn ask and changes "
      "nothing until it returns with --approved <ask id>; act_and_tell adds a tell. With no --bite, a change "
      "that narrows any authority binds at the next pulse and every other change at the next step boundary. "
      "While the item is launched it edits the item's seed contract and bumps its version; once bound it bumps "
-     "the run record's contract version and queues one pending entry. Journals contract_set."),
+     "the run record's contract version and queues one pending entry. A --limit only records the name: the limit "
+     "stays off until Shawn's pick of set-check, and limit_asks in the output gives the offer. Journals contract_set."),
 )
 
 

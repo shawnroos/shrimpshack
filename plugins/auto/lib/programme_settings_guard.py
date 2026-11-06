@@ -2,9 +2,10 @@
 """Refuse the PM's write to a settings file a permission proposal targets.
 
 Best effort: the driving session is refused Write, Edit, MultiEdit or Bash calls that name
-that settings.local.json. Only `answer-permission <id> allow` writes it, after Shawn's pick;
-workers are not checked. While the programme's record cannot be read, the driver is refused any
+that settings.local.json. Only `answer-permission <id> allow` writes it, after Shawn's pick.
+While the programme's record cannot be read, the driver is refused any
 .claude/settings.local.json: which one a proposal targets cannot be known.
+`pm-settings-writes` off lifts the driver's refusal. A limited worker's writes are programme_limits' job.
 """
 
 from __future__ import annotations
@@ -21,11 +22,12 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_home = load_lib_module("programme_home")
 rules = load_lib_module("programme_permission_rules")
+guard_text = load_lib_module("programme_guard_text")
 
 SETTINGS_FILE = rules.DESTINATION_FILE
 _TOOLS = ("Bash", "Write", "Edit", "MultiEdit")
 _TOKEN = re.compile(r"[^\s;&|<>()`]*\.claude/settings\.local\.json(?![\w.-])", re.IGNORECASE)
-_HIDING_CHARS = re.compile(r"[\"'\\\\]")
+PM_CHECK = "pm-settings-writes"
 _ONLY_THE_VERB = "Only `programme.sh answer-permission <perm-id> allow` writes this file, after Shawn's pick."
 
 
@@ -55,15 +57,6 @@ def scope(session_id):
     return None if not isinstance(programme, dict) or programme.get("ended") else (driven[0]["run"], programme)
 
 
-def _expanded(path: str) -> str:
-    return os.path.expanduser(os.path.expandvars(path))
-
-
-def _resolved(path: str, cwd: str) -> str:
-    path = _expanded(path)
-    return os.path.realpath(path if os.path.isabs(path) else os.path.join(cwd, path))
-
-
 def _any_settings_file(path: str) -> bool:
     parent, name = os.path.split(path)
     return name.casefold() == "settings.local.json" and os.path.basename(parent).casefold() == ".claude"
@@ -78,30 +71,39 @@ def _target(tool_name, tool_input, cwd, destinations):
         if destinations is not None:
             return path.casefold() in guarded
         # A symlinked .claude folder resolves to a path without the settings name; check the name as written too.
-        written = os.path.normpath(os.path.join(cwd, _expanded(raw)))
+        written = os.path.normpath(os.path.join(cwd, guard_text.expanded(raw)))
         return _any_settings_file(path) or _any_settings_file(written)
 
     if tool_name != "Bash":
         raw = tool_input.get("file_path")
-        path = _resolved(raw, cwd) if isinstance(raw, str) else None
+        path = guard_text.resolved(raw, cwd) if isinstance(raw, str) else None
         return path if path and hit(path, raw) else None
     command = tool_input.get("command")
     if not isinstance(command, str):
         return None
-    text = _HIDING_CHARS.sub("", command)
+    text = guard_text.HIDING_CHARS.sub("", command)
     tokens = _TOKEN.findall(text)
     for token in tokens:
-        if hit(_resolved(token, cwd), token):
-            return _resolved(token, cwd)
+        if hit(guard_text.resolved(token, cwd), token):
+            return guard_text.resolved(token, cwd)
     if destinations is None:
         return None
     # A relative name after a cd elsewhere resolves against the wrong folder; best effort.
-    if any(not os.path.isabs(_expanded(t)) for t in tokens):
-        folded = _expanded(text).casefold()
+    if any(not os.path.isabs(guard_text.expanded(t)) for t in tokens):
+        folded = guard_text.expanded(text).casefold()
         for dest in destinations:
             if dest.casefold() in folded or os.path.realpath(dest).casefold() in folded:
                 return os.path.realpath(os.path.join(dest, SETTINGS_FILE))
     return None
+
+
+def names_settings(tool_input) -> bool:
+    named = guard_text.HIDING_CHARS.sub("", json.dumps(tool_input)).casefold()
+    return "settings.json" in named or "settings.local.json" in named
+
+
+def written(tool_name, tool_input, target) -> dict:
+    return {"path": target, **({"command": tool_input.get("command")} if tool_name == "Bash" else {})}
 
 
 def decision(stdin_raw: str):
@@ -111,10 +113,14 @@ def decision(stdin_raw: str):
         return None
     tool_name = data["tool_name"]
     tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
-    if "settings.local.json" not in json.dumps(tool_input).casefold():
+    if not names_settings(tool_input):
         return None
     session_id = data.get("session_id") if isinstance(data.get("session_id"), str) else None
-    found = scope(session_id)
+    cwd = data.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
+    # Loaded here, not at the top: only a call naming the file needs the checks.
+    states = load_lib_module("programme_checks").hook_checks(session_id)["states"]
+    found = scope(session_id) if states[PM_CHECK] else None
     if found is None:
         return None
     run_id, programme = found
@@ -123,29 +129,17 @@ def decision(stdin_raw: str):
         if isinstance(p, dict) and isinstance(p.get("destination"), str) and os.path.isabs(p["destination"])]
     if destinations == []:
         return None
-    cwd = data.get("cwd")
-    cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
     target = _target(tool_name, tool_input, cwd, destinations)
     if target is None:
         return None
     if programme is None:
-        return _deny(
+        return guard_text.deny(
             f"auto: this call names {target}, and the record of programme {run_id!r} cannot be read "
             f"right now, so no settings file can be cleared. {_ONLY_THE_VERB} "
             "Retry once the programme is readable, or continue the work that does not need this."), None
-    payload = {"tool": tool_name, "path": target}
-    if tool_name == "Bash":
-        payload["command"] = tool_input.get("command")
-    return _deny(
+    return guard_text.deny(
         f"auto: this call names {target}, the settings file a permission proposal of "
         f"programme {run_id!r} targets. {_ONLY_THE_VERB} Offer that answer and wait for his pick, or continue the "
         "work that does not need this. The attempt is journaled once the programme is free."), \
-        (run_id, "blocked_settings_write", session_id, payload)
+        (run_id, "blocked_settings_write", session_id, {"tool": tool_name, **written(tool_name, tool_input, target)})
 
-
-def _deny(reason: str) -> dict:
-    return {"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason": reason,
-    }}

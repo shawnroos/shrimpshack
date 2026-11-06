@@ -567,6 +567,74 @@ EOF
 )"
 check '[1, 1]' "$OUT"
 
+# ---- A contract term naming a limit routes through set-check ----
+limit_state() {
+  run_py "$1" <<'EOF'
+rec = core.read_run_record(ph.home_path(RUN), RUN)
+print((rec["programme"]["items"][args[0]].get("check_settings") or {}).get("no-destructive-commands"))
+EOF
+}
+contract_limits() {
+  run_py <<'EOF'
+print(wc.contract_of(core.read_run_record(REPO, "wrun")).get("limits"))
+EOF
+}
+
+it "a contract naming a limit on a bound run keeps the name, and the limit stays off"
+prog set-contract --item linear:AI-1 --run "$RUN" --limit no-destructive-commands
+check "0" "$CODE"
+check "['no-destructive-commands']" "$(contract_limits)"
+check "None" "$(limit_state linear:AI-1)"
+
+it "the output gives the PM the route: an offer of set-check for that item"
+has "offer limit-no-destructive-commands --command 'set-check no-destructive-commands on --item linear:AI-1'" "$OUT"
+
+it "status lists the named limit as not on, with its source"
+has "limit no-destructive-commands: named by the contract of item linear:AI-1, not on" "$("$PY" "$PROG" status --run "$RUN" 2>&1)"
+
+it "a contract names a limit: only Shawn's pick of set-check turns it on"
+P="$("$PY" "${AUTO_ROOT}/tests/fixtures/offer_pick.py" "$RUN" "set-check no-destructive-commands on --item linear:AI-1")"
+prog set-check no-destructive-commands on --item linear:AI-1 --prompt "$P" --run "$RUN"
+check "0" "$CODE"
+lacks "None" "$(limit_state linear:AI-1)"
+lacks "limit no-destructive-commands: named" "$("$PY" "$PROG" status --run "$RUN" 2>&1)"
+
+it "a contract naming a limit on a launched seed keeps the name, and the limit stays off"
+prog set-contract --item linear:AI-5 --run "$RUN" --limit no-settings-writes
+check "0" "$CODE"
+has "limit no-settings-writes: named by the contract of item linear:AI-5, not on" "$("$PY" "$PROG" status --run "$RUN" 2>&1)"
+
+it "--drop-limit removes the name and clears the status line, with no setting touched"
+prog set-contract --item linear:AI-5 --run "$RUN" --drop-limit no-settings-writes
+check "0" "$CODE"
+lacks "limit no-settings-writes: named" "$("$PY" "$PROG" status --run "$RUN" 2>&1)"
+
+it "a contract naming a check that is not a limit, or no check, is refused and the record does not move"
+BEFORE="$(run_py <<'EOF'
+print(rec_hash(REPO, "wrun"))
+EOF
+)"
+prog set-contract --item linear:AI-1 --run "$RUN" --limit literal-send
+check "1" "$CODE"
+has "bad_limits" "$OUT"
+prog set-contract --item linear:AI-1 --run "$RUN" --limit no-such-check
+check "1" "$CODE"
+has "bad_limits" "$OUT"
+check "$BEFORE" "$(run_py <<'EOF'
+print(rec_hash(REPO, "wrun"))
+EOF
+)"
+
+it "a seed contract file may name a limit"
+check "['no-destructive-commands']" "$(run_py <<'EOF'
+reg = load_lib_module("worker_register")
+path = os.path.join(REPO, "seed.json")
+with open(path, "w") as fh:
+    json.dump({"authority": {}, "done_bar": {"internal": ["steps_terminal"], "external": []}, "workflow": "a2", "fan_out_cap": 1, "limits": ["no-destructive-commands"]}, fh)
+print(reg.load_contract_file(path, "sess-pm")["limits"])
+EOF
+)"
+
 it "no verb crashed"
 check "" "$CRASHES"
 

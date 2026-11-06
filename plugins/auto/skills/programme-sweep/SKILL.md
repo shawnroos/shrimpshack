@@ -293,7 +293,8 @@ re-arming. Next sweep reads the changes.
    - An item's latest permission explanation shows on its line in `P status`;
      proposals that need Shawn are under Decisions for Shawn. When an
      explanation names something only Shawn can change (a deny rule, a hook,
-     managed settings), tell him in one line.
+     managed settings), tell him in one line. A hook refusal on an item with a `limit_refused` journal row
+     is a check limit: [references/checks.md](references/checks.md), not Shawn.
    - To ask Shawn about a proposal, run `P offer <key> --command 'answer-permission <perm-id> allow'
      --command 'answer-permission <perm-id> not-now' --command 'answer-permission <perm-id> no'`, ask with the
      `input` it prints, unchanged, and run the picked command with `--prompt <pick id>`. On allow, Auto writes the
@@ -375,7 +376,8 @@ re-arming. Next sweep reads the changes.
      wait, never prompt the PM's pane, a refusal of an Auto limit) are shipped files in
      `behaviours/`, and you never retype them. A start with a handoff carries
      them. For a start without a handoff, and for a later prompt, add
-     `--standing` to `P prompt-item`.
+     `--standing` to `P prompt-item`. When `start-worker` returns
+     `limits_not_briefed`, send `P prompt-item`: it carries the limits.
    - Before a long wait on a worker, and before any cleanup of its worktree,
      keep what it made: `P collect-result --item <item> --attempt <token> --source <path> --root <worktree>`
      for each result file, and `P preserve-code --source <worktree>` for its code.

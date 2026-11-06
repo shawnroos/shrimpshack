@@ -132,7 +132,9 @@
 #   programme_sources    → run_record_core, programme_home, programme_journal,
 #                          programme_sanitize, programme_record, programme_context, programme_exec,
 #                          programme_tracker, programme_tasks, programme_plans,
-#                          programme_recovery, session_registry; driver_session [lazy]
+#                          programme_recovery, session_registry, programme_brief; driver_session [lazy]
+#   programme_brief      → run_record_core, programme_context, programme_behaviours;
+#                          programme_limit_terms [lazy]. It never loads programme_sources.
 #   programme_archive    → run_record_core, programme_home, programme_journal;
 #                          programme_authority, programme_artifacts, programme_store,
 #                          programme_context, programme_recovery, programme_preserve,
@@ -166,10 +168,21 @@
 #                          programme_record, programme_permission_rules,
 #                          programme_permission_state, permission_transcript,
 #                          programme_permission_settle (never the reverse)
-#   programme_settings_guard → programme_home, programme_permission_rules
-#   programme_behaviour_guard → programme_settings_guard; programme_behaviours [lazy],
-#                          programme_behaviour_files [lazy], programme_protocol [lazy]
-#                          (programme_protocol arrives through programme_behaviour_files)
+#   programme_guard_text imports nothing; the guards, programme_limits and programme_checks load it.
+#   programme_settings_guard → programme_home, programme_permission_rules, programme_guard_text;
+#                          programme_checks [lazy]
+#   programme_behaviour_guard → programme_settings_guard, programme_guard_text; programme_checks [lazy],
+#                          programme_behaviours [lazy], programme_behaviour_files [lazy], programme_home [lazy],
+#                          programme_protocol [lazy] (programme_protocol arrives through programme_behaviour_files)
+#   programme_limits     → programme_home, programme_guard_text, programme_settings_guard,
+#                          programme_behaviour_guard; programme_checks [lazy]. Neither guard loads it back.
+#   programme_checks     → programme_home, run_record_core, programme_sanitize, programme_store,
+#                          programme_check_health; programme_record [lazy], programme_guard_text [lazy]
+#   programme_check_health → programme_home, run_record_core, programme_sanitize; programme_journal [lazy]
+#   programme_limit_terms → programme_checks (never the reverse); programme_limits [lazy] (the run verbs
+#                          a brief names). programme_brief, programme_sources,
+#                          programme_view, worker_contract_write and programme_behaviour_file_verbs
+#                          load it lazily.
 #   programme_behaviour_files → programme_behaviours, programme_protocol
 #   programme_view_behaviours → programme_behaviour_files, programme_behaviours
 #   programme_view [lazy]  → programme_view_behaviours
@@ -215,11 +228,11 @@
 #   on-stop              → programme_resume [lazy] (reads the compact flag's trigger)
 #   on-stop              → phase-grammar; programme_home [lazy], programme_predicate [lazy],
 #                          programme_journal [lazy], programme [lazy]
-#   on-pretooluse-action → phase-grammar; session_registry [lazy], programme_journal [lazy],
-#                          programme_home [lazy], run_record_core [lazy], programme_evidence [lazy],
+#   on-pretooluse-action → session_registry [lazy], programme_journal [lazy],
+#                          programme_home [lazy], programme_checks [lazy], programme_evidence [lazy],
 #                          programme_behaviour_guard [lazy], programme_settings_guard [lazy],
 #                          programme_store [lazy], send_guard [lazy]
-#   send_guard           → terminal_host, session_registry [lazy]
+#   send_guard           → terminal_host, session_registry [lazy], programme_checks [lazy]
 #   auto-spawn           → driver_session; auto-workspace [lazy]
 #
 # format_compat is a DAG ROOT (pure stdlib, no sibling import), so every `→ format_compat`
@@ -548,7 +561,7 @@ for _pm in programme_home.py programme_predicate.py programme_protocol.py \
            programme_recovery.py programme_archive.py programme_resume.py \
            programme_terms.py programme_proposals.py programme_trajectory.py programme_view_work.py \
            programme_naming.py programme_rulings.py programme_protocol_changes.py programme_carryover.py \
-           programme_view_agreement.py; do
+           programme_view_agreement.py programme_brief.py; do
   it "lib/${_pm} exists (programme family — its edge checks are vacuous without it)"
   if [ -f "${LIB}/${_pm}" ]; then
     pass
@@ -567,6 +580,30 @@ for _hook in on-user-prompt.sh on-pre-compact.sh; do
 done
 
 # ─── programme family: forbidden edges ─────────────────────────────────────
+it "the settings and behaviours guards do NOT load programme_limits (it loads them at module top)"
+if loads_sibling "programme_settings_guard.py" "programme_limits" \
+   || loads_sibling "programme_behaviour_guard.py" "programme_limits"; then
+  fail "a guard loads programme_limits back; a limit's refusals belong in programme_limits.decision"
+else
+  pass
+fi
+
+it "programme_checks and programme_check_health do NOT load programme_limit_terms (it loads programme_checks)"
+if loads_sibling "programme_checks.py" "programme_limit_terms" \
+   || loads_sibling "programme_check_health.py" "programme_limit_terms" \
+   || loads_sibling "programme_check_health.py" "programme_checks"; then
+  fail "a back-edge onto programme_limit_terms or from programme_check_health to programme_checks"
+else
+  pass
+fi
+
+it "programme_guard_text loads no sibling (a leaf every guard shares)"
+if loads_any_sibling "programme_guard_text.py"; then
+  fail "programme_guard_text.py loads a sibling"
+else
+  pass
+fi
+
 for _host in programme_record programme_evidence programme_sources programme_trajectory programme_view \
              programme-watch run_record_evidence programme_lifecycle programme_archive \
              programme_resume programme_terms programme_proposals programme_view_work programme_naming \
@@ -585,6 +622,13 @@ if loads_sibling "programme_resume.py" "programme_sources" \
    || loads_sibling "programme_resume.py" "programme_record" \
    || loads_sibling "programme_resume.py" "programme_archive"; then
   fail "programme_resume.py must not load a verb module — programme loads it before its verb table"
+else
+  pass
+fi
+
+it "programme_brief.py does NOT load programme_sources (programme_sources loads it at module top)"
+if loads_sibling "programme_brief.py" "programme_sources"; then
+  fail "programme_brief.py loading programme_sources closes a cycle"
 else
   pass
 fi

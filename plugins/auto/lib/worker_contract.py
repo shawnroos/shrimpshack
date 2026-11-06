@@ -37,7 +37,7 @@ BITES = ("pulse", "step")
 DONE_INTERNAL = ("steps_terminal", "gaps_closed", "phase_reached")
 DONE_EXTERNAL = ("pr_merged", "ci_green")
 REQUIRED = ("version", "set_at", "set_by", "authority", "done_bar", "workflow", "fan_out_cap")
-OPTIONAL = ("pending_versions", "applied_version", "goal_version", "goal_bound_version")
+OPTIONAL = ("pending_versions", "applied_version", "goal_version", "goal_bound_version", "limits")
 _WORKFLOW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _NO_LEVEL = "propose"
 
@@ -122,6 +122,13 @@ def _check_goal(block) -> None:
                             "bad_goal")
 
 
+def _check_limits(names) -> None:
+    known = load_lib_module("programme_checks").limit_names()
+    if not isinstance(names, list) or len(set(map(str, names))) != len(names) or any(n not in known for n in names):
+        raise ContractError(f"contract limits {names!r} must be a list of limit names, each once; known: {known}",
+                            "bad_limits")
+
+
 def validate(block) -> dict:
     if not isinstance(block, dict):
         raise ContractError("contract must be a map", "bad_shape")
@@ -148,14 +155,16 @@ def validate(block) -> dict:
         raise ContractError(f"contract fan_out_cap {cap!r} must be an integer of at least 1", "bad_cap")
     _check_pending(version, block.get("pending_versions", []), block.get("applied_version", 0))
     _check_goal(block)
+    if "limits" in block:
+        _check_limits(block["limits"])
     return copy.deepcopy(block)
 
 
-def new_contract(*, set_by, authority, done_bar, workflow, fan_out_cap, version=1, now=None) -> dict:
+def new_contract(*, set_by, authority, done_bar, workflow, fan_out_cap, version=1, now=None, limits=None) -> dict:
     return validate({
         "version": version, "set_at": now or run_record_core.now_iso(), "set_by": set_by,
         "authority": authority, "done_bar": done_bar, "workflow": workflow, "fan_out_cap": fan_out_cap,
-        "pending_versions": [], "applied_version": 0,
+        "pending_versions": [], "applied_version": 0, **({"limits": limits} if limits else {}),
     })
 
 

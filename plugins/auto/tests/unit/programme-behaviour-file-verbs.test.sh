@@ -425,6 +425,47 @@ chmod 755 "$(dirname "$SEEN")"
 prog copy-default d9 --prompt "$P" --run "$RUN"
 check "1 0 present" "$FIRST $CODE $([ -e "${PERS}/d9.md" ] && echo present || echo absent)"
 
+# ---- A behaviour naming a limit routes through set-check ----
+limit_draft() {
+  printf -- '---\nwhen: work starts\nlimit: %s\n---\nDo:\n- write a plan\n' "$2" > "${WORK}/drafts/$1.md"
+}
+limit_state() {
+  run_py "$RUN" <<'EOF'
+rec = load_lib_module("run_record_core").read_run_record(ph.home_path(args[0]), args[0])
+print((rec["programme"].get("check_settings") or {}).get("no-destructive-commands"))
+EOF
+}
+limit_draft l1 no-destructive-commands
+limit_draft l2 literal-send
+limit_draft l3 no-such-check
+
+it "a behaviour naming a limit, adopted with no pick of set-check: the limit stays off"
+P="$(opick "$RUN" "adopt-behaviour-file l1 --file ${WORK}/drafts/l1.md")"
+prog adopt-behaviour-file l1 --file "${WORK}/drafts/l1.md" --prompt "$P" --run "$RUN"
+check "0 None" "$CODE $(limit_state)"
+
+it "the adopt output gives the PM the route: an offer of set-check"
+has "offer limit-no-destructive-commands --command 'set-check no-destructive-commands on'" "$OUT"
+
+it "status lists the named limit as not on, with its source, and the behaviour shows its limit"
+TEXT="$("$PY" "$PROG" status --run "$RUN" 2>&1)"
+has "limit no-destructive-commands: named by behaviour l1, not on" "$TEXT"
+has "limit: no-destructive-commands" "$TEXT"
+
+it "only Shawn's pick of set-check turns the behaviour's limit on, and the status line goes"
+P="$(opick "$RUN" "set-check no-destructive-commands on")"
+prog set-check no-destructive-commands on --prompt "$P" --run "$RUN"
+check "0" "$CODE"
+lacks "None" "$(limit_state)"
+lacks "limit no-destructive-commands: named" "$("$PY" "$PROG" status --run "$RUN" 2>&1)"
+
+it "a behaviour naming a check that is not a limit, or no check, cannot be offered"
+for name in l2 l3; do
+  OFFERED="$("$PY" "$PROG" offer "adopt-$name" --command "adopt-behaviour-file $name --file ${WORK}/drafts/${name}.md" --run "$RUN" 2>&1)"
+  has "limit" "$OFFERED"
+  lacks '"input"' "$OFFERED"
+done
+
 echo
 echo "passed: $PASS failed: $FAIL"
 [ "$FAIL" -eq 0 ]

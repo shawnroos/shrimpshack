@@ -372,6 +372,35 @@ EOF
 )"
 check "[] herdr:w2/p26 open 1 3600" "$OUT"
 
+it "check_settings is a programme and item field: empty on a new block, back-filled on an old record, a stored value kept"
+OUT="$(run_py <<'EOF'
+blk = ph.new_programme_block([], "2026-11-05T00:00:00Z")
+item = ph.new_item("linear:AI-1")
+old = ph.normalize_programme({"items": {"linear:AI-1": {"title": "old"}}})
+kept = ph.normalize_programme({"check_settings": {"literal-send": {"state": "off"}},
+                               "items": {"linear:AI-1": {"check_settings": {"literal-send": {"state": "on"}}}}})
+print("check_settings" in ph.PROGRAMME_FIELDS, "check_settings" in ph.ITEM_FIELDS, blk["check_settings"], item["check_settings"],
+      old["check_settings"], old["items"]["linear:AI-1"]["check_settings"],
+      kept["check_settings"]["literal-send"]["state"], kept["items"]["linear:AI-1"]["check_settings"]["literal-send"]["state"])
+EOF
+)"
+check "True True {} None {} None off on" "$OUT"
+
+it "a malformed check_settings does not stop a record normalizing"
+OUT="$(run_py <<'EOF'
+out = ph.normalize_programme({"check_settings": "x", "items": {"linear:AI-1": {"check_settings": 7}}})
+print(out["check_settings"], out["items"]["linear:AI-1"]["check_settings"])
+EOF
+)"
+check "x 7" "$OUT"
+
+it "check_settings stays out of the agreement terms"
+OUT="$(run_py <<'EOF'
+print("check_settings" in ph.new_programme_block([], "2026-11-05T00:00:00Z")["agreement"]["terms"])
+EOF
+)"
+check "False" "$OUT"
+
 it "pm_worktree is a programme field: null on a new block and back-filled null, a recorded value kept"
 OUT="$(run_py <<'EOF'
 kept = {"path": "/r/worktrees/programme-x", "repo": "/r", "created_at": "2026-10-22T00:00:00Z"}

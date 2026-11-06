@@ -26,7 +26,7 @@ SHIPPED_DIR_ENV = "CLAUDE_AUTO_SHIPPED_BEHAVIOURS_DIR"
 PERSONAL_DIR_ENV = "CLAUDE_AUTO_BEHAVIOURS_DIR"
 FOLDER_NAME = "behaviours"
 
-SCALARS = ("when", "trigger", "applies_to", "evidence", "stop", "why")
+SCALARS = ("when", "trigger", "applies_to", "evidence", "stop", "why", "limit")
 LISTS = ("checks", "overrides", "skills", "tools", "agents", "formats", "comms")
 KEYS = SCALARS + LISTS
 MAX_FILE_BYTES = 64 * 1024
@@ -151,7 +151,7 @@ def _entry(bid, fields, body, mtime) -> dict:
     for key in ("overrides", "skills", "tools", "agents", "formats", "comms"):
         if fields.get(key):
             entry[key] = fields[key]
-    for key in ("evidence", "stop", "why"):
+    for key in ("evidence", "stop", "why", "limit"):
         if fields.get(key):
             entry[key] = fields[key]
     return entry

@@ -302,9 +302,7 @@ def register_session(repo_root, run_id, session_id):
     could gate that bystander (a DoS, not a destructive-command bypass); the
     env-derived contract is the mitigation.
 
-    Does NOT touch ``driving_session_id`` — the boss remains the primary owner,
-    and only the boss's session is exempt from the action gate's operator-pause
-    carve-out (see on-pretooluse-action.py::_owns_session).
+    Does NOT touch ``driving_session_id`` — the boss remains the primary owner.
     """
     if not session_id or not isinstance(session_id, str):
         raise run_record_core.RunRecordError(

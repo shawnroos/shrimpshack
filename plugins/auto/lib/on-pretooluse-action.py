@@ -1,67 +1,13 @@
 #!/usr/bin/env python3
-"""auto U4: decision logic behind .claude/hooks/on-pretooluse-action.sh.
+"""Behind on-pretooluse-action.sh: the tracker, settings, behaviours and send guards, and `no-destructive-commands`.
 
-The live checks here are the tracker, settings, behaviours and send guards.
+The limit reads only the programme record, through programme_checks. It refuses one Bash call and
+journals it. Nothing pauses, and a session a limit does not bind is not checked.
 
-THE DESTRUCTIVE CHECK IS OFF BY DEFAULT: destructive commands are not refused and
-do not pause a run. ``decide`` and its helpers are dormant behind
-``_destructive_check_on``, which only a fenced test hatch turns on. The rest of
-this docstring describes the dormant check.
-
-The deterministic destructive-action backstop (KTD-4/5). On a Bash tool call,
-under the SAME live-run + session_id ownership gate as the question hook, match
-the `command` against the CLAUDE.md-anchored irreversible/destructive set and
-ESCALATE via the pause handoff. Write tool calls reach this hook (the plugin
-matches both) but only their `command` field is classified — which Write never
-sets — so Write is effectively a no-op here (round-4 P2: Write `content` is NOT
-scanned; see ``_command_text``).
-
-FAILS CLOSED (KTD-4 — the opposite asymmetry from the question gate):
-    on a CONFIRMED destructive command for a CONFIRMED live run, this hook PAUSES
-    the run (set_loop driver="manual" + blocked_on) UNCONDITIONALLY — even when
-    the PreToolUse `deny` contract is unavailable. It never degrades to
-    silent-allow on a destructive match. The halt is observable on the RUN_RECORD
-    (driver=manual / blocked_on), not the process exit code (which stays 0).
-
-    Scope of fail-closed is PRECISE: a confirmed-destructive command on a
-    confirmed-live owned run. A malformed run-record, an unidentifiable run, a
-    non-owned session, or a BENIGN command all fall through to allow (matching
-    the question hook's malformed->allow scenario). We do NOT blanket-deny on any
-    exception — that would brick the tool flow on an unrelated read.
-
-DENY-CONTRACT MODES:
-    * normal (deny supported): emit the deny JSON (blocks the single call) AND
-      pause the run (halts the loop). Belt-and-suspenders.
-    * deny-unsupported (test hatch CLAUDE_AUTO_TEST_DENY_UNSUPPORTED, fenced via
-      test_hatch_enabled): still pause the run, but emit a `systemMessage`
-      instead of the deny payload — never an empty/allow output on a destructive
-      match. This is the fail-closed path the integration test exercises.
-
-BYPASS RESIDUALS (KTD-4 — documented out-of-scope, NOT covered by this
-classifier): the general flag-reorder/long-form class (`rm -vrf`,
-`rm --recursive --force` — we catch the literal `rm -rf` and `rm -fr` only),
-refspec force-push (`git push origin +<ref>`), compound commands (`a; rm -rf b`),
-and eval/obfuscation. ALSO out-of-scope (fix-round-5 P2): GitHub MCP write tools
-(`delete_file`, `merge_pull_request`, `push_files`, `create_or_update_file`) — they
-do NOT flow through the Bash `command` channel this classifier reads (their
-tool_input carries no `command`), and the hook is wired to Bash/Write tool names
-only, so an MCP tool name never reaches it. Gating MCP-write tools is a tool-name
-interception change beyond v0.6.0's detect-and-escalate scope; fan-out steps carry
-the prompt-embedded two-handoff instruction instead. The classifier is a
-deterministic minimum-set backstop, not a comprehensive sandbox.
-
-PATH-SCOPING (drive-friction fix — narrows the rm family ONLY): the `rm -rf`/
-`rm -fr` matches are exempted when EVERY path target provably resolves to a real
-child under a known-ephemeral root (/tmp / /private/tmp / /var/folders) — see
-``_rm_targets_all_ephemeral``. Benign teardown of fan-out agents' scratch dirs
-and the operator's finalize cleanup was false-firing the fail-closed backstop
-and LATCHING the run. Exemption (unlike gating) is CONSERVATIVE about runtime
-expansion: a target with a glob / command-substitution / brace / unresolved
-`$`-var gates, the temp ROOT itself gates, `..` traversal gates, and `$TMPDIR` is
-RESOLVED from the hook env (unset/empty -> gate, so `rm -rf "$TMPDIR/"` can't
-expand to `rm -rf /`). This is an allowlist that only narrows in-scope rm
-matches; it does NOT widen the residual set above and does NOT touch the
-git/gh/npm patterns.
+The list is a best-effort match on the command text. It does not catch the flag-reorder class
+(`rm -vrf`, `rm --recursive --force`), a refspec force-push (`git push origin +<ref>`), a compound
+`a; rm -rf b`, eval or other obfuscation, or a write through an MCP tool. Write `content` is not read:
+plans and reviews quote these commands.
 
 rel-001: ALWAYS exit 0 at the process level.
 """
@@ -76,29 +22,18 @@ import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _LIB_DIR)
-from _bootstrap import (  # noqa: E402
-    iter_worktree_run_records,
-    load_run_record,
-    load_lib_module,
-    session_membership,
-    test_hatch_enabled,
-)
-
-phase_grammar = load_lib_module("phase-grammar")
+from _bootstrap import load_lib_module  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────
-# Destructive pattern set (KTD-4 — anchored to the project's CLAUDE.md
-# destructive list). Each entry is (human_label, compiled_regex). The regex is
-# matched against the Bash `command` string ONLY (round-4 P2: NOT Write content
-# — see ``_command_text``); the label is surfaced in the deny reason / pause
-# record (never the raw regex source — that would be opaque to the agent reading
-# permissionDecisionReason). The set is the documented minimum; residual bypasses
-# (see module docstring) are out of scope.
+# Destructive pattern set. Each entry is (human_label, compiled_regex). The label
+# goes into the refusal, never the raw regex source. The shell shim's text test
+# must match anything these match: tests/integration/check-settings.test.sh pins it.
 # The two rm labels are named constants because the path-scoping exemption keys
 # off them by value (``_PATH_SCOPED_RM_LABELS`` below): if a label string here
 # and there ever drift apart, path-scoping silently becomes a dead no-op and
-# every ephemeral rm starts false-pausing again. Sharing the constant makes that
+# every ephemeral rm starts being refused. Sharing the constant makes that
 # impossible.
+DESTRUCTIVE_LIMIT = "no-destructive-commands"
 _RM_RF_LABEL = "rm -rf"
 _RM_FR_LABEL = "rm -fr"
 
@@ -146,18 +81,10 @@ _DESTRUCTIVE_PATTERNS = [
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Path-scoping for the rm family (drive-friction fix). The `rm -rf`/`rm -fr`
-# patterns above match the verb+flags with no path awareness, so benign teardown
-# of an EPHEMERAL temp dir (fan-out agents' $TMPDIR scratch, the operator's own
-# finalize cleanup) false-fired the fail-closed backstop and LATCHED the run.
-# We exempt an rm ONLY when EVERY one of its path targets provably resolves under
-# a known-ephemeral root — an allowlist, so anything not provably ephemeral
-# (relative paths under the repo, $HOME, the temp root ITSELF, traversal
-# evasions, unparseable commands) still GATES. This refines the rm matches the
-# classifier already catches; it does NOT widen the documented residual set
-# (flag-reorder long-form, compound `a; rm -rf b`, eval/obfuscation all still
-# bypass — see module docstring) and touches ONLY the rm family (the git/gh/npm
-# patterns have no path-exemption concept).
+# Path-scoping for the rm family. An rm is exempt ONLY when EVERY path target
+# provably resolves under a known-ephemeral root: an allowlist, so anything not
+# provably ephemeral (relative paths, $HOME, the temp root ITSELF, traversal,
+# unparseable commands) is still matched.
 _PATH_SCOPED_RM_LABELS = frozenset({_RM_RF_LABEL, _RM_FR_LABEL})
 
 # Drift guard: every rm-family pattern MUST participate in path-scoping. Without
@@ -233,7 +160,7 @@ def _rm_targets_all_ephemeral(command: str) -> bool:
     """True iff ``command`` is an ``rm`` whose EVERY path target provably resolves
     to a real child under an ephemeral-temp root.
 
-    Fail-closed: returns False (→ the backstop still gates) on anything not
+    Returns False (→ still matched) on anything not
     provably ephemeral — a relative target (resolves under cwd = repo root), a
     ``$HOME``/repo path, the temp root itself, a ``..`` traversal, a glob /
     command-substitution / brace target whose expansion is unknowable, an
@@ -250,7 +177,7 @@ def _rm_targets_all_ephemeral(command: str) -> bool:
     # tokens after it. A compound command (`rm -rf /tmp/a && rm -rf /repo`) is a
     # documented residual that still gates here: the shell operators (`&&`, `;`)
     # and the second command's tokens are collected as non-ephemeral targets and
-    # fail the check below — fail-closed, not exempt.
+    # fail the check below, so it is not exempt.
     idx = next(
         (i for i, t in enumerate(tokens) if t == "rm" or t.endswith("/rm")),
         None,
@@ -302,19 +229,7 @@ def _matched_destructive(command: str):
 
 
 def _command_text(stdin_data: dict) -> str:
-    """Extract the text to classify from the PreToolUse tool_input.
-
-    Bash ONLY -> tool_input.command. The Bash `command` channel is the
-    load-bearing destructive backstop; Write `content` is DELIBERATELY NOT
-    scanned (round-4 P2). Classifying Write prose against the destructive
-    command set false-positive-pauses the driving session's own ce-skill doc
-    writes — /ce-plan, /ce-doc-review, /ce-brainstorm routinely emit
-    plan/review markdown that quotes `rm -rf`/`push --force` as examples (this
-    repo's CLAUDE.md lists the destructive set verbatim). That is nearly all
-    false-positive cost: the in-scope driving-session doc Writes are the common
-    case, while a real destructive operation runs through Bash, which IS gated.
-    Defensive: a missing `command` reads as empty.
-    """
+    """tool_input.command, or empty. Write `content` is DELIBERATELY NOT read: plans and reviews quote these commands."""
     ti = stdin_data.get("tool_input") or {}
     if not isinstance(ti, dict):
         return ""
@@ -337,229 +252,18 @@ def _read_stdin(raw: str):
     return sid, _command_text(data)
 
 
-def _owns_session(led, *, session_id):
-    """True iff this run is a LIVE auto run owned by ``session_id`` that the
-    destructive backstop must still gate.
-
-    Base match: ``current phase != "done" AND session_id == driving_session_id``
-    — DELIBERATELY OMITTING the ``last_beat_at`` staleness conjunct the question
-    gate keeps, and NOT requiring ``driver == "self"`` (with ONE precise
-    operator-pause exemption, below). Both choices exist because this hook fails
-    CLOSED and a denied tool call does NOT end the agent's turn:
-
-      * driver: THIS hook's own ``_pause_run`` flips the owned run to
-        ``driver="manual"`` the instant it blocks the first destructive command.
-        A plain ``driver=="self"`` requirement would make every SUBSEQUENT
-        destructive command see ``driver=="manual"`` → no match → ALLOW
-        (self-disarm after one fire). So we do NOT key on ``driver=="self"``.
-      * staleness (round-2 P2 fix): ``_pause_run`` calls ``set_loop`` WITHOUT
-        ``beat=True``, so it does NOT re-stamp ``last_beat_at``. If the operator
-        deliberates past ``DRIVER_SELF_STALE_SECONDS`` (3900s) after the backstop
-        fires once, a stale-conjunct would read the paused run as a dead chain →
-        no match → ALLOW a second ``rm -rf`` / force-push — the exact self-disarm
-        the driver omission was meant to prevent, reintroduced through the
-        staleness door. A live session whose id equals the recorded driving id IS
-        the run to gate regardless of beat freshness; pausing a genuinely-dead run
-        is harmless (fail-safe). So staleness lives ONLY in the question hook
-        (where stale→allow is a benign fail-OPEN), never here.
-
-    OPERATOR-PAUSE EXEMPTION (P3-b): a run the OPERATOR manually paused
-    (``driver=="manual"`` WITHOUT ``loop.backstop_latched``) is under human
-    control — the autonomous pulse loop is dormant, so the only actor issuing tool
-    calls is the operator, and we must NOT gate their own cleanup (``rm`` etc.).
-    The ONE ``driver=="manual"`` state we KEEP gating is a pause THIS backstop
-    caused: ``_pause_run`` sets ``backstop_latched=True`` atomically with the
-    pause, so a second destructive command in the same autonomous turn still
-    matches (no self-disarm). The latch is STICKY across an agent-run
-    ``auto-resume pause`` (that path does not clear it), so once the backstop has
-    FIRED a self-driven agent cannot re-disarm it — only an operator
-    ``continue``/``abort`` clears it (continue clears the latch; abort ends the
-    run). Trade-off (documented, surfaced to the operator in the deny reason): a
-    run that ALREADY tripped the backstop keeps blocking the operator's own
-    destructive commands during a *pause* — they must ``continue`` or ``abort``
-    first; ``abort`` → ``phase=done`` is the clean full-release cleanup path.
-
-    KNOWN RESIDUAL — pre-latch self-disarm (adversarial review, v0.13.0;
-    PRE-EXISTING, not introduced by U8). The stickiness above closes the
-    POST-fire retry, not the FIRST destructive command. A self-driven agent that
-    has not yet tripped the backstop can run a benign ``auto-resume pause`` (which
-    calls ``apply_pause`` with the default ``backstop_latched=False``) and then a
-    destructive command in the same turn — the exemption fires because
-    ``driver=="manual"`` and the latch is unset. A clean fix requires
-    distinguishing an AGENT-initiated pause from an OPERATOR-initiated one, but at
-    the CLI both run in the driving session with the same ``session_id`` and both
-    set ``driver=="manual"`` — they are not distinguishable without a new,
-    agent-honest signal (and a prompt-injected agent would just omit it). U6's
-    boss hand-back also legitimately calls ``auto-resume pause``, so latching on
-    EVERY pause would gate the operator's own post-hand-back cleanup — a real UX
-    regression. Left as a documented residual rather than a half-fix; the backstop
-    is defense-in-depth against a MISBEHAVING agent (an agent with Bash edits the
-    run-record directly regardless), not a sandbox against a MALICIOUS one.
-
-    Dimension #2 (a concurrent STANDALONE ce-skill is not gated) is preserved by
-    the ``session_id`` MEMBERSHIP conjunct alone — a standalone skill is neither
-    the driving session nor a registered sub-agent, so it never matches. Still
-    NOT on-stop's `_is_blocking` (no met-state coupling).
-
-    OWNERSHIP IS A SET (U8 / R21 / KTD-7): the loop's phase work — including
-    ``fix``, which writes code and runs Bash — now runs in background sub-agents
-    that carry their OWN session_id. Matching only the scalar ``driving_session_id``
-    left the destructive backstop dark for exactly the phase most likely to run a
-    destructive command. A dispatched sub-agent registers itself into
-    ``agent_session_ids`` and is gated identically to the boss.
-
-    THE OPERATOR-PAUSE EXEMPTION IS DRIVING-SESSION-ONLY (the hazard U8 had to
-    avoid): the exemption above exists because, during a pause the human
-    initiated, the only actor issuing tool calls is the OPERATOR doing their own
-    cleanup. A sub-agent is NEVER the operator — an in-flight sub-agent can still
-    be executing while the operator deliberates. Extending the exemption to the
-    whole owner set would have let a registered sub-agent run ``rm -rf`` during an
-    operator pause: a strictly WIDER destructive surface than before U8, created
-    by the very change meant to narrow it. So the exemption is gated on
-    ``is_driving``. tests/integration/tree-ownership.test.sh scenario 5 is the
-    regression.
-    """
-    if not isinstance(led, dict):
-        return False
-    if phase_grammar.current_phase(led) == "done":
-        return False
-    if not session_id:
-        return False
-    is_driving, is_agent = session_membership(led, session_id)
-    if not (is_driving or is_agent):
-        return False
-    loop = led.get("loop") or {}
-    if (
-        is_driving
-        and loop.get("driver") == "manual"
-        and not loop.get("backstop_latched")
-    ):
-        return False  # operator-controlled pause => allow the OPERATOR's own actions
-    return True
-
-
-def _owning_run_id(repo_root: str, session_id):
-    """Return the run_id of the live auto run owning ``session_id``, or None.
-
-    Scans the per-worktree run-records (``iter_worktree_run_records`` — fan-out sub-runs
-    are out of hook scope by design, KTD-5). Unlike the question hook we need the
-    RUN ID, not just a bool, so we can pause it. No staleness/driver coupling —
-    see ``_owns_session`` (round-2 P2: a stale or driver=manual conjunct would
-    self-disarm the fail-closed backstop).
-    """
-    if not session_id:
-        return None
-    for run_id, led in iter_worktree_run_records(repo_root):
-        if _owns_session(led, session_id=session_id):
-            return run_id
-    return None
-
-
-def _pause_run(repo_root: str, run_id: str, reason: str) -> None:
-    """Halt the owned run via the pause handoff (the fail-closed mechanism).
-
-    Routes through the shared run_record.apply_pause core (import-topology facade
-    discipline): set_loop driver="manual" + blocked_on, WITHOUT marking the loop
-    done — the run stays resumable. The backstop passes ``backstop_latched=True``
-    so the gate keeps firing on a second destructive command in the same
-    autonomous turn (no self-disarm), whereas the operator pause
-    (auto-resume.py, default False) is exempt so the operator can run their own
-    cleanup. Best-effort: a write failure must not propagate (rel-001), but the
-    deny/systemMessage is still emitted, so the action is not silently allowed.
-    """
-    try:
-        run_record = load_run_record()
-        # backstop_latched=True rides the SAME atomic write as driver="manual"
-        # (P3-b) => the latch exists iff the pause does. NOT a separate
-        # best-effort write (the audit record below is separate; a latch derived
-        # from it could split-brain).
-        run_record.apply_pause(repo_root, run_id, reason, backstop_latched=True)
-    except Exception:
-        pass
-
-
-def _audit_action(repo_root: str, run_id: str, *, command: str, label: str) -> None:
-    """Append the kind="action" audit record for this fired backstop (KTD-5).
-
-    Every fired action backstop is appended to the run-record's advisor_audit list
-    (driver-reference.md §Audit, run-record-schema §2.1, SKILL.md §4.5) so a fired
-    backstop is diagnosable in the exit report next to the P3 findings — without
-    this the deny/pause is invisible to the driver (the hook denies out-of-band;
-    no other code path runs at action-deny time). The ``subject`` is the
-    classified Bash command; ``classification`` is the destructive-pattern
-    label; ``resolution`` is the fixed "blocked-and-paused" (KTD-5 vocabulary).
-    Best-effort like ``_pause_run`` — a write failure must not propagate
-    (rel-001) and never suppresses the deny/systemMessage payload.
-    """
-    try:
-        run_record = load_run_record()
-        run_record.append_advisor_audit(
-            repo_root, run_id,
-            kind="action", subject=command, classification=label,
-            resolution="blocked-and-paused",
-        )
-    except Exception:
-        pass
-
-
-def decide(repo_root: str, stdin_raw: str) -> dict | None:
-    """Return the decision dict to print (deny OR systemMessage), or None to allow.
-
-    Pauses the owned run on a confirmed destructive match (fail-closed), then
-    emits the contract-appropriate payload. Allows silently on anything that is
-    not a confirmed-destructive-command-on-an-owned-live-run.
-    """
+def destructive_denial(stdin_raw: str) -> tuple | None:
     session_id, command = _read_stdin(stdin_raw)
     label = _matched_destructive(command)
-    if label is None:
-        return None  # benign command => allow.
-    run_id = _owning_run_id(repo_root, session_id)
-    if run_id is None:
-        return None  # not our live run (or unidentifiable) => allow (precise scope).
-
-    reason = (
-        f"auto destructive-action backstop: blocked `{label}` and PAUSED run "
-        f"{run_id!r}. This is an irreversible/destructive operation auto will not "
-        "run autonomously. Do NOT attempt to disarm or retry it — consult the "
-        f"operator, then `/auto-resume continue {run_id}` once they approve. "
-        f"(Operator: to run your OWN cleanup, take manual control first with "
-        f"`/auto-resume abort {run_id}` — abort fully releases the gate.)"
-    )
-    _pause_run(repo_root, run_id, reason)
-    _audit_action(repo_root, run_id, command=command, label=label)
-
-    if test_hatch_enabled("CLAUDE_AUTO_TEST_DENY_UNSUPPORTED"):
-        # Fail-closed under a missing deny contract: the run is ALREADY paused
-        # above; surface a loud systemMessage instead of the deny payload — never
-        # an empty/allow output on a destructive match.
-        return {
-            "systemMessage": (
-                "auto destructive-action backstop fired but the PreToolUse deny "
-                f"contract is unavailable — run {run_id!r} has been PAUSED "
-                "(driver=manual) to fail closed. " + reason
-            )
-        }
-    return {
-        # P3-a: a top-level `systemMessage` is a LOUD operator-facing signal
-        # surfaced in the transcript ALONGSIDE the deny (confirmed against the CC
-        # hooks contract: systemMessage is a universal field, not suppressed by a
-        # permissionDecision). Without it the production deny only surfaced the
-        # agent-facing permissionDecisionReason + a run-record pause — silent to an
-        # operator not watching the run-record. The deny-unsupported path already
-        # emitted a systemMessage; this gives the normal path parity.
-        "systemMessage": (
-            f"auto: RUN PAUSED — destructive-action backstop blocked `{label}` "
-            f"on run {run_id!r} (driver=manual). {reason}"
-        ),
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        },
-    }
+    if label is None or session_id is None:
+        return None
+    checks = load_lib_module("programme_checks")
+    if not checks.hook_checks(session_id)["states"][DESTRUCTIVE_LIMIT]:
+        return None
+    return checks.limit_refusal(DESTRUCTIVE_LIMIT, session_id, "Bash", f"runs `{label}`", command=command)
 
 
-def driver_send_denial(stdin_raw: str) -> dict | None:
+def driver_send_denial(stdin_raw: str) -> tuple | None:
     session_id, command = _read_stdin(stdin_raw)
     if not command:
         return None
@@ -687,7 +391,7 @@ def _remit_write(tool_name, tool_input, programme):
     return None
 
 
-def tracker_write_denial(stdin_raw: str) -> dict | None:
+def tracker_write_denial(stdin_raw: str) -> tuple | None:
     data = json.loads(stdin_raw) if stdin_raw else None
     if not isinstance(data, dict) or not _is_tracker_tool(data.get("tool_name")):
         return None
@@ -700,7 +404,11 @@ def tracker_write_denial(stdin_raw: str) -> dict | None:
     if programme is None:
         what = "comes from a programme whose authority cannot be read, so its remit cannot be checked"
     else:
-        what = _proof_write(tool_input, programme) or _remit_write(data["tool_name"], tool_input, programme)
+        what = _proof_write(tool_input, programme)
+        if what is None:
+            what = _remit_write(data["tool_name"], tool_input, programme)
+            if what and not load_lib_module("programme_checks").run_state("tracker-outside-remit", run_id, session_id):
+                what = None
     if what is None:
         return None
     row = (run_id, "blocked_tracker_write", session_id, {
@@ -718,7 +426,6 @@ def tracker_write_denial(stdin_raw: str) -> dict | None:
 # The hook is killed at its 10 s timeout and a killed hook denies nothing, so a guard never
 # waits out a held programme store: each read gives up quickly (a hold denies), and the
 # journal row is written after the deny is on stdout, giving up if the lock stays held.
-STORE_WAIT_MS = 250
 JOURNAL_LOCK_WAIT = 1.0
 COMMAND_CAP = 2000
 
@@ -750,12 +457,11 @@ def _guarded(check, stdin_raw):
         return None, None
 
 
-def _destructive_check_on() -> bool:
-    return test_hatch_enabled("CLAUDE_AUTO_TEST_DESTRUCTIVE_CHECK")
+def _decision_of(module):
+    return lambda raw: load_lib_module(module).decision(raw)
 
 
-def _cli(argv) -> int:
-    repo_root = argv[0] if argv else os.getcwd()
+def _cli() -> int:
     stdin_raw = ""
     if not sys.stdin.isatty():
         try:
@@ -763,7 +469,8 @@ def _cli(argv) -> int:
         except Exception:
             stdin_raw = ""
     try:
-        load_lib_module("programme_store").bound_waits(STORE_WAIT_MS)
+        store = load_lib_module("programme_store")
+        store.bound_waits(store.HOOK_WAIT_MS)
         load_lib_module("programme_home").cache_reads()
     except Exception:
         pass
@@ -772,26 +479,20 @@ def _cli(argv) -> int:
         _emit(tracker_denial)
         _journal(tracker_row)
         return 0
-    settings_denial, settings_row = _guarded(
-        lambda raw: load_lib_module("programme_settings_guard").decision(raw), stdin_raw)
-    behaviours_denial, behaviours_row = _guarded(
-        lambda raw: load_lib_module("programme_behaviour_guard").decision(raw), stdin_raw)
-    driver_denial, driver_row = _guarded(driver_send_denial, stdin_raw)
-    try:
-        decision = decide(repo_root, stdin_raw) if repo_root and _destructive_check_on() else None
-    except Exception:
-        decision = None  # any failure => allow (rel-001). Fail-closed is SCOPED
-        # to a confirmed destructive match on a confirmed run, handled inside
-        # decide(); an unrelated internal error must not brick the tool flow.
-    if decision is None:
-        decision = settings_denial or behaviours_denial or driver_denial
+    results = [_guarded(guard, stdin_raw) for guard in (
+        destructive_denial,
+        _decision_of("programme_settings_guard"),
+        _decision_of("programme_behaviour_guard"),
+        driver_send_denial,
+        _decision_of("programme_limits"),
+    )]
+    decision = next((denial for denial, _row in results if denial), None)
     if decision is not None:
         _emit(decision)
-    _journal(settings_row)
-    _journal(behaviours_row)
-    _journal(driver_row)
+    for _denial, row in results:
+        _journal(row)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(_cli(sys.argv[1:]))
+    sys.exit(_cli())
