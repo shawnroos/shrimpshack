@@ -6,7 +6,7 @@ A session with no limit on is never refused here. A limit stops an honest worker
 boundary against a session set on getting round it. A file tool is matched by real path and Bash by text.
 Under a limit a command that names a protected place passes only when every part of it is a plain read, or
 a run of the plugin's scripts (for `programme.sh`, one of RUN_VERBS with every argument written out). Any
-command naming `SESSION_ID` is refused. A name, path or verb built at run time, a glob, or a script written
+command naming `CLAUDE_CODE_SESSION_ID` is refused. A name, path or verb built at run time, a glob, or a script written
 first and run later gets through.
 """
 
@@ -236,7 +236,9 @@ def _bash_target(command, cwd, dirs):
     if _too_long(command):
         # Spaces kept, so prose such as "the plugin system" does not join into a trigger word.
         plain = guard_text.HIDING_CHARS.sub("", command).casefold()
-        names = (DATA_ENV, ROOT_ENV, SESSION_ENV, LIFT_VERB, *HOOK_KEYS, _PLUGIN_ROOT, *_protected())
+        # Path tails too: `~/.claude/plugins/cache` never spells a resolved path, and prose has no such slash.
+        names = (DATA_ENV, ROOT_ENV, SESSION_ENV, LIFT_VERB, *HOOK_KEYS, _PLUGIN_ROOT, *_protected(),
+                 "plugins/cache", "/programmes/")
         return _TOO_LONG if any(w.casefold() in plain for w in names) else None
     parsed = _parsed(command, _env_refs)
     segments, text = parsed.segments, parsed.text
@@ -257,8 +259,9 @@ def _bash_target(command, cwd, dirs):
             refused = _refused_run(*run)
             if refused:
                 return refused
-            # After a cd into a protected folder a bare verb would read as a path there; a path argument has a slash.
-            args = [w for w in run[1] if "/" in w] if os.path.basename(run[0]) in PROGRAMME_SCRIPTS else run[1]
+            # After a cd into a protected folder, a verb, a URL or a relative --ref would read as a path there.
+            args = [w for w in run[1] if w.startswith(("/", "~"))] \
+                if os.path.basename(run[0]) in PROGRAMME_SCRIPTS else run[1]
         if any(_named(word, bases, dirs) for word in [*args, *segment.targets]):
             kept.append(segment)
     for segment in kept:

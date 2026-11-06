@@ -297,6 +297,8 @@ ALLOWED_BASH=(
   "grep -rn SESSION_ID src/"
   "git log --grep APP_SESSION_ID"
   "cd ${CACHE}/lib && bash programme.sh status"
+  "cd ${CACHE}/lib && bash programme.sh claim --item linear:AI-1 --deliverable pr --ref https://example.com/1"
+  "cd ${CACHE}/lib && bash programme.sh claim --item linear:AI-1 --deliverable plan --ref docs/plans/x.md"
   "cat ${HOME_FILE}"
   "ls -la ${PROGRAMMES}"
   "cat ${HOME_FILE} | grep open | head -3"
@@ -357,6 +359,16 @@ check "allow" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
 ${PAD}
 plugins and programmes are words in prose here
 EOF")"
+
+it "a long command writing the plugin cache through a home path is still refused"
+check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+EOF
+echo x > ~/.claude/plugins/cache/shrimpshack/x")"
+check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+EOF
+echo x > \$HOME/.claude/plugins/cache/shrimpshack/x")"
 
 it "a long command naming a protected place is still refused"
 check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
