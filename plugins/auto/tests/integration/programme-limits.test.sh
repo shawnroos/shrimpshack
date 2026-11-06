@@ -370,6 +370,25 @@ ${PAD}
 EOF
 echo x > \$HOME/.claude/plugins/cache/shrimpshack/x")"
 
+it "a long command naming the programmes folder with no slash after it is refused"
+check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+EOF
+rm -r ~/.claude/plugins/data/auto-shrimpshack/programmes")"
+check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+EOF
+cd ~/.claude/plugins/data/auto-shrimpshack/programmes && echo x > prog-1/record.json")"
+
+it "a long command is matched whatever its case"
+check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
+${PAD}
+EOF
+echo x > ~/.CLAUDE/PLUGINS/CACHE/shrimpshack/x")"
+
+it "a home path given to an allowed programme.sh verb is read as a path"
+check "deny" "$(sh_verdict sess-lim "bash ${CACHE}/lib/programme.sh status --out ~/.claude/plugins/cache/shrimpshack/x")"
+
 it "a long command naming a protected place is still refused"
 check "deny" "$(sh_verdict sess-lim "cat > notes.md <<'EOF'
 ${PAD}

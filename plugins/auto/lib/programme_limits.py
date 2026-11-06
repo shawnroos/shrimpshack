@@ -68,7 +68,7 @@ _READERS = frozenset((
     "find", "realpath", "readlink", "basename", "dirname", "echo", "printf", "test", "[", "true", "cd", "pwd",
 ))
 _READER_WRITES = {"find": ("-delete", "-exec", "-ok", "-fprint", "-fls"), "printf": ("-v",)}
-_TOO_LONG = "what a command too long to examine in full names"
+_TOO_LONG = "what a command too long to examine in full names; to write a long file, use the Write tool"
 
 Segment = collections.namedtuple("Segment", "words targets")
 Parsed = collections.namedtuple("Parsed", "text segments readable")
@@ -236,9 +236,10 @@ def _bash_target(command, cwd, dirs):
     if _too_long(command):
         # Spaces kept, so prose such as "the plugin system" does not join into a trigger word.
         plain = guard_text.HIDING_CHARS.sub("", command).casefold()
-        # Path tails too: `~/.claude/plugins/cache` never spells a resolved path, and prose has no such slash.
+        # Path tails too: `~/.claude/plugins/cache` never spells a resolved path. A long doc naming them is refused
+        # as well; the refusal points it to the Write tool.
         names = (DATA_ENV, ROOT_ENV, SESSION_ENV, LIFT_VERB, *HOOK_KEYS, _PLUGIN_ROOT, *_protected(),
-                 "plugins/cache", "/programmes/")
+                 "plugins/cache", "/programmes", os.path.basename(programme_home.data_dir()))
         return _TOO_LONG if any(w.casefold() in plain for w in names) else None
     parsed = _parsed(command, _env_refs)
     segments, text = parsed.segments, parsed.text
