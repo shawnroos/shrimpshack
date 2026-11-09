@@ -106,7 +106,7 @@ print(ph.create_programme(["w2"], "sess-pm")["run"])
 EOF
 )"
 
-it "a key at the start of the description records a linear item with the coder's done rule"
+it "an issue key as the label records a linear item with the coder's done rule, silently"
 OUT="$(payload sess-pm "AI-1234 / Fix the reframe crop" "Build the fix." coder agentaaa1 1 \
   | "$PY" "${AUTO_ROOT}/lib/on-subagent-worker.py" 2>&1)"
 check "" "$OUT"
@@ -124,20 +124,26 @@ EOF
 )"
 check "[]" "$REASONS"
 
-it "a key only in the prompt's first line records a linear item titled by the description"
-start sess-pm "Investigate the crop jump" $'Ticket: WEB-77\nRead the logs.' investigator agentbbb2 1
+it "an issue key as the label records a linear item for an investigator"
+start sess-pm "WEB-77 / Investigate the crop jump" "Read the logs." investigator agentbbb2 1
 check "waiting investigator fix_only Investigate the crop jump" \
   "$(item linear:WEB-77 state) $(item linear:WEB-77 who) $(item linear:WEB-77 kinds) $(item linear:WEB-77 title)"
 
-it "a label / title description with no key records a study item"
+it "any other label records a study item"
 start sess-pm "Cue timing / why waits grow" "Look into it." planner agentccc3 1
 check "waiting fix_only why waits grow" \
   "$(item study:cue-timing-why-waits-grow state) $(item study:cue-timing-why-waits-grow kinds) $(item study:cue-timing-why-waits-grow title)"
 
-it "no key and no label / title shape records nothing"
+it "a description without the label / title shape records nothing, key or not"
 BEFORE="$(item_count)"
 start sess-pm "Hook facts for Agent tool" "Read the docs." general-purpose agentddd4 1
-check "$BEFORE" "$(item_count)"
+start sess-pm "AI-321 Fix the crop" "x" coder agentkkk1 1
+start sess-pm "GPT-5.6 cross-model pass" "x" coder agentkkk2 1
+check "$BEFORE absent" "$(item_count) $(item linear:AI-321 state)"
+
+it "a label that only starts with a key-like token is a study label"
+start sess-pm "UTF-8 decode / fix" "x" coder agentkkk3 1
+check "absent waiting" "$(item linear:UTF-8 state) $(item study:utf-8-decode-fix state)"
 
 it "a foreground agent records nothing"
 start sess-pm "AI-555 / Quick look" "x" coder agenteee5 0
@@ -147,38 +153,28 @@ it "a foreground result wins over a run_in_background flag"
 start sess-pm "AI-559 / Quick look" "x" coder agenteee6 flag-only
 check "absent" "$(item linear:AI-559 state)"
 
-it "a version-like token in the description is not a ticket key"
-BEFORE="$(item_count)"
-start sess-pm "GPT-5.6 cross-model pass" "x" coder agentkkk1 1
-start sess-pm "UTF-8 parsing check" "x" coder agentkkk2 1
-check "$BEFORE absent absent" "$(item_count) $(item linear:GPT-5 state) $(item linear:UTF-8 state)"
-
-it "with no remit teams a key and a space is not enough; a label / title shape becomes a study item"
-start sess-pm "UTF-8 decode / fix" "x" coder agentkkk3 1
-check "absent waiting" "$(item linear:UTF-8 state) $(item study:utf-8-decode-fix state)"
-
-it "a key in the prompt without Ticket: or Issue: is not read"
-start sess-pm "Look around" $'AI-321 is related\nRead.' coder agentkkk4 1
-check "absent" "$(item linear:AI-321 state)"
-
-it "item_for: remit teams admit a key and a space; another prefix falls through to the label / title shape"
-check "linear:WEB-123|Fix the crop study:gpt-5-tune none linear:WEB-9 None" "$(run_py <<'EOF'
-mod = load_lib_module("on-subagent-worker")
-hit = mod.item_for("WEB-123 Fix the crop", "", {"WEB", "AI"})
-miss = mod.item_for("GPT-5 / tune", "", {"WEB", "AI"})
-prompt_miss = mod.item_for("x", "Ticket: GPT-5", {"WEB"})
-dotted = mod.item_for("x", "Ticket: WEB-9.", {"WEB"})[0]
-version = mod.item_for("x", "Ticket: WEB-9.5", {"WEB"})
-print("|".join(hit), miss and miss[0] or "none", prompt_miss and prompt_miss[0] or "none", dotted, version)
-EOF
-)"
-
 it "item_for: two long descriptions that share a prefix get different study ids"
 check "2 True" "$(run_py <<'EOF'
 mod = load_lib_module("on-subagent-worker")
 head = "Cue timing / " + "why the waits grow under load and what the queue does " * 2
-a, b = mod.item_for(head + "first", "")[0], mod.item_for(head + "second", "")[0]
+a, b = mod.item_for(head + "first")[0], mod.item_for(head + "second")[0]
 print(len({a, b}), all(len(i) <= 70 for i in (a, b)))
+EOF
+)"
+
+it "a start whose result carries no agentId records nothing and journals the start step"
+"$PY" -c 'import json; print(json.dumps({"session_id": "sess-pm", "hook_event_name": "PostToolUse", "tool_name": "Agent", "tool_input": {"description": "AI-560 / x", "subagent_type": "coder"}, "tool_response": {"status": "async_launched"}}))' \
+  | bash "$HOOK"
+check "absent start" "$(item linear:AI-560 state) $(run_py "$RUN" <<'EOF'
+print(" ".join(r["payload"]["step"] for r in pj.read(args[0])
+               if r["kind"] == "subagent_record_failed" and r["payload"]["item"] == "linear:AI-560"))
+EOF
+)"
+
+it "a stop from an auto reader agent writes no journal row"
+printf '{"session_id":"sess-pm","hook_event_name":"SubagentStop","agent_id":"reader1","agent_type":"auto:programme-status-reader"}' | bash "$HOOK"
+check "0" "$(run_py "$RUN" <<'EOF'
+print(sum(1 for r in pj.read(args[0]) if r["kind"] == "subagent_stopped" and r["payload"]["agent"] == "reader1"))
 EOF
 )"
 
@@ -240,7 +236,7 @@ OUT="$(start sess-pm "AI-900 / After compaction" "x" coder agentjjj0 1)"
 check "absent" "$OUT$(item linear:AI-900 state)"
 it "  the journal names the failed step and item"
 check "add-item linear:AI-900" "$(run_py "$RUN" <<'EOF'
-rows = [r for r in pj.read(args[0]) if r["kind"] == "subagent_record_failed"]
+rows = [r for r in pj.read(args[0]) if r["kind"] == "subagent_record_failed" and r["payload"]["item"] == "linear:AI-900"]
 print(" ".join(f"{r['payload']['step']} {r['payload']['item']}" for r in rows))
 EOF
 )"
