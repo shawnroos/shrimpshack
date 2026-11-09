@@ -35,7 +35,7 @@ KIND_BY_TYPE = {"coder": "flagged_code", "investigator": "fix_only", "tester": "
 SKIP_TYPE_PREFIX = "auto:"
 _KEY = r"([A-Z][A-Z0-9]{1,9})-([0-9]+)"
 _DESC_KEY = re.compile(rf"^\s*{_KEY}(?:\s*[/:|—–]\s*|\s+-\s+|\s+|$)(.*)$", re.S)
-_PROMPT_KEY = re.compile(rf"^\s*(?i:ticket|issue)\s*[:#]?\s*{_KEY}(?![A-Za-z0-9.-])")
+_PROMPT_KEY = re.compile(rf"^\s*(?i:ticket|issue)\s*[:#]?\s*{_KEY}(?![A-Za-z0-9-]|\.[A-Za-z0-9])")
 _LABEL_TITLE = re.compile(r"^\s*([^/]+?)\s+/\s+(\S.*)$", re.S)
 
 
@@ -189,7 +189,10 @@ def on_stop(data, run, record, session_id) -> list:
     if not agent:
         return []
     # Journal before reading the items: a start that sets its wait after this read finds the row instead.
-    programme_journal.append(run, "subagent_stopped", session_id, {"agent": agent})
+    try:
+        programme_journal.append(run, "subagent_stopped", session_id, {"agent": agent})
+    except Exception:  # noqa: BLE001 — the hand-back below must still run; only the race recovery is lost
+        pass
     record, _hold = programme_home.read_programme(run)
     steps = []
     for key, item in sorted(_items(record).items()):

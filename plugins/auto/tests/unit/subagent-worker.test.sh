@@ -84,6 +84,17 @@ print(" ".join(r["kind"] for r in pj.read(args[0])))
 EOF
 }
 
+it "hooks.json wires PostToolUse Agent|Task and SubagentStop to the worker hook, async"
+check "True True" "$("$PY" - "${AUTO_ROOT}/.claude/hooks/hooks.json" <<'EOF'
+import json, sys
+h = json.load(open(sys.argv[1]))["hooks"]
+def wired(entries, matcher):
+    return any(e.get("matcher") == matcher and any("on-subagent-worker.sh" in x["command"] and x.get("async") is True
+                                                    for x in e["hooks"]) for e in entries)
+print(wired(h.get("PostToolUse", []), "Agent|Task"), wired(h.get("SubagentStop", []), None))
+EOF
+)"
+
 it "no lease on the machine: the hook runs no Python"
 MARKER="${WORK}/marker-python"
 printf '#!/usr/bin/env bash\ntouch "%s/python-ran"\n' "$WORK" > "$MARKER"; chmod +x "$MARKER"
@@ -151,12 +162,14 @@ start sess-pm "Look around" $'AI-321 is related\nRead.' coder agentkkk4 1
 check "absent" "$(item linear:AI-321 state)"
 
 it "item_for: remit teams admit a key and a space; another prefix falls through to the label / title shape"
-check "linear:WEB-123|Fix the crop study:gpt-5-tune none" "$(run_py <<'EOF'
+check "linear:WEB-123|Fix the crop study:gpt-5-tune none linear:WEB-9 None" "$(run_py <<'EOF'
 mod = load_lib_module("on-subagent-worker")
 hit = mod.item_for("WEB-123 Fix the crop", "", {"WEB", "AI"})
 miss = mod.item_for("GPT-5 / tune", "", {"WEB", "AI"})
 prompt_miss = mod.item_for("x", "Ticket: GPT-5", {"WEB"})
-print("|".join(hit), miss and miss[0] or "none", prompt_miss and prompt_miss[0] or "none")
+dotted = mod.item_for("x", "Ticket: WEB-9.", {"WEB"})[0]
+version = mod.item_for("x", "Ticket: WEB-9.5", {"WEB"})
+print("|".join(hit), miss and miss[0] or "none", prompt_miss and prompt_miss[0] or "none", dotted, version)
 EOF
 )"
 
