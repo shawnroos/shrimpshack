@@ -87,6 +87,10 @@ check deny "$(decision a1 "python3 - <<EOF
 from _bootstrap import load_lib_module
 load_lib_module('programme_asks')
 EOF")"
+it "a sub-agent running a hook script by hand is denied"
+check deny "$(decision a1 "bash /x/.claude/hooks/on-subagent-worker.sh <<< '{\"session_id\":\"s\"}'")"
+it "a sub-agent running the hook's python by hand is denied"
+check deny "$(decision a1 "/usr/bin/python3 /x/lib/on-subagent-worker.py")"
 it "eval of a programme write is denied"
 check deny "$(decision a1 "eval \"$P hand-item x\"")"
 it "eval of a gh write is denied"

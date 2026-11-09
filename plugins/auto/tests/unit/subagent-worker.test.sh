@@ -45,10 +45,11 @@ payload() {
   "$PY" -c '
 import json, sys
 sid, desc, prompt, kind, agent, bg = sys.argv[1:7]
+status = {"1": "async_launched", "0": "completed", "flag-only": "completed"}[bg]
 print(json.dumps({"session_id": sid, "hook_event_name": "PostToolUse", "tool_name": "Agent",
                   "tool_input": {"description": desc, "prompt": prompt, "subagent_type": kind,
-                                 "run_in_background": bg == "1"},
-                  "tool_response": {"status": "async_launched" if bg == "1" else "completed", "agentId": agent}}))
+                                 "run_in_background": bg != "0"},
+                  "tool_response": {"status": status, "agentId": agent}}))
 ' "$@"
 }
 
@@ -95,7 +96,8 @@ EOF
 )"
 
 it "a key at the start of the description records a linear item with the coder's done rule"
-OUT="$(start sess-pm "AI-1234 / Fix the reframe crop" "Build the fix." coder agentaaa1 1)"
+OUT="$(payload sess-pm "AI-1234 / Fix the reframe crop" "Build the fix." coder agentaaa1 1 \
+  | "$PY" "${AUTO_ROOT}/lib/on-subagent-worker.py" 2>&1)"
 check "" "$OUT"
 it "  the item waits on the coder, reported by the agent"
 check "waiting coder agentaaa1 flagged_code Fix the reframe crop" \
@@ -130,6 +132,62 @@ it "a foreground agent records nothing"
 start sess-pm "AI-555 / Quick look" "x" coder agenteee5 0
 check "absent" "$(item linear:AI-555 state)"
 
+it "a foreground result wins over a run_in_background flag"
+start sess-pm "AI-559 / Quick look" "x" coder agenteee6 flag-only
+check "absent" "$(item linear:AI-559 state)"
+
+it "a version-like token in the description is not a ticket key"
+BEFORE="$(item_count)"
+start sess-pm "GPT-5.6 cross-model pass" "x" coder agentkkk1 1
+start sess-pm "UTF-8 parsing check" "x" coder agentkkk2 1
+check "$BEFORE absent absent" "$(item_count) $(item linear:GPT-5 state) $(item linear:UTF-8 state)"
+
+it "with no remit teams a key and a space is not enough; a label / title shape becomes a study item"
+start sess-pm "UTF-8 decode / fix" "x" coder agentkkk3 1
+check "absent waiting" "$(item linear:UTF-8 state) $(item study:utf-8-decode-fix state)"
+
+it "a key in the prompt without Ticket: or Issue: is not read"
+start sess-pm "Look around" $'AI-321 is related\nRead.' coder agentkkk4 1
+check "absent" "$(item linear:AI-321 state)"
+
+it "item_for: remit teams admit a key and a space; another prefix falls through to the label / title shape"
+check "linear:WEB-123|Fix the crop study:gpt-5-tune none" "$(run_py <<'EOF'
+mod = load_lib_module("on-subagent-worker")
+hit = mod.item_for("WEB-123 Fix the crop", "", {"WEB", "AI"})
+miss = mod.item_for("GPT-5 / tune", "", {"WEB", "AI"})
+prompt_miss = mod.item_for("x", "Ticket: GPT-5", {"WEB"})
+print("|".join(hit), miss and miss[0] or "none", prompt_miss and prompt_miss[0] or "none")
+EOF
+)"
+
+it "item_for: two long descriptions that share a prefix get different study ids"
+check "2 True" "$(run_py <<'EOF'
+mod = load_lib_module("on-subagent-worker")
+head = "Cue timing / " + "why the waits grow under load and what the queue does " * 2
+a, b = mod.item_for(head + "first", "")[0], mod.item_for(head + "second", "")[0]
+print(len({a, b}), all(len(i) <= 70 for i in (a, b)))
+EOF
+)"
+
+it "a stop that lands before the start is recorded still puts the item on the PM"
+stop_agent sess-pm agentrace1
+start sess-pm "AI-777 / Fast agent" "x" coder agentrace1 1
+check "waiting pm pm" "$(item linear:AI-777 state) $(item linear:AI-777 who) $(item linear:AI-777 reporter)"
+
+it "a stop from a session that does not drive the programme changes nothing"
+start sess-pm "AI-778 / Slow agent" "x" coder agentslow1 1
+stop_agent sess-other agentslow1
+check "coder agentslow1" "$(item linear:AI-778 who) $(item linear:AI-778 reporter)"
+
+it "a stop leaves an item that no longer waits on the agent untouched"
+run_py "$RUN" <<'EOF' >/dev/null
+import subprocess
+subprocess.run([sys.executable, os.path.join(sys.argv[1], "lib", "programme.py"), "set-waiting", "linear:AI-778",
+                "--clear", "--run", args[0]], env=dict(os.environ, CLAUDE_CODE_SESSION_ID="sess-pm"), check=True)
+EOF
+stop_agent sess-pm agentslow1
+check "open None" "$(item linear:AI-778 state) $(item linear:AI-778 who)"
+
 it "an auto reader agent records nothing"
 start sess-pm "AI-556 / status" "x" auto:programme-status-reader agentfff6 1
 check "absent" "$(item linear:AI-556 state)"
@@ -154,7 +212,8 @@ check " waiting pm pm" "$OUT $(item linear:AI-1234 state) $(item linear:AI-1234 
 
 it "a stop from an agent the item no longer waits on changes nothing"
 stop_agent sess-pm agentaaa1
-check "waiting pm pm" "$(item linear:AI-1234 state) $(item linear:AI-1234 who) $(item linear:AI-1234 reporter)"
+check "waiting pm pm investigator" \
+  "$(item linear:AI-1234 state) $(item linear:AI-1234 who) $(item linear:AI-1234 reporter) $(item linear:WEB-77 who)"
 
 it "the other items still wait on their own agents"
 check "investigator planner" "$(item linear:WEB-77 who) $(item study:cue-timing-why-waits-grow who)"
@@ -166,8 +225,12 @@ EOF
 )"
 OUT="$(start sess-pm "AI-900 / After compaction" "x" coder agentjjj0 1)"
 check "absent" "$OUT$(item linear:AI-900 state)"
-it "  the journal names the failed step"
-case "$(journal_kinds)" in *subagent_record_failed*) pass ;; *) fail "no subagent_record_failed row" ;; esac
+it "  the journal names the failed step and item"
+check "add-item linear:AI-900" "$(run_py "$RUN" <<'EOF'
+rows = [r for r in pj.read(args[0]) if r["kind"] == "subagent_record_failed"]
+print(" ".join(f"{r['payload']['step']} {r['payload']['item']}" for r in rows))
+EOF
+)"
 
 echo
 echo "  ${PASS} passed, ${FAIL} failed"

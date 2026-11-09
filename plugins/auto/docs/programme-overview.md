@@ -114,12 +114,14 @@ An explicit end releases leases without completing the remaining work. The next 
 The PM can run a worker as a background sub-agent instead of a terminal pane. A hook records it, because no `start-worker` call does.
 
 1. The PM calls the Agent tool with `run_in_background`.
-2. The hook finds the item. It reads a ticket key at the start of the description (`AI-1234 / Fix the crop`), or on the prompt's first line (`Ticket: AI-1234`). The item is `linear:<KEY>`. With no key, a `<label> / <title>` description gives `study:<slug>`. Any other description records nothing.
+2. The hook finds the item. It reads a ticket key at the start of the description (`AI-1234 / Fix the crop`), or after `Ticket:` or `Issue:` on the prompt's first line (`Ticket: AI-1234`). The item is `linear:<KEY>`. When the remit lists tracker teams, the key must belong to one of them, and a space after the key is enough (`WEB-123 Fix the crop`). With no teams in the remit, the key needs a separator (`/`, `:`, `|`, a dash), so text such as `UTF-8 parsing` is not read as a key. With no key, a `<label> / <title>` description gives `study:<slug>`; a long slug ends in a short hash, so two long descriptions do not share an item. Any other description records nothing.
 3. A new item gets `add-item`. A `coder` agent gets kind `flagged_code`. An `investigator`, `tester` or `planner` agent gets kind `fix_only`. Other agent types get no kind, so the Stop hook still asks for a rule.
 4. The item gets `set-waiting --who <agent type> --reporter <agent id>`. An item that exists keeps its kind and title; only its wait changes.
-5. When the agent stops, an item that still waits on that agent waits on `pm`. The PM reviews the result. The hook never marks an item done.
+5. When the agent stops, the hook journals `subagent_stopped`, and an item that still waits on that agent waits on `pm`. The PM reviews the result. The hook never marks an item done. Both hooks run in the background, so a fast agent can stop before its start is recorded; the start then finds the `subagent_stopped` row and moves the item to `pm` itself.
 
-The hook runs only for the driving session, and only for a background start from the PM itself. It skips `auto:` reader agents. It writes nothing to the item owner, which holds a pane and session, and nothing to the remit's worker repos, which only `start-worker` writes. A failed verb, for example after compaction before `rules --ack`, is journaled as `subagent_record_failed`. The hook prints nothing.
+An item waits on one agent at a time. A second agent started on the same item takes the wait, and the first agent's stop then changes nothing.
+
+The hook runs only for the driving session, and only for a background start from the PM itself. A sub-agent cannot run the hook scripts by hand: the sub-agent guard refuses a command that names a script in the plugin's `lib` or `.claude/hooks` folder. It skips `auto:` reader agents. It writes nothing to the item owner, which holds a pane and session, and nothing to the remit's worker repos, which only `start-worker` writes. A failed verb, for example after compaction before `rules --ack`, is journaled as `subagent_record_failed`. The hook prints nothing.
 
 ## 3. The PM reads work from several sources
 

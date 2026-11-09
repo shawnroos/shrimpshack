@@ -109,10 +109,14 @@ def _is_read_call(rest):
 
 
 def _names_lib_script(token):
-    # Default-deny: any script shipped in this plugin's lib is programme code, whatever its name.
+    # Default-deny: any script shipped in this plugin's lib or hooks is programme code, whatever its name.
+    # A hook script run by hand takes a forged payload, and some hooks write as the session the payload names.
     if not token.endswith((".py", ".sh")):
         return False
-    return os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(token)))
+    lib = os.path.dirname(os.path.abspath(__file__))
+    name = os.path.basename(token)
+    return any(os.path.exists(os.path.join(folder, name))
+               for folder in (lib, os.path.join(os.path.dirname(lib), ".claude", "hooks")))
 
 
 def _segment_refusal(segment):

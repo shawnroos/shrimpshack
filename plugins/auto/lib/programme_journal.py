@@ -140,6 +140,7 @@ KINDS = (
     "worker_started",
     "worker_start_failed",
     "subagent_record_failed",
+    "subagent_stopped",
     "prompt_sent",
     "prompt_refused",
     "programme_started",

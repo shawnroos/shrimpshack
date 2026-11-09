@@ -2,13 +2,14 @@
 """Record a PM's background sub-agent as a worker item, and hand the item back to the PM when it stops.
 
 PostToolUse on Agent: when the session drives a programme and the agent went to the background, find the item
-from a ticket key (or a "<label> / <title>" description) and record it with `add-item` and `set-waiting`.
+from an issue key (or a "<label> / <title>" description) and record it with `add-item` and `set-waiting`.
 SubagentStop: an item still waiting on that agent waits on the PM for review. Writes go through the verbs,
 never the store. Silent on success; a failed verb is journaled as subagent_record_failed. Always exits 0.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,7 @@ from _bootstrap import load_lib_module  # noqa: E402
 
 programme_journal = load_lib_module("programme_journal")
 programme_sanitize = load_lib_module("programme_sanitize")
+programme_home = load_lib_module("programme_home")
 on_user_prompt = load_lib_module("on-user-prompt")
 
 PYTHON3 = os.environ.get("CLAUDE_AUTO_PYTHON3") or "/usr/bin/python3"
@@ -31,9 +33,9 @@ TITLE_CAP = 200
 KIND_BY_TYPE = {"coder": "flagged_code", "investigator": "fix_only", "tester": "fix_only", "planner": "fix_only"}
 # The PM's own readers and packagers are dispatched as auto:* agents; they read, they are not workers.
 SKIP_TYPE_PREFIX = "auto:"
-_KEY = r"[A-Z][A-Z0-9]{1,9}-[0-9]+"
-_DESC_KEY = re.compile(rf"^\s*({_KEY})(?![A-Za-z0-9-])\s*[/:|—–-]*\s*(.*)$", re.S)
-_PROMPT_KEY = re.compile(rf"^\s*(?:(?:ticket|issue)\s*[:#]?\s*)?({_KEY})(?![A-Za-z0-9-])", re.I)
+_KEY = r"([A-Z][A-Z0-9]{1,9})-([0-9]+)"
+_DESC_KEY = re.compile(rf"^\s*{_KEY}(?:\s*[/:|—–]\s*|\s+-\s+|\s+|$)(.*)$", re.S)
+_PROMPT_KEY = re.compile(rf"^\s*(?i:ticket|issue)\s*[:#]?\s*{_KEY}(?![A-Za-z0-9.-])")
 _LABEL_TITLE = re.compile(r"^\s*([^/]+?)\s+/\s+(\S.*)$", re.S)
 
 
@@ -44,18 +46,38 @@ def _first_line(text) -> str:
     return ""
 
 
-def item_for(description, prompt):
-    """(item id, title) for an agent start, or None when it names no ticket and has no label / title shape."""
+def _team_keys(record) -> set:
+    tracker = (((record or {}).get("programme") or {}).get("remit") or {}).get("tracker") or {}
+    return {t["key"] for t in tracker.get("teams") or [] if isinstance(t, dict) and isinstance(t.get("key"), str)}
+
+
+def _key_ok(team, teams) -> bool:
+    # With no teams in the remit any key shape counts, so a description like "UTF-8 parsing" needs a separator.
+    return team in teams if teams else True
+
+
+def _slug(text) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    if len(slug) <= SLUG_CAP:
+        return slug
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+    return slug[:SLUG_CAP - 9].strip("-") + "-" + digest
+
+
+def item_for(description, prompt, teams=frozenset()):
+    """(item id, title) for an agent start, or None when it names no issue and has no label / title shape."""
     description = (description or "").strip()
     found = _DESC_KEY.match(description)
-    if found:
-        return f"linear:{found.group(1)}", found.group(2).strip() or description
+    if found and _key_ok(found.group(1), teams):
+        separated = description[found.end(2):found.start(3)].strip() != "" or not found.group(3)
+        if teams or separated:
+            return f"linear:{found.group(1)}-{found.group(2)}", found.group(3).strip() or description
     found = _PROMPT_KEY.match(_first_line(prompt))
-    if found and found.group(1).upper() == found.group(1):
-        return f"linear:{found.group(1)}", description or None
+    if found and _key_ok(found.group(1), teams):
+        return f"linear:{found.group(1)}-{found.group(2)}", description or None
     shaped = _LABEL_TITLE.match(description)
     if shaped:
-        slug = re.sub(r"[^a-z0-9]+", "-", description.lower()).strip("-")[:SLUG_CAP].strip("-")
+        slug = _slug(description)
         if slug:
             return f"study:{slug}", shaped.group(2).strip()
     return None
@@ -73,9 +95,9 @@ def agent_id_of(response) -> str | None:
 
 
 def _backgrounded(tool_input, response) -> bool:
-    if tool_input.get("run_in_background") is True:
-        return True
-    return isinstance(response, dict) and response.get("status") == "async_launched"
+    if isinstance(response, dict) and response.get("status"):
+        return response["status"] == "async_launched"
+    return tool_input.get("run_in_background") is True
 
 
 def _items(record) -> dict:
@@ -117,7 +139,7 @@ def on_start(data, run, record, session_id) -> list:
     subagent_type = str(tool_input.get("subagent_type") or "general-purpose")
     if subagent_type.startswith(SKIP_TYPE_PREFIX):
         return []
-    found = item_for(tool_input.get("description"), tool_input.get("prompt"))
+    found = item_for(tool_input.get("description"), tool_input.get("prompt"), _team_keys(record))
     agent = agent_id_of(response)
     if found is None:
         return []
@@ -125,13 +147,14 @@ def on_start(data, run, record, session_id) -> list:
     if agent is None:
         _failed(run, session_id, "start", item_id, "the Agent result carried no agent id")
         return [("start", item_id, False)]
-    who = programme_sanitize.token(subagent_type.rsplit(":", 1)[-1]) or "agent"
+    base_type = subagent_type.rsplit(":", 1)[-1]
+    who = programme_sanitize.token(base_type) or "agent"
     steps = []
     if not _exists(record, item_id):
         argv = ["add-item", item_id]
         if title:
             argv += ["--title", programme_sanitize.clean(title, TITLE_CAP)]
-        kind = KIND_BY_TYPE.get(subagent_type.rsplit(":", 1)[-1])
+        kind = KIND_BY_TYPE.get(base_type)
         if kind:
             argv += ["--kind", kind]
         ok, reason = _verb(run, session_id, argv)
@@ -143,13 +166,31 @@ def on_start(data, run, record, session_id) -> list:
     steps.append(("set-waiting", item_id, ok))
     if not ok:
         _failed(run, session_id, "set-waiting", item_id, reason)
+        return steps
+    # The two hooks run async, so a fast agent's stop can land first; on_stop journals before it reads the items.
+    if _stopped(run, agent):
+        ok, reason = _verb(run, session_id, ["set-waiting", item_id, "--who", "pm", "--reporter", "pm"])
+        steps.append(("review", item_id, ok))
+        if not ok:
+            _failed(run, session_id, "review", item_id, reason)
     return steps
+
+
+def _stopped(run, agent) -> bool:
+    try:
+        rows = programme_journal.read(run)
+    except Exception:
+        return False
+    return any(r.get("kind") == "subagent_stopped" and (r.get("payload") or {}).get("agent") == agent for r in rows)
 
 
 def on_stop(data, run, record, session_id) -> list:
     agent = programme_sanitize.token(data.get("agent_id"))
     if not agent:
         return []
+    # Journal before reading the items: a start that sets its wait after this read finds the row instead.
+    programme_journal.append(run, "subagent_stopped", session_id, {"agent": agent})
+    record, _hold = programme_home.read_programme(run)
     steps = []
     for key, item in sorted(_items(record).items()):
         if not isinstance(item, dict) or item.get("state") != "waiting":

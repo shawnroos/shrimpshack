@@ -766,7 +766,7 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
 `domain_behaviour_answered`, `gone_pane_closed`, `gone_pane_reported`, `ask_relayed`, `pm_decided`,
 `claim`, `claims_read`, `working_now`, `queue_changed`, `tested_build_recorded`,
 `source_changed`, `evidence_checked`, `evidence_refuted`, `validate_pass`, `merge_pinned`,
-`worker_started`, `worker_start_failed`, `prompt_sent`, `prompt_refused`, `programme_started`,
+`worker_started`, `worker_start_failed`, `subagent_record_failed`, `subagent_stopped`, `prompt_sent`, `prompt_refused`, `programme_started`,
 `taken_over`, `handed_over`, `programme_ended`, `request_refused`, `approval_refused`,
 `effects_recorded`, `legacy_imported`, `foreign_write_absorbed`, `result_collected`,
 `result_collection_failed`, `source_retained`, `inventory_frozen`, `preservation_checked`,
@@ -784,6 +784,9 @@ key. An unknown kind raises `JournalError`. `KINDS` today:
   `focus_overridden {item, would_hold, approval_prompt_id}` is journaled when an approved `--despite focus` starts an item the gate would have held.
   `item_swapped {out, in, parked_pane, decision_id, stop_prompt, next}` is journaled by `swap-item`;
   `focus_noted {subagents}` by `focus-note`. `size-item` journals `item_updated`.
+- `subagent_record_failed {step, item, reason}`: the sub-agent worker hook could not record a background
+  agent; `step` is `start`, `add-item`, `set-waiting` or `review`. `subagent_stopped {agent}`: a background
+  agent of the driving session stopped.
 - `trajectory_changed {item, old_hash, new_hash}`: one row per item whose step path changed under the same
   driving session. A first recording, a recording under a new driving session and an unchanged path write no row.
 - `prompt_sent`, `worker_started` and `worker_start_failed` payloads add `decision_ids`

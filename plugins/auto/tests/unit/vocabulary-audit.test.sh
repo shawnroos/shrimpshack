@@ -417,6 +417,7 @@ SCRUBS=(
   # ── tick ──
   'tick%%^(tests/unit/rearm-command-exists\.test\.sh|tests/smoke/scaffold\.test\.sh|tests/integration/pulse-alias-inflight\.test\.sh)$%%auto-tick%%@ALIAS@%%auto-tick%%KTD-4: the kept alias command commands/auto-tick.md is path-whitelisted, but the tests that PIN it must NAME it. Was a WHOLE-LINE grep -v drop (the fifth instance of the unbounded-exemption class); now a bounded token scrub, so any OTHER stale `tick` on those lines still fails.'
   'tick%%^(tests/unit/rearm-command-exists\.test\.sh|tests/smoke/scaffold\.test\.sh|tests/integration/pulse-alias-inflight\.test\.sh)$%%tick\.sh%%@STUB@%%tick.sh%%same, for the kept forwarding stub lib/tick.sh.'
+  'tick%%^(lib/on-subagent-worker\.py|skills/programme-sweep/SKILL\.md|docs/programme-overview\.md|tests/unit/subagent-worker\.test\.sh)$%%[Tt]icket%%@WORD@%%ticket%%the English word: the sub-agent worker hook reads `Ticket: AI-1234` from a prompt, and its docs and tests name it. Only the whole word `ticket`, only in those files; a bare `tick` there still fails.'
 )
 # SCRUBS-TABLE>>>
 # NB: there is deliberately NO `emitter`, `seam`, `ledger` or `orchestrator` row.
