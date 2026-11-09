@@ -109,6 +109,18 @@ An unaccepted agreement expires after one cadence. The expiry path ends that pro
 
 An explicit end releases leases without completing the remaining work. The next PM session re-arms watchers after handover or takeover.
 
+### Sub-agent workers
+
+The PM can run a worker as a background sub-agent instead of a terminal pane. A hook records it, because no `start-worker` call does.
+
+1. The PM calls the Agent tool with `run_in_background`.
+2. The hook finds the item. It reads a ticket key at the start of the description (`AI-1234 / Fix the crop`), or on the prompt's first line (`Ticket: AI-1234`). The item is `linear:<KEY>`. With no key, a `<label> / <title>` description gives `study:<slug>`. Any other description records nothing.
+3. A new item gets `add-item`. A `coder` agent gets kind `flagged_code`. An `investigator`, `tester` or `planner` agent gets kind `fix_only`. Other agent types get no kind, so the Stop hook still asks for a rule.
+4. The item gets `set-waiting --who <agent type> --reporter <agent id>`. An item that exists keeps its kind and title; only its wait changes.
+5. When the agent stops, an item that still waits on that agent waits on `pm`. The PM reviews the result. The hook never marks an item done.
+
+The hook runs only for the driving session, and only for a background start from the PM itself. It skips `auto:` reader agents. It writes nothing to the item owner, which holds a pane and session, and nothing to the remit's worker repos, which only `start-worker` writes. A failed verb, for example after compaction before `rules --ack`, is journaled as `subagent_record_failed`. The hook prints nothing.
+
 ## 3. The PM reads work from several sources
 
 A sweep reads the active sources and compares their records with the remit.

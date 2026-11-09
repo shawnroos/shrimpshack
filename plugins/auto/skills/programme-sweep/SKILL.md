@@ -347,6 +347,12 @@ re-arming. Next sweep reads the changes.
      [references/judgment.md](references/judgment.md).
    - Start a queued worker with `P start-worker <item> -- <spinoff arguments>`.
      Never pass `--session-id`; the verb mints it.
+   - A worker run as a background sub-agent (the Agent tool with
+     `run_in_background`) is recorded by a hook; see "Sub-agent workers" in
+     `docs/programme-overview.md`. Start the description with the ticket key
+     (`AI-1234 / <title>`) or put `Ticket: AI-1234` on the prompt's first line,
+     or use `<label> / <title>` for work with no ticket. When the agent stops,
+     the item waits on you: review its result, then record the next step.
    - Prompt a worker with `P prompt-item <item> "<text>"`. It sends only to the
      item's recorded pane and owner session.
    - Link each decision the work rests on with `--decision <id>` (repeat it
