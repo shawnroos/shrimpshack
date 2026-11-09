@@ -37,7 +37,6 @@ SKIP_TYPE_PREFIX = "auto:"
 _LABEL_TITLE = re.compile(r"^\s*(\S[^/]*?)\s+/\s+(\S.*)$", re.S)
 # Same bounds as the Linear key check in on-pretooluse-action.py.
 _ISSUE_KEY = re.compile(r"[A-Z][A-Z0-9]{0,7}-[0-9]{1,6}")
-_HAND_BACK = ("--who", "pm", "--reporter", "pm")
 
 
 def _slug(text) -> str:
@@ -99,6 +98,12 @@ def _journal(run, session_id, kind, payload) -> None:
         pass
 
 
+def _hand_back(run, session_id, item_id, agent) -> None:
+    # --if-reporter makes the check and the write one store write, so a newer agent's wait is never replaced.
+    _record(run, session_id, "review", item_id,
+            ["set-waiting", item_id, "--who", "pm", "--reporter", "pm", "--if-reporter", agent])
+
+
 def _stopped(run, agent) -> bool:
     try:
         rows = programme_journal.read(run)
@@ -123,7 +128,7 @@ def on_start(data, run, record, session_id) -> None:
                  {"step": "start", "item": item_id, "reason": "the Agent result carried no agentId"})
         return
     if not _exists(record, item_id):
-        argv = ["add-item", item_id, "--title", programme_sanitize.clean(title, TITLE_CAP)]
+        argv = ["add-item", item_id, "--title", programme_sanitize.clean(title, TITLE_CAP) or item_id]
         if worker in KIND_BY_TYPE:
             argv += ["--kind", KIND_BY_TYPE[worker]]
         if not _record(run, session_id, "add-item", item_id, argv):
@@ -134,7 +139,7 @@ def on_start(data, run, record, session_id) -> None:
         return
     # The two hooks run async, so a fast agent's stop can land first; on_stop journals before it reads the items.
     if _stopped(run, agent):
-        _record(run, session_id, "review", item_id, ["set-waiting", item_id, *_HAND_BACK])
+        _hand_back(run, session_id, item_id, agent)
 
 
 def on_stop(data, run, _record_at_start, session_id) -> None:
@@ -147,7 +152,7 @@ def on_stop(data, run, _record_at_start, session_id) -> None:
     for key, item in sorted(_items(record).items()):
         if (isinstance(item, dict) and item.get("state") == "waiting"
                 and (item.get("waiting_on") or {}).get("reporter") == agent):
-            _record(run, session_id, "review", key, ["set-waiting", key, *_HAND_BACK])
+            _hand_back(run, session_id, key, agent)
 
 
 def handle(raw: str) -> None:

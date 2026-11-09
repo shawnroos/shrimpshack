@@ -183,6 +183,24 @@ stop_agent sess-pm agentrace1
 start sess-pm "AI-777 / Fast agent" "x" coder agentrace1 1
 check "waiting pm pm" "$(item linear:AI-777 state) $(item linear:AI-777 who) $(item linear:AI-777 reporter)"
 
+it "set-waiting --if-reporter changes the wait only while the item still waits on that reporter"
+check "1 coder agentnew1 0 pm pm" "$(run_py "$RUN" <<'EOF'
+import subprocess
+def verb(*argv):
+    return subprocess.run([sys.executable, os.path.join(sys.argv[1], "lib", "programme.py"), *argv, "--run", args[0]],
+                          env=dict(os.environ, CLAUDE_CODE_SESSION_ID="sess-pm"), capture_output=True).returncode
+def wait():
+    record, _ = ph.read_programme(args[0])
+    w = record["programme"]["items"]["linear:AI-777"]["waiting_on"]
+    return f"{w['who']} {w['reporter']}"
+verb("set-waiting", "linear:AI-777", "--who", "coder", "--reporter", "agentnew1")
+stale = verb("set-waiting", "linear:AI-777", "--who", "pm", "--reporter", "pm", "--if-reporter", "agentrace1")
+after_stale = wait()
+current = verb("set-waiting", "linear:AI-777", "--who", "pm", "--reporter", "pm", "--if-reporter", "agentnew1")
+print(stale, after_stale, current, wait())
+EOF
+)"
+
 it "a stop from a session that does not drive the programme changes nothing"
 start sess-pm "AI-778 / Slow agent" "x" coder agentslow1 1
 stop_agent sess-other agentslow1
