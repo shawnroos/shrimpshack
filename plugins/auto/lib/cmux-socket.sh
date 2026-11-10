@@ -69,6 +69,7 @@ AUTO_CLAUDE_SETTINGS='{"remoteControlAtStartup":false}'
 auto::resume_command() {
   printf "sleep 1; claude --settings '%s' '/auto:auto-resume %s'" "$AUTO_CLAUDE_SETTINGS" "$1"
 }
+
 # The cmux binary. Overridable for tests (a mock shim on PATH records its args).
 CLAUDE_AUTO_CMUX="${CLAUDE_AUTO_CMUX:-cmux}"
 # Spawn-in-flight window (seconds): skip re-spawn if a sentinel was touched this
