@@ -62,7 +62,7 @@ CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 # Remote Control stays off for sessions auto launches: on reattach the claude.ai server
 # replays an old end_session, and the session quits about 30 s after start with no error.
 # lib/auto-workspace.py holds the Python copy; tests/unit/remote-control-off.test.sh pins both.
-AUTO_CLAUDE_SETTINGS='{"remoteControlAtStartup":false}'
+AUTO_CLAUDE_SETTINGS='{"remoteControlAtStartup":false,"enabledPlugins":{"peek@peek":false}}'
 
 # auto::resume_command <run>
 #   The shell command an /auto-resume workspace runs.

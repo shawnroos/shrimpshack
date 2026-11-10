@@ -51,7 +51,7 @@ run_record = load_run_record()
 # Remote Control stays off for sessions auto launches: on reattach the claude.ai server
 # replays an old end_session, and the session quits about 30 s after start with no error.
 # lib/cmux-socket.sh holds the bash copy; tests/unit/remote-control-off.test.sh pins both.
-CLAUDE_LAUNCH_SETTINGS = '{"remoteControlAtStartup":false}'
+CLAUDE_LAUNCH_SETTINGS = '{"remoteControlAtStartup":false,"enabledPlugins":{"peek@peek":false}}'
 
 
 def claude_command() -> str:
