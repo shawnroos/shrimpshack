@@ -449,10 +449,10 @@ def _wait_spec(opts, watcher, blocker) -> dict:
 def _h_set_waiting(host, argv):
     positional, opts = host._parse(
         argv, values=("run", "who", "reporter", "watcher", "process-id", "task-id", "kind", "trace-id",
-                      "job-id", "due") + BLOCKER_FIELDS,
+                      "job-id", "due", "if-reporter") + BLOCKER_FIELDS,
         flags=("blocker", "safety", "clear"))
     if len(positional) != 1:
-        raise ValueError("usage: set-waiting <id> --who <name> [--watcher <id>] ... | --clear")
+        raise ValueError("usage: set-waiting <id> --who <name> [--watcher <id>] [--if-reporter <id>] ... | --clear")
     if not opts.get("clear") and not opts.get("who"):
         raise ValueError("set-waiting needs --who <name> (or --clear)")
     item_id = check_item_id(positional[0])
@@ -467,6 +467,9 @@ def _h_set_waiting(host, argv):
         item = programme["items"][key]
         if item["state"] not in WAITABLE_STATES:
             raise RecordError(f"item {key!r} is {item['state']}; only an open or waiting item waits")
+        expected = opts.get("if-reporter")
+        if expected is not None and (item.get("waiting_on") or {}).get("reporter") != expected:
+            raise RecordError(f"item {key!r} no longer waits on reporter {expected!r}; nothing changed")
         if opts.get("clear"):
             item.update(state="open", waiting_on=None)
             _history(item, "wait_cleared")
@@ -895,7 +898,7 @@ _SPECS = (
      "<id> --who <name> [--reporter <name>] [--watcher <id> [--process-id <n>] [--task-id <id> "
      "[--kind cron|monitor]]] "
      "[--blocker (--serves <text> --evidence <text> --unblocks-when <text> | --safety)] [--trace-id <id>] "
-     "[--job-id <id>] [--due <iso>] [--run <id>] | <id> --clear",
+     "[--job-id <id>] [--due <iso>] [--if-reporter <name>] [--run <id>] | <id> --clear",
      "no --who; a finished item; a watcher id that is not a safe name; a --due that is not an ISO time; "
      "a --blocker without --serves (the requirement or required check it serves), --evidence (of the "
      "dependency) and --unblocks-when (the condition that removes it), unless --safety marks a safety or "
