@@ -170,7 +170,7 @@ enumeration rather than written as a template.
 ## Programme
 
 ### Programme
-An auto run in which a PM coordinates work under an accepted agreement and checked stop rules.
+An Otto run in which a PM coordinates work under an accepted agreement and checked stop rules.
 Its persistent home sits outside disposable code worktrees.
 
 ### Recovery packet
@@ -267,7 +267,7 @@ What a step relies on: a Scope term, a Done standard or an active Ruling. A step
 clause is allowed and shown as such; it is a warning, never a block.
 
 Instructions, decision records, project terms as a who-decides source, corrections, the
-agreement's autonomy term and the contract stamp are retired; `plugins/auto/CONCEPTS.md`
+agreement's autonomy term and the contract stamp are retired; the Otto repo's `CONCEPTS.md` (shawnroos/otto)
 shows how older records name them.
 
 ### Tools of record
@@ -279,7 +279,7 @@ Standing guidance on how the PM or its workers go about the work: when a situati
 true, what to do and not do, which skills, tools and agents to prefer, how to communicate,
 and when to stop. It lives at the personal, repo or programme layer, and the narrower layer
 wins. It carries no authority and no done bar; Authority, Done standards and Rulings answer
-those. The auto glossary (`plugins/auto/CONCEPTS.md`) holds its full entry.
+those. The Otto glossary (`CONCEPTS.md` in shawnroos/otto) holds its full entry.
 
 ### Driver pane
 The terminal pane the person uses to drive a Programme. Only the person types into it: no

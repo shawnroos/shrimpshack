@@ -6,7 +6,6 @@ Tasty crustacey morsels for Claude by [@shawnroos](https://github.com/shawnroos)
 
 | Plugin | Version | What it does |
 |--------|---------|--------------|
-| [auto](plugins/auto/) | 0.14.1 | Runs a plan-and-work loop as a state machine. The loop stops on a deterministic exit test, not on a claim of completion. |
 | [claude-modes](plugins/claude-modes/) | 0.3.1 | Names a working stance and gives it a plugin catalog. Each mode turns a different set of tools on. |
 | [clawcrush](plugins/clawcrush/) | 0.2.0 | Finds and stops zombie processes and leftover files from Claude Code sessions. It selects by owner and liveness, never by age. |
 | [comment-cut](plugins/comment-cut/) | 0.4.0 | Removes comment bloat from a branch and keeps the comments that carry a reason. It proves that only comments changed. |
