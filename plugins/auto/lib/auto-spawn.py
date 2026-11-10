@@ -331,13 +331,13 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
       cmux new-workspace
         --name "auto-fanout-<slug>"
         --cwd  "<worktree>"
-        --command "sleep 1; CLAUDE_AUTO_REPO=<worktree> claude '/auto:auto <plan>'"
+        --command "sleep 1; CLAUDE_AUTO_REPO=<worktree> claude --settings '<json>' '/auto:auto <plan>'"
         --focus false
 
     v0.4.1 (plan 004) KTD-4 mechanism (project workspace present):
       cmux new-surface --pane <marker.left_pane_id> --focus false
       cmux send --surface <captured> "sleep 1; cd <worktree> &&
-        CLAUDE_AUTO_REPO=<worktree> claude '/auto:auto <plan>'"
+        CLAUDE_AUTO_REPO=<worktree> claude --settings '<json>' '/auto:auto <plan>'"
 
     The CLAUDE_AUTO_REPO env-pin (round-2 R2-001) ensures the sub-run's
     run-record writes land at <worktree>/.claude/auto/.
@@ -352,7 +352,7 @@ def _spawn_via_cmux(worktree: str, plan_rel: str, slug: str, *,
     # '/auto-status'` → Unknown, `/auto:auto-status` → runs). Plugin name is `auto`.
     inner_cmd = (
         f"CLAUDE_AUTO_REPO='{worktree}' "
-        f"claude '/auto:auto {plan_esc}'"
+        f"{_load_workspace_module().claude_command()} '/auto:auto {plan_esc}'"
     )
     script = os.path.join(_LIB_DIR, "cmux-socket.sh")
 

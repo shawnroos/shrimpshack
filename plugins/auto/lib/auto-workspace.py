@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,16 @@ from _bootstrap import (
 # The run-record facade owns the canonical ISO-Z time stamp (run_record.now_iso). Load
 # it via the facade so the marker's created_at matches every run-record timestamp.
 run_record = load_run_record()
+
+# Remote Control stays off for sessions auto launches: on reattach the claude.ai server
+# replays an old end_session, and the session quits about 30 s after start with no error.
+# lib/cmux-socket.sh holds the bash copy; tests/unit/remote-control-off.test.sh pins both.
+CLAUDE_LAUNCH_SETTINGS = '{"remoteControlAtStartup":false}'
+
+
+def claude_command() -> str:
+    """The `claude` launch prefix every auto-started session uses, quoted for a shell."""
+    return f"claude --settings {shlex.quote(CLAUDE_LAUNCH_SETTINGS)}"
 
 
 # ── Public API surface ─────────────────────────────────────────────────────
@@ -252,7 +263,7 @@ def create(host_repo: str, *, name: str | None = None, force: bool = False) -> d
         "direction": "horizontal",
         "split": 0.5,
         "children": [
-            {"pane": {"surfaces": [{"type": "terminal", "command": "claude"}]}},
+            {"pane": {"surfaces": [{"type": "terminal", "command": claude_command()}]}},
             {"pane": {"surfaces": [{"type": "terminal"}]}},
         ],
     }

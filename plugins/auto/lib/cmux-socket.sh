@@ -7,7 +7,7 @@
 # on-session-start.py only SURFACES a resume hint; U8 makes resume AUTOMATIC.
 #
 # MECHANISM (verified by the U1 spike — docs/research/cmux-socket-spike.md):
-#   cmux new-workspace --command "sleep 1; claude '/auto:auto-resume <run>'" \
+#   cmux new-workspace --command "sleep 1; claude --settings '<json>' '/auto:auto-resume <run>'" \
 #     --focus false
 #   * The spawned workspace is APP-OWNED, so it survives the parent Claude
 #     session exiting — exactly the U8 use case.
@@ -58,6 +58,17 @@
 set -uo pipefail
 
 CLAUDE_AUTO_PYTHON3="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
+
+# Remote Control stays off for sessions auto launches: on reattach the claude.ai server
+# replays an old end_session, and the session quits about 30 s after start with no error.
+# lib/auto-workspace.py holds the Python copy; tests/unit/remote-control-off.test.sh pins both.
+AUTO_CLAUDE_SETTINGS='{"remoteControlAtStartup":false}'
+
+# auto::resume_command <run>
+#   The shell command an /auto-resume workspace runs.
+auto::resume_command() {
+  printf "sleep 1; claude --settings '%s' '/auto:auto-resume %s'" "$AUTO_CLAUDE_SETTINGS" "$1"
+}
 # The cmux binary. Overridable for tests (a mock shim on PATH records its args).
 CLAUDE_AUTO_CMUX="${CLAUDE_AUTO_CMUX:-cmux}"
 # Spawn-in-flight window (seconds): skip re-spawn if a sentinel was touched this
@@ -154,7 +165,7 @@ auto::build_spawn_command() {
     "$CLAUDE_AUTO_CMUX" \
     "auto-resume-${run}" \
     "$repo" \
-    "sleep 1; claude '/auto:auto-resume ${run}'"
+    "$(auto::resume_command "$run")"
 }
 
 # auto::cmux_spawn_workspace <name> <cwd> <command>
@@ -293,7 +304,7 @@ PYEOF
   auto::cmux_spawn_workspace \
     "auto-resume-${run}" \
     "$repo" \
-    "sleep 1; claude '/auto:auto-resume ${run}'"
+    "$(auto::resume_command "$run")"
   return 0
 }
 

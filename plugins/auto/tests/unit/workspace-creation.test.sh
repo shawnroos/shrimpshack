@@ -138,16 +138,16 @@ fi
 rm -rf "$R2"
 
 # ── Scenario 3: left child runs `claude`, right is plain terminal
-auto_test::it "layout left pane runs claude, right pane is plain terminal"
+auto_test::it "layout left pane runs claude with Remote Control off, right pane is plain terminal"
 R3="$(make_repo)"
 : > "$CMUX_LOG"
 "$PY" "$WS" create "$R3" >/dev/null 2>&1
 left_cmd="$(parse_layout_field "$R3" children.0.pane.surfaces.0.command)"
 right_type="$(parse_layout_field "$R3" children.1.pane.surfaces.0.type)"
-if [ "$left_cmd" = "claude" ] && [ "$right_type" = "terminal" ]; then
+if [ "$left_cmd" = "claude --settings '{\"remoteControlAtStartup\":false}'" ] && [ "$right_type" = "terminal" ]; then
   auto_test::pass
 else
-  auto_test::fail "expected left.command=claude / right.type=terminal; got left=$left_cmd / right=$right_type"
+  auto_test::fail "expected left.command=claude --settings <json> / right.type=terminal; got left=$left_cmd / right=$right_type"
 fi
 rm -rf "$R3"
 
