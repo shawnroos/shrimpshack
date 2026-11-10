@@ -25,6 +25,14 @@ abspath() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd -P)
 # continuation prompt with no claude at all. Escape, never trust the input.
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# Remote Control stays off for launched sessions: on reattach the claude.ai server replays
+# an old end_session, and the session quits about 30 s after start with no error shown.
+SPINOFF_CLAUDE_SETTINGS='{"remoteControlAtStartup":false}'
+
+# The `claude` argv every launch and recovery line shares, already quoted for a shell.
+# $1 = the --session-id prefix ("" or "--session-id '<id>' "), $2 = the session label.
+claude_args() { printf '%s--name %s --settings %s' "$1" "$(shq "$2")" "$(shq "$SPINOFF_CLAUDE_SETTINGS")"; }
+
 # ---- launcher seam (KTD-1 / KTD-2) ------------------------------------------
 # The launch region near the bottom is backend-neutral: it calls launcher_*
 # verbs that dispatch on the resolved $LAUNCHER. Three backends implement them —
@@ -2150,10 +2158,10 @@ printf '%s\n' "$KICKOFF" > "$BRIEF_FILE" 2>/dev/null || true
 _brief_excl="$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null)"
 [ -n "$_brief_excl" ] && { grep -qxF '/.spinoff-brief' "$_brief_excl" 2>/dev/null || printf '/.spinoff-brief\n' >> "$_brief_excl"; }
 
-LAUNCH_CMD="cd $(shq "$WORKTREE") && claude ${CLAUDE_SID_ARG}--name $(shq "$LABEL") \"\$(cat $(shq "$BRIEF_FILE"))\""
+LAUNCH_CMD="cd $(shq "$WORKTREE") && claude $(claude_args "$CLAUDE_SID_ARG" "$LABEL") \"\$(cat $(shq "$BRIEF_FILE"))\""
 # Recovery line for the summary: never references the brief file, so it stays
 # runnable even if that file is gone.
-MANUAL_CMD="cd $(shq "$WORKTREE") && claude ${CLAUDE_SID_ARG}--name $(shq "$LABEL")"
+MANUAL_CMD="cd $(shq "$WORKTREE") && claude $(claude_args "$CLAUDE_SID_ARG" "$LABEL")"
 
 # Detect the backend once (KTD-2), then drive the launch through the neutral
 # verbs. resolve_launcher's precedence (herdr live > cmux > none) subsumes the old
@@ -2428,7 +2436,7 @@ if [ "$BRIEF_ATTEMPTED" = "1" ] && [ "$KICKOFF_OK" != "1" ]; then
     echo "  $KICKOFF_FAIL." >&2
     echo "  The worktree, branch and handoff are intact. Start the briefed session in that pane:" >&2
     echo >&2
-    echo "    claude ${CLAUDE_SID_ARG}--name $(shq "$LABEL") \"\$(cat .spinoff-brief)\"" >&2
+    echo "    claude $(claude_args "$CLAUDE_SID_ARG" "$LABEL") \"\$(cat .spinoff-brief)\"" >&2
     exit 3
   fi
   echo "  The launch itself did not complete — the failure is reported above, not swallowed." >&2

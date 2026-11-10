@@ -279,3 +279,15 @@ run_rex() {
   [ "$status" -eq 3 ]
   [[ "$output" == *"claude is not running in block:bTAB"* ]]
 }
+
+load launch-argv
+
+@test "remote control: rex launch reaches claude with Remote Control off" {
+  run_rex tab
+  [ "$status" -eq 0 ]
+  local cmd argv
+  cmd="$(sed -n 's/^.* -- sh -c //p' "$REX_ARGV_LOG" | head -1)"
+  [ -n "$cmd" ]
+  argv="$(launch_argv "$cmd")"
+  assert_remote_control_off "$argv"
+}

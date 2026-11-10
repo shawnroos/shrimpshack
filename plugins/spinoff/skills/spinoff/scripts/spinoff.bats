@@ -1544,3 +1544,104 @@ run_resolve_bin_rejected() {
   [ "$output" = "$known/tool" ]
 }
 
+
+# ---- Remote Control off for launched sessions ---------------------------------
+# Every launch must reach claude with --settings '{"remoteControlAtStartup":false}' as two
+# exact argv entries, whatever quoting the backend puts the string through.
+
+load launch-argv
+
+@test "remote control: claude_args quotes the settings JSON, a session id and an apostrophe label" {
+  run bash -c '
+    SPINOFF_TEST_SOURCE=1 . "$1" || exit 9
+    printf "claude %s" "$(claude_args "--session-id $(shq 0b9f2c4e-7a1d-4e5b-9c3f-2d8e6a1b4c70) " "Shawn'"'"'s \$(spinoff)")"
+  ' _ "$SCRIPT"
+  [ "$status" -eq 0 ]
+  local argv
+  argv="$(launch_argv "$output")"
+  [ "$argv" = "$(printf '%s\n' --session-id 0b9f2c4e-7a1d-4e5b-9c3f-2d8e6a1b4c70 --name "Shawn's \$(spinoff)" \
+                   --settings '{"remoteControlAtStartup":false}')" ]
+}
+
+@test "remote control: the ghostty sh -lc wrapper keeps the settings JSON intact" {
+  run bash -c '
+    SPINOFF_TEST_SOURCE=1 . "$1" || exit 9
+    _ghostty_sh_c "cd /tmp && claude $(claude_args "" "it'"'"'s")"
+  ' _ "$SCRIPT"
+  [ "$status" -eq 0 ]
+  # Tokenize the wrapper the way a shell does, then run its -c payload without -l, so a
+  # login profile cannot put the real claude ahead of the fake one.
+  eval "set -- $output"
+  [ "$1" = sh ] && [ "$2" = -lc ]
+  local argv
+  argv="$(launch_argv "$3")"
+  assert_remote_control_off "$argv"
+  grep -qxF "it's" <<<"$argv"
+}
+
+@test "remote control: herdr launch reaches claude with Remote Control off" {
+  run_herdr_tab
+  [ "$status" -eq 0 ]
+  local cmd argv
+  cmd="$(sed -n 's/^pane run wS:p2 //p' "$HERDR_ARGV_LOG")"
+  [ -n "$cmd" ]
+  argv="$(launch_argv "$cmd")"
+  assert_remote_control_off "$argv"
+  grep -qxF 'testlabel' <<<"$argv"
+}
+
+@test "remote control: cmux launch reaches claude with Remote Control off" {
+  local repo="$BATS_TEST_TMPDIR/crc"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name tester
+  echo hi > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -qm init
+  printf '# Handoff\n\nbrief body\n' > "$repo/handoff.md"
+  local log="$BATS_TEST_TMPDIR/cmux-rc.log"
+  run env PATH="$STUBDIR:$PATH" CMUX_ARGV_LOG="$log" CMUX_WORKSPACE_ID=workspace:99 HERDR_ENV= REX_SESSION= \
+      bash "$SCRIPT" --name crc --label testlabel --handoff "$repo/handoff.md" --repo "$repo" --target tab
+  [ "$status" -eq 0 ]
+  local cmd argv
+  cmd="$(sed -n 's/^send --surface surface:42 --workspace workspace:99 //p' "$log")"
+  [ -n "$cmd" ]
+  argv="$(launch_argv "$cmd")"
+  assert_remote_control_off "$argv"
+}
+
+@test "remote control: ghostty launch reaches claude with Remote Control off" {
+  local app="$BATS_TEST_TMPDIR/Ghostty.app/Contents/Resources"
+  mkdir -p "$app"
+  local cmdfile="$BATS_TEST_TMPDIR/ghostty-cmd"
+  cat > "$STUBDIR/osascript" <<'STUB'
+#!/usr/bin/env bash
+case "$2" in
+  new-tab|new-window) printf '%s' "$3" > "$GHOSTTY_CMD_OUT"; printf 'terminal=T1\nwindow=W1\npid=4242\n' ;;
+  pid) printf 'pid=4242\n' ;;
+esac
+exit 0
+STUB
+  chmod +x "$STUBDIR/osascript"
+  LOUD_ARGS="--launcher ghostty" run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= REX_SESSION= \
+      GHOSTTY_RESOURCES_DIR="$app" OSASCRIPT_BIN="$STUBDIR/osascript" GHOSTTY_CMD_OUT="$cmdfile"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"launcher:  ghostty"* ]]
+  local wrapped argv
+  wrapped="$(cat "$cmdfile")"
+  eval "set -- $wrapped"
+  [ "$1" = sh ] && [ "$2" = -lc ]
+  argv="$(launch_argv "$3")"
+  assert_remote_control_off "$argv"
+}
+
+@test "remote control: the manual recovery line also turns Remote Control off" {
+  run_unresolvable HERDR_ENV= CMUX_WORKSPACE_ID= REX_SESSION= OSASCRIPT_BIN=/nonexistent/osascript
+  [ "$status" -eq 0 ]
+  local line argv
+  line="$(grep -E "^ +cd '.*' && claude " <<<"$output" | head -1 | sed 's/^ *//')"
+  [ -n "$line" ]
+  argv="$(launch_argv "$line")"
+  assert_remote_control_off "$argv"
+}
