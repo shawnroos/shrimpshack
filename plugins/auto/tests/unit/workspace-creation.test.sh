@@ -144,7 +144,7 @@ R3="$(make_repo)"
 "$PY" "$WS" create "$R3" >/dev/null 2>&1
 left_cmd="$(parse_layout_field "$R3" children.0.pane.surfaces.0.command)"
 right_type="$(parse_layout_field "$R3" children.1.pane.surfaces.0.type)"
-if [ "$left_cmd" = "claude --settings '{\"remoteControlAtStartup\":false}'" ] && [ "$right_type" = "terminal" ]; then
+if [ "$left_cmd" = "claude --settings '{\"remoteControlAtStartup\":false,\"enabledPlugins\":{\"peek@peek\":false}}'" ] && [ "$right_type" = "terminal" ]; then
   auto_test::pass
 else
   auto_test::fail "expected left.command=claude --settings <json> / right.type=terminal; got left=$left_cmd / right=$right_type"

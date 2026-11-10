@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every session auto launches must reach claude with --settings '{"remoteControlAtStartup":false}'
+# Every session auto launches must reach claude with --settings '{"remoteControlAtStartup":false,"enabledPlugins":{"peek@peek":false}}'
 # as two exact argv entries. Each case runs the real launch string through sh against a fake
 # claude and reads back its argv, so the check covers the shell quoting, not only the text.
 
@@ -13,7 +13,7 @@ PY="${CLAUDE_AUTO_PYTHON3:-/usr/bin/python3}"
 SOCKET="$ROOT/lib/cmux-socket.sh"
 WS="$ROOT/lib/auto-workspace.py"
 SPAWN="$ROOT/lib/auto-spawn.py"
-WANT='{"remoteControlAtStartup":false}'
+WANT='{"remoteControlAtStartup":false,"enabledPlugins":{"peek@peek":false}}'
 
 SANDBOX="$(mktemp -d -t rc-off.XXXXXX)"
 ORIG_HOME="$HOME"
