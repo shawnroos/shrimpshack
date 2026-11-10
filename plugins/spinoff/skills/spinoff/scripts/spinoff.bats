@@ -471,7 +471,7 @@ version: 0.8.2' HERDR_ENV=1 CMUX_WORKSPACE_ID=
   grep -qxF "tab create --workspace wS --label testlabel --no-focus" "$HERDR_ARGV_LOG"
   # …and claude is RUN INTO its root pane (cd + claude), never `agent start`
   # (which splits a pane in the CURRENT tab — the bug this replaces).
-  grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel' \"\\\$\(cat '.*\.spinoff-brief'\)\"$" "$HERDR_ARGV_LOG"
+  grep -qE "^pane run wS:p2 cd '.*/worktrees/htab' && claude --name 'testlabel' --settings '\{\"remoteControlAtStartup\":false\}' \"\\\$\(cat '.*\.spinoff-brief'\)\"$" "$HERDR_ARGV_LOG"
   ! grep -q "^agent start" "$HERDR_ARGV_LOG"
 }
 
