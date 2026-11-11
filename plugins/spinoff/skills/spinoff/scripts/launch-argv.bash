@@ -14,11 +14,11 @@ launch_argv() {
 }
 
 # $1 = claude's argv, one per line. Passes when --settings appears exactly once and its
-# value is exactly the launch settings JSON (Remote Control and peek off).
+# value is exactly the launch settings JSON (Remote Control off).
 assert_remote_control_off() {
   local argv="$1"
   [ "$(grep -cxF -- '--settings' <<<"$argv")" -eq 1 ] || { echo "want one --settings, argv was:"; echo "$argv"; return 1; }
   local val
   val="$(awk 'prev == "--settings" { print; exit } { prev = $0 }' <<<"$argv")"
-  [ "$val" = '{"remoteControlAtStartup":false,"enabledPlugins":{"peek@peek":false}}' ] || { echo "--settings value was: $val"; return 1; }
+  [ "$val" = '{"remoteControlAtStartup":false}' ] || { echo "--settings value was: $val"; return 1; }
 }

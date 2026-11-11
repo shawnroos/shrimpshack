@@ -25,11 +25,9 @@ abspath() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$(pwd -P)
 # continuation prompt with no claude at all. Escape, never trust the input.
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# Launched sessions start with Remote Control and peek off. Remote Control: on reattach the
-# claude.ai server replays an old end_session. peek (0.2.4): its start-up colour probe sets the
-# shared tty to `min 0 time 2`, claude's stdin read gets 0 bytes, and the 30 s orphan check
-# exits 129. Drop the peek entry once a fixed peek ships.
-SPINOFF_CLAUDE_SETTINGS='{"remoteControlAtStartup":false,"enabledPlugins":{"peek@peek":false}}'
+# Launched sessions start with Remote Control off: on reattach the claude.ai server replays an
+# old end_session.
+SPINOFF_CLAUDE_SETTINGS='{"remoteControlAtStartup":false}'
 
 # The `claude` argv every launch and recovery line shares, already quoted for a shell.
 # $1 = the --session-id prefix ("" or "--session-id '<id>' "), $2 = the session label.
