@@ -12,7 +12,6 @@ Tasty crustacey morsels for Claude by [@shawnroos](https://github.com/shawnroos)
 | [lint-router](plugins/lint-router/) | 0.2.0 | Picks the linters to run from who the work is for. It matches on the git origin or on marker files. |
 | [multi-slice-review](plugins/multi-slice-review/) | 0.1.0 | Reviews a change too large for one reviewer. It cuts the change into slices and gives each slice its own lens. |
 | [nerd](plugins/nerd/) | 0.1.2 | Researches a codebase without supervision. It finds tunable values, runs experiments in worktrees, and reports what to keep or change. |
-| [reflect](plugins/reflect/) | 0.6.1 | Stores memories and documents, and searches them with QMD. It keeps the index small enough to load every session. |
 | [spawn](plugins/spawn/) | 0.5.0 | Runs Claude on any model the local Superagent Gateway serves, across five surfaces. A second model reads new material best. |
 | [spinoff](plugins/spinoff/) | 0.10.3 | Moves the topic just discussed into its own worktree and its own briefed session. The handoff links back to the source session. |
 | [stackup](plugins/stackup/) | 0.1.0 | Asks whether work ships as a stack of dependent pull requests. It asks twice, while the answer is still cheap to act on. |
